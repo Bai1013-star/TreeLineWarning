@@ -1,19 +1,17 @@
-# T4B Review: Low-Density Preview Crop Range Selector
+# T4B Review Update: Visual Crop Range Selector Fix
 
 ## Branch and Baseline
 
 - Current branch: `feature/io`
-- Baseline commit: `8700e55 feat: add streamed point cloud preview generator`
-- No commit made for T4B.
+- T4B selector commit currently at `20f03bb feat: add point cloud crop range selector`
+- T4B-VISUAL-FIX is implemented as uncommitted workspace changes.
+- No commit made for this fix.
 - No push performed.
 
-Start checks:
+Recent log:
 
 ```text
-git status --short --branch
-## feature/io
-
-git log -5 --oneline
+20f03bb feat: add point cloud crop range selector
 8700e55 feat: add streamed point cloud preview generator
 9763d3c feat: add chunked LAS reader and crop engine
 80c444d feat: add readonly LAS discovery and header summary
@@ -21,14 +19,15 @@ git log -5 --oneline
 72f9935 chore: initialize repository and add project documentation
 ```
 
-Worktree was clean before T4B changes.
+## Actual Modified Files
 
-Read before implementation:
+```text
+scripts/crop_selector.py
+tests/scripts/test_crop_selector.py
+reviews/T4B-review.md
+```
 
-- `docs/requirements.md`
-- `docs/codex_tasks.md`
-- `algorithms/preprocessing/preview.py`
-- `core/contracts/`
+No files under `data/` or `outputs/` were modified by this fix.
 
 ## Page Launch Command
 
@@ -36,80 +35,66 @@ Read before implementation:
 E:\Miniforge3\envs\treeline\python.exe -m streamlit run scripts/crop_selector.py
 ```
 
-Environment check:
+## Visual Fix Summary
 
-```text
-streamlit 1.59.2
-plotly 6.9.0
-```
+Display modes now available:
 
-## Actual Modified Files
+- `高度`
+- `增强 RGB`
+- `Classification`
+- `Intensity`
 
-Added:
+Default display mode is `高度`, so the page no longer starts in pale RGB mode.
 
-```text
-scripts/crop_selector.py
-tests/scripts/__init__.py
-tests/scripts/test_crop_selector.py
-reviews/T4B-review.md
-```
+Enhanced RGB behavior:
 
-## Range Selection Method
+- detects original RGB dtype and shape
+- supports `uint8` and LAS-style `uint16` RGB values
+- uses per-channel 1%-99% percentile contrast stretching
+- applies adjustable Gamma, default `0.8`
+- converts display colors to Plotly `rgb(r,g,b)` strings in the `0-255` range
+- falls back to height coloring when RGB is missing, invalid, non-finite, or has no contrast
+- displays RGB dtype, min, max, percentile stretch method, Gamma, and output range in the page
 
-The page automatically reads only:
+Plot style changes:
 
-```text
-outputs/previews/scan_small_preview.npz
-outputs/previews/scan_small_preview.json
-```
+- dark 3D background
+- medium gray grid lines
+- default point size `2`
+- point size control range `1-5`
+- opacity control range `0.2-1.0`
+- crop bounding box drawn in orange/yellow
+- height, classification, and intensity modes use colorbars
+- default camera shows the complete selected preview scene
 
-It does not open or read the original LAS. The page displays source-coordinate XYZ range and
-provides numeric controls for:
+## 2D Projection Views
 
-- X min / X max
-- Y min / Y max
-- Z min / Z max
+The page now adds three projection views below the 3D plot:
 
-Filtering rule is inclusive:
+- `XY` top view
+- `XZ` side view
+- `YZ` side view
 
-```text
-min_x <= x <= max_x
-min_y <= y <= max_y
-min_z <= z <= max_z
-```
+Each projection uses the currently filtered preview points and draws the current crop range rectangle.
+Projection plots may deterministically subsample selected preview points for display, while preserving
+the overall shape.
 
-Displayed values:
+## Chinese Interface and JSON Stability
 
-- selected preview point count
-- selected preview ratio
-- current X/Y/Z bounds
-- copyable CropBounds JSON
+Visible page labels now use Chinese directly:
 
-3D view:
+- `X 最小值`
+- `X 最大值`
+- `Y 最小值`
+- `Y 最大值`
+- `Z 最小值`
+- `Z 最大值`
+- `显示模式`
+- `点大小`
+- `透明度`
+- `保存裁剪范围`
 
-- RGB mode when RGB exists
-- height fallback
-- classification mode when classification exists
-- X/Y/Z hover in source coordinates
-- local-coordinate axes for display
-- crop bounding box trace
-
-The page explicitly warns that this only selects a range on preview data and has not cropped the
-original LAS.
-
-Selection guidance included in the page:
-
-- choose a 20-35 m line section
-- include multiple intact parallel wires
-- include vegetation / tree areas
-- avoid the densest left-side pole or mixed area
-- do not select the whole scene
-- do not select only wires without trees
-- inspect the middle-right section but choose manually
-
-## JSON Output Format
-
-Copyable CropBounds JSON:
+Copyable JSON keys and values remain stable English contract values:
 
 ```json
 {
@@ -120,60 +105,32 @@ Copyable CropBounds JSON:
 }
 ```
 
-Save button target:
+## Selection Save Safety
+
+The existing file is present:
 
 ```text
 outputs/selections/scene_simple_bounds.json
 ```
 
-Saved selection record fields:
+It is treated as an existing candidate and was not deleted or overwritten.
 
-- `source_id`
-- `source_path`
-- `created_at`
-- `preview_point_count`
-- `selected_preview_point_count`
-- `estimated_keep_ratio`
-- `min_xyz`
-- `max_xyz`
-- `coordinate_mode`
-- `label`
-- `note`
+New page behavior:
 
-Safety:
-
-- validates each `min < max`
-- only writes under `outputs/selections`
-- rejects `data/raw`
-- rejects existing output by default
-
-No selection file was created during T4B implementation:
+- adds `允许覆盖已有选择文件` checkbox, default unchecked
+- existing selection JSON cannot be replaced unless the checkbox is explicitly enabled
+- selected point ratio is displayed before save
+- ratios greater than `80%` show:
 
 ```text
-Test-Path outputs\selections\scene_simple_bounds.json
-False
+当前范围接近整个场景，不建议作为 scene_simple
 ```
 
-## Real Preview Load Verification
-
-Command loaded only NPZ and JSON:
+Git ignore confirmation:
 
 ```text
-preview_point_count: 197301
-selected_preview_point_count using full original range: 197301
-source_id: raw_scene_01_small_scan_small_las_685cb9a412
-source_path metadata string: E:\TreeLineWarning\data\raw\scene_01_small\scan_small.las
-```
-
-Default full-range CropBounds:
-
-```json
-{
-  "min_xyz": [-25.051700592041016, -20.719900131225586, -3.1609000000000003],
-  "max_xyz": [21.584299407958987, 18.31899986877442, 13.747100000000001],
-  "coordinate_mode": "source",
-  "label": "scene_simple"
-}
+git check-ignore -v outputs\selections\scene_simple_bounds.json
+.gitignore:4:outputs/	"outputs\\selections\\scene_simple_bounds.json"
 ```
 
 ## Tests
@@ -187,37 +144,31 @@ E:\Miniforge3\envs\treeline\python.exe -m pytest
 Result:
 
 ```text
-============================= test session starts =============================
-platform win32 -- Python 3.11.15, pytest-9.1.1, pluggy-1.6.0
-rootdir: E:\TreeLineWarning
-configfile: pyproject.toml
-testpaths: tests
-plugins: anyio-4.14.2, dash-4.4.0, cov-7.1.0
-collected 57 items
+collected 63 items
+tests\contracts\test_pointcloud_contracts.py ...........
+tests\contracts\test_progress_contracts.py ......
+tests\io\test_chunks_and_crop.py .............
+tests\io\test_discovery.py ..
+tests\io\test_headers.py ......
+tests\preprocessing\test_preview.py ...........
+tests\scripts\test_crop_selector.py ..............
 
-tests\contracts\test_pointcloud_contracts.py ...........                 [ 19%]
-tests\contracts\test_progress_contracts.py ......                        [ 29%]
-tests\io\test_chunks_and_crop.py .............                           [ 52%]
-tests\io\test_discovery.py ..                                            [ 56%]
-tests\io\test_headers.py ......                                          [ 66%]
-tests\preprocessing\test_preview.py ...........                          [ 85%]
-tests\scripts\test_crop_selector.py ........                             [100%]
-
-============================= 57 passed in 0.81s ==============================
+63 passed in 0.95s
 ```
 
-Covered:
+Added or updated coverage:
 
-- NPZ and JSON loading.
-- min/max range validation.
-- range filtering point count.
-- inclusive boundary behavior.
-- empty selection mask.
-- CropBounds JSON format.
-- save path restricted to `outputs/selections`.
-- no overwrite by default.
-- no original LAS read required.
-- Streamlit page / figure smoke test.
+- `uint8` RGB enhancement
+- `uint16` RGB enhancement
+- RGB output range is `0-255`
+- all-white / no-contrast RGB falls back to height coloring
+- height mode is the default
+- point size and opacity parameters
+- `XY`, `XZ`, and `YZ` projection filtering
+- warning when selected ratio is greater than `80%`
+- existing selection file cannot be overwritten unless explicitly allowed
+- JSON keys and values remain English contract fields
+- preview loading does not require reading original LAS
 
 ## Ruff
 
@@ -268,15 +219,14 @@ Command:
 git status --short --branch
 ```
 
-Result before writing this review:
+Result after this review update was written:
 
 ```text
 ## feature/io
-?? scripts/crop_selector.py
-?? tests/scripts/
+ M reviews/T4B-review.md
+ M scripts/crop_selector.py
+ M tests/scripts/test_crop_selector.py
 ```
-
-This review file is added after that status and appears in the final status.
 
 ## Git Diff Stat
 
@@ -286,13 +236,14 @@ Command:
 git diff --stat
 ```
 
-Result:
+Result after this review update was written:
 
 ```text
-
+reviews/T4B-review.md               | 302 +++++++++++++------------------
+scripts/crop_selector.py            | 341 +++++++++++++++++++++++++++++++-----
+tests/scripts/test_crop_selector.py | 116 +++++++++++-
+3 files changed, 533 insertions(+), 226 deletions(-)
 ```
-
-All T4B files are currently untracked, so there is no tracked diff stat.
 
 ## Git Diff Check
 
@@ -305,45 +256,40 @@ git diff --check
 Result:
 
 ```text
-
 ```
 
-Exit code: 0.
-
-## Git Ignore Confirmation
-
-Command:
-
-```powershell
-git check-ignore -v outputs/selections/scene_simple_bounds.json
-```
-
-Result:
-
-```text
-.gitignore:4:outputs/  outputs/selections/scene_simple_bounds.json
-```
-
-Selection files under `outputs/selections` are ignored and must not be committed.
+Exit code: 0. PowerShell reported only Git line-ending normalization warnings for tracked text
+files.
 
 ## Safety Confirmation
 
+- Read only the preview NPZ / JSON paths through the selector utilities and tests.
 - Did not read original LAS point records.
 - Did not read `scan_large.las`.
-- Did not formally crop `scene_simple.las`.
+- Did not generate `scene_simple.las`.
 - Did not modify `data/raw`.
+- Did not delete or overwrite the existing `outputs/selections/scene_simple_bounds.json`.
 - Did not install, upgrade, or uninstall dependencies.
-- Did not implement wires, trees, classification, clearance, risk, or prediction.
+- Did not implement wires, trees, distance, model, risk, or prediction functionality.
 - Did not commit or push.
 
 ## Known Limits
 
-- Numeric range controls are source-coordinate number inputs rather than drawing interaction.
-- The page filters low-density preview points only.
-- The saved bounds are intended for a later approved formal crop task.
-- Bounding box visualization is a Plotly line trace over the filtered preview view.
+- Range selection remains numeric controls rather than direct drag handles in Plotly.
+- RGB mode cannot show a scalar colorbar because Plotly receives per-point RGB strings; height,
+  classification, and intensity modes provide scalar colorbars.
+- The existing full-scene `scene_simple_bounds.json` remains in ignored outputs and should be
+  replaced only by an explicit user save after choosing a narrower range.
 
-## Commit Recommendation
+## Recommendation
 
-Recommend GPT review T4B. If approved, recommend committing only the script, tests, and review
-package. Do not commit any files under `outputs/`.
+Recommend GPT review T4B-VISUAL-FIX. If approved, commit only:
+
+```text
+scripts/crop_selector.py
+tests/scripts/test_crop_selector.py
+reviews/T4B-review.md
+```
+
+Do not commit `outputs/`, preview files, selection files, point clouds, models, caches, or generated
+results.
