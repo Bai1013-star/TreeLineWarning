@@ -8,13 +8,23 @@ from algorithms.io.headers import (
     read_las_header_summary,
     read_las_header_summary_for_source,
 )
+from algorithms.io.samples import (
+    create_scene_sample,
+    load_and_validate_scene_simple_selection,
+    precheck_crop,
+    validate_scene_sample_outputs,
+)
 
 __all__ = [
     "DEFAULT_CHUNK_SIZE",
     "LasIoError",
     "crop_las_xyz",
+    "create_scene_sample",
     "discover_las_sources",
     "iter_las_chunks",
+    "load_and_validate_scene_simple_selection",
+    "precheck_crop",
     "read_las_header_summary",
     "read_las_header_summary_for_source",
+    "validate_scene_sample_outputs",
 ]
