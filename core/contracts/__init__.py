@@ -1,5 +1,17 @@
 """Public contracts shared by TreeLineWarning pipeline modules."""
 
+from core.contracts.candidates import (
+    CandidateEvidenceSet,
+    CandidateLevel,
+    CandidatePointSet,
+    CandidateReasonFlag,
+    CandidateSource,
+    ManualSelectionConfig,
+    WireCandidateConfig,
+    WireCandidateQualityFlag,
+    WireCandidateResult,
+    WireCandidateStatistics,
+)
 from core.contracts.errors import UnifiedError
 from core.contracts.features import (
     FeatureQualityFlag,
@@ -33,6 +45,11 @@ from core.contracts.progress import CancellationToken, PipelineProgress, Progres
 
 __all__ = [
     "CancellationToken",
+    "CandidateEvidenceSet",
+    "CandidateLevel",
+    "CandidatePointSet",
+    "CandidateReasonFlag",
+    "CandidateSource",
     "CropBounds",
     "CropResult",
     "DownsampledPointCloud",
@@ -40,6 +57,7 @@ __all__ = [
     "GeometryFeatureConfig",
     "GeometryFeatureResult",
     "GeometryFeatureStatistics",
+    "ManualSelectionConfig",
     "GroundEstimationConfig",
     "GroundEstimationResult",
     "GroundEstimationStatistics",
@@ -56,4 +74,8 @@ __all__ = [
     "ProcessingStatistics",
     "ProgressReporter",
     "UnifiedError",
+    "WireCandidateConfig",
+    "WireCandidateQualityFlag",
+    "WireCandidateResult",
+    "WireCandidateStatistics",
 ]
