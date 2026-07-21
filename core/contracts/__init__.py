@@ -8,6 +8,14 @@ from core.contracts.features import (
     GeometryFeatureStatistics,
     PointFeatureSet,
 )
+from core.contracts.ground import (
+    GroundEstimationConfig,
+    GroundEstimationResult,
+    GroundEstimationStatistics,
+    GroundQualityFlag,
+    GroundSurfaceModel,
+    HeightAboveGroundSet,
+)
 from core.contracts.pointcloud import (
     CropBounds,
     CropResult,
@@ -32,6 +40,12 @@ __all__ = [
     "GeometryFeatureConfig",
     "GeometryFeatureResult",
     "GeometryFeatureStatistics",
+    "GroundEstimationConfig",
+    "GroundEstimationResult",
+    "GroundEstimationStatistics",
+    "GroundQualityFlag",
+    "GroundSurfaceModel",
+    "HeightAboveGroundSet",
     "LasHeaderSummary",
     "PipelineProgress",
     "PointCloudChunk",
