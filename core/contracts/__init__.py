@@ -1,6 +1,13 @@
 """Public contracts shared by TreeLineWarning pipeline modules."""
 
 from core.contracts.errors import UnifiedError
+from core.contracts.features import (
+    FeatureQualityFlag,
+    GeometryFeatureConfig,
+    GeometryFeatureResult,
+    GeometryFeatureStatistics,
+    PointFeatureSet,
+)
 from core.contracts.pointcloud import (
     CropBounds,
     CropResult,
@@ -21,10 +28,15 @@ __all__ = [
     "CropBounds",
     "CropResult",
     "DownsampledPointCloud",
+    "FeatureQualityFlag",
+    "GeometryFeatureConfig",
+    "GeometryFeatureResult",
+    "GeometryFeatureStatistics",
     "LasHeaderSummary",
     "PipelineProgress",
     "PointCloudChunk",
     "PointCloudSource",
+    "PointFeatureSet",
     "PreprocessingConfig",
     "PreprocessingResult",
     "ProcessingStatistics",
