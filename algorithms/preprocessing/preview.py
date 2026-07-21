@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from core.contracts import CancellationToken, PipelineProgress, ProgressReporter
+from core.contracts import CancellationToken, CropBounds, PipelineProgress, ProgressReporter
 
 from algorithms.io import DEFAULT_CHUNK_SIZE, iter_las_chunks, read_las_header_summary
 from algorithms.io.headers import _error
@@ -52,6 +52,7 @@ def build_pointcloud_preview(
     reporter: ProgressReporter | None = None,
     cancellation_token: CancellationToken | None = None,
     generate_html: bool = True,
+    crop_bounds: CropBounds | None = None,
     project_root: Path | str | None = None,
 ) -> PreviewResult:
     """Build deterministic streamed preview NPZ/JSON and optional Plotly HTML."""
@@ -153,13 +154,14 @@ def build_pointcloud_preview(
             html_path=html_path if generate_html and _plotly_available() else None,
             target_preview_points=target_preview_points,
             max_preview_points=max_preview_points,
+            crop_bounds=crop_bounds,
         )
 
         np.savez_compressed(_temporary_path(npz_path), **data)
         _write_json_atomic(_temporary_path(json_path), metadata)
         html_output: Path | None = None
         if generate_html and _plotly_available():
-            _write_plotly_html(_temporary_path(html_path), data, metadata)
+            _write_plotly_html(_temporary_path(html_path), data, metadata, crop_bounds=crop_bounds)
             html_output = html_path
 
         _replace(_temporary_path(npz_path), npz_path, overwrite=overwrite)
@@ -256,6 +258,7 @@ def _metadata(
     html_path: Path | None,
     target_preview_points: int,
     max_preview_points: int,
+    crop_bounds: CropBounds | None,
 ) -> dict[str, Any]:
     original_count = int(header.point_count)
     return {
@@ -288,6 +291,7 @@ def _metadata(
             "html": str(html_path) if html_path is not None else None,
         },
         "plotly_available": html_path is not None,
+        "crop_bounds": crop_bounds.to_dict() if crop_bounds is not None else None,
     }
 
 
@@ -305,57 +309,185 @@ def _write_json_atomic(path: Path, metadata: dict[str, Any]) -> None:
     path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _write_plotly_html(path: Path, data: dict[str, np.ndarray], metadata: dict[str, Any]) -> None:
+def _write_plotly_html(
+    path: Path,
+    data: dict[str, np.ndarray],
+    metadata: dict[str, Any],
+    *,
+    crop_bounds: CropBounds | None,
+) -> None:
     import plotly.graph_objects as go
 
     xyz = data["local_xyz"]
     source_xyz = data["xyz"]
-    if "rgb" in data:
-        colors = [
-            f"rgb({int(red)},{int(green)},{int(blue)})"
-            for red, green, blue in np.asarray(data["rgb"])
-        ]
-        colorbar = None
-    else:
-        color_values = source_xyz[:, 2] if len(source_xyz) else []
-        colors = color_values
-        colorbar = {"title": "Source Z (m)"}
+    height_marker = {
+        "size": 1.8,
+        "color": source_xyz[:, 2] if len(source_xyz) else [],
+        "colorscale": "Turbo",
+        "opacity": 0.85,
+        "colorbar": {"title": "Height Z (m)"},
+    }
 
     hover = [
         f"X={x:.3f} m<br>Y={y:.3f} m<br>Z={z:.3f} m"
         for x, y, z in source_xyz
     ]
-    figure = go.Figure(
-        data=[
+    traces = [
+        go.Scatter3d(
+            x=xyz[:, 0] if len(xyz) else [],
+            y=xyz[:, 1] if len(xyz) else [],
+            z=xyz[:, 2] if len(xyz) else [],
+            mode="markers",
+            marker=height_marker,
+            text=hover,
+            hoverinfo="text",
+            name="Height",
+            visible=True,
+        )
+    ]
+    buttons = [
+        {
+            "label": "Height",
+            "method": "update",
+            "args": [{"visible": _visibility(0, 1 + _optional_trace_count(data) + 1)}],
+        }
+    ]
+    if "rgb" in data:
+        traces.append(
             go.Scatter3d(
                 x=xyz[:, 0] if len(xyz) else [],
                 y=xyz[:, 1] if len(xyz) else [],
                 z=xyz[:, 2] if len(xyz) else [],
                 mode="markers",
                 marker={
-                    "size": 1.5,
-                    "color": colors,
+                    "size": 1.8,
+                    "color": _enhanced_rgb_colors(np.asarray(data["rgb"])),
                     "opacity": 0.85,
-                    "colorbar": colorbar,
                 },
                 text=hover,
                 hoverinfo="text",
-                name="Preview points",
+                name="Enhanced RGB",
+                visible=False,
             )
-        ]
-    )
+        )
+        buttons.append(
+            {
+                "label": "Enhanced RGB",
+                "method": "update",
+                "args": [
+                    {
+                        "visible": _visibility(
+                            len(traces) - 1,
+                            1 + _optional_trace_count(data) + 1,
+                        )
+                    }
+                ],
+            }
+        )
+    if "classification" in data:
+        traces.append(
+            go.Scatter3d(
+                x=xyz[:, 0] if len(xyz) else [],
+                y=xyz[:, 1] if len(xyz) else [],
+                z=xyz[:, 2] if len(xyz) else [],
+                mode="markers",
+                marker={
+                    "size": 1.8,
+                    "color": np.asarray(data["classification"]),
+                    "colorscale": "Turbo",
+                    "opacity": 0.85,
+                    "colorbar": {"title": "Classification"},
+                },
+                text=hover,
+                hoverinfo="text",
+                name="Classification",
+                visible=False,
+            )
+        )
+        buttons.append(
+            {
+                "label": "Classification",
+                "method": "update",
+                "args": [
+                    {
+                        "visible": _visibility(
+                            len(traces) - 1,
+                            1 + _optional_trace_count(data) + 1,
+                        )
+                    }
+                ],
+            }
+        )
+    if "intensity" in data:
+        traces.append(
+            go.Scatter3d(
+                x=xyz[:, 0] if len(xyz) else [],
+                y=xyz[:, 1] if len(xyz) else [],
+                z=xyz[:, 2] if len(xyz) else [],
+                mode="markers",
+                marker={
+                    "size": 1.8,
+                    "color": np.asarray(data["intensity"]),
+                    "colorscale": "Viridis",
+                    "opacity": 0.85,
+                    "colorbar": {"title": "Intensity"},
+                },
+                text=hover,
+                hoverinfo="text",
+                name="Intensity",
+                visible=False,
+            )
+        )
+        buttons.append(
+            {
+                "label": "Intensity",
+                "method": "update",
+                "args": [
+                    {
+                        "visible": _visibility(
+                            len(traces) - 1,
+                            1 + _optional_trace_count(data) + 1,
+                        )
+                    }
+                ],
+            }
+        )
+    if crop_bounds is not None:
+        traces.append(_crop_bounds_trace(data, crop_bounds))
+        for button in buttons:
+            button["args"][0]["visible"][-1] = True
+
+    figure = go.Figure(data=traces)
     figure.update_layout(
-        title="scan_small low-density preview, not full-density source point cloud",
+        title=f"{Path(str(metadata['source_path'])).stem} low-density preview, not full density",
+        paper_bgcolor="#111111",
+        plot_bgcolor="#111111",
+        font={"color": "#f0f0f0"},
         scene={
             "xaxis_title": "Local X (m)",
             "yaxis_title": "Local Y (m)",
             "zaxis_title": "Local Z (m)",
+            "bgcolor": "#151515",
+            "xaxis": {"gridcolor": "#666666", "zerolinecolor": "#888888"},
+            "yaxis": {"gridcolor": "#666666", "zerolinecolor": "#888888"},
+            "zaxis": {"gridcolor": "#666666", "zerolinecolor": "#888888"},
+            "camera": {"eye": {"x": 1.6, "y": 1.6, "z": 0.9}},
         },
+        updatemenus=[
+            {
+                "buttons": buttons,
+                "direction": "down",
+                "x": 0.01,
+                "xanchor": "left",
+                "y": 0.98,
+                "yanchor": "top",
+            }
+        ],
         annotations=[
             {
                 "text": (
                     f"Preview points: {metadata['preview_point_count']} / "
-                    f"{metadata['original_point_count']}"
+                    f"{metadata['original_point_count']}; default mode: Height"
                 ),
                 "showarrow": False,
                 "xref": "paper",
@@ -367,6 +499,73 @@ def _write_plotly_html(path: Path, data: dict[str, np.ndarray], metadata: dict[s
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.write_html(path, include_plotlyjs="cdn", full_html=True)
+
+
+def _optional_trace_count(data: dict[str, np.ndarray]) -> int:
+    count = 0
+    for name in ("rgb", "classification", "intensity"):
+        if name in data:
+            count += 1
+    return count
+
+
+def _visibility(active_index: int, trace_count: int) -> list[bool]:
+    return [index == active_index for index in range(trace_count)]
+
+
+def _enhanced_rgb_colors(rgb: np.ndarray, gamma: float = 0.8) -> list[str]:
+    values = np.asarray(rgb, dtype=np.float64)
+    if len(values) == 0:
+        return []
+    low = np.percentile(values, 1, axis=0)
+    high = np.percentile(values, 99, axis=0)
+    dynamic = np.where((high - low) <= 0, 1.0, high - low)
+    stretched = np.clip((values - low) / dynamic, 0.0, 1.0)
+    adjusted = np.power(stretched, gamma)
+    rgb_255 = np.rint(adjusted * 255.0).astype(np.uint8)
+    return [f"rgb({int(red)},{int(green)},{int(blue)})" for red, green, blue in rgb_255]
+
+
+def _crop_bounds_trace(data: dict[str, np.ndarray], bounds: CropBounds) -> Any:
+    import plotly.graph_objects as go
+
+    origin = np.asarray(data["origin_xyz"], dtype=np.float64)
+    minimum = np.asarray(bounds.min_xyz, dtype=np.float64) - origin
+    maximum = np.asarray(bounds.max_xyz, dtype=np.float64) - origin
+    corners = np.array(
+        [
+            [minimum[0], minimum[1], minimum[2]],
+            [maximum[0], minimum[1], minimum[2]],
+            [maximum[0], maximum[1], minimum[2]],
+            [minimum[0], maximum[1], minimum[2]],
+            [minimum[0], minimum[1], minimum[2]],
+            [minimum[0], minimum[1], maximum[2]],
+            [maximum[0], minimum[1], maximum[2]],
+            [maximum[0], maximum[1], maximum[2]],
+            [minimum[0], maximum[1], maximum[2]],
+            [minimum[0], minimum[1], maximum[2]],
+            [None, None, None],
+            [maximum[0], minimum[1], minimum[2]],
+            [maximum[0], minimum[1], maximum[2]],
+            [None, None, None],
+            [maximum[0], maximum[1], minimum[2]],
+            [maximum[0], maximum[1], maximum[2]],
+            [None, None, None],
+            [minimum[0], maximum[1], minimum[2]],
+            [minimum[0], maximum[1], maximum[2]],
+        ],
+        dtype=object,
+    )
+    return go.Scatter3d(
+        x=corners[:, 0],
+        y=corners[:, 1],
+        z=corners[:, 2],
+        mode="lines",
+        line={"color": "#ffb000", "width": 7},
+        name="Approved crop bounds",
+        hoverinfo="skip",
+        visible=True,
+    )
 
 
 def _validate_preview_limits(target_preview_points: int, max_preview_points: int) -> None:

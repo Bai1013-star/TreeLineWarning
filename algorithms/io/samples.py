@@ -21,6 +21,7 @@ from algorithms.io.headers import _error, read_las_header_summary
 BOUNDARY_TOLERANCE_M = 0.10
 ALGORITHM_NAME = "chunked_xyz_scene_sample_crop"
 ALGORITHM_VERSION = "0.1"
+BOUNDARY_NAMES = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,24 @@ class CropPrecheck:
         }
 
 
+@dataclass(frozen=True)
+class BoundaryProximityReport:
+    point_count: int
+    tolerances_m: tuple[float, ...]
+    counts: dict[str, dict[str, int]]
+    ratios: dict[str, dict[str, float]]
+    z_max_detail: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "point_count": self.point_count,
+            "tolerances_m": list(self.tolerances_m),
+            "counts": self.counts,
+            "ratios": self.ratios,
+            "z_max_detail": self.z_max_detail,
+        }
+
+
 def file_snapshot(path: Path | str) -> FileSnapshot:
     file_path = Path(path)
     stat = file_path.stat()
@@ -114,6 +133,159 @@ def load_and_validate_scene_simple_selection(
             f"{bounds.min_xyz} - {bounds.max_xyz}"
         )
     return payload, bounds
+
+
+def validate_scene_sample_artifacts(
+    *,
+    sample_path: Path | str,
+    index_map_path: Path | str,
+    manifest_path: Path | str,
+    bounds: CropBounds,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> dict[str, Any]:
+    """Validate scene_simple LAS, sidecar index map, and manifest without writing."""
+    sample = Path(sample_path)
+    index_map = Path(index_map_path)
+    manifest_file = Path(manifest_path)
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    sample_snapshot = file_snapshot(sample)
+    sample_header = read_las_header_summary(sample, source_id="scene_simple")
+    bounds_check = _validate_output_points_within_bounds(sample, bounds, chunk_size=chunk_size)
+
+    with np.load(index_map, allow_pickle=False) as data:
+        original_index = np.asarray(data["original_index"], dtype=np.int64)
+        index_output_count = int(np.asarray(data["output_point_count"]).item())
+        index_source_id = str(np.asarray(data["source_id"]).item())
+        index_bounds = json.loads(str(np.asarray(data["crop_bounds"]).item()))
+
+    source_point_count = int(manifest["source_point_count"])
+    if len(original_index) != sample_header.point_count:
+        raise ValueError("index_map original_index length does not match scene_simple point count")
+    if index_output_count != sample_header.point_count:
+        raise ValueError("index_map output_point_count does not match scene_simple point count")
+    if len(original_index) and int(original_index.min()) < 0:
+        raise ValueError("index_map contains negative original_index values")
+    if len(original_index) and int(original_index.max()) >= source_point_count:
+        raise ValueError("index_map contains original_index values outside source point count")
+    index_unique = len(np.unique(original_index)) == len(original_index)
+    if not index_unique:
+        raise ValueError("index_map contains duplicate original_index values")
+
+    expected_output = Path(manifest["output_path"])
+    expected_index = Path(manifest["index_map_path"])
+    manifest_matches = (
+        Path(manifest["output_path"]) == sample
+        and expected_output.exists()
+        and expected_index == index_map
+        and manifest["output_point_count"] == sample_header.point_count
+        and manifest["output_file_size"] == sample_snapshot.size_bytes
+        and manifest["crop_bounds"]["min_xyz"] == list(bounds.min_xyz)
+        and manifest["crop_bounds"]["max_xyz"] == list(bounds.max_xyz)
+        and manifest["coordinate_mode"] == bounds.coordinate_mode
+    )
+    if not manifest_matches:
+        raise ValueError("manifest does not match scene_simple sample artifacts")
+
+    return {
+        "sample_header": sample_header.to_dict(),
+        "sample_file": sample_snapshot.to_dict(),
+        "points_within_bounds": bounds_check["all_within_bounds"],
+        "actual_min_xyz": bounds_check["min_xyz"],
+        "actual_max_xyz": bounds_check["max_xyz"],
+        "index_map_length": len(original_index),
+        "index_map_min": int(original_index.min()) if len(original_index) else None,
+        "index_map_max": int(original_index.max()) if len(original_index) else None,
+        "index_map_unique": index_unique,
+        "index_map_source_id": index_source_id,
+        "index_map_crop_bounds": index_bounds,
+        "manifest_matches_files": manifest_matches,
+        "manifest": manifest,
+    }
+
+
+def boundary_proximity_report(
+    sample_path: Path | str,
+    bounds: CropBounds,
+    *,
+    source_id: str,
+    tolerances_m: tuple[float, ...] = (0.05, 0.10, 0.20),
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> BoundaryProximityReport:
+    """Count points near each approved crop boundary with z_max detail."""
+    tolerances = tuple(float(value) for value in tolerances_m)
+    counts = {
+        boundary: {f"{tolerance:.2f}": 0 for tolerance in tolerances}
+        for boundary in BOUNDARY_NAMES
+    }
+    total_points = 0
+    z_max_xyz_parts: list[np.ndarray] = []
+    z_max_intensity_parts: list[np.ndarray] = []
+    z_max_class_parts: list[np.ndarray] = []
+    z_max_rgb_parts: list[np.ndarray] = []
+    maximum = np.asarray(bounds.max_xyz, dtype=np.float64)
+
+    for chunk in iter_las_chunks(sample_path, source_id=source_id, chunk_size=chunk_size):
+        xyz = np.asarray(chunk.xyz, dtype=np.float64)
+        total_points += chunk.point_count
+        distances = {
+            "x_min": np.abs(xyz[:, 0] - bounds.min_xyz[0]),
+            "x_max": np.abs(xyz[:, 0] - bounds.max_xyz[0]),
+            "y_min": np.abs(xyz[:, 1] - bounds.min_xyz[1]),
+            "y_max": np.abs(xyz[:, 1] - bounds.max_xyz[1]),
+            "z_min": np.abs(xyz[:, 2] - bounds.min_xyz[2]),
+            "z_max": np.abs(xyz[:, 2] - bounds.max_xyz[2]),
+        }
+        for boundary, values in distances.items():
+            for tolerance in tolerances:
+                counts[boundary][f"{tolerance:.2f}"] += int(
+                    np.count_nonzero(values <= tolerance)
+                )
+
+        z_mask = distances["z_max"] <= 0.10
+        if int(np.count_nonzero(z_mask)):
+            z_max_xyz_parts.append(xyz[z_mask])
+            intensity = chunk.attributes.get("intensity")
+            classification = chunk.attributes.get("classification")
+            red = chunk.attributes.get("red")
+            green = chunk.attributes.get("green")
+            blue = chunk.attributes.get("blue")
+            if intensity is not None:
+                z_max_intensity_parts.append(np.asarray(intensity)[z_mask])
+            if classification is not None:
+                z_max_class_parts.append(np.asarray(classification)[z_mask])
+            if red is not None and green is not None and blue is not None:
+                z_max_rgb_parts.append(
+                    np.column_stack(
+                        (
+                            np.asarray(red)[z_mask],
+                            np.asarray(green)[z_mask],
+                            np.asarray(blue)[z_mask],
+                        )
+                    )
+                )
+
+    ratios = {
+        boundary: {
+            tolerance: 0.0 if total_points == 0 else count / total_points
+            for tolerance, count in tolerance_counts.items()
+        }
+        for boundary, tolerance_counts in counts.items()
+    }
+    z_max_detail = _z_max_detail(
+        xyz_parts=z_max_xyz_parts,
+        intensity_parts=z_max_intensity_parts,
+        class_parts=z_max_class_parts,
+        rgb_parts=z_max_rgb_parts,
+        max_xyz=maximum,
+        total_points=total_points,
+    )
+    return BoundaryProximityReport(
+        point_count=total_points,
+        tolerances_m=tolerances,
+        counts=counts,
+        ratios=ratios,
+        z_max_detail=z_max_detail,
+    )
 
 
 def precheck_crop(
@@ -539,3 +711,64 @@ def _process_memory_bytes() -> int | None:
     except Exception:
         return None
     return int(psutil.Process().memory_info().rss)
+
+
+def _z_max_detail(
+    *,
+    xyz_parts: list[np.ndarray],
+    intensity_parts: list[np.ndarray],
+    class_parts: list[np.ndarray],
+    rgb_parts: list[np.ndarray],
+    max_xyz: np.ndarray,
+    total_points: int,
+) -> dict[str, Any]:
+    xyz = _concat_or_empty_2d(xyz_parts, width=3, dtype=np.float64)
+    intensity = _concat_or_empty_1d(intensity_parts, dtype=np.float64)
+    classification = _concat_or_empty_1d(class_parts, dtype=np.int64)
+    rgb = _concat_or_empty_2d(rgb_parts, width=3, dtype=np.float64)
+    count = int(len(xyz))
+    detail: dict[str, Any] = {
+        "count": count,
+        "ratio": 0.0 if total_points == 0 else count / total_points,
+        "xyz_range": {
+            "min": _list_or_none(xyz.min(axis=0)) if count else None,
+            "max": _list_or_none(xyz.max(axis=0)) if count else None,
+        },
+        "touches_z_max": bool(count and float(xyz[:, 2].max()) >= float(max_xyz[2])),
+    }
+    if len(intensity):
+        detail["intensity"] = {
+            "min": float(intensity.min()),
+            "max": float(intensity.max()),
+            "mean": float(intensity.mean()),
+        }
+    if len(classification):
+        values, counts = np.unique(classification, return_counts=True)
+        detail["classification_counts"] = {
+            str(int(value)): int(count_value)
+            for value, count_value in zip(values, counts, strict=True)
+        }
+    if len(rgb):
+        detail["rgb"] = {
+            "min": [float(value) for value in rgb.min(axis=0)],
+            "max": [float(value) for value in rgb.max(axis=0)],
+            "mean": [float(value) for value in rgb.mean(axis=0)],
+        }
+    return detail
+
+
+def _concat_or_empty_1d(parts: list[np.ndarray], *, dtype: Any) -> np.ndarray:
+    if not parts:
+        return np.empty(0, dtype=dtype)
+    return np.concatenate(parts).astype(dtype, copy=False)
+
+
+def _concat_or_empty_2d(
+    parts: list[np.ndarray],
+    *,
+    width: int,
+    dtype: Any,
+) -> np.ndarray:
+    if not parts:
+        return np.empty((0, width), dtype=dtype)
+    return np.concatenate(parts).astype(dtype, copy=False)

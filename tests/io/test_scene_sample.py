@@ -8,12 +8,15 @@ import numpy as np
 import pytest
 from algorithms.io import (
     LasIoError,
+    boundary_proximity_report,
     create_scene_sample,
     load_and_validate_scene_simple_selection,
     precheck_crop,
     read_las_header_summary,
+    validate_scene_sample_artifacts,
 )
 from algorithms.io.samples import validate_scene_sample_outputs
+from algorithms.preprocessing.preview import build_pointcloud_preview
 from core.contracts import CropBounds
 
 
@@ -321,3 +324,114 @@ def test_validation_detects_manifest_mismatch(tmp_path: Path) -> None:
             expected_point_count=result["output_point_count"],
             chunk_size=2,
         )
+
+
+def test_scene_sample_artifact_consistency_check(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    raw = project / "data" / "raw"
+    samples = project / "data" / "samples"
+    raw.mkdir(parents=True)
+    samples.mkdir(parents=True)
+    source = raw / "source.las"
+    output = samples / "scene_simple.las"
+    index_map = samples / "scene_simple_index_map.npz"
+    manifest = samples / "scene_simple_manifest.json"
+    write_scene_source(source)
+    bounds = CropBounds(min_xyz=(102.0, 202.0, 2.0), max_xyz=(104.0, 204.0, 4.0))
+    create_scene_sample(
+        source_path=source,
+        output_path=output,
+        index_map_path=index_map,
+        manifest_path=manifest,
+        bounds=bounds,
+        source_id="source",
+        selection_record=selection_payload(source, bounds),
+        chunk_size=2,
+        project_root=project,
+    )
+
+    validation = validate_scene_sample_artifacts(
+        sample_path=output,
+        index_map_path=index_map,
+        manifest_path=manifest,
+        bounds=bounds,
+        chunk_size=2,
+    )
+
+    assert validation["sample_header"]["point_count"] == 3
+    assert validation["index_map_length"] == 3
+    assert validation["index_map_unique"] is True
+    assert validation["manifest_matches_files"] is True
+    assert validation["points_within_bounds"] is True
+
+
+def test_boundary_proximity_report_counts_multiple_tolerances(tmp_path: Path) -> None:
+    source = tmp_path / "source.las"
+    write_scene_source(source)
+    bounds = CropBounds(min_xyz=(102.0, 202.0, 2.0), max_xyz=(104.0, 204.0, 4.0))
+
+    report = boundary_proximity_report(source, bounds, source_id="source", chunk_size=3)
+    payload = report.to_dict()
+
+    assert payload["point_count"] == 8
+    assert payload["counts"]["x_min"]["0.05"] == 1
+    assert payload["counts"]["x_max"]["0.10"] == 1
+    assert payload["counts"]["z_max"]["0.20"] == 1
+    assert payload["z_max_detail"]["count"] == 1
+    assert payload["z_max_detail"]["touches_z_max"] is True
+    assert payload["z_max_detail"]["classification_counts"] == {"0": 1}
+
+
+def test_scene_sample_preview_marks_bounds_and_avoids_full_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    raw = project / "data" / "raw"
+    samples = project / "data" / "samples"
+    previews = project / "outputs" / "previews"
+    raw.mkdir(parents=True)
+    samples.mkdir(parents=True)
+    source = raw / "source.las"
+    output = samples / "scene_simple.las"
+    index_map = samples / "scene_simple_index_map.npz"
+    manifest = samples / "scene_simple_manifest.json"
+    write_scene_source(source)
+    bounds = CropBounds(min_xyz=(102.0, 202.0, 2.0), max_xyz=(104.0, 204.0, 4.0))
+    create_scene_sample(
+        source_path=source,
+        output_path=output,
+        index_map_path=index_map,
+        manifest_path=manifest,
+        bounds=bounds,
+        source_id="source",
+        selection_record=selection_payload(source, bounds),
+        chunk_size=2,
+        project_root=project,
+    )
+    before = output.stat()
+
+    def fail_read(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("full point read must not be called")
+
+    monkeypatch.setattr(laspy, "read", fail_read)
+    monkeypatch.setattr(laspy.lasreader.LasReader, "read", fail_read)
+
+    result = build_pointcloud_preview(
+        output,
+        previews,
+        source_id="scene_simple",
+        target_preview_points=3,
+        max_preview_points=3,
+        chunk_size=2,
+        crop_bounds=bounds,
+        project_root=project,
+    )
+    after = output.stat()
+
+    assert result.metadata["preview_point_count"] == 3
+    assert result.metadata["crop_bounds"]["coordinate_mode"] == "source"
+    assert result.html_path is not None
+    assert "Approved crop bounds" in result.html_path.read_text(encoding="utf-8")
+    assert before.st_size == after.st_size
+    assert before.st_mtime == after.st_mtime
