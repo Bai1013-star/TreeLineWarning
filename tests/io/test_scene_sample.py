@@ -365,6 +365,139 @@ def test_scene_sample_artifact_consistency_check(tmp_path: Path) -> None:
     assert validation["points_within_bounds"] is True
 
 
+def test_scene_sample_artifact_bounds_tolerate_json_float_noise(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    raw = project / "data" / "raw"
+    samples = project / "data" / "samples"
+    raw.mkdir(parents=True)
+    samples.mkdir(parents=True)
+    source = raw / "source.las"
+    output = samples / "scene_simple.las"
+    index_map = samples / "scene_simple_index_map.npz"
+    manifest = samples / "scene_simple_manifest.json"
+    bounds = CropBounds(
+        min_xyz=(102.0, 202.0, -3.1609),
+        max_xyz=(104.0, 204.0, 4.0),
+    )
+    write_scene_source(source)
+    create_scene_sample(
+        source_path=source,
+        output_path=output,
+        index_map_path=index_map,
+        manifest_path=manifest,
+        bounds=bounds,
+        source_id="source",
+        selection_record=selection_payload(source, bounds),
+        chunk_size=2,
+        project_root=project,
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["crop_bounds"]["min_xyz"][2] = -3.1609000000000003
+    payload["crop_bounds"]["max_xyz"][0] += 5e-10
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_scene_sample_artifacts(
+        sample_path=output,
+        index_map_path=index_map,
+        manifest_path=manifest,
+        bounds=bounds,
+        chunk_size=2,
+    )
+
+    assert validation["manifest_matches_files"] is True
+
+
+@pytest.mark.parametrize("invalid_value", [float("nan"), float("inf")])
+def test_scene_sample_artifact_bounds_reject_large_or_nonfinite_differences(
+    tmp_path: Path,
+    invalid_value: float,
+) -> None:
+    project = tmp_path / "project"
+    raw = project / "data" / "raw"
+    samples = project / "data" / "samples"
+    raw.mkdir(parents=True)
+    samples.mkdir(parents=True)
+    source = raw / "source.las"
+    output = samples / "scene_simple.las"
+    index_map = samples / "scene_simple_index_map.npz"
+    manifest = samples / "scene_simple_manifest.json"
+    bounds = CropBounds(min_xyz=(102.0, 202.0, 2.0), max_xyz=(104.0, 204.0, 4.0))
+    write_scene_source(source)
+    create_scene_sample(
+        source_path=source,
+        output_path=output,
+        index_map_path=index_map,
+        manifest_path=manifest,
+        bounds=bounds,
+        source_id="source",
+        selection_record=selection_payload(source, bounds),
+        chunk_size=2,
+        project_root=project,
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["crop_bounds"]["min_xyz"][0] += 1e-6
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="manifest"):
+        validate_scene_sample_artifacts(
+            sample_path=output,
+            index_map_path=index_map,
+            manifest_path=manifest,
+            bounds=bounds,
+            chunk_size=2,
+        )
+
+    payload["crop_bounds"] = bounds.to_dict()
+    payload["crop_bounds"]["max_xyz"][0] = invalid_value
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="manifest"):
+        validate_scene_sample_artifacts(
+            sample_path=output,
+            index_map_path=index_map,
+            manifest_path=manifest,
+            bounds=bounds,
+            chunk_size=2,
+        )
+
+
+def test_scene_sample_artifact_bounds_reject_coordinate_mode_change(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    raw = project / "data" / "raw"
+    samples = project / "data" / "samples"
+    raw.mkdir(parents=True)
+    samples.mkdir(parents=True)
+    source = raw / "source.las"
+    output = samples / "scene_simple.las"
+    index_map = samples / "scene_simple_index_map.npz"
+    manifest = samples / "scene_simple_manifest.json"
+    bounds = CropBounds(min_xyz=(102.0, 202.0, 2.0), max_xyz=(104.0, 204.0, 4.0))
+    write_scene_source(source)
+    create_scene_sample(
+        source_path=source,
+        output_path=output,
+        index_map_path=index_map,
+        manifest_path=manifest,
+        bounds=bounds,
+        source_id="source",
+        selection_record=selection_payload(source, bounds),
+        chunk_size=2,
+        project_root=project,
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["coordinate_mode"] = "local"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="manifest"):
+        validate_scene_sample_artifacts(
+            sample_path=output,
+            index_map_path=index_map,
+            manifest_path=manifest,
+            bounds=bounds,
+            chunk_size=2,
+        )
+
+
 def test_boundary_proximity_report_counts_multiple_tolerances(tmp_path: Path) -> None:
     source = tmp_path / "source.las"
     write_scene_source(source)

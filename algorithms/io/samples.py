@@ -19,6 +19,8 @@ from algorithms.io.crop import crop_las_xyz
 from algorithms.io.headers import _error, read_las_header_summary
 
 BOUNDARY_TOLERANCE_M = 0.10
+# This only absorbs JSON float representation noise and is far below the 0.0001 m LAS scale.
+CROP_BOUNDS_COMPARISON_ATOL_M = 1e-9
 ALGORITHM_NAME = "chunked_xyz_scene_sample_crop"
 ALGORITHM_VERSION = "0.1"
 BOUNDARY_NAMES = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
@@ -179,8 +181,7 @@ def validate_scene_sample_artifacts(
         and expected_index == index_map
         and manifest["output_point_count"] == sample_header.point_count
         and manifest["output_file_size"] == sample_snapshot.size_bytes
-        and manifest["crop_bounds"]["min_xyz"] == list(bounds.min_xyz)
-        and manifest["crop_bounds"]["max_xyz"] == list(bounds.max_xyz)
+        and _crop_bounds_match(manifest.get("crop_bounds"), bounds)
         and manifest["coordinate_mode"] == bounds.coordinate_mode
     )
     if not manifest_matches:
@@ -201,6 +202,28 @@ def validate_scene_sample_artifacts(
         "manifest_matches_files": manifest_matches,
         "manifest": manifest,
     }
+
+
+def _crop_bounds_match(manifest_bounds: Any, bounds: CropBounds) -> bool:
+    """Compare finite manifest coordinates with a serialization-only tolerance."""
+    if not isinstance(manifest_bounds, dict):
+        return False
+    try:
+        manifest_min = np.asarray(manifest_bounds["min_xyz"], dtype=np.float64)
+        manifest_max = np.asarray(manifest_bounds["max_xyz"], dtype=np.float64)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+    expected_min = np.asarray(bounds.min_xyz, dtype=np.float64)
+    expected_max = np.asarray(bounds.max_xyz, dtype=np.float64)
+    coordinates = (manifest_min, manifest_max, expected_min, expected_max)
+    if any(values.shape != (3,) or not np.isfinite(values).all() for values in coordinates):
+        return False
+
+    return bool(
+        np.allclose(manifest_min, expected_min, rtol=0.0, atol=CROP_BOUNDS_COMPARISON_ATOL_M)
+        and np.allclose(manifest_max, expected_max, rtol=0.0, atol=CROP_BOUNDS_COMPARISON_ATOL_M)
+    )
 
 
 def boundary_proximity_report(

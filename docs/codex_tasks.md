@@ -64,7 +64,7 @@
 总控必须以以下事实为准：
 
 1. 项目根目录：`E:\TreeLineWarning`；
-2. 基础环境：`E:\Miniforge3\envs\treeline`；
+2. 基础环境：`E:\Miniforge\envs\treeline`；
 3. 模型环境尚未作为第一步创建；
 4. 当前有两份完全不同的 LAS 原始点云；
 5. 一份约 300 多 MB；
