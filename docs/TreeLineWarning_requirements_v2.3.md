@@ -42,7 +42,7 @@
 基础系统环境：
 
 ```text
-E:\Miniforge3\envs\treeline
+E:\Miniforge\envs\treeline
 ```
 
 负责：
@@ -58,7 +58,7 @@ E:\Miniforge3\envs\treeline
 模型环境在基础闭环完成后再创建：
 
 ```text
-E:\Miniforge3\envs\treeline-ml
+E:\Miniforge\envs\treeline-ml
 ```
 
 负责：
