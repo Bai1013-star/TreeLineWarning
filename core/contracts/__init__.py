@@ -8,16 +8,26 @@ from core.contracts.pointcloud import (
     PointCloudChunk,
     PointCloudSource,
 )
+from core.contracts.preprocessing import (
+    DownsampledPointCloud,
+    PreprocessingConfig,
+    PreprocessingResult,
+    ProcessingStatistics,
+)
 from core.contracts.progress import CancellationToken, PipelineProgress, ProgressReporter
 
 __all__ = [
     "CancellationToken",
     "CropBounds",
     "CropResult",
+    "DownsampledPointCloud",
     "LasHeaderSummary",
     "PipelineProgress",
     "PointCloudChunk",
     "PointCloudSource",
+    "PreprocessingConfig",
+    "PreprocessingResult",
+    "ProcessingStatistics",
     "ProgressReporter",
     "UnifiedError",
 ]
