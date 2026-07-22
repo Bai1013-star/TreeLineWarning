@@ -42,6 +42,21 @@ from core.contracts.preprocessing import (
     ProcessingStatistics,
 )
 from core.contracts.progress import CancellationToken, PipelineProgress, ProgressReporter
+from core.contracts.wires import (
+    WireAssignmentQualityFlag,
+    WireAssignmentReasonFlag,
+    WireAssignmentSet,
+    WireConfirmationChannel,
+    WireInstanceSet,
+    WireSeedConfig,
+    WireSeparationConfig,
+    WireSeparationResult,
+    WireSeparationStatistics,
+    WireTrackQualityFlag,
+    WireTrackSource,
+    WireTrackStatus,
+    WireTrackSummary,
+)
 
 __all__ = [
     "CancellationToken",
@@ -78,4 +93,17 @@ __all__ = [
     "WireCandidateQualityFlag",
     "WireCandidateResult",
     "WireCandidateStatistics",
+    "WireAssignmentQualityFlag",
+    "WireAssignmentReasonFlag",
+    "WireAssignmentSet",
+    "WireConfirmationChannel",
+    "WireInstanceSet",
+    "WireSeparationConfig",
+    "WireSeparationResult",
+    "WireSeparationStatistics",
+    "WireSeedConfig",
+    "WireTrackQualityFlag",
+    "WireTrackSource",
+    "WireTrackStatus",
+    "WireTrackSummary",
 ]
