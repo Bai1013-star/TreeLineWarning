@@ -42,6 +42,20 @@ from core.contracts.preprocessing import (
     ProcessingStatistics,
 )
 from core.contracts.progress import CancellationToken, PipelineProgress, ProgressReporter
+from core.contracts.vegetation_candidates import (
+    VegetationCandidateConfig,
+    VegetationCandidateLevel,
+    VegetationCandidatePointSet,
+    VegetationCandidateResult,
+    VegetationCandidateStatistics,
+    VegetationEvidenceFlag,
+    VegetationHagState,
+    VegetationManualAction,
+    VegetationManualProvenanceFlag,
+    VegetationManualSelectionConfig,
+    VegetationQualityFlag,
+    VegetationReasonFlag,
+)
 from core.contracts.wire_models import (
     WireModelMethod,
     WireModelQualityFlag,
@@ -124,4 +138,16 @@ __all__ = [
     "WireReconstructionConfig",
     "WireReconstructionResult",
     "WireReconstructionStatistics",
+    "VegetationCandidateConfig",
+    "VegetationCandidateLevel",
+    "VegetationCandidatePointSet",
+    "VegetationCandidateResult",
+    "VegetationCandidateStatistics",
+    "VegetationEvidenceFlag",
+    "VegetationHagState",
+    "VegetationManualAction",
+    "VegetationManualProvenanceFlag",
+    "VegetationManualSelectionConfig",
+    "VegetationQualityFlag",
+    "VegetationReasonFlag",
 ]
