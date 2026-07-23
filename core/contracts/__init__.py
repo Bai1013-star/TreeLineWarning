@@ -42,6 +42,16 @@ from core.contracts.preprocessing import (
     ProcessingStatistics,
 )
 from core.contracts.progress import CancellationToken, PipelineProgress, ProgressReporter
+from core.contracts.wire_models import (
+    WireModelMethod,
+    WireModelQualityFlag,
+    WireModelSet,
+    WireModelStatus,
+    WireModelSummary,
+    WireReconstructionConfig,
+    WireReconstructionResult,
+    WireReconstructionStatistics,
+)
 from core.contracts.wires import (
     WireAssignmentQualityFlag,
     WireAssignmentReasonFlag,
@@ -106,4 +116,12 @@ __all__ = [
     "WireTrackSource",
     "WireTrackStatus",
     "WireTrackSummary",
+    "WireModelMethod",
+    "WireModelQualityFlag",
+    "WireModelSet",
+    "WireModelStatus",
+    "WireModelSummary",
+    "WireReconstructionConfig",
+    "WireReconstructionResult",
+    "WireReconstructionStatistics",
 ]
