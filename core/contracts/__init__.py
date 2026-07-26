@@ -56,6 +56,20 @@ from core.contracts.vegetation_candidates import (
     VegetationQualityFlag,
     VegetationReasonFlag,
 )
+from core.contracts.vegetation_instances import (
+    LocalScaleState,
+    VegetationClusterStatus,
+    VegetationInstanceConfig,
+    VegetationInstanceManualFlag,
+    VegetationInstancePointSet,
+    VegetationInstanceQualityFlag,
+    VegetationInstanceReasonFlag,
+    VegetationInstanceResult,
+    VegetationInstanceStatistics,
+    VegetationManualActionRecord,
+    VegetationManualLog,
+    VegetationPlausibilityLabel,
+)
 from core.contracts.wire_models import (
     WireModelMethod,
     WireModelQualityFlag,
@@ -150,4 +164,16 @@ __all__ = [
     "VegetationManualSelectionConfig",
     "VegetationQualityFlag",
     "VegetationReasonFlag",
+    "LocalScaleState",
+    "VegetationClusterStatus",
+    "VegetationInstanceConfig",
+    "VegetationInstanceManualFlag",
+    "VegetationInstancePointSet",
+    "VegetationInstanceQualityFlag",
+    "VegetationInstanceReasonFlag",
+    "VegetationInstanceResult",
+    "VegetationInstanceStatistics",
+    "VegetationManualActionRecord",
+    "VegetationManualLog",
+    "VegetationPlausibilityLabel",
 ]
