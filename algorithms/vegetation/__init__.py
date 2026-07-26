@@ -1,5 +1,10 @@
 """V1 vegetation candidate helpers."""
 
+from algorithms.vegetation.associations import (
+    VegetationAssociationError,
+    load_vegetation_associations,
+    run_vegetation_associations,
+)
 from algorithms.vegetation.candidates import (
     VegetationCandidateError,
     generate_vegetation_candidate_preview,
@@ -22,4 +27,7 @@ __all__ = [
     "generate_vegetation_instances_preview",
     "load_vegetation_instances",
     "run_vegetation_instance_grouping",
+    "VegetationAssociationError",
+    "load_vegetation_associations",
+    "run_vegetation_associations",
 ]

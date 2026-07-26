@@ -42,6 +42,17 @@ from core.contracts.preprocessing import (
     ProcessingStatistics,
 )
 from core.contracts.progress import CancellationToken, PipelineProgress, ProgressReporter
+from core.contracts.vegetation_associations import (
+    BLOCKING_EVIDENCE_NAMES,
+    POSITIVE_EVIDENCE_NAMES,
+    VegetationAssociationConfig,
+    VegetationAssociationProvenanceFlag,
+    VegetationAssociationReasonFlag,
+    VegetationAssociationResult,
+    VegetationAssociationStatistics,
+    VegetationAssociationStatus,
+    validate_association_arrays,
+)
 from core.contracts.vegetation_candidates import (
     VegetationCandidateConfig,
     VegetationCandidateLevel,
@@ -176,4 +187,13 @@ __all__ = [
     "VegetationManualActionRecord",
     "VegetationManualLog",
     "VegetationPlausibilityLabel",
+    "BLOCKING_EVIDENCE_NAMES",
+    "POSITIVE_EVIDENCE_NAMES",
+    "VegetationAssociationConfig",
+    "VegetationAssociationProvenanceFlag",
+    "VegetationAssociationReasonFlag",
+    "VegetationAssociationResult",
+    "VegetationAssociationStatistics",
+    "VegetationAssociationStatus",
+    "validate_association_arrays",
 ]
