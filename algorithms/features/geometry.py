@@ -151,6 +151,127 @@ def run_geometry_feature_extraction(
     return result
 
 
+def load_geometry_features(
+    npz_path: Path | str, json_path: Path | str
+) -> tuple[GeometryFeatureResult, PointFeatureSet]:
+    """Reload a published A2A artifact pair without relying on original paths.
+
+    The JSON output paths are retained as publication provenance and are not
+    compared to the supplied paths, so a complete sibling pair remains
+    loadable after relocation.
+    """
+    npz_file, json_file = Path(npz_path), Path(json_path)
+    if not npz_file.is_file() or not json_file.is_file():
+        raise _feature_error(
+            code="FEATURE_LOAD_MISSING",
+            message="A2A NPZ and JSON artifacts must both exist",
+            details={"npz_path": str(npz_file), "json_path": str(json_file)},
+        )
+    try:
+        raw = json.loads(json_file.read_text(encoding="utf-8"))
+        if not isinstance(raw, Mapping):
+            raise ValueError("JSON root must be an object")
+        if "origin_xyz" in raw:
+            _validate_json_origin(raw["origin_xyz"])
+        result = GeometryFeatureResult.from_dict(raw)
+    except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+        raise _feature_error(
+            code="FEATURE_LOAD_JSON",
+            message="A2A JSON metadata is invalid",
+            details={"json_path": str(json_file)},
+            cause=str(exc),
+        ) from exc
+    if result.algorithm_version != ALGORITHM_VERSION:
+        raise _feature_error(
+            code="FEATURE_LOAD_VERSION",
+            message="A2A algorithm version is unsupported",
+            details={"algorithm_version": result.algorithm_version},
+        )
+    try:
+        size_matches = npz_file.stat().st_size == result.output_npz_bytes
+        hash_matches = _sha256_file(npz_file) == result.output_npz_sha256
+    except OSError as exc:
+        raise _feature_error(
+            code="FEATURE_LOAD_INTEGRITY",
+            message="A2A NPZ integrity could not be verified",
+            details={"npz_path": str(npz_file)},
+            cause=str(exc),
+        ) from exc
+    if not size_matches or not hash_matches:
+        raise _feature_error(
+            code="FEATURE_LOAD_INTEGRITY",
+            message="A2A NPZ size or SHA-256 differs from JSON metadata",
+            details={"npz_path": str(npz_file)},
+        )
+    try:
+        with np.load(npz_file, allow_pickle=False) as data:
+            arrays = {name: data[name] for name in data.files}
+    except (OSError, ValueError) as exc:
+        raise _feature_error(
+            code="FEATURE_LOAD_NPZ",
+            message="A2A NPZ artifact cannot be loaded without pickle support",
+            details={"npz_path": str(npz_file)},
+            cause=str(exc),
+        ) from exc
+    expected = {"source_id", "manifest_source_id", *PointFeatureSet.__dataclass_fields__}
+    if set(arrays) != expected:
+        raise _feature_error(
+            code="FEATURE_LOAD_ARRAYS",
+            message="A2A NPZ fields do not match the published contract",
+            details={"missing": sorted(expected - set(arrays)), "unknown": sorted(set(arrays) - expected)},
+        )
+    if any(value.dtype == object for value in arrays.values()):
+        raise _feature_error(
+            code="FEATURE_LOAD_OBJECT",
+            message="A2A artifact must not contain object arrays",
+            details={},
+        )
+    try:
+        source_id = _artifact_scalar_text(arrays["source_id"], "source_id")
+        manifest_source_id = _artifact_scalar_text(arrays["manifest_source_id"], "manifest_source_id")
+        features = PointFeatureSet(
+            source_id=source_id,
+            manifest_source_id=manifest_source_id,
+            **{name: arrays[name] for name in PointFeatureSet.__dataclass_fields__ if name not in {"source_id", "manifest_source_id"}},
+        )
+    except ValueError as exc:
+        raise _feature_error(
+            code="FEATURE_LOAD_ARRAYS",
+            message="A2A NPZ arrays violate the public feature contract",
+            details={},
+            cause=str(exc),
+        ) from exc
+    if (
+        np.any(features.original_index < 0)
+        or len(np.unique(features.original_index)) != features.point_count
+        or np.any(features.sample_index < 0)
+        or len(np.unique(features.sample_index)) != features.point_count
+    ):
+        raise _feature_error(
+            code="FEATURE_LOAD_INDEXES",
+            message="A2A point indexes must be non-negative and unique",
+            details={},
+        )
+    _validate_output_arrays(features)
+    if (
+        features.source_id != result.source_id
+        or features.manifest_source_id != result.manifest_source_id
+        or not np.array_equal(features.origin_xyz, np.asarray(result.origin_xyz, dtype=np.float64))
+        or result.statistics.input_point_count != features.point_count
+        or result.statistics.output_point_count != features.point_count
+        or result.arrays != features.array_metadata()
+        or result.quality_flag_counts != _quality_flag_counts(features.quality_flags)
+        or result.formulas != FORMULAS
+    ):
+        raise _feature_error(
+            code="FEATURE_LOAD_METADATA",
+            message="A2A JSON metadata differs from its NPZ artifact",
+            details={},
+        )
+    _freeze_arrays(arrays.values())
+    return result, features
+
+
 def _load_a1_input(
     npz_path: Path,
     json_path: Path,
@@ -930,6 +1051,36 @@ def _scalar_text(value: np.ndarray, name: str) -> str:
             details={"array": name},
         )
     return result
+
+
+def _artifact_scalar_text(value: np.ndarray, name: str) -> str:
+    if value.shape != () or value.dtype.kind not in {"U", "S"}:
+        raise ValueError(f"{name} must be a scalar Unicode or byte string array")
+    result = value.item()
+    if isinstance(result, bytes):
+        result = result.decode("utf-8")
+    if not isinstance(result, str) or not result:
+        raise ValueError(f"{name} must be a non-empty string")
+    return result
+
+
+def _validate_json_origin(value: Any) -> None:
+    if not isinstance(value, list) or len(value) != 3:
+        raise ValueError("origin_xyz must be a three-item JSON list")
+    for coordinate in value:
+        if not isinstance(coordinate, int | float) or isinstance(coordinate, bool):
+            raise ValueError("origin_xyz must contain only finite non-bool JSON numbers")
+        try:
+            finite = math.isfinite(float(coordinate))
+        except OverflowError as exc:
+            raise ValueError("origin_xyz must contain only finite non-bool JSON numbers") from exc
+        if not finite:
+            raise ValueError("origin_xyz must contain only finite non-bool JSON numbers")
+
+
+def _freeze_arrays(values: Any) -> None:
+    for value in values:
+        value.setflags(write=False)
 
 
 def _sha256_file(path: Path) -> str:

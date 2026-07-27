@@ -3,13 +3,18 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import shutil
 from pathlib import Path
 
 import laspy
 import numpy as np
 import pytest
 from algorithms.features import ground
-from algorithms.features.ground import GroundEstimationError, run_ground_height_estimation
+from algorithms.features.ground import (
+    GroundEstimationError,
+    load_ground_estimation,
+    run_ground_height_estimation,
+)
 from core.contracts import (
     CancellationToken,
     GroundEstimationConfig,
@@ -126,6 +131,19 @@ def run_ground(
         project_root=project,
     )
     return result, _load_npz(result.output_npz_path)
+
+
+def _published_ground(tmp_path: Path):
+    xyz = np.vstack((_cell_points(0.0, 0.0, 0.0, 32), _cell_points(1.0, 0.0, 2.0, 32)))
+    result, _arrays = run_ground(tmp_path, xyz)
+    return result
+
+
+def _refresh_ground_integrity(json_path: Path, npz_path: Path) -> None:
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    payload["output_npz_sha256"] = _sha256(npz_path)
+    payload["output_npz_bytes"] = npz_path.stat().st_size
+    json_path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _cell_points(x: float, y: float, z: float, count: int) -> np.ndarray:
@@ -327,3 +345,180 @@ def test_ground_implementation_uses_control_kdtree_not_global_distance_matrix() 
     assert "cKDTree(control_xy)" in source
     assert "distance_matrix" not in source
     assert "cdist(" not in source
+
+
+def test_public_loader_reloads_relocated_a2b_and_freezes_arrays(tmp_path: Path) -> None:
+    result = _published_ground(tmp_path)
+    before = {path: _sha256(path) for path in (result.output_npz_path, result.output_json_path)}
+    loaded, surface, hag = load_ground_estimation(result.output_npz_path, result.output_json_path)
+    assert loaded == result
+    assert hag.point_count == 64
+    assert surface.grid_shape[0] > 0
+    assert not hag.height_agl_m.flags.writeable
+    assert not surface.cell_point_count.flags.writeable
+    with pytest.raises(ValueError):
+        hag.height_agl_m[0] = np.float32(0.0)
+    assert {path: _sha256(path) for path in before} == before
+
+    relocated = tmp_path / "relocated"
+    relocated.mkdir()
+    npz_path, json_path = relocated / result.output_npz_path.name, relocated / result.output_json_path.name
+    shutil.copy2(result.output_npz_path, npz_path)
+    shutil.copy2(result.output_json_path, json_path)
+    relocated_result, _surface, relocated_hag = load_ground_estimation(npz_path, json_path)
+    assert relocated_result.output_npz_path == result.output_npz_path
+    assert np.array_equal(relocated_hag.original_index, hag.original_index)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "unknown", "version", "hash", "size"])
+def test_public_loader_rejects_a2b_json_failures(tmp_path: Path, mutation: str) -> None:
+    result = _published_ground(tmp_path)
+    payload = json.loads(result.output_json_path.read_text(encoding="utf-8"))
+    if mutation == "missing":
+        payload.pop("arrays")
+    elif mutation == "unknown":
+        payload["unexpected"] = True
+    elif mutation == "version":
+        payload["algorithm_version"] = "unsupported"
+    elif mutation == "hash":
+        payload["output_npz_sha256"] = "0" * 64
+    else:
+        payload["output_npz_bytes"] += 1
+    result.output_json_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(GroundEstimationError):
+        load_ground_estimation(result.output_npz_path, result.output_json_path)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "dtype", "shape", "object", "nonfinite"])
+def test_public_loader_rejects_invalid_a2b_arrays(tmp_path: Path, mutation: str) -> None:
+    result = _published_ground(tmp_path)
+    arrays = _load_npz(result.output_npz_path)
+    if mutation == "missing":
+        arrays.pop("height_agl_m")
+    elif mutation == "dtype":
+        arrays["original_index"] = arrays["original_index"].astype(np.int32)
+    elif mutation == "shape":
+        arrays["height_agl_m"] = arrays["height_agl_m"].reshape((-1, 1))
+    elif mutation == "object":
+        arrays["height_agl_m"] = np.asarray(["bad"] * len(arrays["height_agl_m"]), dtype=object)
+    else:
+        arrays["ground_z_m"][0] = np.nan
+    np.savez_compressed(result.output_npz_path, **arrays)
+    _refresh_ground_integrity(result.output_json_path, result.output_npz_path)
+    with pytest.raises(GroundEstimationError):
+        load_ground_estimation(result.output_npz_path, result.output_json_path)
+
+
+def test_public_loader_preserves_contract_allowed_invalid_a2b_values(tmp_path: Path) -> None:
+    result = _published_ground(tmp_path)
+    arrays = _load_npz(result.output_npz_path)
+    arrays["quality_flags"][0] |= int(GroundQualityFlag.INVALID_GROUND_ESTIMATE)
+    for name in ("ground_z_m", "raw_height_agl_m", "height_agl_m", "ground_distance_m"):
+        arrays[name][0] = np.nan
+    np.savez_compressed(result.output_npz_path, **arrays)
+    _refresh_ground_integrity(result.output_json_path, result.output_npz_path)
+    payload = json.loads(result.output_json_path.read_text(encoding="utf-8"))
+    payload["quality_flag_counts"] = ground._quality_flag_counts(arrays["quality_flags"])
+    payload["distributions"] = {
+        "ground_z_m": ground._distribution(arrays["ground_z_m"]),
+        "raw_height_agl_m": ground._distribution(arrays["raw_height_agl_m"]),
+        "height_agl_m": ground._distribution(arrays["height_agl_m"]),
+    }
+    result.output_json_path.write_text(json.dumps(payload), encoding="utf-8")
+    _loaded, _surface, hag = load_ground_estimation(result.output_npz_path, result.output_json_path)
+    assert np.isnan(hag.height_agl_m[0])
+    assert hag.quality_flags[0] & int(GroundQualityFlag.INVALID_GROUND_ESTIMATE)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "array_shape",
+        "array_dtype",
+        "array_unit",
+        "grid",
+        "quality_counts",
+        "distributions",
+        "formulas",
+        "origin_string",
+        "origin_bool",
+        "origin_large_int",
+    ],
+)
+def test_public_loader_rejects_tampered_a2b_deterministic_metadata(
+    tmp_path: Path, mutation: str
+) -> None:
+    result = _published_ground(tmp_path)
+    payload = json.loads(result.output_json_path.read_text(encoding="utf-8"))
+    if mutation == "array_shape":
+        payload["arrays"]["points"]["height_agl_m"]["shape"] = [99]
+    elif mutation == "array_dtype":
+        payload["arrays"]["surface"]["cell_point_count"]["dtype"] = "int64"
+    elif mutation == "array_unit":
+        payload["arrays"]["points"]["height_agl_m"]["unit"] = "unitless"
+    elif mutation == "grid":
+        payload["grid"]["grid_size_m"] = 99.0
+    elif mutation == "quality_counts":
+        payload["quality_flag_counts"]["NONE"] += 1
+    elif mutation == "distributions":
+        payload["distributions"]["height_agl_m"]["max"] = -1.0
+    elif mutation == "formulas":
+        payload["formulas"]["idw"] = "tampered"
+    elif mutation == "origin_string":
+        payload["origin_xyz"][0] = "10.0"
+    elif mutation == "origin_bool":
+        payload["origin_xyz"][0] = True
+    else:
+        payload["origin_xyz"][0] = 10**400
+    result.output_json_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(GroundEstimationError):
+        load_ground_estimation(result.output_npz_path, result.output_json_path)
+
+
+def test_public_loader_wraps_a2b_integrity_io_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = _published_ground(tmp_path)
+
+    def fail_sha(_path: Path) -> str:
+        raise OSError("synthetic hash read failure")
+
+    monkeypatch.setattr(ground, "_sha256_file", fail_sha)
+    with pytest.raises(GroundEstimationError):
+        load_ground_estimation(result.output_npz_path, result.output_json_path)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["origin_dtype", "negative_original", "duplicate_sample", "negative_hag", "nonfinite_control"],
+)
+def test_public_loader_rejects_invalid_a2b_identity_and_semantics(
+    tmp_path: Path, mutation: str
+) -> None:
+    result = _published_ground(tmp_path)
+    arrays = _load_npz(result.output_npz_path)
+    if mutation == "origin_dtype":
+        arrays["origin_xyz"] = arrays["origin_xyz"].astype(np.float32)
+    elif mutation == "negative_original":
+        arrays["original_index"][0] = -1
+    elif mutation == "duplicate_sample":
+        arrays["sample_index"][1] = arrays["sample_index"][0]
+    elif mutation == "negative_hag":
+        arrays["height_agl_m"][0] = np.float32(-1.0)
+    else:
+        arrays["control_ground_z_m"][0] = np.nan
+    np.savez_compressed(result.output_npz_path, **arrays)
+    _refresh_ground_integrity(result.output_json_path, result.output_npz_path)
+    with pytest.raises(GroundEstimationError):
+        load_ground_estimation(result.output_npz_path, result.output_json_path)
+
+
+def test_public_loader_freezes_every_a2b_contract_array(tmp_path: Path) -> None:
+    result = _published_ground(tmp_path)
+    _loaded, surface, hag = load_ground_estimation(result.output_npz_path, result.output_json_path)
+    for contract in (surface, hag):
+        assert all(
+            not getattr(contract, name).flags.writeable
+            for name in contract.__dataclass_fields__
+            if isinstance(getattr(contract, name), np.ndarray)
+        )

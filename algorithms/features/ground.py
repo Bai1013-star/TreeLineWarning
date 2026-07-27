@@ -167,6 +167,159 @@ def run_ground_height_estimation(
     return result
 
 
+def load_ground_estimation(
+    npz_path: Path | str, json_path: Path | str
+) -> tuple[GroundEstimationResult, GroundSurfaceModel, HeightAboveGroundSet]:
+    """Reload a published A2B artifact pair without relying on original paths."""
+    npz_file, json_file = Path(npz_path), Path(json_path)
+    if not npz_file.is_file() or not json_file.is_file():
+        raise _ground_error(
+            code="GROUND_LOAD_MISSING",
+            message="A2B NPZ and JSON artifacts must both exist",
+            details={"npz_path": str(npz_file), "json_path": str(json_file)},
+        )
+    try:
+        raw = json.loads(json_file.read_text(encoding="utf-8"))
+        if not isinstance(raw, Mapping):
+            raise ValueError("JSON root must be an object")
+        if "origin_xyz" in raw:
+            _validate_json_origin(raw["origin_xyz"])
+        result = GroundEstimationResult.from_dict(raw)
+    except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+        raise _ground_error(
+            code="GROUND_LOAD_JSON",
+            message="A2B JSON metadata is invalid",
+            details={"json_path": str(json_file)},
+            cause=str(exc),
+        ) from exc
+    if result.algorithm_version != ALGORITHM_VERSION:
+        raise _ground_error(
+            code="GROUND_LOAD_VERSION",
+            message="A2B algorithm version is unsupported",
+            details={"algorithm_version": result.algorithm_version},
+        )
+    try:
+        size_matches = npz_file.stat().st_size == result.output_npz_bytes
+        hash_matches = _sha256_file(npz_file) == result.output_npz_sha256
+    except OSError as exc:
+        raise _ground_error(
+            code="GROUND_LOAD_INTEGRITY",
+            message="A2B NPZ integrity could not be verified",
+            details={"npz_path": str(npz_file)},
+            cause=str(exc),
+        ) from exc
+    if not size_matches or not hash_matches:
+        raise _ground_error(
+            code="GROUND_LOAD_INTEGRITY",
+            message="A2B NPZ size or SHA-256 differs from JSON metadata",
+            details={"npz_path": str(npz_file)},
+        )
+    try:
+        with np.load(npz_file, allow_pickle=False) as data:
+            arrays = {name: data[name] for name in data.files}
+    except (OSError, ValueError) as exc:
+        raise _ground_error(
+            code="GROUND_LOAD_NPZ",
+            message="A2B NPZ artifact cannot be loaded without pickle support",
+            details={"npz_path": str(npz_file)},
+            cause=str(exc),
+        ) from exc
+    expected = {
+        "source_id", "manifest_source_id", "origin_xyz", "grid_origin_xy", "grid_size_m", "grid_shape",
+        *GroundSurfaceModel.__dataclass_fields__, *HeightAboveGroundSet.__dataclass_fields__,
+    }
+    if set(arrays) != expected:
+        raise _ground_error(
+            code="GROUND_LOAD_ARRAYS",
+            message="A2B NPZ fields do not match the published contract",
+            details={"missing": sorted(expected - set(arrays)), "unknown": sorted(set(arrays) - expected)},
+        )
+    if any(value.dtype == object for value in arrays.values()):
+        raise _ground_error(
+            code="GROUND_LOAD_OBJECT",
+            message="A2B artifact must not contain object arrays",
+            details={},
+        )
+    if (
+        arrays["origin_xyz"].dtype != np.float64
+        or arrays["origin_xyz"].shape != (3,)
+        or not np.isfinite(arrays["origin_xyz"]).all()
+    ):
+        raise _ground_error(
+            code="GROUND_LOAD_ORIGIN",
+            message="A2B NPZ origin_xyz must be a finite float64 XYZ vector",
+            details={},
+        )
+    try:
+        source_id = _artifact_scalar_text(arrays["source_id"], "source_id")
+        manifest_source_id = _artifact_scalar_text(arrays["manifest_source_id"], "manifest_source_id")
+        if arrays["grid_size_m"].dtype != np.float64 or arrays["grid_size_m"].shape != ():
+            raise ValueError("grid_size_m must be a float64 scalar")
+        if arrays["grid_shape"].dtype != np.int32 or arrays["grid_shape"].shape != (2,):
+            raise ValueError("grid_shape must be an int32 pair")
+        surface = GroundSurfaceModel(
+            grid_origin_xy=arrays["grid_origin_xy"],
+            grid_size_m=float(arrays["grid_size_m"].item()),
+            grid_shape=tuple(int(value) for value in arrays["grid_shape"]),
+            **{name: arrays[name] for name in GroundSurfaceModel.__dataclass_fields__ if name not in {"grid_origin_xy", "grid_size_m", "grid_shape"}},
+        )
+        hag = HeightAboveGroundSet(
+            source_id=source_id,
+            manifest_source_id=manifest_source_id,
+            **{name: arrays[name] for name in HeightAboveGroundSet.__dataclass_fields__ if name not in {"source_id", "manifest_source_id"}},
+        )
+    except ValueError as exc:
+        raise _ground_error(
+            code="GROUND_LOAD_ARRAYS",
+            message="A2B NPZ arrays violate the public ground contract",
+            details={},
+            cause=str(exc),
+        ) from exc
+    if (
+        np.any(hag.original_index < 0)
+        or len(np.unique(hag.original_index)) != hag.point_count
+        or np.any(hag.sample_index < 0)
+        or len(np.unique(hag.sample_index)) != hag.point_count
+    ):
+        raise _ground_error(
+            code="GROUND_LOAD_INDEXES",
+            message="A2B point indexes must be non-negative and unique",
+            details={},
+        )
+    _validate_output_arrays(surface, hag)
+    expected_grid = {
+        "grid_origin_xy": [float(value) for value in surface.grid_origin_xy],
+        "grid_shape": list(surface.grid_shape),
+        "grid_size_m": surface.grid_size_m,
+        "total_cell_count": int(surface.cell_point_count.size),
+    }
+    if (
+        hag.source_id != result.source_id
+        or hag.manifest_source_id != result.manifest_source_id
+        or not np.array_equal(arrays["origin_xyz"], np.asarray(result.origin_xyz, dtype=np.float64))
+        or result.statistics.input_point_count != hag.point_count
+        or result.statistics.output_point_count != hag.point_count
+        or result.arrays
+        != {"surface": surface.array_metadata(), "points": hag.array_metadata()}
+        or result.grid != expected_grid
+        or result.quality_flag_counts != _quality_flag_counts(hag.quality_flags)
+        or result.distributions
+        != {
+            "ground_z_m": _distribution(hag.ground_z_m),
+            "raw_height_agl_m": _distribution(hag.raw_height_agl_m),
+            "height_agl_m": _distribution(hag.height_agl_m),
+        }
+        or result.formulas != FORMULAS
+    ):
+        raise _ground_error(
+            code="GROUND_LOAD_METADATA",
+            message="A2B JSON metadata differs from its NPZ artifact",
+            details={},
+        )
+    _freeze_arrays(arrays.values())
+    return result, surface, hag
+
+
 def _load_inputs(
     a1_npz_path: Path,
     a1_json_path: Path,
@@ -992,6 +1145,36 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _artifact_scalar_text(value: np.ndarray, name: str) -> str:
+    if value.shape != () or value.dtype.kind not in {"U", "S"}:
+        raise ValueError(f"{name} must be a scalar Unicode or byte string array")
+    result = value.item()
+    if isinstance(result, bytes):
+        result = result.decode("utf-8")
+    if not isinstance(result, str) or not result:
+        raise ValueError(f"{name} must be a non-empty string")
+    return result
+
+
+def _validate_json_origin(value: Any) -> None:
+    if not isinstance(value, list) or len(value) != 3:
+        raise ValueError("origin_xyz must be a three-item JSON list")
+    for coordinate in value:
+        if not isinstance(coordinate, int | float) or isinstance(coordinate, bool):
+            raise ValueError("origin_xyz must contain only finite non-bool JSON numbers")
+        try:
+            finite = math.isfinite(float(coordinate))
+        except OverflowError as exc:
+            raise ValueError("origin_xyz must contain only finite non-bool JSON numbers") from exc
+        if not finite:
+            raise ValueError("origin_xyz must contain only finite non-bool JSON numbers")
+
+
+def _freeze_arrays(values: Any) -> None:
+    for value in values:
+        value.setflags(write=False)
 
 
 def _ground_error(
