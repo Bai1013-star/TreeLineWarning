@@ -112,6 +112,12 @@ from core.contracts.vegetation_trees import (
     TreeSegmentationStatistics,
     TreeSegmentationStatus,
 )
+from core.contracts.tree_inputs import (
+    TreeSegmentationInputClusterDisposition,
+    TreeSegmentationInputDisposition,
+    TreeSegmentationInputIdentity,
+    TreeSegmentationInputSet,
+)
 from core.contracts.wire_models import (
     WireModelMethod,
     WireModelQualityFlag,
@@ -245,6 +251,10 @@ __all__ = [
     "TreeSegmentationResult",
     "TreeSegmentationStatistics",
     "TreeSegmentationStatus",
+    "TreeSegmentationInputClusterDisposition",
+    "TreeSegmentationInputDisposition",
+    "TreeSegmentationInputIdentity",
+    "TreeSegmentationInputSet",
     "BLOCKING_EVIDENCE_NAMES",
     "POSITIVE_EVIDENCE_NAMES",
     "VegetationAssociationConfig",
