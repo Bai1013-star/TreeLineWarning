@@ -101,6 +101,17 @@ from core.contracts.vegetation_instances import (
     VegetationManualLog,
     VegetationPlausibilityLabel,
 )
+from core.contracts.vegetation_trees import (
+    TREE_SEGMENTATION_ALGORITHM_VERSION,
+    TREE_SEGMENTATION_SCHEMA_VERSION,
+    TreeInstanceRecord,
+    TreeSegmentationConfig,
+    TreeSegmentationErrorCode,
+    TreeSegmentationQualityFlag,
+    TreeSegmentationResult,
+    TreeSegmentationStatistics,
+    TreeSegmentationStatus,
+)
 from core.contracts.wire_models import (
     WireModelMethod,
     WireModelQualityFlag,
@@ -225,6 +236,15 @@ __all__ = [
     "VegetationManualActionRecord",
     "VegetationManualLog",
     "VegetationPlausibilityLabel",
+    "TREE_SEGMENTATION_ALGORITHM_VERSION",
+    "TREE_SEGMENTATION_SCHEMA_VERSION",
+    "TreeInstanceRecord",
+    "TreeSegmentationConfig",
+    "TreeSegmentationErrorCode",
+    "TreeSegmentationQualityFlag",
+    "TreeSegmentationResult",
+    "TreeSegmentationStatistics",
+    "TreeSegmentationStatus",
     "BLOCKING_EVIDENCE_NAMES",
     "POSITIVE_EVIDENCE_NAMES",
     "VegetationAssociationConfig",
