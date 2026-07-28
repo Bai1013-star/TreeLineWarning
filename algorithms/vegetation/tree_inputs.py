@@ -1,14 +1,18 @@
-"""Typed identity validation and V2 membership construction for V3 inputs.
+"""Path-level loading, typed identity validation, and V2 input construction for V3.
 
-This module accepts only already-loaded public contracts.  It provides pure
-cross-artifact identity validation and pure V2 membership/InputSet construction
-without I/O, artifact hashing, or segmentation execution.
+This module integrates public V2/A2A/A2B artifact loaders, provides pure
+cross-artifact identity validation, and constructs pure V2 membership/InputSet
+contracts.  ``validate_tree_input_identity()`` never reads files and
+``build_tree_segmentation_input_set()`` never reads paths.  No function here
+performs tree segmentation.
 """
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
-from typing import Any
+from pathlib import Path
+from typing import Any, NoReturn
 
 import numpy as np
 from core.contracts.features import GeometryFeatureResult, PointFeatureSet
@@ -26,6 +30,13 @@ from core.contracts.vegetation_instances import (
     VegetationInstanceStatistics,
 )
 from core.contracts.vegetation_trees import TreeSegmentationErrorCode
+
+from algorithms.features.geometry import GeometryFeatureError, load_geometry_features
+from algorithms.features.ground import GroundEstimationError, load_ground_estimation
+from algorithms.vegetation.instances import (
+    VegetationInstanceError,
+    load_vegetation_instances,
+)
 
 _V2_PROVENANCE_PATHS = {
     "v1_npz": ("v1_npz", "sha256"),
@@ -600,6 +611,201 @@ def _require_array(
     return value
 
 
+def _validated_v2_point_arrays(
+    arrays: Mapping[str, np.ndarray], source_id: str
+) -> tuple[dict[str, np.ndarray], int]:
+    """Extract the existing V2 point arrays without mutating their objects."""
+    point_arrays: dict[str, np.ndarray] = {}
+    for name in _POINT_ARRAY_FIELDS:
+        shape = (None,) if name != "xyz_local" else (None, 3)
+        point_arrays[name] = _require_array(arrays, name, _POINT_ARRAY_DTYPES[name], shape)
+    point_count = len(point_arrays["original_index"])
+    for name, array in point_arrays.items():
+        expected = (point_count, 3) if name == "xyz_local" else (point_count,)
+        if array.shape != expected:
+            _raise(
+                TreeSegmentationErrorCode.CORRUPT_SIBLING_ARTIFACT,
+                "v2",
+                name,
+                f"ndarray[dtype={array.dtype}, shape={expected}]",
+                _value_summary(array),
+                source_id=source_id,
+            )
+    return point_arrays, point_count
+
+
+def _build_v2_point_contract(
+    point_arrays: Mapping[str, np.ndarray], source_id: str
+) -> VegetationInstancePointSet:
+    """Build the typed V2 point contract after the caller's structural checks."""
+    try:
+        return VegetationInstancePointSet(**point_arrays)
+    except ValueError as exc:
+        _raise(
+            TreeSegmentationErrorCode.CORRUPT_SIBLING_ARTIFACT,
+            "v2",
+            "point_arrays",
+            "valid VegetationInstancePointSet arrays",
+            str(exc),
+            source_id=source_id,
+        )
+    raise AssertionError("unreachable")
+
+
+def _artifact_path(
+    value: Path | str,
+    suffix: str,
+    artifact_role: str,
+    field: str,
+) -> Path:
+    """Adapt and validate one explicit artifact path without resolving it."""
+    try:
+        path = Path(value)
+    except (TypeError, ValueError, OSError):
+        _raise(
+            TreeSegmentationErrorCode.CORRUPT_SIBLING_ARTIFACT,
+            artifact_role,
+            f"{field}_path",
+            "Path or str",
+            _value_summary(value),
+        )
+    if path.suffix.lower() != suffix:
+        _raise(
+            TreeSegmentationErrorCode.CORRUPT_SIBLING_ARTIFACT,
+            artifact_role,
+            f"{field}_suffix",
+            suffix,
+            path.suffix.lower() or "missing",
+        )
+    try:
+        is_file = path.is_file()
+    except OSError:
+        is_file = False
+    if not is_file:
+        _raise(
+            TreeSegmentationErrorCode.CORRUPT_SIBLING_ARTIFACT,
+            artifact_role,
+            f"{field}_path",
+            "existing regular file",
+            "missing or not a regular file",
+        )
+    return path
+
+
+def _sha256_file(path: Path) -> str:
+    """Return a lowercase SHA-256 digest while reading a file in bounded chunks."""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _raise_loader_error(
+    artifact_role: str,
+    exc: VegetationInstanceError | GeometryFeatureError | GroundEstimationError,
+) -> NoReturn:
+    """Convert an exact upstream public-loader failure to the V3 error contract."""
+    error = exc.error
+    _raise(
+        TreeSegmentationErrorCode.CORRUPT_SIBLING_ARTIFACT,
+        artifact_role,
+        "load",
+        "valid loadable public artifact pair",
+        {"type": type(exc).__name__, "code": error.code},
+    )
+    raise AssertionError("unreachable")
+
+
+def load_tree_segmentation_input_set(
+    v2_npz_path: Path | str,
+    v2_json_path: Path | str,
+    a2a_npz_path: Path | str,
+    a2a_json_path: Path | str,
+    a2b_npz_path: Path | str,
+    a2b_json_path: Path | str,
+) -> TreeSegmentationInputSet:
+    """Load verified V2/A2A/A2B artifacts and return the read-only V3 input set."""
+    v2_npz = _artifact_path(v2_npz_path, ".npz", "v2", "npz")
+    v2_json = _artifact_path(v2_json_path, ".json", "v2", "json")
+    a2a_npz = _artifact_path(a2a_npz_path, ".npz", "a2a", "npz")
+    a2a_json = _artifact_path(a2a_json_path, ".json", "a2a", "json")
+    a2b_npz = _artifact_path(a2b_npz_path, ".npz", "a2b", "npz")
+    a2b_json = _artifact_path(a2b_json_path, ".json", "a2b", "json")
+
+    try:
+        v2_result, v2_arrays = load_vegetation_instances(v2_npz, v2_json)
+    except VegetationInstanceError as exc:
+        _raise_loader_error("v2", exc)
+    try:
+        a2a_result, geometry_features = load_geometry_features(a2a_npz, a2a_json)
+    except GeometryFeatureError as exc:
+        _raise_loader_error("a2a", exc)
+    try:
+        a2b_result, _ground_surface, heights_above_ground = load_ground_estimation(
+            a2b_npz, a2b_json
+        )
+    except GroundEstimationError as exc:
+        _raise_loader_error("a2b", exc)
+
+    try:
+        v2_json_sha256 = _sha256_file(v2_json)
+    except OSError as exc:
+        _raise(
+            TreeSegmentationErrorCode.CORRUPT_SIBLING_ARTIFACT,
+            "v2",
+            "json_sha256",
+            "readable JSON file",
+            {"type": type(exc).__name__},
+        )
+    try:
+        a2a_json_sha256 = _sha256_file(a2a_json)
+    except OSError as exc:
+        _raise(
+            TreeSegmentationErrorCode.CORRUPT_SIBLING_ARTIFACT,
+            "a2a",
+            "json_sha256",
+            "readable JSON file",
+            {"type": type(exc).__name__},
+        )
+    try:
+        a2b_json_sha256 = _sha256_file(a2b_json)
+    except OSError as exc:
+        _raise(
+            TreeSegmentationErrorCode.CORRUPT_SIBLING_ARTIFACT,
+            "a2b",
+            "json_sha256",
+            "readable JSON file",
+            {"type": type(exc).__name__},
+        )
+
+    arrays = _require_mapping(v2_arrays)
+    _require_type(v2_result, VegetationInstanceResult, "v2")
+    source_id = v2_result.source_id
+    point_arrays, _point_count = _validated_v2_point_arrays(arrays, source_id)
+    v2_points = _build_v2_point_contract(point_arrays, source_id)
+    v2_origin_xyz = _require_array(arrays, "origin_xyz", np.float64, (3,))
+    identity = validate_tree_input_identity(
+        v2_result,
+        v2_points,
+        v2_origin_xyz,
+        a2a_result,
+        geometry_features,
+        a2b_result,
+        heights_above_ground,
+        v2_json_sha256=v2_json_sha256,
+        a2a_json_sha256=a2a_json_sha256,
+        a2b_json_sha256=a2b_json_sha256,
+    )
+    return build_tree_segmentation_input_set(
+        v2_result,
+        arrays,
+        geometry_features,
+        heights_above_ground,
+        identity,
+    )
+
+
 def _require_status(
     value: int, artifact_role: str, field: str, source_id: str
 ) -> VegetationClusterStatus:
@@ -975,22 +1181,7 @@ def build_tree_segmentation_input_set(
     arrays = _require_mapping(v2_arrays)
     source_id = v2_result.source_id
 
-    point_arrays: dict[str, np.ndarray] = {}
-    for name in _POINT_ARRAY_FIELDS:
-        shape = (None,) if name != "xyz_local" else (None, 3)
-        point_arrays[name] = _require_array(arrays, name, _POINT_ARRAY_DTYPES[name], shape)
-    point_count = len(point_arrays["original_index"])
-    for name, array in point_arrays.items():
-        expected = (point_count, 3) if name == "xyz_local" else (point_count,)
-        if array.shape != expected:
-            _raise(
-                TreeSegmentationErrorCode.CORRUPT_SIBLING_ARTIFACT,
-                "v2",
-                name,
-                f"ndarray[dtype={array.dtype}, shape={expected}]",
-                _value_summary(array),
-                source_id=source_id,
-            )
+    point_arrays, point_count = _validated_v2_point_arrays(arrays, source_id)
 
     cluster_id = _require_array(arrays, "cluster_id", _CLUSTER_ARRAY_DTYPES["cluster_id"], (None,))
     cluster_count = len(cluster_id)
@@ -1058,17 +1249,7 @@ def build_tree_segmentation_input_set(
         member_rows,
         source_id,
     )
-    try:
-        vegetation_points = VegetationInstancePointSet(**point_arrays)
-    except ValueError as exc:
-        _raise(
-            TreeSegmentationErrorCode.CORRUPT_SIBLING_ARTIFACT,
-            "v2",
-            "point_arrays",
-            "valid VegetationInstancePointSet arrays",
-            str(exc),
-            source_id=source_id,
-        )
+    vegetation_points = _build_v2_point_contract(point_arrays, source_id)
     _validate_summaries(
         v2_result.clusters,
         cluster_id,
