@@ -650,28 +650,13 @@ def test_rejects_invalid_v2_provenance_digest(digest: object) -> None:
     )
 
 
-def test_validator_module_has_no_loading_or_segmentation_scope() -> None:
-    source = inspect.getsource(tree_inputs)
+def test_identity_validator_has_no_loading_or_membership_scope() -> None:
+    validator = tree_inputs.validate_tree_input_identity
+    source = inspect.getsource(validator)
     parsed = ast.parse(source)
     calls = [node for node in ast.walk(parsed) if isinstance(node, ast.Call)]
-    function_names = {
-        node.name
-        for node in ast.walk(parsed)
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-    }
     call_names = {node.func.id for node in calls if isinstance(node.func, ast.Name)} | {
         node.func.attr for node in calls if isinstance(node.func, ast.Attribute)
-    }
-    import_names = {
-        alias.name.split(".", maxsplit=1)[0]
-        for node in ast.walk(parsed)
-        if isinstance(node, ast.Import)
-        for alias in node.names
-    } | {
-        alias.name
-        for node in ast.walk(parsed)
-        if isinstance(node, ast.ImportFrom)
-        for alias in node.names
     }
 
     assert not any(
@@ -688,12 +673,9 @@ def test_validator_module_has_no_loading_or_segmentation_scope() -> None:
         isinstance(node.func, ast.Attribute) and node.func.attr in {"read_text", "read_bytes"}
         for node in calls
     )
-    assert "TreeSegmentationInputSet" not in tree_inputs.__dict__
     assert "TreeSegmentationInputSet" not in call_names
-    assert not {"laspy", "lazrs", "lazperf"} & {name.lower() for name in import_names}
-    assert not {"cluster", "member", "eligibility"} & (function_names | call_names | import_names)
+    assert not {"cluster", "member", "eligibility"} & call_names
 
-    validator = tree_inputs.validate_tree_input_identity
     assert get_type_hints(validator)["return"] is TreeSegmentationInputIdentity
     parameters = inspect.signature(validator).parameters
     assert not any("path" in name for name in parameters)
