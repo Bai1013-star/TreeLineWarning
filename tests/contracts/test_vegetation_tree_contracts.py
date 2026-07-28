@@ -19,6 +19,7 @@ from core.contracts import (
 def _record(
     tree_id: int = -1,
     status: TreeSegmentationStatus = TreeSegmentationStatus.REVIEW_REQUIRED,
+    segment_id: int = 0,
     source_ids: tuple[int, ...] = (3,),
     source_statuses: tuple[VegetationClusterStatus, ...] = (VegetationClusterStatus.CONFIRMED,),
     source_ready: tuple[bool, ...] = (True,),
@@ -28,6 +29,7 @@ def _record(
 ) -> TreeInstanceRecord:
     return TreeInstanceRecord(
         tree_id,
+        segment_id,
         status,
         source_ids,
         source_statuses,
@@ -60,6 +62,7 @@ def _result(
     offsets: np.ndarray | None = None,
     members: np.ndarray | None = None,
     *,
+    segment_ids: np.ndarray | None = None,
     config: TreeSegmentationConfig | None = None,
     statistics: TreeSegmentationStatistics | None = None,
     source_id: object = "synthetic",
@@ -76,6 +79,15 @@ def _result(
         offsets = np.zeros(len(records) + 1, np.int64)
     if members is None:
         members = np.empty(0, np.int64)
+    if segment_ids is None:
+        segment_ids = np.full(len(ids), -1, np.int32)
+        for index, record in enumerate(records):
+            if index + 1 >= len(offsets):
+                break
+            start, end = offsets[index : index + 2]
+            rows = members[start:end]
+            valid_rows = rows[(rows >= 0) & (rows < len(segment_ids))]
+            segment_ids[valid_rows] = record.segment_id
     return TreeSegmentationResult(
         TREE_SEGMENTATION_SCHEMA_VERSION,
         TREE_SEGMENTATION_ALGORITHM_VERSION,
@@ -85,6 +97,7 @@ def _result(
         config or TreeSegmentationConfig(),
         statistics or _statistics(records, len(ids)),
         records,
+        segment_ids,
         ids,
         ready,
         offsets,
@@ -102,14 +115,60 @@ def test_public_enums_and_exports_are_frozen() -> None:
     assert TreeSegmentationQualityFlag.CROSS_CLUSTER_REVIEW == 64
 
 
+def test_every_record_has_segment_identity_independent_of_tree_identity() -> None:
+    review = _record(segment_id=0)
+    confirmed = _record(
+        0,
+        TreeSegmentationStatus.CONFIRMED_TREE,
+        segment_id=1,
+        tree_ready=True,
+    )
+    result = _result(
+        (review, confirmed),
+        ids=np.array([-1, 0, 0, -1], np.int32),
+        ready=np.array([False, True, True, False], np.bool_),
+        offsets=np.array([0, 1, 3], np.int64),
+        members=np.array([0, 1, 2], np.int64),
+        segment_ids=np.array([0, 1, 1, -1], np.int32),
+    )
+
+    assert [(record.segment_id, record.tree_id) for record in result.records] == [
+        (0, -1),
+        (1, 0),
+    ]
+    assert result.records[0].tree_distance_ready is False
+    assert result.records[1].tree_distance_ready is True
+
+
+def test_record_segment_identity_is_strict_and_non_negative() -> None:
+    with pytest.raises(ValueError, match="segment_id"):
+        _record(segment_id=-1)
+    with pytest.raises(ValueError, match="segment_id"):
+        _record(segment_id=False)
+    payload = _record().to_dict()
+    assert payload["segment_id"] == 0
+    for value in (True, -1, "0"):
+        invalid = dict(payload)
+        invalid["segment_id"] = value
+        with pytest.raises(ValueError, match="segment_id"):
+            TreeInstanceRecord.from_dict(invalid)
+
+
+def test_segment_ids_are_unique_continuous_and_canonical() -> None:
+    with pytest.raises(ValueError, match="unique"):
+        _result((_record(), _record(source_ids=(4,))))
+    with pytest.raises(ValueError, match="continuous"):
+        _result((_record(segment_id=1),))
+
+
 def test_empty_result_and_nonconfirmed_roundtrip() -> None:
     empty = _result(ids=np.empty(0, np.int32), ready=np.empty(0, np.bool_))
     assert TreeSegmentationResult.from_dict(empty.to_dict()).to_dict() == empty.to_dict()
     records = (
         _record(status=TreeSegmentationStatus.REVIEW_REQUIRED),
-        _record(status=TreeSegmentationStatus.PROVISIONAL, source_ids=(4,)),
-        _record(status=TreeSegmentationStatus.REJECTED, source_ids=(5,)),
-        _record(status=TreeSegmentationStatus.UNRESOLVED, source_ids=(6,)),
+        _record(status=TreeSegmentationStatus.PROVISIONAL, segment_id=1, source_ids=(4,)),
+        _record(status=TreeSegmentationStatus.REJECTED, segment_id=2, source_ids=(5,)),
+        _record(status=TreeSegmentationStatus.UNRESOLVED, segment_id=3, source_ids=(6,)),
     )
     result = _result(
         records,
@@ -119,9 +178,49 @@ def test_empty_result_and_nonconfirmed_roundtrip() -> None:
     assert TreeSegmentationResult.from_dict(result.to_dict()).to_dict() == result.to_dict()
 
 
+def test_caller_record_order_does_not_change_canonical_segment_output() -> None:
+    review = _record(segment_id=0)
+    confirmed = _record(
+        0,
+        TreeSegmentationStatus.CONFIRMED_TREE,
+        segment_id=1,
+        source_ids=(4,),
+        tree_ready=True,
+    )
+    segment_ids = np.array([0, 1, 1, -1], np.int32)
+    tree_ids = np.array([-1, 0, 0, -1], np.int32)
+    ready = np.array([False, True, True, False], np.bool_)
+    canonical = _result(
+        (review, confirmed),
+        tree_ids,
+        ready,
+        np.array([0, 1, 3], np.int64),
+        np.array([0, 1, 2], np.int64),
+        segment_ids=segment_ids,
+    )
+    shuffled = _result(
+        (confirmed, review),
+        tree_ids,
+        ready,
+        np.array([0, 2, 3], np.int64),
+        np.array([1, 2, 0], np.int64),
+        segment_ids=segment_ids,
+    )
+
+    assert shuffled.to_dict() == canonical.to_dict()
+    assert [record.segment_id for record in shuffled.records] == [0, 1]
+    assert [record.tree_id for record in shuffled.records] == [-1, 0]
+
+
 def test_confirmed_tree_ids_start_at_zero_and_are_continuous() -> None:
     first = _record(0, TreeSegmentationStatus.CONFIRMED_TREE, tree_ready=True)
-    second = _record(1, TreeSegmentationStatus.CONFIRMED_TREE, source_ids=(4,), tree_ready=True)
+    second = _record(
+        1,
+        TreeSegmentationStatus.CONFIRMED_TREE,
+        segment_id=1,
+        source_ids=(4,),
+        tree_ready=True,
+    )
     result = _result(
         (second, first),
         np.array([0, 0, 1, 1], np.int32),
@@ -278,14 +377,88 @@ def test_origin_xyz_is_strictly_numeric_finite_and_three_dimensional(origin_xyz:
 def test_member_offsets_and_indexes_are_strict(
     offsets: np.ndarray, members: np.ndarray, error: str
 ) -> None:
-    records = (_record(),) if len(offsets) == 2 else (_record(), _record(source_ids=(4,)))
+    records = (
+        (_record(),)
+        if len(offsets) == 2
+        else (_record(), _record(segment_id=1, source_ids=(4,)))
+    )
     with pytest.raises(ValueError, match=error):
         _result(records, offsets=offsets, members=members)
 
 
+def test_segment_point_array_dtype_rank_length_and_ids_are_strict() -> None:
+    with pytest.raises(ValueError, match="segment_id_by_point"):
+        _result(segment_ids=np.full(4, -1, np.int64))
+    with pytest.raises(ValueError, match="segment_id_by_point"):
+        _result(segment_ids=np.full((4, 1), -1, np.int32))
+    with pytest.raises(ValueError, match="segment_id_by_point"):
+        _result(segment_ids=np.full(3, -1, np.int32))
+    with pytest.raises(ValueError, match="unknown"):
+        _result(segment_ids=np.array([-1, 0, -1, -1], np.int32))
+
+
+def test_segment_members_must_exactly_match_point_identity() -> None:
+    review = _record()
+    with pytest.raises(ValueError, match="segment member rows"):
+        _result(
+            (review,),
+            offsets=np.array([0, 1], np.int64),
+            members=np.array([0], np.int64),
+            segment_ids=np.array([-1, -1, -1, -1], np.int32),
+        )
+    with pytest.raises(ValueError, match="segment member rows"):
+        _result(
+            (review,),
+            offsets=np.array([0, 1], np.int64),
+            members=np.array([0], np.int64),
+            segment_ids=np.array([0, 0, -1, -1], np.int32),
+        )
+
+
+def test_no_point_may_belong_to_two_retained_segments() -> None:
+    with pytest.raises(ValueError, match="share member rows"):
+        _result(
+            (_record(), _record(segment_id=1, source_ids=(4,))),
+            offsets=np.array([0, 1, 2], np.int64),
+            members=np.array([0, 0], np.int64),
+            segment_ids=np.array([0, -1, -1, -1], np.int32),
+        )
+
+
+def test_nonconfirmed_segment_members_cannot_receive_tree_identity_or_readiness() -> None:
+    review = _record()
+    confirmed = _record(
+        0,
+        TreeSegmentationStatus.CONFIRMED_TREE,
+        segment_id=1,
+        source_ids=(4,),
+    )
+    with pytest.raises(ValueError, match="non-confirmed member rows"):
+        _result(
+            (review, confirmed),
+            ids=np.array([0, 0, -1, -1], np.int32),
+            offsets=np.array([0, 1, 2], np.int64),
+            members=np.array([0, 1], np.int64),
+            segment_ids=np.array([0, 1, -1, -1], np.int32),
+        )
+    with pytest.raises(ValueError, match="confirmed tree_id"):
+        _result(
+            (review,),
+            ready=np.array([True, False, False, False], np.bool_),
+            offsets=np.array([0, 1], np.int64),
+            members=np.array([0], np.int64),
+            segment_ids=np.array([0, -1, -1, -1], np.int32),
+        )
+
+
 def test_confirmed_members_cannot_overlap_or_disagree_with_point_arrays() -> None:
     first = _record(0, TreeSegmentationStatus.CONFIRMED_TREE)
-    second = _record(1, TreeSegmentationStatus.CONFIRMED_TREE, source_ids=(4,))
+    second = _record(
+        1,
+        TreeSegmentationStatus.CONFIRMED_TREE,
+        segment_id=1,
+        source_ids=(4,),
+    )
     with pytest.raises(ValueError, match="share"):
         _result(
             (first, second),
@@ -327,15 +500,32 @@ def test_confirmed_member_readiness_must_match_each_member_row() -> None:
 
 
 def test_point_alignment_dtype_nonfinite_and_input_immutability() -> None:
+    segment_ids = np.array([-1, -1, -1, -1], np.int32)
     ids = np.array([-1, -1, -1, -1], np.int32)
     ready = np.zeros(4, np.bool_)
     offsets = np.array([0], np.int64)
     members = np.empty(0, np.int64)
-    before = (ids.copy(), ready.copy(), offsets.copy(), members.copy())
-    _result(ids=ids, ready=ready, offsets=offsets, members=members)
+    before = (
+        segment_ids.copy(),
+        ids.copy(),
+        ready.copy(),
+        offsets.copy(),
+        members.copy(),
+    )
+    _result(
+        ids=ids,
+        ready=ready,
+        offsets=offsets,
+        members=members,
+        segment_ids=segment_ids,
+    )
     assert all(
         np.array_equal(value, snapshot)
-        for value, snapshot in zip((ids, ready, offsets, members), before, strict=True)
+        for value, snapshot in zip(
+            (segment_ids, ids, ready, offsets, members),
+            before,
+            strict=True,
+        )
     )
     with pytest.raises(ValueError, match="dtype"):
         _result(ids=np.array([-1] * 4, object))
@@ -360,6 +550,9 @@ def test_config_roundtrip_and_illegal_values() -> None:
     "field,value,error",
     (
         ("ordered_tree_member_row_index", [1.5], "integer"),
+        ("segment_id_by_point", ["0", -1, -1, -1], "integer"),
+        ("segment_id_by_point", [True, -1, -1, -1], "integer"),
+        ("segment_id_by_point", [[-1], [-1], [-1], [-1]], "integer"),
         ("tree_id_by_point", ["0", -1, -1, -1], "integer"),
         ("tree_distance_ready_by_point", [0, 0, 0, 0], "bool"),
         ("tree_id_by_point", [True, -1, -1, -1], "integer"),
@@ -374,6 +567,28 @@ def test_from_dict_rejects_non_json_array_types(
     payload[field] = value
     with pytest.raises(ValueError, match=error):
         TreeSegmentationResult.from_dict(payload)
+
+
+def test_segment_json_fields_are_required_and_unknown_fields_are_rejected() -> None:
+    record_payload = _record().to_dict()
+    missing_record = dict(record_payload)
+    missing_record.pop("segment_id")
+    with pytest.raises(ValueError, match="missing"):
+        TreeInstanceRecord.from_dict(missing_record)
+    unknown_record = dict(record_payload)
+    unknown_record["segment"] = 0
+    with pytest.raises(ValueError, match="unknown"):
+        TreeInstanceRecord.from_dict(unknown_record)
+
+    result_payload = _result().to_dict()
+    missing_result = dict(result_payload)
+    missing_result.pop("segment_id_by_point")
+    with pytest.raises(ValueError, match="missing"):
+        TreeSegmentationResult.from_dict(missing_result)
+    unknown_result = dict(result_payload)
+    unknown_result["segments"] = []
+    with pytest.raises(ValueError, match="unknown"):
+        TreeSegmentationResult.from_dict(unknown_result)
 
 
 @pytest.mark.parametrize(

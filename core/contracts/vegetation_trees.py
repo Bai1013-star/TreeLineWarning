@@ -18,7 +18,6 @@ import numpy as np
 from core.contracts._json import json_safe_mapping, reject_unknown_fields, require_fields
 from core.contracts.vegetation_instances import VegetationClusterStatus
 
-
 TREE_SEGMENTATION_SCHEMA_VERSION = "tree-segmentation-v1"
 TREE_SEGMENTATION_ALGORITHM_VERSION = "v3-single-tree-segmentation-v1"
 
@@ -199,6 +198,7 @@ class TreeInstanceRecord:
     """One V3 hypothesis; only ``CONFIRMED_TREE`` carries a formal tree ID."""
 
     tree_id: int
+    segment_id: int
     status: TreeSegmentationStatus
     source_cluster_ids: tuple[int, ...]
     source_cluster_statuses: tuple[VegetationClusterStatus, ...]
@@ -208,6 +208,11 @@ class TreeInstanceRecord:
     quality_flags: TreeSegmentationQualityFlag = TreeSegmentationQualityFlag.NONE
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "segment_id",
+            _non_negative_int(self.segment_id, "segment_id"),
+        )
         status = _enum_value(self.status, TreeSegmentationStatus, "status")
         object.__setattr__(self, "status", TreeSegmentationStatus(status))
         if not isinstance(self.tree_id, int | np.integer) or isinstance(self.tree_id, bool):
@@ -277,6 +282,7 @@ class TreeInstanceRecord:
     def to_dict(self) -> dict[str, Any]:
         return {
             "tree_id": self.tree_id,
+            "segment_id": self.segment_id,
             "status": int(self.status),
             "source_cluster_ids": list(self.source_cluster_ids),
             "source_cluster_statuses": [int(value) for value in self.source_cluster_statuses],
@@ -356,10 +362,11 @@ class TreeSegmentationStatistics:
 class TreeSegmentationResult:
     """Canonical V3 point-aligned output contract.
 
-    ``tree_id_by_point`` and ``tree_distance_ready_by_point`` always have one
-    row for every V2 point row.  V3A1 intentionally has no member digest: a
-    future artifact layer must use a documented cryptographic digest, never
-    Python's process-randomized ``hash()``.
+    ``segment_id_by_point``, ``tree_id_by_point``, and
+    ``tree_distance_ready_by_point`` always have one row for every V2 point
+    row.  V3A1 intentionally has no member digest: a future artifact layer
+    must use a documented cryptographic digest, never Python's
+    process-randomized ``hash()``.
     """
 
     schema_version: str
@@ -370,6 +377,7 @@ class TreeSegmentationResult:
     config: TreeSegmentationConfig
     statistics: TreeSegmentationStatistics
     records: tuple[TreeInstanceRecord, ...]
+    segment_id_by_point: Any
     tree_id_by_point: Any
     tree_distance_ready_by_point: Any
     tree_member_offsets: Any
@@ -419,11 +427,23 @@ class TreeSegmentationResult:
         for name, expected in expected_statistics.items():
             if getattr(self.statistics, name) != expected:
                 raise ValueError(f"statistics.{name} does not match records")
-        point_ids = _array(self.tree_id_by_point, np.int32, (None,), "tree_id_by_point")
+        point_count = self.statistics.input_point_count
+        point_segments = _array(
+            self.segment_id_by_point,
+            np.int32,
+            (point_count,),
+            "segment_id_by_point",
+        )
+        point_ids = _array(
+            self.tree_id_by_point,
+            np.int32,
+            (point_count,),
+            "tree_id_by_point",
+        )
         point_ready = _array(
             self.tree_distance_ready_by_point,
             np.bool_,
-            (len(point_ids),),
+            (point_count,),
             "tree_distance_ready_by_point",
         )
         offsets = _array(
@@ -444,10 +464,20 @@ class TreeSegmentationResult:
             or np.any(np.diff(offsets) < 0)
         ):
             raise ValueError("tree_member_offsets must be monotonic and span member rows")
-        if np.any(members < 0) or np.any(members >= len(point_ids)):
+        if np.any(members < 0) or np.any(members >= len(point_segments)):
             raise ValueError("tree member index is outside V2 point-row range")
-        if len(point_ids) != self.statistics.input_point_count:
-            raise ValueError("point-level arrays must align with input_point_count")
+        if len(np.unique(members)) != len(members):
+            raise ValueError("retained segments must not share member rows")
+        segment_ids = [record.segment_id for record in records]
+        if len(segment_ids) != len(set(segment_ids)):
+            raise ValueError("record segment_id values must be unique")
+        if sorted(segment_ids) != list(range(len(segment_ids))):
+            raise ValueError("segment_id values must start at zero and be continuous")
+        allowed_segment_ids = {-1, *segment_ids}
+        if any(int(value) not in allowed_segment_ids for value in point_segments):
+            raise ValueError(
+                "segment_id_by_point contains an unknown or invalid segment_id"
+            )
         confirmed_ids = [
             record.tree_id
             for record in records
@@ -461,19 +491,26 @@ class TreeSegmentationResult:
         if np.any(point_ready & (point_ids < 0)):
             raise ValueError("tree_distance_ready_by_point requires a confirmed tree_id")
         entries: list[tuple[TreeInstanceRecord, np.ndarray]] = []
-        confirmed_member_rows: set[int] = set()
+        retained_member_rows: set[int] = set()
         for index, record in enumerate(records):
             start, end = offsets[index : index + 2]
             rows = members[start:end]
             if len(rows) > 1 and np.any(np.diff(rows) <= 0):
                 raise ValueError("member rows must be strictly increasing within a record")
+            overlap = retained_member_rows.intersection(int(value) for value in rows)
+            if overlap:
+                raise ValueError("retained segments must not share member rows")
+            retained_member_rows.update(int(value) for value in rows)
+            if not np.array_equal(
+                np.flatnonzero(point_segments == record.segment_id),
+                rows,
+            ):
+                raise ValueError(
+                    "segment member rows must exactly match segment_id_by_point"
+                )
             if record.status is TreeSegmentationStatus.CONFIRMED_TREE:
                 if not len(rows):
                     raise ValueError("confirmed trees must have member rows")
-                overlap = confirmed_member_rows.intersection(int(value) for value in rows)
-                if overlap:
-                    raise ValueError("confirmed trees must not share member rows")
-                confirmed_member_rows.update(int(value) for value in rows)
                 if not np.array_equal(np.flatnonzero(point_ids == record.tree_id), rows):
                     raise ValueError("confirmed member rows must exactly match tree_id_by_point")
                 if not np.array_equal(
@@ -524,12 +561,9 @@ class TreeSegmentationResult:
     @staticmethod
     def _record_sort_key(record: TreeInstanceRecord, rows: np.ndarray) -> tuple[Any, ...]:
         return (
-            0 if record.status is TreeSegmentationStatus.CONFIRMED_TREE else 1,
-            (
-                record.tree_id
-                if record.status is TreeSegmentationStatus.CONFIRMED_TREE
-                else int(record.status)
-            ),
+            record.segment_id,
+            record.tree_id,
+            int(record.status),
             record.source_cluster_ids,
             tuple(int(value) for value in record.source_cluster_statuses),
             record.source_cluster_distance_ready,
@@ -549,6 +583,7 @@ class TreeSegmentationResult:
             "config": self.config.to_dict(),
             "statistics": self.statistics.to_dict(),
             "records": [record.to_dict() for record in self.records],
+            "segment_id_by_point": self.segment_id_by_point.tolist(),
             "tree_id_by_point": self.tree_id_by_point.tolist(),
             "tree_distance_ready_by_point": self.tree_distance_ready_by_point.tolist(),
             "tree_member_offsets": self.tree_member_offsets.tolist(),
@@ -568,6 +603,9 @@ class TreeSegmentationResult:
         values["statistics"] = TreeSegmentationStatistics.from_dict(values["statistics"])
         values["records"] = tuple(
             TreeInstanceRecord.from_dict(value) for value in values["records"]
+        )
+        values["segment_id_by_point"] = _json_integer_array(
+            values["segment_id_by_point"], np.int32, "segment_id_by_point"
         )
         values["tree_id_by_point"] = _json_integer_array(
             values["tree_id_by_point"], np.int32, "tree_id_by_point"
