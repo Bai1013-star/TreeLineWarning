@@ -17,11 +17,19 @@ from algorithms.vegetation.instances import (
     load_vegetation_instances,
     run_vegetation_instance_grouping,
 )
+from algorithms.vegetation.tree_artifacts import (
+    LoadedTreeSegmentationArtifact,
+    TreeSegmentationArtifactError,
+    load_tree_segmentation_artifact,
+)
 
 __all__ = [
+    "LoadedTreeSegmentationArtifact",
+    "TreeSegmentationArtifactError",
     "VegetationCandidateError",
     "generate_vegetation_candidate_preview",
     "load_vegetation_candidates",
+    "load_tree_segmentation_artifact",
     "run_vegetation_candidate_selection",
     "VegetationInstanceError",
     "generate_vegetation_instances_preview",
