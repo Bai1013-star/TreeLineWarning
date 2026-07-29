@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
+from dataclasses import FrozenInstanceError
+
 import numpy as np
 import pytest
 from core.contracts import (
     TREE_SEGMENTATION_ALGORITHM_VERSION,
     TREE_SEGMENTATION_SCHEMA_VERSION,
+    TreeGeometrySummary,
     TreeInstanceRecord,
     TreeSegmentationConfig,
     TreeSegmentationErrorCode,
@@ -16,6 +20,24 @@ from core.contracts import (
 )
 
 
+def _geometry(
+    *,
+    apex_xyz_local: object = (1.0, 2.0, 12.0),
+    maximum_hag_m: object = 10.0,
+    robust_height_hag_m: object = 9.5,
+    vertical_extent_m: object = 9.0,
+) -> TreeGeometrySummary:
+    return TreeGeometrySummary(
+        apex_xyz_local=apex_xyz_local,
+        maximum_hag_m=maximum_hag_m,
+        robust_height_hag_m=robust_height_hag_m,
+        vertical_extent_m=vertical_extent_m,
+    )
+
+
+_DEFAULT_GEOMETRY = _geometry()
+
+
 def _record(
     tree_id: int = -1,
     status: TreeSegmentationStatus = TreeSegmentationStatus.REVIEW_REQUIRED,
@@ -25,18 +47,20 @@ def _record(
     source_ready: tuple[bool, ...] = (True,),
     tree_ready: bool = False,
     confidence: float = 0.5,
+    geometry_summary: TreeGeometrySummary | None = _DEFAULT_GEOMETRY,
     quality_flags: TreeSegmentationQualityFlag = TreeSegmentationQualityFlag.NONE,
 ) -> TreeInstanceRecord:
     return TreeInstanceRecord(
-        tree_id,
-        segment_id,
-        status,
-        source_ids,
-        source_statuses,
-        source_ready,
-        tree_ready,
-        confidence,
-        quality_flags,
+        tree_id=tree_id,
+        segment_id=segment_id,
+        status=status,
+        source_cluster_ids=source_ids,
+        source_cluster_statuses=source_statuses,
+        source_cluster_distance_ready=source_ready,
+        tree_distance_ready=tree_ready,
+        confidence=confidence,
+        geometry_summary=geometry_summary,
+        quality_flags=quality_flags,
     )
 
 
@@ -115,6 +139,209 @@ def test_public_enums_and_exports_are_frozen() -> None:
     assert TreeSegmentationQualityFlag.CROSS_CLUSTER_REVIEW == 64
 
 
+def test_geometry_summary_is_frozen_canonical_and_json_roundtrippable() -> None:
+    apex = [np.int32(1), 2.5, np.float64(3)]
+    summary = _geometry(
+        apex_xyz_local=apex,
+        maximum_hag_m=np.int64(12),
+        robust_height_hag_m=np.float32(11.5),
+        vertical_extent_m=np.float64(10),
+    )
+    assert summary.apex_xyz_local == (1.0, 2.5, 3.0)
+    assert all(type(value) is float for value in summary.apex_xyz_local)
+    assert type(summary.maximum_hag_m) is float
+    assert type(summary.robust_height_hag_m) is float
+    assert type(summary.vertical_extent_m) is float
+    assert summary.to_dict() == {
+        "apex_xyz_local": [1.0, 2.5, 3.0],
+        "maximum_hag_m": 12.0,
+        "robust_height_hag_m": 11.5,
+        "vertical_extent_m": 10.0,
+    }
+    payload = json.loads(json.dumps(summary.to_dict()))
+    assert TreeGeometrySummary.from_dict(payload) == summary
+    assert TreeGeometrySummary.from_dict(payload).to_dict() == payload
+    apex[0] = 99
+    assert summary.apex_xyz_local == (1.0, 2.5, 3.0)
+    with pytest.raises(FrozenInstanceError):
+        summary.vertical_extent_m = 1.0
+
+
+@pytest.mark.parametrize("numeric", (1, 1.25, np.int32(2), np.float32(2.5)))
+def test_geometry_summary_accepts_python_and_numpy_numeric_values(numeric: object) -> None:
+    summary = _geometry(
+        apex_xyz_local=(numeric, numeric, numeric),
+        maximum_hag_m=numeric,
+        robust_height_hag_m=numeric,
+        vertical_extent_m=numeric,
+    )
+    assert all(type(value) is float for value in summary.apex_xyz_local)
+    assert type(summary.maximum_hag_m) is float
+    assert type(summary.robust_height_hag_m) is float
+    assert type(summary.vertical_extent_m) is float
+
+
+@pytest.mark.parametrize(
+    "apex",
+    (
+        (1, 2),
+        (1, 2, 3, 4),
+        "123",
+        b"123",
+        [[1], 2, 3],
+        None,
+        (True, 2, 3),
+        (np.bool_(False), 2, 3),
+        (np.nan, 2, 3),
+        (np.inf, 2, 3),
+        (-np.inf, 2, 3),
+        np.array([[1.0, 2.0, 3.0]], dtype=np.float64),
+    ),
+)
+def test_geometry_summary_rejects_invalid_apex(apex: object) -> None:
+    with pytest.raises(ValueError, match="apex_xyz_local"):
+        _geometry(apex_xyz_local=apex)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("maximum_hag_m", True),
+        ("maximum_hag_m", np.bool_(False)),
+        ("maximum_hag_m", "10"),
+        ("maximum_hag_m", [10]),
+        ("maximum_hag_m", np.nan),
+        ("maximum_hag_m", np.inf),
+        ("maximum_hag_m", -np.inf),
+        ("maximum_hag_m", -1),
+        ("robust_height_hag_m", True),
+        ("robust_height_hag_m", np.bool_(False)),
+        ("robust_height_hag_m", "9"),
+        ("robust_height_hag_m", {"value": 9}),
+        ("robust_height_hag_m", np.nan),
+        ("robust_height_hag_m", np.inf),
+        ("robust_height_hag_m", -np.inf),
+        ("robust_height_hag_m", -1),
+        ("vertical_extent_m", True),
+        ("vertical_extent_m", np.bool_(False)),
+        ("vertical_extent_m", "8"),
+        ("vertical_extent_m", (8,)),
+        ("vertical_extent_m", np.nan),
+        ("vertical_extent_m", np.inf),
+        ("vertical_extent_m", -np.inf),
+        ("vertical_extent_m", -1),
+    ),
+)
+def test_geometry_summary_rejects_invalid_scalars(field: str, value: object) -> None:
+    kwargs = {field: value}
+    with pytest.raises(ValueError, match=field):
+        _geometry(**kwargs)
+
+
+def test_geometry_summary_hag_nullability_and_cross_field_rules() -> None:
+    local_only = _geometry(maximum_hag_m=None, robust_height_hag_m=None)
+    assert local_only.maximum_hag_m is None
+    assert local_only.robust_height_hag_m is None
+    with pytest.raises(ValueError, match="both"):
+        _geometry(maximum_hag_m=None, robust_height_hag_m=0.0)
+    with pytest.raises(ValueError, match="both"):
+        _geometry(maximum_hag_m=0.0, robust_height_hag_m=None)
+    with pytest.raises(ValueError, match="must not exceed"):
+        _geometry(maximum_hag_m=5.0, robust_height_hag_m=5.1)
+
+    zero = _geometry(
+        maximum_hag_m=0,
+        robust_height_hag_m=0,
+        vertical_extent_m=0,
+    )
+    assert zero.maximum_hag_m == 0.0
+    assert zero.robust_height_hag_m == 0.0
+    assert zero.vertical_extent_m == 0.0
+    assert (
+        _geometry(
+            maximum_hag_m=2.0,
+            robust_height_hag_m=2.0,
+            vertical_extent_m=5.0,
+        ).vertical_extent_m
+        == 5.0
+    )
+
+
+def test_geometry_summary_json_fields_are_exact_and_mapping_is_required() -> None:
+    payload = _geometry().to_dict()
+    for field in payload:
+        missing = dict(payload)
+        missing.pop(field)
+        with pytest.raises(ValueError, match="missing"):
+            TreeGeometrySummary.from_dict(missing)
+    unknown = dict(payload)
+    unknown["crown_area_m2"] = 1.0
+    with pytest.raises(ValueError, match="unknown"):
+        TreeGeometrySummary.from_dict(unknown)
+    for value in (None, [], "geometry", 1):
+        with pytest.raises(ValueError, match="mapping"):
+            TreeGeometrySummary.from_dict(value)
+
+
+def test_status_dependent_geometry_rules_are_strict() -> None:
+    local_only = _geometry(maximum_hag_m=None, robust_height_hag_m=None)
+    with pytest.raises(ValueError, match="complete geometry"):
+        _record(
+            tree_id=0,
+            status=TreeSegmentationStatus.CONFIRMED_TREE,
+            geometry_summary=None,
+        )
+    with pytest.raises(ValueError, match="complete geometry"):
+        _record(
+            tree_id=0,
+            status=TreeSegmentationStatus.CONFIRMED_TREE,
+            geometry_summary=local_only,
+        )
+    assert (
+        _record(
+            tree_id=0,
+            status=TreeSegmentationStatus.CONFIRMED_TREE,
+            geometry_summary=_geometry(),
+        ).geometry_summary
+        == _geometry()
+    )
+
+    for status in (
+        TreeSegmentationStatus.REVIEW_REQUIRED,
+        TreeSegmentationStatus.PROVISIONAL,
+    ):
+        for geometry in (_geometry(), local_only, None):
+            assert _record(status=status, geometry_summary=geometry).geometry_summary is geometry
+
+    for status in (
+        TreeSegmentationStatus.REJECTED,
+        TreeSegmentationStatus.UNRESOLVED,
+    ):
+        for geometry in (_geometry(), None):
+            assert _record(status=status, geometry_summary=geometry).geometry_summary is geometry
+
+
+def test_record_geometry_serialization_is_strict() -> None:
+    record = _record()
+    payload = json.loads(json.dumps(record.to_dict()))
+    assert TreeInstanceRecord.from_dict(payload) == record
+    missing = dict(payload)
+    missing.pop("geometry_summary")
+    with pytest.raises(ValueError, match="missing"):
+        TreeInstanceRecord.from_dict(missing)
+    unknown = dict(payload)
+    unknown["apex"] = [1.0, 2.0, 3.0]
+    with pytest.raises(ValueError, match="unknown"):
+        TreeInstanceRecord.from_dict(unknown)
+    for value in ([], "geometry", 1, True):
+        invalid = dict(payload)
+        invalid["geometry_summary"] = value
+        with pytest.raises(ValueError, match="mapping"):
+            TreeInstanceRecord.from_dict(invalid)
+    absent = _record(geometry_summary=None)
+    assert TreeInstanceRecord.from_dict(absent.to_dict()) == absent
+
+
 def test_every_record_has_segment_identity_independent_of_tree_identity() -> None:
     review = _record(segment_id=0)
     confirmed = _record(
@@ -166,16 +393,31 @@ def test_empty_result_and_nonconfirmed_roundtrip() -> None:
     assert TreeSegmentationResult.from_dict(empty.to_dict()).to_dict() == empty.to_dict()
     records = (
         _record(status=TreeSegmentationStatus.REVIEW_REQUIRED),
-        _record(status=TreeSegmentationStatus.PROVISIONAL, segment_id=1, source_ids=(4,)),
-        _record(status=TreeSegmentationStatus.REJECTED, segment_id=2, source_ids=(5,)),
-        _record(status=TreeSegmentationStatus.UNRESOLVED, segment_id=3, source_ids=(6,)),
+        _record(
+            status=TreeSegmentationStatus.PROVISIONAL,
+            segment_id=1,
+            source_ids=(4,),
+            geometry_summary=_geometry(maximum_hag_m=None, robust_height_hag_m=None),
+        ),
+        _record(
+            status=TreeSegmentationStatus.REJECTED,
+            segment_id=2,
+            source_ids=(5,),
+            geometry_summary=None,
+        ),
+        _record(
+            status=TreeSegmentationStatus.UNRESOLVED,
+            segment_id=3,
+            source_ids=(6,),
+        ),
     )
     result = _result(
         records,
         offsets=np.array([0, 1, 2, 3, 4], np.int64),
         members=np.arange(4, dtype=np.int64),
     )
-    assert TreeSegmentationResult.from_dict(result.to_dict()).to_dict() == result.to_dict()
+    payload = json.loads(json.dumps(result.to_dict()))
+    assert TreeSegmentationResult.from_dict(payload).to_dict() == payload
 
 
 def test_caller_record_order_does_not_change_canonical_segment_output() -> None:
@@ -370,17 +612,18 @@ def test_origin_xyz_is_strictly_numeric_finite_and_three_dimensional(origin_xyz:
     assert _result(origin_xyz=(1, 2.5, np.float32(3))).origin_xyz == (1.0, 2.5, 3.0)
 
 
-@pytest.mark.parametrize("offsets,members,error", [
-    (np.array([0, 2, 1], np.int64), np.array([0], np.int64), "monotonic"),
-    (np.array([0, 1], np.int64), np.array([4], np.int64), "outside"),
-])
+@pytest.mark.parametrize(
+    "offsets,members,error",
+    [
+        (np.array([0, 2, 1], np.int64), np.array([0], np.int64), "monotonic"),
+        (np.array([0, 1], np.int64), np.array([4], np.int64), "outside"),
+    ],
+)
 def test_member_offsets_and_indexes_are_strict(
     offsets: np.ndarray, members: np.ndarray, error: str
 ) -> None:
     records = (
-        (_record(),)
-        if len(offsets) == 2
-        else (_record(), _record(segment_id=1, source_ids=(4,)))
+        (_record(),) if len(offsets) == 2 else (_record(), _record(segment_id=1, source_ids=(4,)))
     )
     with pytest.raises(ValueError, match=error):
         _result(records, offsets=offsets, members=members)
@@ -486,17 +729,15 @@ def test_confirmed_member_readiness_must_match_each_member_row() -> None:
     assert not _result(
         (not_ready,), ready=np.zeros(4, np.bool_), **kwargs
     ).tree_distance_ready_by_point.any()
-    assert _result(
-        (ready,), ready=np.array([True, True, False, False], np.bool_), **kwargs
-    ).tree_distance_ready_by_point[:2].all()
+    assert (
+        _result((ready,), ready=np.array([True, True, False, False], np.bool_), **kwargs)
+        .tree_distance_ready_by_point[:2]
+        .all()
+    )
     with pytest.raises(ValueError, match="readiness"):
-        _result(
-            (not_ready,), ready=np.array([True, False, False, False], np.bool_), **kwargs
-        )
+        _result((not_ready,), ready=np.array([True, False, False, False], np.bool_), **kwargs)
     with pytest.raises(ValueError, match="readiness"):
-        _result(
-            (ready,), ready=np.array([True, False, False, False], np.bool_), **kwargs
-        )
+        _result((ready,), ready=np.array([True, False, False, False], np.bool_), **kwargs)
 
 
 def test_point_alignment_dtype_nonfinite_and_input_immutability() -> None:
@@ -560,9 +801,7 @@ def test_config_roundtrip_and_illegal_values() -> None:
         ("tree_id_by_point", [[-1], [-1], [-1], [-1]], "integer"),
     ),
 )
-def test_from_dict_rejects_non_json_array_types(
-    field: str, value: object, error: str
-) -> None:
+def test_from_dict_rejects_non_json_array_types(field: str, value: object, error: str) -> None:
     payload = _result().to_dict()
     payload[field] = value
     with pytest.raises(ValueError, match=error):

@@ -62,6 +62,12 @@ from core.contracts.preprocessing import (
     ProcessingStatistics,
 )
 from core.contracts.progress import CancellationToken, PipelineProgress, ProgressReporter
+from core.contracts.tree_inputs import (
+    TreeSegmentationInputClusterDisposition,
+    TreeSegmentationInputDisposition,
+    TreeSegmentationInputIdentity,
+    TreeSegmentationInputSet,
+)
 from core.contracts.vegetation_associations import (
     BLOCKING_EVIDENCE_NAMES,
     POSITIVE_EVIDENCE_NAMES,
@@ -104,6 +110,7 @@ from core.contracts.vegetation_instances import (
 from core.contracts.vegetation_trees import (
     TREE_SEGMENTATION_ALGORITHM_VERSION,
     TREE_SEGMENTATION_SCHEMA_VERSION,
+    TreeGeometrySummary,
     TreeInstanceRecord,
     TreeSegmentationConfig,
     TreeSegmentationErrorCode,
@@ -111,12 +118,6 @@ from core.contracts.vegetation_trees import (
     TreeSegmentationResult,
     TreeSegmentationStatistics,
     TreeSegmentationStatus,
-)
-from core.contracts.tree_inputs import (
-    TreeSegmentationInputClusterDisposition,
-    TreeSegmentationInputDisposition,
-    TreeSegmentationInputIdentity,
-    TreeSegmentationInputSet,
 )
 from core.contracts.wire_models import (
     WireModelMethod,
@@ -244,6 +245,7 @@ __all__ = [
     "VegetationPlausibilityLabel",
     "TREE_SEGMENTATION_ALGORITHM_VERSION",
     "TREE_SEGMENTATION_SCHEMA_VERSION",
+    "TreeGeometrySummary",
     "TreeInstanceRecord",
     "TreeSegmentationConfig",
     "TreeSegmentationErrorCode",

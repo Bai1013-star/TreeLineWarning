@@ -122,9 +122,8 @@ def _origin_xyz(value: Any) -> tuple[float, float, float]:
         raise ValueError("origin_xyz must contain exactly three values")
     origin = []
     for coordinate in value:
-        if (
-            not isinstance(coordinate, int | float | np.integer | np.floating)
-            or isinstance(coordinate, bool | np.bool_)
+        if not isinstance(coordinate, int | float | np.integer | np.floating) or isinstance(
+            coordinate, bool | np.bool_
         ):
             raise ValueError("origin_xyz must contain only finite numeric values")
         numeric = float(coordinate)
@@ -132,6 +131,37 @@ def _origin_xyz(value: Any) -> tuple[float, float, float]:
             raise ValueError("origin_xyz must contain only finite numeric values")
         origin.append(numeric)
     return (origin[0], origin[1], origin[2])
+
+
+def _geometry_scalar(value: Any, name: str, minimum: float | None = None) -> float:
+    if not isinstance(value, int | float | np.integer | np.floating) or isinstance(
+        value, bool | np.bool_
+    ):
+        raise ValueError(f"{name} must be a finite numeric value")
+    try:
+        result = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite numeric value") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be a finite numeric value")
+    if minimum is not None and result < minimum:
+        raise ValueError(f"{name} must be at least {minimum}")
+    return result
+
+
+def _apex_xyz_local(value: Any) -> tuple[float, float, float]:
+    if isinstance(value, np.ndarray):
+        if value.ndim != 1:
+            raise ValueError("apex_xyz_local must be a one-dimensional XYZ sequence")
+        coordinates: Sequence[Any] = value
+    elif isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        coordinates = value
+    else:
+        raise ValueError("apex_xyz_local must be a one-dimensional XYZ sequence")
+    if len(coordinates) != 3:
+        raise ValueError("apex_xyz_local must contain exactly three values")
+    apex = tuple(_geometry_scalar(coordinate, "apex_xyz_local") for coordinate in coordinates)
+    return (apex[0], apex[1], apex[2])
 
 
 def _enum_value(value: Any, enum_type: type[IntEnum], name: str) -> IntEnum:
@@ -194,8 +224,65 @@ class TreeSegmentationConfig:
 
 
 @dataclass(frozen=True)
+class TreeGeometrySummary:
+    """Minimal vertical geometry for one retained V3 segment.
+
+    ``apex_xyz_local`` is an algorithm-selected representative in the result's
+    local Cartesian metre frame; V3C1B does not freeze its selection policy.
+    HAG values use metres above ground and may be absent only as a pair.
+    ``vertical_extent_m`` is maximum local Z minus minimum local Z over valid
+    local-geometry support and is intentionally not compared with either HAG
+    value.
+    """
+
+    apex_xyz_local: tuple[float, float, float]
+    maximum_hag_m: float | None
+    robust_height_hag_m: float | None
+    vertical_extent_m: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "apex_xyz_local", _apex_xyz_local(self.apex_xyz_local))
+        maximum_missing = self.maximum_hag_m is None
+        robust_missing = self.robust_height_hag_m is None
+        if maximum_missing != robust_missing:
+            raise ValueError("maximum_hag_m and robust_height_hag_m must both be present or None")
+        if not maximum_missing:
+            maximum = _geometry_scalar(self.maximum_hag_m, "maximum_hag_m", 0.0)
+            robust = _geometry_scalar(self.robust_height_hag_m, "robust_height_hag_m", 0.0)
+            if robust > maximum:
+                raise ValueError("robust_height_hag_m must not exceed maximum_hag_m")
+            object.__setattr__(self, "maximum_hag_m", maximum)
+            object.__setattr__(self, "robust_height_hag_m", robust)
+        object.__setattr__(
+            self,
+            "vertical_extent_m",
+            _geometry_scalar(self.vertical_extent_m, "vertical_extent_m", 0.0),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "apex_xyz_local": list(self.apex_xyz_local),
+            "maximum_hag_m": self.maximum_hag_m,
+            "robust_height_hag_m": self.robust_height_hag_m,
+            "vertical_extent_m": self.vertical_extent_m,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> TreeGeometrySummary:
+        if not isinstance(data, Mapping):
+            raise ValueError("TreeGeometrySummary must be a mapping")
+        require_fields(data, set(cls.__dataclass_fields__), cls.__name__)
+        reject_unknown_fields(data, set(cls.__dataclass_fields__), cls.__name__)
+        return cls(**dict(data))
+
+
+@dataclass(frozen=True)
 class TreeInstanceRecord:
-    """One V3 hypothesis; only ``CONFIRMED_TREE`` carries a formal tree ID."""
+    """One V3 hypothesis; only ``CONFIRMED_TREE`` carries a formal tree ID.
+
+    Confirmed trees require complete geometry including both HAG values.  Other
+    statuses may retain complete, local-only, or no geometry.
+    """
 
     tree_id: int
     segment_id: int
@@ -205,6 +292,7 @@ class TreeInstanceRecord:
     source_cluster_distance_ready: tuple[bool, ...]
     tree_distance_ready: bool
     confidence: float
+    geometry_summary: TreeGeometrySummary | None
     quality_flags: TreeSegmentationQualityFlag = TreeSegmentationQualityFlag.NONE
 
     def __post_init__(self) -> None:
@@ -243,8 +331,7 @@ class TreeInstanceRecord:
         )
         readiness = tuple(bool(value) for value in self.source_cluster_distance_ready)
         if any(
-            not isinstance(value, bool | np.bool_)
-            for value in self.source_cluster_distance_ready
+            not isinstance(value, bool | np.bool_) for value in self.source_cluster_distance_ready
         ):
             raise ValueError("source_cluster_distance_ready must contain bool values")
         if len(statuses) != len(source_ids) or len(readiness) != len(source_ids):
@@ -256,6 +343,10 @@ class TreeInstanceRecord:
         object.__setattr__(self, "confidence", _finite(self.confidence, "confidence", 0.0))
         if self.confidence > 1.0:
             raise ValueError("confidence must not exceed one")
+        if self.geometry_summary is not None and not isinstance(
+            self.geometry_summary, TreeGeometrySummary
+        ):
+            raise ValueError("geometry_summary must be a TreeGeometrySummary or None")
         if not isinstance(self.quality_flags, int | np.integer) or isinstance(
             self.quality_flags, bool
         ):
@@ -274,6 +365,12 @@ class TreeInstanceRecord:
         if self.tree_distance_ready and not confirmed:
             raise ValueError("tree_distance_ready requires CONFIRMED_TREE")
         if confirmed and (
+            self.geometry_summary is None
+            or self.geometry_summary.maximum_hag_m is None
+            or self.geometry_summary.robust_height_hag_m is None
+        ):
+            raise ValueError("confirmed trees require complete geometry with HAG values")
+        if confirmed and (
             any(status is not VegetationClusterStatus.CONFIRMED for status in statuses)
             or not all(readiness)
         ):
@@ -289,6 +386,9 @@ class TreeInstanceRecord:
             "source_cluster_distance_ready": list(self.source_cluster_distance_ready),
             "tree_distance_ready": self.tree_distance_ready,
             "confidence": self.confidence,
+            "geometry_summary": (
+                None if self.geometry_summary is None else self.geometry_summary.to_dict()
+            ),
             "quality_flags": int(self.quality_flags),
         }
 
@@ -296,7 +396,13 @@ class TreeInstanceRecord:
     def from_dict(cls, data: Mapping[str, Any]) -> TreeInstanceRecord:
         require_fields(data, set(cls.__dataclass_fields__), cls.__name__)
         reject_unknown_fields(data, set(cls.__dataclass_fields__), cls.__name__)
-        return cls(**dict(data))
+        values = dict(data)
+        geometry_summary = values["geometry_summary"]
+        if geometry_summary is not None:
+            if not isinstance(geometry_summary, Mapping):
+                raise ValueError("geometry_summary must be a mapping or null")
+            values["geometry_summary"] = TreeGeometrySummary.from_dict(geometry_summary)
+        return cls(**values)
 
 
 @dataclass(frozen=True)
@@ -458,11 +564,7 @@ class TreeSegmentationResult:
             (None,),
             "ordered_tree_member_row_index",
         )
-        if (
-            offsets[0] != 0
-            or offsets[-1] != len(members)
-            or np.any(np.diff(offsets) < 0)
-        ):
+        if offsets[0] != 0 or offsets[-1] != len(members) or np.any(np.diff(offsets) < 0):
             raise ValueError("tree_member_offsets must be monotonic and span member rows")
         if np.any(members < 0) or np.any(members >= len(point_segments)):
             raise ValueError("tree member index is outside V2 point-row range")
@@ -475,9 +577,7 @@ class TreeSegmentationResult:
             raise ValueError("segment_id values must start at zero and be continuous")
         allowed_segment_ids = {-1, *segment_ids}
         if any(int(value) not in allowed_segment_ids for value in point_segments):
-            raise ValueError(
-                "segment_id_by_point contains an unknown or invalid segment_id"
-            )
+            raise ValueError("segment_id_by_point contains an unknown or invalid segment_id")
         confirmed_ids = [
             record.tree_id
             for record in records
@@ -505,9 +605,7 @@ class TreeSegmentationResult:
                 np.flatnonzero(point_segments == record.segment_id),
                 rows,
             ):
-                raise ValueError(
-                    "segment member rows must exactly match segment_id_by_point"
-                )
+                raise ValueError("segment member rows must exactly match segment_id_by_point")
             if record.status is TreeSegmentationStatus.CONFIRMED_TREE:
                 if not len(rows):
                     raise ValueError("confirmed trees must have member rows")
@@ -518,9 +616,7 @@ class TreeSegmentationResult:
                     np.full(len(rows), record.tree_distance_ready, dtype=np.bool_),
                 ):
                     raise ValueError("confirmed point readiness must match tree_distance_ready")
-            elif len(rows) and (
-                np.any(point_ids[rows] != -1) or np.any(point_ready[rows])
-            ):
+            elif len(rows) and (np.any(point_ids[rows] != -1) or np.any(point_ready[rows])):
                 raise ValueError(
                     "non-confirmed member rows must not receive a formal tree assignment"
                 )
@@ -534,9 +630,7 @@ class TreeSegmentationResult:
                 raise ValueError("cross-cluster confirmed trees are disabled by configuration")
         entries.sort(key=lambda item: self._record_sort_key(item[0], item[1]))
         canonical_offsets = np.zeros(len(entries) + 1, dtype=np.int64)
-        canonical_offsets[1:] = np.cumsum(
-            [len(rows) for _record, rows in entries], dtype=np.int64
-        )
+        canonical_offsets[1:] = np.cumsum([len(rows) for _record, rows in entries], dtype=np.int64)
         canonical_members = (
             np.concatenate([rows for _record, rows in entries]).astype(np.int64, copy=False)
             if entries
