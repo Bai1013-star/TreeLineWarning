@@ -110,6 +110,7 @@ from core.contracts.vegetation_instances import (
 from core.contracts.vegetation_trees import (
     TREE_SEGMENTATION_ALGORITHM_VERSION,
     TREE_SEGMENTATION_SCHEMA_VERSION,
+    TreeCrownSummary,
     TreeGeometrySummary,
     TreeInstanceRecord,
     TreeSegmentationConfig,
@@ -245,6 +246,7 @@ __all__ = [
     "VegetationPlausibilityLabel",
     "TREE_SEGMENTATION_ALGORITHM_VERSION",
     "TREE_SEGMENTATION_SCHEMA_VERSION",
+    "TreeCrownSummary",
     "TreeGeometrySummary",
     "TreeInstanceRecord",
     "TreeSegmentationConfig",

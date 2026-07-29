@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import FrozenInstanceError
 
 import numpy as np
@@ -8,6 +9,7 @@ import pytest
 from core.contracts import (
     TREE_SEGMENTATION_ALGORITHM_VERSION,
     TREE_SEGMENTATION_SCHEMA_VERSION,
+    TreeCrownSummary,
     TreeGeometrySummary,
     TreeInstanceRecord,
     TreeSegmentationConfig,
@@ -18,6 +20,19 @@ from core.contracts import (
     TreeSegmentationStatus,
     VegetationClusterStatus,
 )
+
+
+def _crown(
+    *,
+    crown_xy_bounds_local: object = (0.0, 0.0, 4.0, 4.0),
+    crown_area_m2: object = 4.0,
+    crown_equivalent_radius_m: object = math.sqrt(4.0 / math.pi),
+) -> TreeCrownSummary:
+    return TreeCrownSummary(
+        crown_xy_bounds_local=crown_xy_bounds_local,
+        crown_area_m2=crown_area_m2,
+        crown_equivalent_radius_m=crown_equivalent_radius_m,
+    )
 
 
 def _geometry(
@@ -35,6 +50,7 @@ def _geometry(
     )
 
 
+_DEFAULT_CROWN = _crown()
 _DEFAULT_GEOMETRY = _geometry()
 
 
@@ -48,6 +64,7 @@ def _record(
     tree_ready: bool = False,
     confidence: float = 0.5,
     geometry_summary: TreeGeometrySummary | None = _DEFAULT_GEOMETRY,
+    crown_summary: TreeCrownSummary | None = _DEFAULT_CROWN,
     quality_flags: TreeSegmentationQualityFlag = TreeSegmentationQualityFlag.NONE,
 ) -> TreeInstanceRecord:
     return TreeInstanceRecord(
@@ -60,6 +77,7 @@ def _record(
         tree_distance_ready=tree_ready,
         confidence=confidence,
         geometry_summary=geometry_summary,
+        crown_summary=crown_summary,
         quality_flags=quality_flags,
     )
 
@@ -133,10 +151,396 @@ def _result(
     )
 
 
+def _confirmed_result(
+    record: TreeInstanceRecord,
+    *,
+    config: TreeSegmentationConfig | None = None,
+) -> TreeSegmentationResult:
+    return _result(
+        (record,),
+        ids=np.array([record.tree_id, -1, -1, -1], np.int32),
+        ready=np.array([record.tree_distance_ready, False, False, False], np.bool_),
+        offsets=np.array([0, 1], np.int64),
+        members=np.array([0], np.int64),
+        config=config,
+    )
+
+
 def test_public_enums_and_exports_are_frozen() -> None:
     assert [int(value) for value in TreeSegmentationStatus] == [0, 1, 2, 3, 4]
     assert TreeSegmentationErrorCode.CANCELLED.value == "V3_CANCELLED"
     assert TreeSegmentationQualityFlag.CROSS_CLUSTER_REVIEW == 64
+    assert TreeCrownSummary.__name__ == "TreeCrownSummary"
+
+
+def test_crown_summary_is_frozen_canonical_hashable_and_json_roundtrippable() -> None:
+    bounds = [np.int32(1), 2.5, np.float64(5), 6]
+    area = 8.0
+    radius = math.sqrt(area / math.pi)
+    summary = _crown(
+        crown_xy_bounds_local=bounds,
+        crown_area_m2=np.int64(area),
+        crown_equivalent_radius_m=np.float64(radius),
+    )
+    expected = TreeCrownSummary((1.0, 2.5, 5.0, 6.0), 8.0, radius)
+    assert summary == expected
+    assert hash(summary) == hash(expected)
+    assert summary.crown_xy_bounds_local == (1.0, 2.5, 5.0, 6.0)
+    assert all(type(value) is float for value in summary.crown_xy_bounds_local)
+    assert type(summary.crown_area_m2) is float
+    assert type(summary.crown_equivalent_radius_m) is float
+    assert summary.to_dict() == {
+        "crown_xy_bounds_local": [1.0, 2.5, 5.0, 6.0],
+        "crown_area_m2": 8.0,
+        "crown_equivalent_radius_m": radius,
+    }
+    payload = json.loads(json.dumps(summary.to_dict()))
+    assert TreeCrownSummary.from_dict(payload) == summary
+    bounds[0] = 99
+    assert summary.crown_xy_bounds_local == (1.0, 2.5, 5.0, 6.0)
+    with pytest.raises(FrozenInstanceError):
+        summary.crown_area_m2 = 1.0
+
+
+@pytest.mark.parametrize("numeric", (0, 0.0, np.int32(0), np.float32(0.0)))
+def test_crown_summary_accepts_python_and_numpy_numeric_scalars(numeric: object) -> None:
+    summary = _crown(
+        crown_xy_bounds_local=(numeric, numeric, numeric, numeric),
+        crown_area_m2=numeric,
+        crown_equivalent_radius_m=numeric,
+    )
+    assert summary.crown_xy_bounds_local == (0.0, 0.0, 0.0, 0.0)
+    assert type(summary.crown_area_m2) is float
+    assert type(summary.crown_equivalent_radius_m) is float
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("crown_area_m2", True),
+        ("crown_area_m2", np.bool_(False)),
+        ("crown_area_m2", "1"),
+        ("crown_area_m2", [1]),
+        ("crown_area_m2", np.nan),
+        ("crown_area_m2", np.inf),
+        ("crown_area_m2", -np.inf),
+        ("crown_equivalent_radius_m", True),
+        ("crown_equivalent_radius_m", np.bool_(False)),
+        ("crown_equivalent_radius_m", "1"),
+        ("crown_equivalent_radius_m", {"value": 1}),
+        ("crown_equivalent_radius_m", np.nan),
+        ("crown_equivalent_radius_m", np.inf),
+        ("crown_equivalent_radius_m", -np.inf),
+    ),
+)
+def test_crown_summary_rejects_invalid_scalars(field: str, value: object) -> None:
+    with pytest.raises(ValueError, match=field):
+        _crown(**{field: value})
+
+
+@pytest.mark.parametrize(
+    "bounds",
+    (
+        (1, 2, 3),
+        (1, 2, 3, 4, 5),
+        "1234",
+        b"1234",
+        {"min_x": 1, "min_y": 2, "max_x": 3, "max_y": 4},
+        ((1,), 2, 3, 4),
+        (True, 2, 3, 4),
+        (np.bool_(False), 2, 3, 4),
+        (np.nan, 2, 3, 4),
+        (np.inf, 2, 3, 4),
+        (-np.inf, 2, 3, 4),
+        np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float64),
+    ),
+)
+def test_crown_summary_rejects_invalid_bounds(bounds: object) -> None:
+    with pytest.raises(ValueError, match="crown_xy_bounds_local"):
+        _crown(crown_xy_bounds_local=bounds)
+
+
+def test_crown_bounds_normalize_sequences_and_allow_degenerate_extents() -> None:
+    as_list = [0, 1, 0, 5]
+    list_summary = _crown(
+        crown_xy_bounds_local=as_list,
+        crown_area_m2=0,
+        crown_equivalent_radius_m=0,
+    )
+    assert list_summary.crown_xy_bounds_local == (0.0, 1.0, 0.0, 5.0)
+    as_array = np.array([2, 3, 7, 3], dtype=np.int32)
+    array_summary = _crown(
+        crown_xy_bounds_local=as_array,
+        crown_area_m2=0,
+        crown_equivalent_radius_m=0,
+    )
+    assert array_summary.crown_xy_bounds_local == (2.0, 3.0, 7.0, 3.0)
+    point = _crown(
+        crown_xy_bounds_local=(4, 5, 4, 5),
+        crown_area_m2=0,
+        crown_equivalent_radius_m=0,
+    )
+    assert point.crown_xy_bounds_local == (4.0, 5.0, 4.0, 5.0)
+    as_list[0] = -100
+    as_array[0] = -100
+    assert list_summary.crown_xy_bounds_local[0] == 0.0
+    assert array_summary.crown_xy_bounds_local[0] == 2.0
+
+
+@pytest.mark.parametrize(
+    "bounds",
+    (
+        (2, 0, 1, 1),
+        (0, 2, 1, 1),
+    ),
+)
+def test_crown_summary_rejects_reversed_bounds(bounds: object) -> None:
+    with pytest.raises(ValueError, match="minima"):
+        _crown(crown_xy_bounds_local=bounds)
+
+
+def test_crown_area_must_fit_within_bounds_with_documented_tolerance() -> None:
+    equal = _crown(
+        crown_area_m2=16.0,
+        crown_equivalent_radius_m=math.sqrt(16.0 / math.pi),
+    )
+    assert equal.crown_area_m2 == 16.0
+    below = _crown(
+        crown_area_m2=3.0,
+        crown_equivalent_radius_m=math.sqrt(3.0 / math.pi),
+    )
+    assert below.crown_area_m2 == 3.0
+    within_tolerance = 16.0 + 1e-9
+    tolerated = _crown(
+        crown_area_m2=within_tolerance,
+        crown_equivalent_radius_m=math.sqrt(within_tolerance / math.pi),
+    )
+    assert tolerated.crown_area_m2 == within_tolerance
+    materially_greater = 16.0 + 1e-6
+    with pytest.raises(ValueError, match="bounding-box area"):
+        _crown(
+            crown_area_m2=materially_greater,
+            crown_equivalent_radius_m=math.sqrt(materially_greater / math.pi),
+        )
+    with pytest.raises(ValueError, match="at least"):
+        _crown(crown_area_m2=-1, crown_equivalent_radius_m=0)
+    with pytest.raises(ValueError, match="bounding-box area"):
+        _crown(
+            crown_xy_bounds_local=(0, 0, 0, 1),
+            crown_area_m2=1,
+            crown_equivalent_radius_m=math.sqrt(1 / math.pi),
+        )
+
+
+@pytest.mark.parametrize(
+    "bounds",
+    (
+        (0.0, 0.0, 0.0, 1.0),
+        (0.0, 0.0, 1.0, 0.0),
+        (1.0, 2.0, 1.0, 2.0),
+    ),
+)
+def test_degenerate_crown_bounds_require_exactly_zero_area(
+    bounds: tuple[float, float, float, float],
+) -> None:
+    tiny_area = 1e-13
+    with pytest.raises(ValueError, match="bounding-box area"):
+        _crown(
+            crown_xy_bounds_local=bounds,
+            crown_area_m2=tiny_area,
+            crown_equivalent_radius_m=math.sqrt(tiny_area / math.pi),
+        )
+    zero = _crown(
+        crown_xy_bounds_local=bounds,
+        crown_area_m2=0.0,
+        crown_equivalent_radius_m=0.0,
+    )
+    assert zero.crown_area_m2 == 0.0
+    assert zero.crown_equivalent_radius_m == 0.0
+
+
+def test_crown_equivalent_radius_is_strictly_consistent_with_area() -> None:
+    area = 5.0
+    expected = math.sqrt(area / math.pi)
+    assert (
+        _crown(
+            crown_area_m2=area,
+            crown_equivalent_radius_m=expected,
+        ).crown_equivalent_radius_m
+        == expected
+    )
+    tolerated = expected + 5e-13
+    assert (
+        _crown(
+            crown_area_m2=area,
+            crown_equivalent_radius_m=tolerated,
+        ).crown_equivalent_radius_m
+        == tolerated
+    )
+    with pytest.raises(ValueError, match="inconsistent"):
+        _crown(crown_area_m2=area, crown_equivalent_radius_m=expected + 1e-6)
+    with pytest.raises(ValueError, match="at least"):
+        _crown(crown_equivalent_radius_m=-1)
+    zero = _crown(
+        crown_xy_bounds_local=(0, 0, 0, 0),
+        crown_area_m2=0,
+        crown_equivalent_radius_m=0,
+    )
+    assert zero.crown_equivalent_radius_m == 0.0
+    with pytest.raises(ValueError, match="must be zero"):
+        _crown(
+            crown_xy_bounds_local=(0, 0, 0, 0),
+            crown_area_m2=0,
+            crown_equivalent_radius_m=1e-13,
+        )
+
+
+def test_crown_summary_json_fields_are_exact_and_mapping_is_required() -> None:
+    payload = _crown().to_dict()
+    for field in payload:
+        missing = dict(payload)
+        missing.pop(field)
+        with pytest.raises(ValueError, match="missing"):
+            TreeCrownSummary.from_dict(missing)
+    unknown = dict(payload)
+    unknown["crown_vertical_range_m"] = 1.0
+    with pytest.raises(ValueError, match="unknown"):
+        TreeCrownSummary.from_dict(unknown)
+    for value in (None, [], "crown", 1, True):
+        with pytest.raises(ValueError, match="mapping"):
+            TreeCrownSummary.from_dict(value)
+
+
+def test_record_crown_summary_is_complete_or_absent_and_strictly_serialized() -> None:
+    record = _record(crown_summary=_crown())
+    payload = json.loads(json.dumps(record.to_dict()))
+    assert payload["crown_summary"] == _crown().to_dict()
+    assert TreeInstanceRecord.from_dict(payload) == record
+    absent = _record(crown_summary=None)
+    absent_payload = absent.to_dict()
+    assert absent_payload["crown_summary"] is None
+    assert TreeInstanceRecord.from_dict(absent_payload) == absent
+
+    missing = dict(payload)
+    missing.pop("crown_summary")
+    with pytest.raises(ValueError, match="missing"):
+        TreeInstanceRecord.from_dict(missing)
+    unknown = dict(payload)
+    unknown["crown"] = payload["crown_summary"]
+    with pytest.raises(ValueError, match="unknown"):
+        TreeInstanceRecord.from_dict(unknown)
+    for value in ([], "crown", 1, True):
+        invalid = dict(payload)
+        invalid["crown_summary"] = value
+        with pytest.raises(ValueError, match="mapping"):
+            TreeInstanceRecord.from_dict(invalid)
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        (0.0, 0.0, 1.0, 1.0),
+        [0.0, 0.0, 1.0, 1.0],
+        {
+            "crown_xy_bounds_local": [0.0, 0.0, 1.0, 1.0],
+            "crown_area_m2": 1.0,
+            "crown_equivalent_radius_m": math.sqrt(1.0 / math.pi),
+        },
+        _geometry(),
+    ),
+)
+def test_record_rejects_partial_or_untyped_crown_values(value: object) -> None:
+    with pytest.raises(ValueError, match="crown_summary"):
+        _record(crown_summary=value)
+
+
+@pytest.mark.parametrize(
+    "status",
+    (
+        TreeSegmentationStatus.REVIEW_REQUIRED,
+        TreeSegmentationStatus.PROVISIONAL,
+        TreeSegmentationStatus.REJECTED,
+        TreeSegmentationStatus.UNRESOLVED,
+    ),
+)
+@pytest.mark.parametrize("crown_summary", (_DEFAULT_CROWN, None))
+def test_nonconfirmed_statuses_retain_complete_or_absent_crown(
+    status: TreeSegmentationStatus,
+    crown_summary: TreeCrownSummary | None,
+) -> None:
+    record = _record(status=status, crown_summary=crown_summary)
+    assert record.crown_summary is crown_summary
+    assert record.tree_id == -1
+    assert record.tree_distance_ready is False
+
+
+def test_default_confirmed_tree_requires_positive_crown_summary() -> None:
+    missing = _record(
+        tree_id=0,
+        status=TreeSegmentationStatus.CONFIRMED_TREE,
+        crown_summary=None,
+    )
+    with pytest.raises(ValueError, match="complete crown summary"):
+        _confirmed_result(missing)
+
+    zero_crown = _crown(
+        crown_xy_bounds_local=(0, 0, 0, 0),
+        crown_area_m2=0,
+        crown_equivalent_radius_m=0,
+    )
+    degenerate = _record(
+        tree_id=0,
+        status=TreeSegmentationStatus.CONFIRMED_TREE,
+        crown_summary=zero_crown,
+    )
+    with pytest.raises(ValueError, match="positive"):
+        _confirmed_result(degenerate)
+    with pytest.raises(ValueError, match="positive"):
+        _confirmed_result(
+            degenerate,
+            config=TreeSegmentationConfig(allow_trunk_only_confirmation=True),
+        )
+
+    confirmed = _record(
+        tree_id=0,
+        status=TreeSegmentationStatus.CONFIRMED_TREE,
+        crown_summary=_crown(),
+    )
+    assert _confirmed_result(confirmed).records == (confirmed,)
+
+
+def test_trunk_only_confirmation_exception_preserves_existing_readiness_semantics() -> None:
+    trunk_only = _record(
+        tree_id=0,
+        status=TreeSegmentationStatus.CONFIRMED_TREE,
+        tree_ready=True,
+        crown_summary=None,
+        quality_flags=TreeSegmentationQualityFlag.MISSING_CROWN_EVIDENCE,
+    )
+    result = _confirmed_result(
+        trunk_only,
+        config=TreeSegmentationConfig(allow_trunk_only_confirmation=True),
+    )
+    assert result.records == (trunk_only,)
+    assert result.records[0].tree_distance_ready is True
+    assert result.tree_distance_ready_by_point[0]
+
+
+def test_tree_quality_flag_bitmask_behavior_remains_strict_and_deterministic() -> None:
+    combined = (
+        TreeSegmentationQualityFlag.INSUFFICIENT_SUPPORT
+        | TreeSegmentationQualityFlag.PARTIAL_GEOMETRY
+    )
+    record = _record(quality_flags=np.int32(int(combined)))
+    assert record.quality_flags == combined
+    assert TreeInstanceRecord.from_dict(record.to_dict()) == record
+    with pytest.raises(ValueError, match="quality flags"):
+        _record(quality_flags=np.bool_(False))
+    with pytest.raises(ValueError, match="quality flags"):
+        _record(quality_flags=-1)
+    unknown_bit = 1 << max(int(flag).bit_length() for flag in TreeSegmentationQualityFlag)
+    with pytest.raises(ValueError, match="quality flags"):
+        _record(quality_flags=unknown_bit)
 
 
 def test_geometry_summary_is_frozen_canonical_and_json_roundtrippable() -> None:

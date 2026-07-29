@@ -164,6 +164,26 @@ def _apex_xyz_local(value: Any) -> tuple[float, float, float]:
     return (apex[0], apex[1], apex[2])
 
 
+def _crown_xy_bounds_local(value: Any) -> tuple[float, float, float, float]:
+    if isinstance(value, np.ndarray):
+        if value.ndim != 1:
+            raise ValueError("crown_xy_bounds_local must be a one-dimensional XY bounds sequence")
+        coordinates: Sequence[Any] = value
+    elif isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        coordinates = value
+    else:
+        raise ValueError("crown_xy_bounds_local must be a one-dimensional XY bounds sequence")
+    if len(coordinates) != 4:
+        raise ValueError("crown_xy_bounds_local must contain exactly four values")
+    bounds = tuple(
+        _geometry_scalar(coordinate, "crown_xy_bounds_local") for coordinate in coordinates
+    )
+    min_x, min_y, max_x, max_y = bounds
+    if min_x > max_x or min_y > max_y:
+        raise ValueError("crown_xy_bounds_local minima must not exceed maxima")
+    return (min_x, min_y, max_x, max_y)
+
+
 def _enum_value(value: Any, enum_type: type[IntEnum], name: str) -> IntEnum:
     if isinstance(value, bool | np.bool_) or not isinstance(value, int | np.integer):
         raise ValueError(f"{name} must be a non-bool integer enum value")
@@ -218,6 +238,74 @@ class TreeSegmentationConfig:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> TreeSegmentationConfig:
+        require_fields(data, set(cls.__dataclass_fields__), cls.__name__)
+        reject_unknown_fields(data, set(cls.__dataclass_fields__), cls.__name__)
+        return cls(**dict(data))
+
+
+@dataclass(frozen=True)
+class TreeCrownSummary:
+    """Minimal planimetric crown geometry for one retained V3 segment.
+
+    ``crown_xy_bounds_local`` is an axis-aligned bounding box in the result's
+    local Cartesian metre frame, ordered as ``(min_x, min_y, max_x, max_y)``.
+    ``crown_area_m2`` is an algorithm-estimated horizontal footprint area, not
+    necessarily the bounding-box area. ``crown_equivalent_radius_m`` is the
+    radius of a circle with the same area.
+    """
+
+    crown_xy_bounds_local: tuple[float, float, float, float]
+    crown_area_m2: float
+    crown_equivalent_radius_m: float
+
+    def __post_init__(self) -> None:
+        bounds = _crown_xy_bounds_local(self.crown_xy_bounds_local)
+        area = _geometry_scalar(self.crown_area_m2, "crown_area_m2", 0.0)
+        radius = _geometry_scalar(
+            self.crown_equivalent_radius_m,
+            "crown_equivalent_radius_m",
+            0.0,
+        )
+        min_x, min_y, max_x, max_y = bounds
+        box_area = (max_x - min_x) * (max_y - min_y)
+        if box_area == 0.0:
+            if area != 0.0:
+                raise ValueError("crown_area_m2 must not exceed the crown XY bounding-box area")
+        elif area > box_area and not math.isclose(
+            area,
+            box_area,
+            rel_tol=1e-9,
+            abs_tol=1e-12,
+        ):
+            raise ValueError("crown_area_m2 must not exceed the crown XY bounding-box area")
+        expected_radius = math.sqrt(area / math.pi)
+        if area == 0.0:
+            if radius != 0.0:
+                raise ValueError(
+                    "crown_equivalent_radius_m must be zero when crown_area_m2 is zero"
+                )
+        elif not math.isclose(
+            radius,
+            expected_radius,
+            rel_tol=1e-9,
+            abs_tol=1e-12,
+        ):
+            raise ValueError("crown_equivalent_radius_m is inconsistent with crown_area_m2")
+        object.__setattr__(self, "crown_xy_bounds_local", bounds)
+        object.__setattr__(self, "crown_area_m2", area)
+        object.__setattr__(self, "crown_equivalent_radius_m", radius)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "crown_xy_bounds_local": list(self.crown_xy_bounds_local),
+            "crown_area_m2": self.crown_area_m2,
+            "crown_equivalent_radius_m": self.crown_equivalent_radius_m,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> TreeCrownSummary:
+        if not isinstance(data, Mapping):
+            raise ValueError("TreeCrownSummary must be a mapping")
         require_fields(data, set(cls.__dataclass_fields__), cls.__name__)
         reject_unknown_fields(data, set(cls.__dataclass_fields__), cls.__name__)
         return cls(**dict(data))
@@ -281,7 +369,9 @@ class TreeInstanceRecord:
     """One V3 hypothesis; only ``CONFIRMED_TREE`` carries a formal tree ID.
 
     Confirmed trees require complete geometry including both HAG values.  Other
-    statuses may retain complete, local-only, or no geometry.
+    statuses may retain complete, local-only, or no geometry.  The containing
+    result requires a positive-area crown for confirmation unless its existing
+    trunk-only confirmation policy is enabled.
     """
 
     tree_id: int
@@ -293,6 +383,7 @@ class TreeInstanceRecord:
     tree_distance_ready: bool
     confidence: float
     geometry_summary: TreeGeometrySummary | None
+    crown_summary: TreeCrownSummary | None
     quality_flags: TreeSegmentationQualityFlag = TreeSegmentationQualityFlag.NONE
 
     def __post_init__(self) -> None:
@@ -347,6 +438,8 @@ class TreeInstanceRecord:
             self.geometry_summary, TreeGeometrySummary
         ):
             raise ValueError("geometry_summary must be a TreeGeometrySummary or None")
+        if self.crown_summary is not None and not isinstance(self.crown_summary, TreeCrownSummary):
+            raise ValueError("crown_summary must be a TreeCrownSummary or None")
         if not isinstance(self.quality_flags, int | np.integer) or isinstance(
             self.quality_flags, bool
         ):
@@ -389,6 +482,7 @@ class TreeInstanceRecord:
             "geometry_summary": (
                 None if self.geometry_summary is None else self.geometry_summary.to_dict()
             ),
+            "crown_summary": (None if self.crown_summary is None else self.crown_summary.to_dict()),
             "quality_flags": int(self.quality_flags),
         }
 
@@ -402,6 +496,11 @@ class TreeInstanceRecord:
             if not isinstance(geometry_summary, Mapping):
                 raise ValueError("geometry_summary must be a mapping or null")
             values["geometry_summary"] = TreeGeometrySummary.from_dict(geometry_summary)
+        crown_summary = values["crown_summary"]
+        if crown_summary is not None:
+            if not isinstance(crown_summary, Mapping):
+                raise ValueError("crown_summary must be a mapping or null")
+            values["crown_summary"] = TreeCrownSummary.from_dict(crown_summary)
         return cls(**values)
 
 
@@ -513,6 +612,14 @@ class TreeSegmentationResult:
         records = tuple(self.records)
         if any(not isinstance(record, TreeInstanceRecord) for record in records):
             raise ValueError("records must contain TreeInstanceRecord values")
+        for record in records:
+            if record.status is not TreeSegmentationStatus.CONFIRMED_TREE:
+                continue
+            if record.crown_summary is None:
+                if not self.config.allow_trunk_only_confirmation:
+                    raise ValueError("confirmed trees require a complete crown summary")
+            elif record.crown_summary.crown_area_m2 == 0.0:
+                raise ValueError("confirmed tree crown area must be positive")
         actual_status_counts = {
             TreeSegmentationStatus.CONFIRMED_TREE: 0,
             TreeSegmentationStatus.REVIEW_REQUIRED: 0,
