@@ -11,6 +11,14 @@ from algorithms.vegetation.candidates import (
     load_vegetation_candidates,
     run_vegetation_candidate_selection,
 )
+from algorithms.vegetation.canopy_height_model import (
+    CanopyHeightModelConfig,
+    CanopyHeightModelError,
+    CanopyHeightModelErrorCode,
+    CanopyHeightModelResult,
+    CanopySupportFlag,
+    build_canopy_height_model,
+)
 from algorithms.vegetation.instances import (
     VegetationInstanceError,
     generate_vegetation_instances_preview,
@@ -24,6 +32,11 @@ from algorithms.vegetation.tree_artifacts import (
 )
 
 __all__ = [
+    "CanopyHeightModelConfig",
+    "CanopyHeightModelError",
+    "CanopyHeightModelErrorCode",
+    "CanopyHeightModelResult",
+    "CanopySupportFlag",
     "LoadedTreeSegmentationArtifact",
     "TreeSegmentationArtifactError",
     "VegetationCandidateError",
@@ -38,4 +51,5 @@ __all__ = [
     "VegetationAssociationError",
     "load_vegetation_associations",
     "run_vegetation_associations",
+    "build_canopy_height_model",
 ]
