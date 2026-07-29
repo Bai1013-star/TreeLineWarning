@@ -62,6 +62,16 @@ from core.contracts.preprocessing import (
     ProcessingStatistics,
 )
 from core.contracts.progress import CancellationToken, PipelineProgress, ProgressReporter
+from core.contracts.tree_artifacts import (
+    TREE_SEGMENTATION_ARTIFACT_SCHEMA_VERSION,
+    TREE_SEGMENTATION_MANIFEST_FILENAME,
+    TREE_SEGMENTATION_METADATA_FILENAME,
+    TREE_SEGMENTATION_NPZ_FILENAME,
+    TreeSegmentationArtifactArrayInventory,
+    TreeSegmentationArtifactArraySpec,
+    TreeSegmentationArtifactManifest,
+    TreeSegmentationArtifactMetadata,
+)
 from core.contracts.tree_inputs import (
     TreeSegmentationInputClusterDisposition,
     TreeSegmentationInputDisposition,
@@ -244,8 +254,16 @@ __all__ = [
     "VegetationManualActionRecord",
     "VegetationManualLog",
     "VegetationPlausibilityLabel",
+    "TREE_SEGMENTATION_ARTIFACT_SCHEMA_VERSION",
+    "TREE_SEGMENTATION_MANIFEST_FILENAME",
+    "TREE_SEGMENTATION_METADATA_FILENAME",
+    "TREE_SEGMENTATION_NPZ_FILENAME",
     "TREE_SEGMENTATION_ALGORITHM_VERSION",
     "TREE_SEGMENTATION_SCHEMA_VERSION",
+    "TreeSegmentationArtifactArrayInventory",
+    "TreeSegmentationArtifactArraySpec",
+    "TreeSegmentationArtifactManifest",
+    "TreeSegmentationArtifactMetadata",
     "TreeCrownSummary",
     "TreeGeometrySummary",
     "TreeInstanceRecord",
