@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
+from types import MappingProxyType
 
+import core.contracts.vegetation_trees as vegetation_trees
 import numpy as np
 import pytest
 from core.contracts import (
@@ -52,6 +55,32 @@ def _geometry(
 
 _DEFAULT_CROWN = _crown()
 _DEFAULT_GEOMETRY = _geometry()
+
+
+def _frozen_array(value: object, dtype: object | None = None) -> np.ndarray:
+    array = np.array(value, dtype=dtype, order="C", copy=True, subok=False)
+    array.setflags(write=False)
+    return array
+
+
+def _result_array(value: np.ndarray) -> np.ndarray:
+    if (
+        type(value) is np.ndarray
+        and value.flags.owndata
+        and value.flags.c_contiguous
+        and not value.flags.writeable
+    ):
+        return value
+    return _frozen_array(value)
+
+
+_RESULT_ARRAY_FIELDS = (
+    "segment_id_by_point",
+    "tree_id_by_point",
+    "tree_distance_ready_by_point",
+    "tree_member_offsets",
+    "ordered_tree_member_row_index",
+)
 
 
 def _record(
@@ -112,6 +141,7 @@ def _result(
     origin_xyz: object = (0.0, 0.0, 0.0),
     warnings: tuple[object, ...] = (),
     limitations: tuple[object, ...] = (),
+    freeze_arrays: bool = True,
 ) -> TreeSegmentationResult:
     if ids is None:
         ids = np.full(4, -1, np.int32)
@@ -130,6 +160,10 @@ def _result(
             rows = members[start:end]
             valid_rows = rows[(rows >= 0) & (rows < len(segment_ids))]
             segment_ids[valid_rows] = record.segment_id
+    if freeze_arrays:
+        segment_ids, ids, ready, offsets, members = (
+            _result_array(value) for value in (segment_ids, ids, ready, offsets, members)
+        )
     return TreeSegmentationResult(
         TREE_SEGMENTATION_SCHEMA_VERSION,
         TREE_SEGMENTATION_ALGORITHM_VERSION,
@@ -1263,3 +1297,504 @@ def test_messages_require_nonstring_sequences_of_strings() -> None:
             _result(**{field: value})
     result = _result(warnings=["warning"])
     assert result.warnings == ("warning",)
+
+
+def test_canonical_arrays_are_retained_read_only_and_replace_is_zero_copy() -> None:
+    arrays = (
+        _frozen_array([-1, -1, -1, -1], np.int32),
+        _frozen_array([-1, -1, -1, -1], np.int32),
+        _frozen_array([False, False, False, False], np.bool_),
+        _frozen_array([0], np.int64),
+        _frozen_array([], np.int64),
+    )
+    result = _result(
+        ids=arrays[1],
+        ready=arrays[2],
+        offsets=arrays[3],
+        members=arrays[4],
+        segment_ids=arrays[0],
+    )
+    for name, value in zip(
+        (
+            "segment_id_by_point",
+            "tree_id_by_point",
+            "tree_distance_ready_by_point",
+            "tree_member_offsets",
+            "ordered_tree_member_row_index",
+        ),
+        arrays,
+        strict=True,
+    ):
+        assert getattr(result, name) is value
+        assert value.flags.owndata
+        assert value.flags.c_contiguous
+        assert not value.flags.writeable
+        assert getattr(replace(result), name) is value
+    with pytest.raises(ValueError, match="ownership"):
+        replace(result, segment_id_by_point=result.segment_id_by_point.copy())
+
+
+class _ArraySubclass(np.ndarray):
+    pass
+
+
+def _storage_policy_base_result() -> TreeSegmentationResult:
+    return _result(
+        (_record(),),
+        ids=np.array([-1, -1, -1, -1], np.int32),
+        ready=np.zeros(4, np.bool_),
+        offsets=np.array([0, 2], np.int64),
+        members=np.array([0, 1], np.int64),
+        segment_ids=np.array([0, 0, -1, -1], np.int32),
+    )
+
+
+def _invalid_storage_array(
+    valid: np.ndarray,
+    defect: str,
+    path: Path,
+) -> np.ndarray:
+    if defect == "writable":
+        return valid.copy()
+    if defect in {"view", "readonly_view"}:
+        backing = np.empty(len(valid) + 1, dtype=valid.dtype)
+        backing[: len(valid)] = valid
+        view = backing[: len(valid)]
+        if defect == "readonly_view":
+            view.setflags(write=False)
+        return view
+    if defect == "subclass":
+        return valid.view(_ArraySubclass)
+    if defect == "memmap":
+        value = np.memmap(path, dtype=valid.dtype, mode="w+", shape=valid.shape)
+        value[:] = valid
+        value.flush()
+        value.setflags(write=False)
+        return value
+    if defect == "wrong_dtype":
+        dtype = np.int32 if valid.dtype in {np.dtype(np.int64), np.dtype(np.bool_)} else np.int64
+        return _frozen_array(valid, dtype)
+    if defect == "wrong_rank":
+        return _frozen_array(valid.reshape((-1, 1)), valid.dtype)
+    if defect == "non_c":
+        backing = np.empty(len(valid) * 2, dtype=valid.dtype)
+        backing[::2] = valid
+        view = backing[::2]
+        view.setflags(write=False)
+        assert not view.flags.c_contiguous
+        return view
+    raise AssertionError(f"unknown storage defect: {defect}")
+
+
+@pytest.mark.parametrize("field", _RESULT_ARRAY_FIELDS)
+@pytest.mark.parametrize(
+    "defect",
+    (
+        "writable",
+        "view",
+        "readonly_view",
+        "subclass",
+        "memmap",
+        "wrong_dtype",
+        "wrong_rank",
+        "non_c",
+    ),
+)
+def test_each_result_array_rejects_every_applicable_storage_defect(
+    field: str,
+    defect: str,
+    tmp_path: Path,
+) -> None:
+    result = _storage_policy_base_result()
+    valid = getattr(result, field)
+    replacement = _invalid_storage_array(
+        valid,
+        defect,
+        tmp_path / f"{field}-{defect}.bin",
+    )
+    assert replacement.shape == valid.shape or defect == "wrong_rank"
+    with pytest.raises(ValueError, match=field):
+        replace(result, **{field: replacement})
+
+
+def test_from_dict_creates_one_canonical_frozen_array_per_field() -> None:
+    restored = TreeSegmentationResult.from_dict(_result().to_dict())
+    for name in (
+        "segment_id_by_point",
+        "tree_id_by_point",
+        "tree_distance_ready_by_point",
+        "tree_member_offsets",
+        "ordered_tree_member_row_index",
+    ):
+        value = getattr(restored, name)
+        assert type(value) is np.ndarray
+        assert value.flags.owndata
+        assert value.flags.c_contiguous
+        assert not value.flags.writeable
+
+
+def test_linear_membership_accepts_exact_and_rejects_count_and_label_mismatches() -> None:
+    records = (_record(segment_id=0), _record(segment_id=1, source_ids=(4,)))
+    valid = {
+        "records": records,
+        "offsets": np.array([0, 2, 3], np.int64),
+        "members": np.array([0, 2, 3], np.int64),
+        "segment_ids": np.array([0, -1, 0, 1], np.int32),
+    }
+    assert np.array_equal(_result(**valid).ordered_tree_member_row_index, [0, 2, 3])
+    with pytest.raises(ValueError, match="assigned count"):
+        _result(
+            records,
+            offsets=np.array([0, 1, 2], np.int64),
+            members=np.array([0, 3], np.int64),
+            segment_ids=valid["segment_ids"],
+        )
+    with pytest.raises(ValueError, match="exactly match"):
+        _result(
+            records,
+            offsets=np.array([0, 2, 3], np.int64),
+            members=np.array([0, 1, 3], np.int64),
+            segment_ids=valid["segment_ids"],
+        )
+    with pytest.raises(ValueError, match="exactly match"):
+        _result(
+            records,
+            offsets=np.array([0, 2, 3], np.int64),
+            members=np.array([0, 2, 3], np.int64),
+            segment_ids=np.array([1, -1, 0, 1], np.int32),
+        )
+
+
+@pytest.mark.parametrize(
+    "members,error",
+    (
+        ([-1], "outside"),
+        ([4], "outside"),
+        ([0, 0], "strictly increasing"),
+    ),
+)
+def test_linear_member_bounds_and_duplicates_are_rejected(
+    members: list[int],
+    error: str,
+) -> None:
+    with pytest.raises(ValueError, match=error):
+        _result(
+            (_record(),),
+            offsets=np.array([0, len(members)], np.int64),
+            members=np.array(members, np.int64),
+            segment_ids=np.array([0, -1, -1, -1], np.int32),
+        )
+
+
+def test_duplicate_member_across_segment_blocks_is_rejected() -> None:
+    with pytest.raises(ValueError, match="share member rows"):
+        _result(
+            (_record(), _record(segment_id=1, source_ids=(4,))),
+            offsets=np.array([0, 1, 2], np.int64),
+            members=np.array([0, 0], np.int64),
+            segment_ids=np.array([0, 1, -1, -1], np.int32),
+        )
+
+
+def test_strict_member_order_is_checked_across_validation_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(vegetation_trees, "_TREE_RESULT_VALIDATION_CHUNK_SIZE", 2)
+    with pytest.raises(ValueError, match="strictly increasing"):
+        _result(
+            (_record(),),
+            offsets=np.array([0, 3], np.int64),
+            members=np.array([0, 2, 1], np.int64),
+            segment_ids=np.array([0, 0, 0, -1], np.int32),
+        )
+
+
+def test_noncanonical_records_reorder_whole_blocks_without_point_array_copies() -> None:
+    records = tuple(_record(segment_id=index, source_ids=(index + 10,)) for index in range(3))
+    point_segments = _frozen_array([0, 0, 1, 2, 2, -1], np.int32)
+    point_ids = _frozen_array([-1] * 6, np.int32)
+    point_ready = _frozen_array([False] * 6, np.bool_)
+    offsets = _frozen_array([0, 1, 3, 5], np.int64)
+    members = _frozen_array([2, 3, 4, 0, 1], np.int64)
+    result = _result(
+        (records[1], records[2], records[0]),
+        ids=point_ids,
+        ready=point_ready,
+        offsets=offsets,
+        members=members,
+        segment_ids=point_segments,
+    )
+    assert result.records == records
+    assert np.array_equal(result.tree_member_offsets, [0, 2, 3, 5])
+    assert np.array_equal(result.ordered_tree_member_row_index, [0, 1, 2, 3, 4])
+    assert result.tree_member_offsets is not offsets
+    assert result.ordered_tree_member_row_index is not members
+    assert result.segment_id_by_point is point_segments
+    assert result.tree_id_by_point is point_ids
+    assert result.tree_distance_ready_by_point is point_ready
+    for index in range(3):
+        start, end = result.tree_member_offsets[index : index + 2]
+        assert np.all(np.diff(result.ordered_tree_member_row_index[start:end]) > 0)
+
+
+def _instrument_result_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[tuple[str, tuple[int, ...]]], list[int]]:
+    allocations: list[tuple[str, tuple[int, ...]]] = []
+    iterated_lengths: list[int] = []
+    real_empty = vegetation_trees.np.empty
+    real_full = vegetation_trees.np.full
+    real_zeros = vegetation_trees.np.zeros
+    real_iter_chunks = vegetation_trees._iter_chunks
+
+    def shape_tuple(shape: object) -> tuple[int, ...]:
+        return (shape,) if isinstance(shape, int) else tuple(shape)
+
+    def empty_spy(shape: object, *args: object, **kwargs: object) -> np.ndarray:
+        allocations.append(("empty", shape_tuple(shape)))
+        return real_empty(shape, *args, **kwargs)
+
+    def full_spy(shape: object, *args: object, **kwargs: object) -> np.ndarray:
+        allocations.append(("full", shape_tuple(shape)))
+        return real_full(shape, *args, **kwargs)
+
+    def zeros_spy(shape: object, *args: object, **kwargs: object) -> np.ndarray:
+        allocations.append(("zeros", shape_tuple(shape)))
+        return real_zeros(shape, *args, **kwargs)
+
+    def iter_chunks_spy(length: int) -> range:
+        iterated_lengths.append(length)
+        return real_iter_chunks(length)
+
+    monkeypatch.setattr(vegetation_trees.np, "empty", empty_spy)
+    monkeypatch.setattr(vegetation_trees.np, "full", full_spy)
+    monkeypatch.setattr(vegetation_trees.np, "zeros", zeros_spy)
+    monkeypatch.setattr(vegetation_trees, "_iter_chunks", iter_chunks_spy)
+    monkeypatch.setattr(
+        vegetation_trees.np,
+        "sort",
+        lambda *_args, **_kwargs: pytest.fail("global sorting is forbidden"),
+    )
+    monkeypatch.setattr(
+        vegetation_trees.np,
+        "unique",
+        lambda *_args, **_kwargs: pytest.fail("global uniqueness reconstruction is forbidden"),
+    )
+    monkeypatch.setattr(
+        vegetation_trees.np,
+        "flatnonzero",
+        lambda *_args, **_kwargs: pytest.fail("per-record full point scans are forbidden"),
+    )
+    monkeypatch.setattr(
+        vegetation_trees.np,
+        "concatenate",
+        lambda *_args, **_kwargs: pytest.fail("global validation copies are forbidden"),
+    )
+    return allocations, iterated_lengths
+
+
+def _scaling_case(record_count: int, point_count: int) -> dict[str, object]:
+    records = tuple(
+        _record(segment_id=index, source_ids=(index + 10,)) for index in range(record_count)
+    )
+    segment_ids = np.full(point_count, -1, np.int32)
+    segment_ids[:record_count] = np.arange(record_count, dtype=np.int32)
+    return {
+        "records": records,
+        "ids": _frozen_array(np.full(point_count, -1, np.int32)),
+        "ready": _frozen_array(np.zeros(point_count, np.bool_)),
+        "offsets": _frozen_array(np.arange(record_count + 1, dtype=np.int64)),
+        "members": _frozen_array(np.arange(record_count, dtype=np.int64)),
+        "segment_ids": _frozen_array(segment_ids),
+    }
+
+
+@pytest.mark.parametrize("record_count", (1, 7))
+def test_complete_point_scan_count_is_independent_of_record_count(
+    record_count: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    point_count = 37
+    case = _scaling_case(record_count, point_count)
+    arrays = tuple(case[name] for name in ("segment_ids", "ids", "ready", "offsets", "members"))
+    allocations, iterated_lengths = _instrument_result_validation(monkeypatch)
+    result = _result(**case)
+    assert iterated_lengths.count(point_count) == 2
+    assert all(shape != (point_count,) for _kind, shape in allocations)
+    for name, value in zip(_RESULT_ARRAY_FIELDS, arrays, strict=True):
+        assert getattr(result, name) is value
+
+
+def test_noncanonical_validation_allocates_only_required_membership_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    point_count = 11
+    records = tuple(_record(segment_id=index, source_ids=(index + 10,)) for index in range(3))
+    point_segments = _frozen_array([0, 0, 1, 2, 2, -1, -1, -1, -1, -1, -1], np.int32)
+    point_ids = _frozen_array([-1] * point_count, np.int32)
+    point_ready = _frozen_array([False] * point_count, np.bool_)
+    offsets = _frozen_array([0, 1, 3, 5], np.int64)
+    members = _frozen_array([2, 3, 4, 0, 1], np.int64)
+    allocations, iterated_lengths = _instrument_result_validation(monkeypatch)
+    result = _result(
+        (records[1], records[2], records[0]),
+        ids=point_ids,
+        ready=point_ready,
+        offsets=offsets,
+        members=members,
+        segment_ids=point_segments,
+    )
+    assert iterated_lengths.count(point_count) == 2
+    assert [shape for kind, shape in allocations if kind == "empty"].count((5,)) == 1
+    assert [shape for kind, shape in allocations if kind == "empty"].count((4,)) == 1
+    assert all(shape != (point_count,) for _kind, shape in allocations)
+    assert result.segment_id_by_point is point_segments
+    assert result.tree_id_by_point is point_ids
+    assert result.tree_distance_ready_by_point is point_ready
+    assert result.tree_member_offsets is not offsets
+    assert result.ordered_tree_member_row_index is not members
+
+
+def test_large_member_block_validation_is_bounded_by_chunk_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chunk_size = vegetation_trees._TREE_RESULT_VALIDATION_CHUNK_SIZE
+    point_count = chunk_size + 3
+    case = {
+        "records": (_record(),),
+        "ids": _frozen_array(np.full(point_count, -1, np.int32)),
+        "ready": _frozen_array(np.zeros(point_count, np.bool_)),
+        "offsets": _frozen_array([0, point_count], np.int64),
+        "members": _frozen_array(np.arange(point_count, dtype=np.int64)),
+        "segment_ids": _frozen_array(np.zeros(point_count, np.int32)),
+    }
+    real_any = vegetation_trees.np.any
+    observed_sizes: list[int] = []
+
+    def any_spy(value: object, *args: object, **kwargs: object) -> np.bool_:
+        observed_sizes.append(np.asarray(value).size)
+        return real_any(value, *args, **kwargs)
+
+    monkeypatch.setattr(vegetation_trees.np, "any", any_spy)
+    result = _result(**case)
+    assert result.ordered_tree_member_row_index is case["members"]
+    assert max(observed_sizes) <= chunk_size
+    assert chunk_size in observed_sizes
+    assert 3 in observed_sizes
+
+
+def test_canonical_membership_arrays_are_retained_by_identity() -> None:
+    record = _record()
+    offsets = _frozen_array([0, 2], np.int64)
+    members = _frozen_array([0, 2], np.int64)
+    result = _result(
+        (record,),
+        offsets=offsets,
+        members=members,
+        segment_ids=np.array([0, -1, 0, -1], np.int32),
+    )
+    assert result.records is not None
+    assert result.tree_member_offsets is offsets
+    assert result.ordered_tree_member_row_index is members
+
+
+def test_tree_id_inventory_and_point_readiness_rules_are_linear() -> None:
+    first = _record(0, TreeSegmentationStatus.CONFIRMED_TREE, segment_id=0)
+    second = _record(
+        1,
+        TreeSegmentationStatus.CONFIRMED_TREE,
+        segment_id=1,
+        source_ids=(4,),
+        tree_ready=True,
+    )
+    result = _result(
+        (first, second),
+        ids=np.array([0, 0, 1, 1], np.int32),
+        ready=np.array([False, False, True, True], np.bool_),
+        offsets=np.array([0, 2, 4], np.int64),
+        members=np.array([0, 1, 2, 3], np.int64),
+        segment_ids=np.array([0, 0, 1, 1], np.int32),
+    )
+    assert [record.tree_id for record in result.records] == [0, 1]
+    with pytest.raises(ValueError, match="continuous"):
+        _result(
+            (
+                first,
+                replace(second, tree_id=0),
+            ),
+            ids=np.array([0, 0, 0, 0], np.int32),
+            ready=np.zeros(4, np.bool_),
+            offsets=np.array([0, 2, 4], np.int64),
+            members=np.array([0, 1, 2, 3], np.int64),
+            segment_ids=np.array([0, 0, 1, 1], np.int32),
+        )
+    with pytest.raises(ValueError, match="formal tree_id"):
+        _result(ids=np.array([0, -1, -1, -1], np.int32))
+    with pytest.raises(ValueError, match="confirmed tree_id"):
+        _result(ready=np.array([True, False, False, False], np.bool_))
+
+
+def test_nested_result_metadata_is_detached_sorted_and_deeply_immutable() -> None:
+    timings = {"validate": 1, "load": 0.25}
+    statistics = TreeSegmentationStatistics(0, 0, 0, 0, 0, 0, 0, 1.25, timings)
+    provenance = {"z": [{"b": 2}], "a": {"items": [1, {"x": True}]}}
+    context = {"unit": "m", "nested": {"axis": ["x", "y", "z"]}}
+    result = TreeSegmentationResult(
+        TREE_SEGMENTATION_SCHEMA_VERSION,
+        TREE_SEGMENTATION_ALGORITHM_VERSION,
+        "synthetic",
+        "manifest",
+        (0.0, 0.0, 0.0),
+        TreeSegmentationConfig(),
+        statistics,
+        (),
+        _frozen_array([], np.int32),
+        _frozen_array([], np.int32),
+        _frozen_array([], np.bool_),
+        _frozen_array([0], np.int64),
+        _frozen_array([], np.int64),
+        provenance,
+        context,
+    )
+    timings["load"] = 99
+    provenance["z"][0]["b"] = 99
+    context["nested"]["axis"].append("w")
+    assert isinstance(result.input_provenance, MappingProxyType)
+    assert isinstance(result.input_provenance["a"], MappingProxyType)
+    assert isinstance(result.input_provenance["a"]["items"], tuple)
+    assert list(result.input_provenance) == ["a", "z"]
+    assert list(result.statistics.phase_timings_seconds) == ["load", "validate"]
+    assert result.statistics.phase_timings_seconds["load"] == 0.25
+    assert result.input_provenance["z"][0]["b"] == 2
+    assert result.coordinate_context["nested"]["axis"] == ("x", "y", "z")
+    with pytest.raises(TypeError):
+        result.input_provenance["new"] = 1
+    with pytest.raises(TypeError):
+        result.input_provenance["a"]["new"] = 1
+    with pytest.raises(TypeError):
+        result.coordinate_context["nested"]["axis"][0] = "q"
+
+    payload = result.to_dict()
+    assert type(payload["input_provenance"]) is dict
+    assert type(payload["input_provenance"]["a"]["items"]) is list
+    payload["input_provenance"]["a"]["items"][0] = 99
+    assert result.input_provenance["a"]["items"][0] == 1
+    restored = TreeSegmentationResult.from_dict(result.to_dict())
+    assert isinstance(restored.input_provenance, MappingProxyType)
+    assert isinstance(restored.input_provenance["a"]["items"], tuple)
+
+
+def test_validation_executes_without_global_membership_reconstruction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        vegetation_trees.np,
+        "flatnonzero",
+        lambda *_args, **_kwargs: pytest.fail("np.flatnonzero must not be used"),
+    )
+    monkeypatch.setattr(
+        vegetation_trees.np,
+        "unique",
+        lambda *_args, **_kwargs: pytest.fail("np.unique must not be used"),
+    )
+    assert _result((_record(),), offsets=np.array([0, 1]), members=np.array([0])).records

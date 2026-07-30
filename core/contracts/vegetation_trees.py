@@ -11,6 +11,7 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum, IntFlag
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
@@ -61,6 +62,7 @@ class TreeSegmentationQualityFlag(IntFlag):
 
 
 _TREE_QUALITY_FLAG_MASK = sum(int(value) for value in TreeSegmentationQualityFlag)
+_TREE_RESULT_VALIDATION_CHUNK_SIZE = 65_536
 
 
 def _finite(value: float, name: str, minimum: float | None = None) -> float:
@@ -85,9 +87,7 @@ def _non_negative_int(value: Any, name: str) -> int:
 
 
 def _array(value: Any, dtype: Any, shape: tuple[int | None, ...], name: str) -> np.ndarray:
-    if getattr(value, "dtype", None) != np.dtype(dtype) or getattr(value, "ndim", None) != len(
-        shape
-    ):
+    if type(value) is not np.ndarray or value.dtype != np.dtype(dtype) or value.ndim != len(shape):
         raise ValueError(f"{name} has invalid dtype or rank")
     if any(
         expected is not None and expected != actual
@@ -96,7 +96,14 @@ def _array(value: Any, dtype: Any, shape: tuple[int | None, ...], name: str) -> 
         raise ValueError(f"{name} has invalid shape")
     if value.dtype == object:
         raise ValueError(f"{name} must not use object dtype")
-    return np.asarray(value)
+    if not value.flags.owndata or not value.flags.c_contiguous or value.flags.writeable:
+        raise ValueError(f"{name} has invalid ownership, contiguity, or mutability")
+    return value
+
+
+def _freeze_array(value: np.ndarray) -> np.ndarray:
+    value.setflags(write=False)
+    return value
 
 
 def _json_integer_array(value: Any, dtype: Any, name: str) -> np.ndarray:
@@ -104,7 +111,7 @@ def _json_integer_array(value: Any, dtype: Any, name: str) -> np.ndarray:
         raise ValueError(f"{name} must be a one-dimensional JSON sequence")
     if any(not isinstance(item, int) or isinstance(item, bool) for item in value):
         raise ValueError(f"{name} must contain only JSON integer values")
-    return np.asarray(value, dtype=dtype)
+    return _freeze_array(np.array(value, dtype=dtype, order="C", copy=True, subok=False))
 
 
 def _json_bool_array(value: Any, name: str) -> np.ndarray:
@@ -112,7 +119,32 @@ def _json_bool_array(value: Any, name: str) -> np.ndarray:
         raise ValueError(f"{name} must be a one-dimensional JSON sequence")
     if any(not isinstance(item, bool) for item in value):
         raise ValueError(f"{name} must contain only JSON bool values")
-    return np.asarray(value, dtype=np.bool_)
+    return _freeze_array(np.array(value, dtype=np.bool_, order="C", copy=True, subok=False))
+
+
+def _freeze_json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        backing = {key: _freeze_json_value(value[key]) for key in sorted(value)}
+        return MappingProxyType(backing)
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_json_value(item) for item in value)
+    return value
+
+
+def _immutable_json_mapping(value: Mapping[str, Any], name: str) -> Mapping[str, Any]:
+    return _freeze_json_value(json_safe_mapping(value, name))
+
+
+def _thaw_json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_json_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json_value(item) for item in value]
+    return value
+
+
+def _iter_chunks(length: int) -> range:
+    return range(0, length, _TREE_RESULT_VALIDATION_CHUNK_SIZE)
 
 
 def _origin_xyz(value: Any) -> tuple[float, float, float]:
@@ -551,10 +583,24 @@ class TreeSegmentationStatistics:
             for key, value in self.phase_timings_seconds.items()
         ):
             raise ValueError("phase_timings_seconds must contain finite non-negative values")
-        object.__setattr__(self, "phase_timings_seconds", dict(self.phase_timings_seconds))
+        object.__setattr__(
+            self,
+            "phase_timings_seconds",
+            _immutable_json_mapping(self.phase_timings_seconds, "phase_timings_seconds"),
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        return dict(self.__dict__)
+        return {
+            "input_point_count": self.input_point_count,
+            "record_count": self.record_count,
+            "confirmed_tree_count": self.confirmed_tree_count,
+            "review_required_count": self.review_required_count,
+            "provisional_count": self.provisional_count,
+            "rejected_count": self.rejected_count,
+            "unresolved_count": self.unresolved_count,
+            "elapsed_seconds": self.elapsed_seconds,
+            "phase_timings_seconds": _thaw_json_value(self.phase_timings_seconds),
+        }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> TreeSegmentationStatistics:
@@ -609,10 +655,10 @@ class TreeSegmentationResult:
             self.statistics, TreeSegmentationStatistics
         ):
             raise ValueError("invalid V3 result contracts")
-        records = tuple(self.records)
-        if any(not isinstance(record, TreeInstanceRecord) for record in records):
+        input_records = tuple(self.records)
+        if any(not isinstance(record, TreeInstanceRecord) for record in input_records):
             raise ValueError("records must contain TreeInstanceRecord values")
-        for record in records:
+        for record in input_records:
             if record.status is not TreeSegmentationStatus.CONFIRMED_TREE:
                 continue
             if record.crown_summary is None:
@@ -627,10 +673,10 @@ class TreeSegmentationResult:
             TreeSegmentationStatus.REJECTED: 0,
             TreeSegmentationStatus.UNRESOLVED: 0,
         }
-        for record in records:
+        for record in input_records:
             actual_status_counts[record.status] += 1
         expected_statistics = {
-            "record_count": len(records),
+            "record_count": len(input_records),
             "confirmed_tree_count": actual_status_counts[TreeSegmentationStatus.CONFIRMED_TREE],
             "review_required_count": actual_status_counts[TreeSegmentationStatus.REVIEW_REQUIRED],
             "provisional_count": actual_status_counts[TreeSegmentationStatus.PROVISIONAL],
@@ -662,7 +708,7 @@ class TreeSegmentationResult:
         offsets = _array(
             self.tree_member_offsets,
             np.int64,
-            (len(records) + 1,),
+            (len(input_records) + 1,),
             "tree_member_offsets",
         )
         members = _array(
@@ -671,108 +717,187 @@ class TreeSegmentationResult:
             (None,),
             "ordered_tree_member_row_index",
         )
-        if offsets[0] != 0 or offsets[-1] != len(members) or np.any(np.diff(offsets) < 0):
+        record_count = len(input_records)
+        member_count = len(members)
+        if offsets[0] != 0 or offsets[-1] != member_count:
             raise ValueError("tree_member_offsets must be monotonic and span member rows")
-        if np.any(members < 0) or np.any(members >= len(point_segments)):
-            raise ValueError("tree member index is outside V2 point-row range")
-        if len(np.unique(members)) != len(members):
-            raise ValueError("retained segments must not share member rows")
-        segment_ids = [record.segment_id for record in records]
-        if len(segment_ids) != len(set(segment_ids)):
-            raise ValueError("record segment_id values must be unique")
-        if sorted(segment_ids) != list(range(len(segment_ids))):
-            raise ValueError("segment_id values must start at zero and be continuous")
-        allowed_segment_ids = {-1, *segment_ids}
-        if any(int(value) not in allowed_segment_ids for value in point_segments):
-            raise ValueError("segment_id_by_point contains an unknown or invalid segment_id")
-        confirmed_ids = [
-            record.tree_id
-            for record in records
-            if record.status is TreeSegmentationStatus.CONFIRMED_TREE
-        ]
-        if sorted(confirmed_ids) != list(range(len(confirmed_ids))):
-            raise ValueError("confirmed tree_id values must start at zero and be continuous")
-        allowed_ids = {-1, *confirmed_ids}
-        if any(int(value) not in allowed_ids for value in point_ids):
-            raise ValueError("tree_id_by_point contains an unknown or invalid tree_id")
-        if np.any(point_ready & (point_ids < 0)):
-            raise ValueError("tree_distance_ready_by_point requires a confirmed tree_id")
-        entries: list[tuple[TreeInstanceRecord, np.ndarray]] = []
-        retained_member_rows: set[int] = set()
-        for index, record in enumerate(records):
-            start, end = offsets[index : index + 2]
-            rows = members[start:end]
-            if len(rows) > 1 and np.any(np.diff(rows) <= 0):
-                raise ValueError("member rows must be strictly increasing within a record")
-            overlap = retained_member_rows.intersection(int(value) for value in rows)
-            if overlap:
-                raise ValueError("retained segments must not share member rows")
-            retained_member_rows.update(int(value) for value in rows)
-            if not np.array_equal(
-                np.flatnonzero(point_segments == record.segment_id),
-                rows,
-            ):
-                raise ValueError("segment member rows must exactly match segment_id_by_point")
-            if record.status is TreeSegmentationStatus.CONFIRMED_TREE:
-                if not len(rows):
+        previous_offset = 0
+        for chunk_start in _iter_chunks(len(offsets)):
+            chunk = offsets[chunk_start : chunk_start + _TREE_RESULT_VALIDATION_CHUNK_SIZE]
+            if np.any(chunk < 0) or np.any(chunk > member_count):
+                raise ValueError("tree_member_offsets must be monotonic and span member rows")
+            if len(chunk) and int(chunk[0]) < previous_offset:
+                raise ValueError("tree_member_offsets must be monotonic and span member rows")
+            if len(chunk) > 1 and np.any(chunk[1:] < chunk[:-1]):
+                raise ValueError("tree_member_offsets must be monotonic and span member rows")
+            if len(chunk):
+                previous_offset = int(chunk[-1])
+
+        assigned_point_count = 0
+        for chunk_start in _iter_chunks(point_count):
+            chunk = point_segments[chunk_start : chunk_start + _TREE_RESULT_VALIDATION_CHUNK_SIZE]
+            if np.any(chunk < -1) or np.any(chunk >= record_count):
+                raise ValueError("segment_id_by_point contains an unknown or invalid segment_id")
+            assigned_point_count += int(np.count_nonzero(chunk >= 0))
+        records_by_segment: list[TreeInstanceRecord | None] = [None] * record_count
+        expected_tree_id_by_segment = np.full(record_count, -1, dtype=np.int32)
+        expected_ready_by_segment = np.zeros(record_count, dtype=np.bool_)
+        confirmed_count = actual_status_counts[TreeSegmentationStatus.CONFIRMED_TREE]
+        confirmed_tree_ids = np.zeros(confirmed_count, dtype=np.bool_)
+        block_lengths_by_segment = np.empty(record_count, dtype=np.int64)
+
+        for input_index, record in enumerate(input_records):
+            segment_id = record.segment_id
+            if segment_id >= record_count:
+                raise ValueError("segment_id values must start at zero and be continuous")
+            if records_by_segment[segment_id] is not None:
+                raise ValueError("record segment_id values must be unique")
+            records_by_segment[segment_id] = record
+            start = int(offsets[input_index])
+            end = int(offsets[input_index + 1])
+            block_lengths_by_segment[segment_id] = end - start
+            previous_member: int | None = None
+            for chunk_start in range(start, end, _TREE_RESULT_VALIDATION_CHUNK_SIZE):
+                rows = members[
+                    chunk_start : min(
+                        end,
+                        chunk_start + _TREE_RESULT_VALIDATION_CHUNK_SIZE,
+                    )
+                ]
+                if np.any(rows < 0) or np.any(rows >= point_count):
+                    raise ValueError("tree member index is outside V2 point-row range")
+                if previous_member is not None and len(rows) and int(rows[0]) <= previous_member:
+                    raise ValueError("member rows must be strictly increasing within a record")
+                if len(rows) > 1 and np.any(rows[1:] <= rows[:-1]):
+                    raise ValueError("member rows must be strictly increasing within a record")
+                if len(rows) and np.any(point_segments[rows] != segment_id):
+                    raise ValueError(
+                        "segment member rows must exactly match segment_id_by_point; "
+                        "retained segments must not share member rows"
+                    )
+                if len(rows):
+                    previous_member = int(rows[-1])
+
+            confirmed = record.status is TreeSegmentationStatus.CONFIRMED_TREE
+            if confirmed:
+                if end == start:
                     raise ValueError("confirmed trees must have member rows")
-                if not np.array_equal(np.flatnonzero(point_ids == record.tree_id), rows):
-                    raise ValueError("confirmed member rows must exactly match tree_id_by_point")
-                if not np.array_equal(
-                    point_ready[rows],
-                    np.full(len(rows), record.tree_distance_ready, dtype=np.bool_),
-                ):
-                    raise ValueError("confirmed point readiness must match tree_distance_ready")
-            elif len(rows) and (np.any(point_ids[rows] != -1) or np.any(point_ready[rows])):
-                raise ValueError(
-                    "non-confirmed member rows must not receive a formal tree assignment"
-                )
-            entries.append((record, rows))
-        for record in records:
+                tree_id = record.tree_id
+                if tree_id < 0:
+                    raise ValueError("confirmed trees require a non-negative tree_id")
+                if tree_id >= confirmed_count or confirmed_tree_ids[tree_id]:
+                    raise ValueError(
+                        "confirmed tree_id values must start at zero and be continuous"
+                    )
+                confirmed_tree_ids[tree_id] = True
+                expected_tree_id_by_segment[segment_id] = tree_id
+                expected_ready_by_segment[segment_id] = record.tree_distance_ready
+            elif record.tree_id != -1:
+                raise ValueError("only confirmed trees may have a non-negative tree_id")
+            elif record.tree_distance_ready:
+                raise ValueError("tree_distance_ready requires CONFIRMED_TREE")
+
             if (
-                record.status is TreeSegmentationStatus.CONFIRMED_TREE
+                confirmed
                 and len(record.source_cluster_ids) > 1
                 and not self.config.allow_cross_cluster_confirmation
             ):
                 raise ValueError("cross-cluster confirmed trees are disabled by configuration")
-        entries.sort(key=lambda item: self._record_sort_key(item[0], item[1]))
-        canonical_offsets = np.zeros(len(entries) + 1, dtype=np.int64)
-        canonical_offsets[1:] = np.cumsum([len(rows) for _record, rows in entries], dtype=np.int64)
-        canonical_members = (
-            np.concatenate([rows for _record, rows in entries]).astype(np.int64, copy=False)
-            if entries
-            else np.empty(0, dtype=np.int64)
+
+        if any(record is None for record in records_by_segment):
+            raise ValueError("segment_id values must start at zero and be continuous")
+        if confirmed_count and not np.all(confirmed_tree_ids):
+            raise ValueError("confirmed tree_id values must start at zero and be continuous")
+        if member_count != assigned_point_count:
+            raise ValueError(
+                "segment member rows must exactly match segment_id_by_point assigned count"
+            )
+
+        for chunk_start in _iter_chunks(point_count):
+            chunk_end = min(
+                point_count,
+                chunk_start + _TREE_RESULT_VALIDATION_CHUNK_SIZE,
+            )
+            segment_chunk = point_segments[chunk_start:chunk_end]
+            tree_id_chunk = point_ids[chunk_start:chunk_end]
+            ready_chunk = point_ready[chunk_start:chunk_end]
+            unassigned = segment_chunk == -1
+            if np.any(tree_id_chunk[unassigned] != -1):
+                raise ValueError("unassigned points must not receive a formal tree_id")
+            if np.any(ready_chunk[unassigned]):
+                raise ValueError("tree_distance_ready_by_point requires a confirmed tree_id")
+            assigned = ~unassigned
+            assigned_segments = segment_chunk[assigned]
+            actual_tree_ids = tree_id_chunk[assigned]
+            expected_tree_ids = expected_tree_id_by_segment[assigned_segments]
+            tree_id_mismatch = actual_tree_ids != expected_tree_ids
+            if np.any(tree_id_mismatch & (expected_tree_ids == -1)):
+                raise ValueError(
+                    "non-confirmed member rows must not receive a formal tree assignment; "
+                    "tree_distance_ready_by_point requires a confirmed tree_id"
+                )
+            if np.any(tree_id_mismatch):
+                raise ValueError("confirmed member rows must exactly match tree_id_by_point")
+            actual_ready = ready_chunk[assigned]
+            expected_ready = expected_ready_by_segment[assigned_segments]
+            readiness_mismatch = actual_ready != expected_ready
+            if np.any(readiness_mismatch & (expected_tree_ids == -1)):
+                raise ValueError(
+                    "non-confirmed member rows must not receive a formal tree assignment; "
+                    "tree_distance_ready_by_point requires a confirmed tree_id"
+                )
+            if np.any(readiness_mismatch):
+                raise ValueError("confirmed point readiness must match tree_distance_ready")
+
+        # Each strictly increasing block is unique, distinct segment labels prevent
+        # cross-block duplicates, and equal dense/grouped counts prove exact membership.
+        canonical_input = all(
+            record.segment_id == index for index, record in enumerate(input_records)
         )
-        object.__setattr__(self, "records", tuple(record for record, _rows in entries))
+        if canonical_input:
+            canonical_records = input_records
+            canonical_offsets = offsets
+            canonical_members = members
+        else:
+            canonical_records = tuple(record for record in records_by_segment if record is not None)
+            canonical_offsets = np.empty(record_count + 1, dtype=np.int64)
+            canonical_offsets[0] = 0
+            canonical_offsets[1:] = block_lengths_by_segment
+            np.cumsum(
+                canonical_offsets[1:],
+                dtype=np.int64,
+                out=canonical_offsets[1:],
+            )
+            canonical_members = np.empty(member_count, dtype=np.int64)
+            for input_index, record in enumerate(input_records):
+                source_start = int(offsets[input_index])
+                source_end = int(offsets[input_index + 1])
+                destination_start = int(canonical_offsets[record.segment_id])
+                destination_end = int(canonical_offsets[record.segment_id + 1])
+                canonical_members[destination_start:destination_end] = members[
+                    source_start:source_end
+                ]
+            canonical_offsets.setflags(write=False)
+            canonical_members.setflags(write=False)
+
+        object.__setattr__(self, "records", canonical_records)
+        object.__setattr__(self, "segment_id_by_point", point_segments)
+        object.__setattr__(self, "tree_id_by_point", point_ids)
+        object.__setattr__(self, "tree_distance_ready_by_point", point_ready)
         object.__setattr__(self, "tree_member_offsets", canonical_offsets)
         object.__setattr__(self, "ordered_tree_member_row_index", canonical_members)
         object.__setattr__(
             self,
             "input_provenance",
-            json_safe_mapping(self.input_provenance, "input_provenance"),
+            _immutable_json_mapping(self.input_provenance, "input_provenance"),
         )
         object.__setattr__(
             self,
             "coordinate_context",
-            json_safe_mapping(self.coordinate_context, "coordinate_context"),
+            _immutable_json_mapping(self.coordinate_context, "coordinate_context"),
         )
         object.__setattr__(self, "warnings", _string_sequence(self.warnings, "warnings"))
         object.__setattr__(self, "limitations", _string_sequence(self.limitations, "limitations"))
-
-    @staticmethod
-    def _record_sort_key(record: TreeInstanceRecord, rows: np.ndarray) -> tuple[Any, ...]:
-        return (
-            record.segment_id,
-            record.tree_id,
-            int(record.status),
-            record.source_cluster_ids,
-            tuple(int(value) for value in record.source_cluster_statuses),
-            record.source_cluster_distance_ready,
-            tuple(int(value) for value in rows),
-            record.tree_distance_ready,
-            record.confidence,
-            int(record.quality_flags),
-        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -789,8 +914,8 @@ class TreeSegmentationResult:
             "tree_distance_ready_by_point": self.tree_distance_ready_by_point.tolist(),
             "tree_member_offsets": self.tree_member_offsets.tolist(),
             "ordered_tree_member_row_index": self.ordered_tree_member_row_index.tolist(),
-            "input_provenance": dict(self.input_provenance),
-            "coordinate_context": dict(self.coordinate_context),
+            "input_provenance": _thaw_json_value(self.input_provenance),
+            "coordinate_context": _thaw_json_value(self.coordinate_context),
             "warnings": list(self.warnings),
             "limitations": list(self.limitations),
         }

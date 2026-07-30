@@ -59,6 +59,12 @@ DISK_DTYPES = {
 }
 
 
+def _frozen_array(value: object, dtype: object | None = None) -> np.ndarray:
+    array = np.array(value, dtype=dtype, order="C", copy=True, subok=False)
+    array.setflags(write=False)
+    return array
+
+
 def _canonical(value: dict[str, Any]) -> bytes:
     return (
         json.dumps(
@@ -169,6 +175,9 @@ def _result(kind: str = "mixed") -> TreeSegmentationResult:
         ready = np.array([False, False, True, True], np.bool_)
         offsets = np.array([0, 2, 4], np.int64)
         members = np.array([0, 1, 2, 3], np.int64)
+    segment, tree, ready, offsets, members = (
+        _frozen_array(value) for value in (segment, tree, ready, offsets, members)
+    )
     status_counts = {
         status: sum(record.status is status for record in records)
         for status in TreeSegmentationStatus
@@ -198,8 +207,12 @@ def _result(kind: str = "mixed") -> TreeSegmentationResult:
         tree_distance_ready_by_point=ready,
         tree_member_offsets=offsets,
         ordered_tree_member_row_index=members,
-        input_provenance={"input": {"kind": "synthetic", "index": 1}},
-        coordinate_context={"frame": "local", "unit": "m"},
+        input_provenance={"input": {"kind": "synthetic", "index": 1, "steps": ["v2", "v3"]}},
+        coordinate_context={
+            "frame": "local",
+            "nested": {"axis": ["x", "y", "z"]},
+            "unit": "m",
+        },
         warnings=("synthetic warning",),
         limitations=("synthetic limitation",),
     )
@@ -399,6 +412,62 @@ def test_repeated_loads_do_not_share_arrays(tmp_path: Path) -> None:
     second = load_tree_segmentation_artifact(bundle)
     for name in ARRAY_NAMES:
         assert getattr(first.result, name) is not getattr(second.result, name)
+        assert not np.shares_memory(
+            getattr(first.result, name),
+            getattr(second.result, name),
+        )
+
+
+def test_loader_freezes_arrays_before_constructor_and_retains_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle, _ = _write_bundle(tmp_path)
+    original_result_type = tree_artifacts.TreeSegmentationResult
+    constructor_arrays: dict[str, np.ndarray] = {}
+
+    def capture_constructor(**kwargs: Any) -> TreeSegmentationResult:
+        for name in ARRAY_NAMES:
+            value = kwargs[name]
+            assert type(value) is np.ndarray
+            assert value.flags.owndata
+            assert value.flags.c_contiguous
+            assert not value.flags.writeable
+            constructor_arrays[name] = value
+        monkeypatch.setattr(
+            tree_artifacts,
+            "TreeSegmentationResult",
+            original_result_type,
+        )
+        return original_result_type(**kwargs)
+
+    monkeypatch.setattr(
+        tree_artifacts,
+        "TreeSegmentationResult",
+        capture_constructor,
+    )
+    loaded = load_tree_segmentation_artifact(bundle)
+    for name in ARRAY_NAMES:
+        assert getattr(loaded.result, name) is constructor_arrays[name]
+
+
+def test_artifact_metadata_is_deeply_immutable_and_serializes_to_plain_json(
+    tmp_path: Path,
+) -> None:
+    direct = _result()
+    bundle, _ = _write_bundle(tmp_path)
+    loaded = load_tree_segmentation_artifact(bundle).result
+    assert type(loaded.input_provenance) is type(direct.input_provenance)
+    assert type(loaded.input_provenance["input"]["steps"]) is tuple
+    assert type(loaded.coordinate_context["nested"]["axis"]) is tuple
+    with pytest.raises(TypeError):
+        loaded.input_provenance["input"]["kind"] = "changed"
+    payload = loaded.to_dict()
+    assert type(payload["input_provenance"]) is dict
+    assert type(payload["input_provenance"]["input"]["steps"]) is list
+    assert type(payload["coordinate_context"]["nested"]["axis"]) is list
+    payload["input_provenance"]["input"]["steps"].append("changed")
+    assert loaded.input_provenance["input"]["steps"] == ("v2", "v3")
 
 
 @pytest.mark.parametrize(

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 import numpy as np
+from core.contracts._json import json_safe_mapping
 from core.contracts.tree_artifacts import (
     TREE_SEGMENTATION_ARTIFACT_SCHEMA_VERSION,
     TREE_SEGMENTATION_MANIFEST_FILENAME,
@@ -791,13 +792,15 @@ def _load_npz_arrays(
                     or raw.dtype.kind in {"O", "S", "U", "V"}
                 ):
                     raise ValueError(f"{name} differs from its validated NPY header")
-                arrays[name] = np.array(
+                value = np.array(
                     raw,
                     dtype=_RUNTIME_DTYPES[name],
                     order="C",
                     copy=True,
                     subok=False,
                 )
+                value.setflags(write=False)
+                arrays[name] = value
                 del raw
     except (OSError, EOFError, ValueError, zipfile.BadZipFile, MemoryError) as exc:
         raise _error(
@@ -862,12 +865,14 @@ def _reconstruct_result(
         and result.statistics == metadata.statistics
         and result.config == metadata.config
         and result.records == metadata.records
-        and result.input_provenance == metadata.input_provenance
-        and result.coordinate_context == metadata.coordinate_context
+        and json_safe_mapping(result.input_provenance, "input_provenance")
+        == json_safe_mapping(metadata.input_provenance, "input_provenance")
+        and json_safe_mapping(result.coordinate_context, "coordinate_context")
+        == json_safe_mapping(metadata.coordinate_context, "coordinate_context")
         and result.warnings == metadata.warnings
         and result.limitations == metadata.limitations
     )
-    arrays_match = all(np.array_equal(getattr(result, name), arrays[name]) for name in _ARRAY_NAMES)
+    arrays_match = all(getattr(result, name) is arrays[name] for name in _ARRAY_NAMES)
     if not structured_matches or not arrays_match:
         raise _error(
             TreeSegmentationErrorCode.CORRUPT_SIBLING_ARTIFACT,
@@ -879,16 +884,16 @@ def _reconstruct_result(
         )
     for name in _ARRAY_NAMES:
         value = getattr(result, name)
-        value.setflags(write=False)
-        if value.flags.writeable or not value.flags.c_contiguous:
+        if value.flags.writeable or not value.flags.c_contiguous or not value.flags.owndata:
             raise _error(
                 TreeSegmentationErrorCode.CORRUPT_SIBLING_ARTIFACT,
                 "result",
                 name,
-                "read-only C-contiguous array",
+                "owning read-only C-contiguous array",
                 {
                     "writeable": value.flags.writeable,
                     "c_contiguous": value.flags.c_contiguous,
+                    "owndata": value.flags.owndata,
                 },
                 bundle_path=bundle_path,
             )
