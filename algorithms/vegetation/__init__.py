@@ -37,6 +37,12 @@ from algorithms.vegetation.tree_artifacts import (
     TreeSegmentationArtifactError,
     load_tree_segmentation_artifact,
 )
+from algorithms.vegetation.tree_segmentation import (
+    TreeResultConstructionConfig,
+    TreeResultConstructionError,
+    TreeResultConstructionErrorCode,
+    build_tree_segmentation_result,
+)
 from algorithms.vegetation.treetop_candidates import (
     TreetopCandidateResult,
     TreetopDetectionConfig,
@@ -57,6 +63,9 @@ __all__ = [
     "CanopySupportFlag",
     "LoadedTreeSegmentationArtifact",
     "TreeSegmentationArtifactError",
+    "TreeResultConstructionConfig",
+    "TreeResultConstructionError",
+    "TreeResultConstructionErrorCode",
     "TreetopCandidateResult",
     "TreetopDetectionConfig",
     "TreetopDetectionError",
@@ -75,5 +84,6 @@ __all__ = [
     "load_vegetation_associations",
     "run_vegetation_associations",
     "build_canopy_height_model",
+    "build_tree_segmentation_result",
     "segment_canopy_regions",
 ]
