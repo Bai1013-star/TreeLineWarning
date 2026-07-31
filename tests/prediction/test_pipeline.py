@@ -1,16 +1,13 @@
-"""
-Prediction Pipeline Tests
-"""
+"""Prediction pipeline tests."""
 
+import json
+from pathlib import Path
 
-from algorithms.prediction.pipeline import (
-    PredictionPipeline
-)
-
-from algorithms.prediction.i1_prediction import (
-    I1TreeData
-)
-
+import pytest
+from algorithms.prediction.i1_pipeline import I1PredictionPipeline
+from algorithms.prediction.i1_prediction import I1TreeData
+from algorithms.prediction.pipeline import PredictionPipeline
+from algorithms.prediction.storage import PredictionStorage
 
 
 def test_pipeline_high_risk():
@@ -76,3 +73,82 @@ def test_pipeline_low_risk():
     assert report["total_tree"] == 1
 
     assert report["low_risk_count"] == 1
+
+
+def test_pipeline_does_not_write_results_by_default(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    tree = I1TreeData(
+        tree_id=3,
+        species="松树",
+        height=10,
+        age=10,
+        diameter=20,
+        distance_to_wire=20,
+    )
+
+    PredictionPipeline().run([tree])
+
+    assert not (tmp_path / "prediction_results.json").exists()
+
+
+def test_prediction_storage_requires_explicit_nonempty_path():
+    with pytest.raises(TypeError):
+        PredictionStorage()
+    with pytest.raises(ValueError, match="explicit output path"):
+        PredictionStorage(None)
+    with pytest.raises(ValueError, match="explicit output path"):
+        PredictionStorage("")
+
+
+def test_pipeline_persists_only_to_explicit_storage_path(tmp_path: Path, monkeypatch):
+    working_directory = tmp_path / "working"
+    output_directory = tmp_path / "output"
+    working_directory.mkdir()
+    output_directory.mkdir()
+    monkeypatch.chdir(working_directory)
+    output_path = output_directory / "results.json"
+    tree = I1TreeData(
+        tree_id=4,
+        species="松树",
+        height=10,
+        age=10,
+        diameter=20,
+        distance_to_wire=20,
+    )
+
+    PredictionPipeline(
+        persist=True, storage=PredictionStorage(output_path)
+    ).run([tree])
+
+    assert output_path.exists()
+    assert not (working_directory / "prediction_results.json").exists()
+
+
+def test_i1_run_remains_backward_compatible(tmp_path: Path):
+    (tmp_path / "trees.json").write_text(
+        json.dumps(
+            [
+                {
+                    "tree_id": 5,
+                    "species": "松树",
+                    "height": 10,
+                    "age": 10,
+                    "diameter": 20,
+                    "distance_to_wire": 20,
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = I1PredictionPipeline().run(tmp_path)
+
+    assert set(result) == {"results", "report"}
+    assert result["report"]["total_tree"] == 1
+
+
+def test_i1_pipeline_exposes_legacy_pipeline_alias():
+    pipeline = I1PredictionPipeline()
+
+    assert pipeline.predict_pipeline is pipeline.pipeline

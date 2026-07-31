@@ -5,9 +5,8 @@ Prediction Storage
 """
 
 import json
-from pathlib import Path
 from datetime import datetime
-
+from pathlib import Path
 
 
 class PredictionStorage:
@@ -16,8 +15,9 @@ class PredictionStorage:
     """
 
 
-    def __init__(self, file_path="prediction_results.json"):
-
+    def __init__(self, file_path: str | Path):
+        if file_path is None or not str(file_path).strip():
+            raise ValueError("PredictionStorage requires an explicit output path")
         self.file_path = Path(file_path)
 
 

@@ -15,17 +15,13 @@ I1数据
 """
 
 
-from algorithms.prediction.i1_batch import (
-    I1BatchPredictionService
-)
+import logging
 
-from algorithms.prediction.risk_report import (
-    RiskReport
-)
+from algorithms.prediction.i1_batch import I1BatchPredictionService
+from algorithms.prediction.risk_report import RiskReport
+from algorithms.prediction.storage import PredictionStorage
 
-from algorithms.prediction.storage import (
-    PredictionStorage
-)
+logger = logging.getLogger(__name__)
 
 
 
@@ -35,46 +31,68 @@ class PredictionPipeline:
     """
 
 
-    def __init__(self):
-
+    def __init__(
+        self,
+        *,
+        storage: PredictionStorage | None = None,
+        persist: bool = False,
+    ):
         self.batch_service = I1BatchPredictionService()
-
         self.report = RiskReport()
-
-        self.storage = PredictionStorage()
+        if persist and storage is None:
+            raise ValueError("persist=True requires an explicit PredictionStorage")
+        self.storage = storage
+        self.persist = persist
 
 
 
     def run(self, trees):
 
+
+        # =========================
         # 1. 批量预测
+        # =========================
 
         results = self.batch_service.predict_batch(
             trees
         )
 
 
-        # 2. 生成报告
+        # =========================
+        # 2. 生成风险报告
+        # =========================
 
         report = self.report.generate(
             results
         )
 
 
-        # 3. 保存
 
-        self.storage.save(
-            {
-                "results": results,
-                "report": report
-            }
+        logger.info(
+            "Prediction batch completed: trees=%d high=%d medium=%d low=%d",
+            len(results),
+            report.get("high_risk_count", 0),
+            report.get("medium_risk_count", 0),
+            report.get("low_risk_count", 0),
         )
 
+        if self.persist:
+            assert self.storage is not None
+            self.storage.save({"results": results, "report": report})
+
+
+
+        # =========================
+        # 4. 返回
+        # =========================
 
         return {
 
+
             "results": results,
 
+
             "report": report
+
 
         }
