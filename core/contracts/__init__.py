@@ -82,6 +82,7 @@ from core.contracts.tree_instance_ml import (
     TREE_INSTANCE_ML_SCHEMA_VERSION,
     TreeInstanceMlPrediction,
     TreeSemanticClass,
+    validate_tree_instance_ml_prediction_alignment,
 )
 from core.contracts.vegetation_associations import (
     BLOCKING_EVIDENCE_NAMES,
@@ -285,6 +286,7 @@ __all__ = [
     "TREE_INSTANCE_ML_SCHEMA_VERSION",
     "TreeInstanceMlPrediction",
     "TreeSemanticClass",
+    "validate_tree_instance_ml_prediction_alignment",
     "BLOCKING_EVIDENCE_NAMES",
     "POSITIVE_EVIDENCE_NAMES",
     "VegetationAssociationConfig",

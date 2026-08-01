@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 
 from core.contracts._json import json_safe_mapping
+from core.contracts.tree_inputs import TreeSegmentationInputSet
 
 TREE_INSTANCE_ML_SCHEMA_VERSION = "tree-instance-ml-v1"
 
@@ -306,8 +307,84 @@ class TreeInstanceMlPrediction:
         object.__setattr__(self, "instance_confidence", instance_confidence)
 
 
+def validate_tree_instance_ml_prediction_alignment(
+    tree_input: TreeSegmentationInputSet,
+    prediction: TreeInstanceMlPrediction,
+) -> int:
+    """Reject a prediction that is not exactly identified and aligned to its input.
+
+    This validator deliberately compares the stable identity and point-row
+    traceability fields only.  In particular, XYZ values are never used to
+    reconstruct row alignment.
+    """
+    if not isinstance(tree_input, TreeSegmentationInputSet):
+        raise ValueError("tree_input must be a TreeSegmentationInputSet")
+    if not isinstance(prediction, TreeInstanceMlPrediction):
+        raise ValueError("prediction must be a TreeInstanceMlPrediction")
+    identity = tree_input.identity
+    original_index = tree_input.vegetation_points.original_index
+    sample_index = tree_input.vegetation_points.sample_index
+    point_count = identity.point_count
+    if len(original_index) != point_count or len(sample_index) != point_count:
+        raise ValueError("tree input index counts do not match tree input identity")
+    if prediction.source_id != identity.source_id:
+        raise ValueError("prediction source_id does not match tree input identity")
+    if prediction.manifest_source_id != identity.manifest_source_id:
+        raise ValueError("prediction manifest_source_id does not match tree input identity")
+    if prediction.point_count != point_count:
+        raise ValueError("prediction point_count does not match tree input identity")
+    if prediction.origin_xyz != identity.origin_xyz:
+        raise ValueError("prediction origin_xyz does not exactly match tree input identity")
+    if not np.array_equal(prediction.original_index, original_index):
+        raise ValueError("prediction original_index does not exactly match tree input row order")
+    if not np.array_equal(prediction.sample_index, sample_index):
+        raise ValueError("prediction sample_index does not exactly match tree input row order")
+
+    segment_ids = prediction.segment_ids
+    segment_id_by_point = prediction.segment_id_by_point
+    member_offsets = prediction.member_offsets
+    member_rows = prediction.member_rows
+    if len(segment_id_by_point) != point_count:
+        raise ValueError("prediction segment_id_by_point does not match tree input point_count")
+    retained_segment_ids = segment_id_by_point[segment_id_by_point >= 0]
+    if len(retained_segment_ids) and not np.isin(retained_segment_ids, segment_ids).all():
+        raise ValueError("prediction segment_id_by_point must reference a retained segment_id")
+    if len(member_offsets) != len(segment_ids) + 1:
+        raise ValueError("prediction member_offsets length must equal segment_ids length plus one")
+    if member_offsets[0] != 0 or member_offsets[-1] != len(member_rows):
+        raise ValueError("prediction member_offsets must begin at zero and end at len(member_rows)")
+    if len(member_offsets) > 1 and np.any(member_offsets[1:] < member_offsets[:-1]):
+        raise ValueError("prediction member_offsets must be monotonic")
+    if len(member_rows) and np.any((member_rows < 0) | (member_rows >= point_count)):
+        raise ValueError("prediction member_rows must contain valid tree input row positions")
+
+    seen_rows = np.zeros(point_count, dtype=np.bool_)
+    for segment_position, segment_id in enumerate(segment_ids):
+        start = int(member_offsets[segment_position])
+        end = int(member_offsets[segment_position + 1])
+        rows = member_rows[start:end]
+        if len(rows) > 1 and np.any(rows[1:] <= rows[:-1]):
+            raise ValueError("prediction member_rows must be strictly increasing within a segment")
+        if len(rows) and np.any(seen_rows[rows]):
+            raise ValueError("prediction member_rows must not contain duplicate source rows")
+        if len(rows) and np.any(segment_id_by_point[rows] == -1):
+            raise ValueError("unassigned rows must not appear in prediction CSR membership")
+        if len(rows) and np.any(segment_id_by_point[rows] != segment_id):
+            raise ValueError("prediction CSR member rows must exactly match segment_id_by_point")
+        if len(rows):
+            seen_rows[rows] = True
+        if not np.any(segment_id_by_point == segment_id):
+            raise ValueError(
+                "each prediction segment_id must be represented by pointwise membership"
+            )
+    if not np.array_equal(seen_rows, segment_id_by_point >= 0):
+        raise ValueError("prediction CSR membership must cover every retained point exactly once")
+    return point_count
+
+
 __all__ = [
     "TREE_INSTANCE_ML_SCHEMA_VERSION",
     "TreeInstanceMlPrediction",
     "TreeSemanticClass",
+    "validate_tree_instance_ml_prediction_alignment",
 ]
