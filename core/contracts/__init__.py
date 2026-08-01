@@ -78,6 +78,11 @@ from core.contracts.tree_inputs import (
     TreeSegmentationInputIdentity,
     TreeSegmentationInputSet,
 )
+from core.contracts.tree_instance_ml import (
+    TREE_INSTANCE_ML_SCHEMA_VERSION,
+    TreeInstanceMlPrediction,
+    TreeSemanticClass,
+)
 from core.contracts.vegetation_associations import (
     BLOCKING_EVIDENCE_NAMES,
     POSITIVE_EVIDENCE_NAMES,
@@ -277,6 +282,9 @@ __all__ = [
     "TreeSegmentationInputDisposition",
     "TreeSegmentationInputIdentity",
     "TreeSegmentationInputSet",
+    "TREE_INSTANCE_ML_SCHEMA_VERSION",
+    "TreeInstanceMlPrediction",
+    "TreeSemanticClass",
     "BLOCKING_EVIDENCE_NAMES",
     "POSITIVE_EVIDENCE_NAMES",
     "VegetationAssociationConfig",

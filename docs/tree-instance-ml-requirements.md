@@ -123,9 +123,9 @@ changing the existing standard result during ML0.  A suggested name is
 | --- | --- | --- |
 | `semantic_class_by_point` | `uint8[N]` | Enum values: `NON_TREE=0`, `SHRUB=1`, `TREE=2`. |
 | `semantic_confidence_by_point` | `float32[N]` | Confidence of the selected semantic class. |
-| `segment_id_by_point` | `int32[N]` | `-1` for no retained instance; otherwise continuous segment IDs. |
+| `segment_id_by_point` | `int32[N]` | `-1` for no retained instance; otherwise the exact corresponding value from `segment_ids`. |
 | `instance_confidence_by_point` | `float32[N]` | Confidence of the assigned instance; `0.0` when segment ID is `-1`. |
-| `instance_confidence_by_segment` | `float32[S]` | One confidence per continuous segment ID. |
+| `instance_confidence_by_segment` | `float32[S]` | One confidence per retained segment ID, in `segment_ids` order. |
 | `instance_member_offsets` | `int64[S + 1]` | CSR offsets, beginning at zero and ending at the member-row count. |
 | `ordered_instance_member_row_index` | `int64[A]` | Strictly increasing rows within each CSR segment; exact members of `segment_id_by_point`. |
 | `source_identity` | `TreeSegmentationInputIdentity` | Exact input identity/provenance. |
@@ -139,6 +139,21 @@ changing the existing standard result during ML0.  A suggested name is
 segments; and `A` is the total assigned point count.  A future implementation
 may add explicit model input/output tensor metadata, but must not add
 unreviewed object-dtype arrays or paths to the contract.
+
+### ML sidecar segment-ID policy
+
+For `TreeInstanceMlPrediction`, `segment_ids` is a one-dimensional `int32`
+array of unique, non-negative, strictly ascending values.  IDs may contain
+gaps and do not need to start at zero: `[2, 5, 9]` is valid.  The contract
+must preserve these exact values; it must not silently sort, renumber, or
+compact them.
+
+`segment_id_by_point` uses `-1` only for no retained instance; every
+non-negative pointwise value must be present in `segment_ids`.  The CSR
+membership arrays and `segment_id_by_point` must use and reconcile the same
+exact ID values, with each CSR segment ordered by its corresponding ascending
+`segment_ids` entry.  Segment IDs that appear only in metadata and not in
+pointwise/CSR membership are invalid.
 
 ## 4. Alignment and index preservation
 
@@ -179,13 +194,17 @@ arrays, silently coerced dtypes, and mutable shared buffers are invalid.
 - Confidence arrays are finite `float32` values in the closed interval
   `[0.0, 1.0]`.
 - Semantic class values are exactly the three proposed `uint8` enum values.
-- Segment IDs are `int32`, are either `-1` or in `[0, S)`, and are continuous
-  over retained segments.
+- `segment_ids` are non-negative, unique, strictly ascending `int32` values;
+  `segment_id_by_point` is `-1` or an exact value from `segment_ids`.  Numeric
+  segment IDs may be gapful and need not start at zero.
 - CSR offsets and member rows are `int64`; offsets are monotonic and member
   rows are valid input-row positions.
 - SHA-256 values are lowercase 64-character hexadecimal strings.
 - The sidecar must retain immutable source identity and canonicalized,
   JSON-safe preprocessing metadata.
+
+`C-contiguous` above describes NumPy memory layout.  It does not require
+numeric segment IDs to be continuous, contiguous, gapless, or zero-based.
 
 ## 6. Safety status rules
 
@@ -238,6 +257,12 @@ versioned compatibility strategy, preserve all existing invariants, derive
 required geometry/crown summaries, populate source-cluster provenance, and
 have an approved algorithm-version/schema policy.  It must remain outside the
 wire, clearance, growth, risk, warning, and prediction-computer paths.
+
+The existing standard `TreeSegmentationResult` may impose its own continuous
+segment-ID requirements.  A future adapter may explicitly create a
+deterministic mapping from ML sidecar IDs to standard-result IDs, but that
+mapping must preserve source membership and provenance.  Adapter-side
+remapping must not mutate or misrepresent the original ML prediction artifact.
 
 ## 8. ONNX deployment and reproducibility
 
