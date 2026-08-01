@@ -37,17 +37,13 @@ def growth_model(growth_model_path):
 
 def test_species_growth_model_requires_explicit_path_or_environment(monkeypatch):
     monkeypatch.delenv("TREELINE_WARNING_SPECIES_GROWTH_MODEL_PATH", raising=False)
-    with pytest.raises(
-        RuntimeError, match="TREELINE_WARNING_SPECIES_GROWTH_MODEL_PATH"
-    ):
+    with pytest.raises(RuntimeError, match="TREELINE_WARNING_SPECIES_GROWTH_MODEL_PATH"):
         SpeciesGrowthModel()
 
 
 def test_species_growth_model_path_priority_and_bad_model(growth_model_path, monkeypatch, tmp_path):
     environment_path = tmp_path / "environment-growth.json"
-    environment_path.write_text(
-        json.dumps({"species_models": {"其他": {}}}), encoding="utf-8"
-    )
+    environment_path.write_text(json.dumps({"species_models": {"其他": {}}}), encoding="utf-8")
     monkeypatch.setenv("TREELINE_WARNING_SPECIES_GROWTH_MODEL_PATH", str(environment_path))
 
     assert SpeciesGrowthModel(growth_model_path).model_path == growth_model_path
@@ -67,9 +63,7 @@ def test_species_growth_model_path_priority_and_bad_model(growth_model_path, mon
     assert error.value.__cause__ is not None
 
     incompatible_path = tmp_path / "incompatible-growth.json"
-    incompatible_path.write_text(
-        json.dumps({"species_models": []}), encoding="utf-8"
-    )
+    incompatible_path.write_text(json.dumps({"species_models": []}), encoding="utf-8")
     with pytest.raises(RuntimeError, match="incompatible-growth"):
         SpeciesGrowthModel(incompatible_path)
 
@@ -125,6 +119,142 @@ def test_short_and_long_forecast_contains_growth_and_wire_metrics(growth_model):
     assert "growth_trend" in result
     assert "risk_timeline_analysis" in result
     assert "maintenance_decision" in result["risk_timeline_analysis"]
+    assert result["current_assessment"]["hazard_level"] in {
+        "安全",
+        "一般隐患",
+        "重大隐患",
+        "紧急隐患",
+    }
+    assert set(result["long_term_forecast"][0]["comprehensive_risk"]["factors"]) == {
+        "D",
+        "G",
+        "M",
+        "H",
+    }
+    assert result["long_term_forecast"][0]["clearance_interval"]["confidence"] == 0.95
+    assert result["calculation_ledger"]["standard_comparisons"]
+    assert result["calculation_ledger"]["risk_formulas"]
+    old_scores = [
+        result["current_assessment"]["risk_score"],
+        *[item["risk_score"] for item in result["short_term_forecast"]],
+        *[item["risk_score"] for item in result["long_term_forecast"]],
+    ]
+    assert result["work_order"]["urgency"] == ForecastService._urgency(
+        max(old_scores), PredictionStandards()
+    )[0]
+    assert "comprehensive_urgency" in result["work_order"]
+    assert result["growth_trend"]["risk_score_change"] == round(
+        result["selected_target_prediction"]["risk_score"]
+        - result["current_assessment"]["risk_score"],
+        2,
+    )
+    assert result["growth_trend"]["comprehensive_risk_score_change"] == round(
+        result["selected_target_prediction"]["comprehensive_risk_score"]
+        - result["current_assessment"]["comprehensive_risk_score"],
+        2,
+    )
+    timeline_item = result["risk_timeline_analysis"]["timeline"][0]
+    forecast_item = result["long_term_forecast"][0]
+    assert timeline_item["risk_score"] == round(forecast_item["risk_score"], 2)
+    assert timeline_item["risk_level"] == forecast_item["risk_level"]
+    assert timeline_item["comprehensive_risk_score"] == forecast_item[
+        "comprehensive_risk_score"
+    ]
+    assert timeline_item["hazard_level"] == forecast_item["hazard_level"]
+
+
+def test_forecast_accepts_only_core_fields_and_marks_imputations(growth_model):
+    service = ForecastService(FakeTemporalPredictor(), growth_model)
+    selected_fields = [
+        "observation_year",
+        "observation_month",
+        "observation_day",
+        "species",
+        "height",
+        "voltage_level_kv",
+        "clearance_distance",
+    ]
+    result = service.forecast(
+        {
+            "selected_fields": selected_fields,
+            "observation_year": 2026,
+            "observation_month": 1,
+            "observation_day": 15,
+            "species": "杨树",
+            "height": 18,
+            "voltage_level_kv": 110,
+            "clearance_distance": 5,
+        },
+        PredictionStandards().to_dict(),
+        short_horizons_days=[1],
+        long_horizons_months=[1],
+    )
+
+    availability = result["input_availability"]
+    assert availability["selection_enabled"] is True
+    assert "gps_longitude" in availability["omitted_fields"]
+    assert "diameter" in availability["omitted_fields"]
+    assert result["observed_input_snapshot"]["gps_longitude"] is None
+    assert result["observed_input_snapshot"]["diameter"] is None
+    assert result["input_snapshot"]["diameter"] > 0
+    diameter_row = next(
+        row
+        for row in result["calculation_ledger"]["standard_comparisons"]
+        if row["field"] == "diameter"
+    )
+    assert diameter_row["status"] == "未提供/模型估计"
+    assert diameter_row["exceeded"] is False
+
+
+def test_checkbox_request_rejects_missing_core_field(growth_model):
+    service = ForecastService(FakeTemporalPredictor(), growth_model)
+    with pytest.raises(ValueError, match="净空距离"):
+        service.forecast(
+            {
+                "selected_fields": [
+                    "observation_year",
+                    "observation_month",
+                    "observation_day",
+                    "species",
+                    "height",
+                    "voltage_level_kv",
+                ],
+                "observation_year": 2026,
+                "observation_month": 1,
+                "observation_day": 15,
+                "species": "杨树",
+                "height": 18,
+                "voltage_level_kv": 110,
+            },
+            PredictionStandards().to_dict(),
+            short_horizons_days=[1],
+            long_horizons_months=[1],
+        )
+
+
+def test_forecast_marks_history_unavailable_without_a_tree_id(growth_model):
+    result = ForecastService(FakeTemporalPredictor(), growth_model).forecast(
+        {
+            "species": "杨树",
+            "height": 18,
+            "diameter": 30,
+            "age": 12,
+            "observation_date": "2026-01-15",
+            "voltage_level_kv": 110,
+            "clearance_distance": 5,
+        },
+        PredictionStandards().to_dict(),
+        short_horizons_days=[1],
+        long_horizons_months=[1],
+        historical_records=[
+            {"tree_id": 10, "observation_date": "2025-12-01", "clearance_distance": 1},
+            {"tree_id": 20, "observation_date": "2025-12-15", "clearance_distance": 1},
+        ],
+    )
+    history = result["historical_context"]["calculation"]
+    assert history["available"] is False
+    assert history["reason"] == "missing_tree_id"
+    assert history["index"] == 0
 
 
 def test_forecast_calendar_starts_from_observation_date_and_crosses_year(growth_model):
@@ -165,19 +295,16 @@ def test_forecast_calendar_starts_from_observation_date_and_crosses_year(growth_
     assert result["calendar_context"]["observation_date"] == "2026-11-30"
     assert result["calendar_context"]["observation_month"] == 11
     assert result["short_term_forecast"][0]["target_date"] == "2026-12-30"
-    assert [
-        item["target_date"] for item in result["long_term_forecast"]
-    ] == ["2026-12-30", "2027-01-30"]
-    assert [
-        item["target_year_month"] for item in result["long_term_forecast"]
-    ] == ["2026年12月", "2027年01月"]
-    assert all(
-        item["season"] == "冬季" for item in result["long_term_forecast"]
-    )
-    assert all(
-        item["wire_condition"] == "冬季工况"
-        for item in result["long_term_forecast"]
-    )
+    assert [item["target_date"] for item in result["long_term_forecast"]] == [
+        "2026-12-30",
+        "2027-01-30",
+    ]
+    assert [item["target_year_month"] for item in result["long_term_forecast"]] == [
+        "2026年12月",
+        "2027年01月",
+    ]
+    assert all(item["season"] == "冬季" for item in result["long_term_forecast"])
+    assert all(item["wire_condition"] == "冬季工况" for item in result["long_term_forecast"])
     assert result["long_term_forecast"][-1]["predicted_age"] > snapshot["age"]
     assert "4 m" in result["treatment_advice"]["target_month_goal"]
 
@@ -326,9 +453,7 @@ def test_current_clearance_violation_requires_immediate_action():
             "risk_score": 80,
             "standard_analysis": {
                 "effective_clearance": 3,
-                "violations": [
-                    {"field": "clearance_distance", "label": "净空距离"}
-                ],
+                "violations": [{"field": "clearance_distance", "label": "净空距离"}],
             },
         },
         [

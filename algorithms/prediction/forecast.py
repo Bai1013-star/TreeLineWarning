@@ -8,6 +8,12 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from algorithms.prediction.predictor import TreeInput, TreeRiskPredictor
+from algorithms.prediction.risk_evaluation import (
+    calculate_historical_risk,
+    calculation_ledger,
+    clearance_interval,
+    comprehensive_risk,
+)
 from algorithms.prediction.species_growth import SpeciesGrowthModel
 from algorithms.prediction.standards import PredictionStandards, analyze_wire
 from algorithms.prediction.temporal_attention import (
@@ -23,6 +29,71 @@ SPECIES_ANNUAL_GROWTH = {
     "柏树": (0.32, 0.60),
     "樟树": (0.75, 1.00),
     "其他": (0.55, 0.85),
+}
+
+REQUIRED_INPUT_FIELDS = (
+    "observation_year",
+    "observation_month",
+    "observation_day",
+    "species",
+    "height",
+    "voltage_level_kv",
+    "clearance_distance",
+)
+
+OPTIONAL_INPUT_FIELDS = (
+    "line_name",
+    "tower_section",
+    "gps_longitude",
+    "gps_latitude",
+    "tree_id",
+    "tree_code",
+    "age",
+    "diameter",
+    "crown_width",
+    "slope",
+    "maximum_sag_winter",
+    "maximum_sag_summer",
+    "vertical_distance",
+    "horizontal_distance",
+    "wind_offset_distance",
+    "wind_speed",
+    "rainfall",
+    "humidity",
+    "temperature",
+    "sunlight_hours",
+)
+
+ALL_INPUT_FIELDS = (*REQUIRED_INPUT_FIELDS, *OPTIONAL_INPUT_FIELDS)
+
+INPUT_FIELD_LABELS = {
+    "observation_year": "观测年份",
+    "observation_month": "观测月份",
+    "observation_day": "观测日期",
+    "line_name": "线路名称",
+    "tower_section": "杆塔区间",
+    "gps_longitude": "GPS 经度",
+    "gps_latitude": "GPS 纬度",
+    "tree_id": "树木编号",
+    "tree_code": "树木档案编号",
+    "species": "树种",
+    "height": "树高",
+    "age": "树龄",
+    "diameter": "胸径",
+    "crown_width": "冠幅",
+    "slope": "立地坡度",
+    "voltage_level_kv": "电压等级",
+    "maximum_sag_winter": "冬季最大弧垂",
+    "maximum_sag_summer": "夏季最大弧垂",
+    "vertical_distance": "垂直距离",
+    "horizontal_distance": "水平距离",
+    "clearance_distance": "净空距离",
+    "wind_offset_distance": "风偏距离",
+    "wind_speed": "风速",
+    "rainfall": "降雨量",
+    "humidity": "湿度",
+    "temperature": "温度",
+    "sunlight_hours": "日照时长",
 }
 
 
@@ -42,10 +113,7 @@ def add_months(value: date, months: int) -> date:
     month = month_index % 12 + 1
     day = min(
         value.day,
-        (
-            date(year + (month == 12), 1 if month == 12 else month + 1, 1)
-            - timedelta(days=1)
-        ).day,
+        (date(year + (month == 12), 1 if month == 12 else month + 1, 1) - timedelta(days=1)).day,
     )
     return date(year, month, day)
 
@@ -120,27 +188,26 @@ class ForecastService:
         if any(value <= 0 or value > 36 for value in long_months):
             raise ValueError("长时预测范围必须在 1–36 个月")
         selected_month = (
-            int(selected_horizon_months)
-            if selected_horizon_months is not None
-            else long_months[-1]
+            int(selected_horizon_months) if selected_horizon_months is not None else long_months[-1]
         )
         if selected_month not in long_months:
             raise ValueError("重点分析月份必须包含在长时预测月份中")
 
-        current = self._normalize_snapshot(snapshot)
+        current = self._normalize_snapshot(snapshot, standard)
         self._validate_snapshot(current)
         current_rule = self._rule_result(current, standard)
-        short_term = [
-            self._short_projection(current, days, standard) for days in short_days
-        ]
-
         usable_history = self._normalize_history(historical_records or [], current)
+        historical_risk = calculate_historical_risk(
+            usable_history,
+            standard,
+            tree_id=current["tree_id"],
+        )
+        short_term = [self._short_projection(current, days, standard) for days in short_days]
+
         monthly_records = [*usable_history[-17:], current]
         long_term = []
         for month_index in range(1, max(long_months) + 1):
-            monthly_records.append(
-                self._next_month(monthly_records[-1], current, month_index)
-            )
+            monthly_records.append(self._next_month(monthly_records[-1], current, month_index))
             if month_index in long_months:
                 long_term.append(
                     self._long_projection(
@@ -150,14 +217,46 @@ class ForecastService:
                     )
                 )
 
-        target = next(
-            item for item in long_term if item["horizon_months"] == selected_month
+        baseline_effective_clearance = float(
+            current_rule.get("standard_analysis", {}).get(
+                "effective_clearance", current["clearance_distance"]
+            )
         )
+        self._attach_comprehensive_risk(
+            current_rule,
+            current,
+            standard,
+            historical_risk,
+            horizon_months=0,
+            baseline_effective_clearance=baseline_effective_clearance,
+        )
+        for item in short_term:
+            self._attach_comprehensive_risk(
+                item,
+                current,
+                standard,
+                historical_risk,
+                horizon_months=max(1, math.ceil(int(item["period"][:-1]) / 30)),
+                baseline_effective_clearance=baseline_effective_clearance,
+            )
+        for item in long_term:
+            self._attach_comprehensive_risk(
+                item,
+                current,
+                standard,
+                historical_risk,
+                horizon_months=int(item["horizon_months"]),
+                baseline_effective_clearance=baseline_effective_clearance,
+            )
+
+        target = next(item for item in long_term if item["horizon_months"] == selected_month)
         height_delta = target["predicted_height"] - current["height"]
-        clearance_delta = target["predicted_clearance_distance"] - current[
-            "clearance_distance"
-        ]
+        clearance_delta = target["predicted_clearance_distance"] - current["clearance_distance"]
         risk_delta = target["risk_score"] - current_rule["risk_score"]
+        comprehensive_risk_delta = (
+            target["comprehensive_risk_score"]
+            - current_rule["comprehensive_risk_score"]
+        )
         risk_timeline = self._risk_timeline_analysis(
             current,
             current_rule,
@@ -167,10 +266,23 @@ class ForecastService:
         all_assessments = [current_rule, *short_term, *long_term]
         maximum_score = max(float(item["risk_score"]) for item in all_assessments)
         urgency, urgency_icon = self._urgency(maximum_score, standard)
+        comprehensive_maximum_score = max(
+            float(item["comprehensive_risk_score"]) for item in all_assessments
+        )
+        comprehensive_urgency, comprehensive_urgency_icon = (
+            self._comprehensive_urgency(comprehensive_maximum_score, standard)
+        )
         now = datetime.now()
         quality_warnings = self._data_quality_warnings(current)
-        work_order_id = (
-            f"TLW-{now:%Y%m%d}-{current['tree_id']:03d}-{now:%H%M%S}"
+        availability = self._input_availability(current)
+        observed_snapshot = self._observed_snapshot(current)
+        work_order_id = f"TLW-{now:%Y%m%d}-{current['tree_id']:03d}-{now:%H%M%S}"
+        ledger = calculation_ledger(
+            current,
+            current_rule,
+            target,
+            target["comprehensive_risk"],
+            standard,
         )
         return {
             "report_type": "配电线路树线隐患智能预警工单",
@@ -179,9 +291,9 @@ class ForecastService:
                 "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "urgency": urgency,
                 "urgency_icon": urgency_icon,
-                "responsible_unit": str(
-                    snapshot.get("responsible_unit", "请立即派单至运维班组")
-                ),
+                "comprehensive_urgency": comprehensive_urgency,
+                "comprehensive_urgency_icon": comprehensive_urgency_icon,
+                "responsible_unit": str(snapshot.get("responsible_unit", "请立即派单至运维班组")),
                 "system_signature": "TreeLineWarning 树线隐患智能研判系统",
             },
             "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
@@ -192,9 +304,7 @@ class ForecastService:
                 "observation_date": current["observation_date"],
                 "observation_year": current["observation_year"],
                 "observation_month": current["observation_month"],
-                "observation_season": season_for_month(
-                    current["observation_month"]
-                ),
+                "observation_season": season_for_month(current["observation_month"]),
                 # Compatibility aliases: "current" here means current observation.
                 "current_date": current["observation_date"],
                 "current_month": current["observation_month"],
@@ -206,16 +316,18 @@ class ForecastService:
                 "risk_scan_months": max(long_months),
             },
             "location_information": {
-                "line_name": current["line_name"],
-                "tower_section": current["tower_section"],
-                "gps_longitude": current["gps_longitude"],
-                "gps_latitude": current["gps_latitude"],
-                "tree_code": current["tree_code"],
+                "line_name": observed_snapshot["line_name"] or "未提供",
+                "tower_section": observed_snapshot["tower_section"] or "未提供",
+                "gps_longitude": observed_snapshot["gps_longitude"] or "未提供",
+                "gps_latitude": observed_snapshot["gps_latitude"] or "未提供",
+                "tree_code": observed_snapshot["tree_code"] or "未提供",
                 "species": current["species"],
                 "height": current["height"],
-                "crown_width": current["crown_width"],
+                "crown_width": observed_snapshot["crown_width"],
             },
             "input_snapshot": current,
+            "observed_input_snapshot": observed_snapshot,
+            "input_availability": availability,
             "applied_standard": standard.to_dict(),
             "current_assessment": current_rule,
             "short_term_forecast": short_term,
@@ -225,17 +337,20 @@ class ForecastService:
             "historical_context": {
                 "status": "已启用" if len(usable_history) >= 2 else "等待用户提供历史数据",
                 "record_count": len(usable_history),
+                "historical_risk_index": historical_risk["index"],
+                "historical_risk_score": round(historical_risk["index"] * 100, 2),
+                "calculation": historical_risk,
                 "effect": (
-                    "历史观测已按时间顺序进入 LSTM，近期记录权重高于早期记录。"
+                    "历史观测既进入 LSTM，也形成独立历史隐患指数 H 并参与综合风险 R。"
                     if len(usable_history) >= 2
-                    else "当前以模拟训练、当月状态和季节规律预测；录入至少两期同树历史后自动融合。"
+                    else "当前 H 按可用记录计算；录入至少两期同树历史后可计算重复预警和净空变化。"
                 ),
             },
             "model_context": {
                 "risk_model": (
-                    "LSTM 三重注意力（近期、季节、树种特征）+ 行业标准规则"
+                    "LSTM 三重注意力（近期、季节、树种特征）+ D/G/M/H 可解释综合风险"
                     if self.temporal_predictor is not None
-                    else "季节生长 + 行业标准规则"
+                    else "季节生长 + 可配置规则"
                 ),
                 "growth_model": (
                     "分树种月度气象生长模型（模拟数据训练）"
@@ -250,11 +365,10 @@ class ForecastService:
             "growth_trend": {
                 "forecast_months": selected_month,
                 "height_change": round(height_delta, 3),
-                "diameter_change": round(
-                    target["predicted_diameter"] - current["diameter"], 3
-                ),
+                "diameter_change": round(target["predicted_diameter"] - current["diameter"], 3),
                 "clearance_change": round(clearance_delta, 3),
                 "risk_score_change": round(risk_delta, 2),
+                "comprehensive_risk_score_change": round(comprehensive_risk_delta, 2),
                 "direction": (
                     "风险上升"
                     if risk_delta > 3
@@ -263,6 +377,7 @@ class ForecastService:
                     else "风险基本稳定"
                 ),
             },
+            "calculation_ledger": ledger,
             "treatment_advice": self._treatment_advice(
                 current_rule,
                 target,
@@ -277,8 +392,13 @@ class ForecastService:
             ],
             "report_notes": [
                 "短时预测按日/周评估，树木生长影响较小，主要反映气象和弧垂工况。",
-                    "长时预测逐月累计树种、温度、日照、降雨、湿度与季节性生长，"
-                    "并融合 LSTM 时序评分与标准规则评分。",
+                "长时预测逐月累计树种、温度、日照、降雨、湿度与季节性生长，"
+                "并融合 LSTM 时序评分、标准规则评分和 D/G/M/H 四因子综合风险。",
+                "四级预警以综合风险指数 R 为准；旧版低/中/高风险分作为辅助模型分保留。",
+                (
+                    "历史隐患 H 由超标率、事故率、重复预警率和处置后复发率加权；"
+                    "缺失字段会在报告中标明。"
+                ),
                 "所有短时日期和未来月份均从观测日期起算，而不是从工单生成日期起算。",
                 "重点月份用于展示选定月份结果；风险上升月与修剪时点按完整风险扫描月份自动计算。",
                 "未提供未来逐日天气预报时，短时预测沿用观测时气象作为情景假设。",
@@ -287,44 +407,160 @@ class ForecastService:
             ],
         }
 
-    def _normalize_snapshot(self, value: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_snapshot(
+        self,
+        value: dict[str, Any],
+        standard: PredictionStandards | None = None,
+    ) -> dict[str, Any]:
+        standard = standard or PredictionStandards()
+        selection_active = isinstance(value.get("selected_fields"), list)
+        if selection_active:
+            provided = {
+                str(field)
+                for field in value["selected_fields"]
+                if str(field) in ALL_INPUT_FIELDS
+            }
+            missing = [
+                INPUT_FIELD_LABELS[field]
+                for field in REQUIRED_INPUT_FIELDS
+                if field not in value or value[field] in (None, "")
+            ]
+            if missing:
+                raise ValueError(f"以下核心字段必须提供：{'、'.join(missing)}")
+            provided.update(REQUIRED_INPUT_FIELDS)
+        else:
+            # Legacy callers did not send selection metadata. Preserve their
+            # historical default behavior and only activate optional semantics
+            # for the new checkbox-enabled client.
+            provided = set(ALL_INPUT_FIELDS)
+
         observed_on = observation_date_from(value)
-        clearance = float(
-            value.get("clearance_distance", value.get("distance_to_wire", 999))
-        )
+        clearance = float(value.get("clearance_distance", value.get("distance_to_wire", 999)))
+        rules = standard.rules_for_voltage(float(value.get("voltage_level_kv", 110)))
+        neutral_temperature = min(20.0, standard.temperature_growth_threshold - 1.0)
+        neutral_sunlight = min(6.0, standard.sunlight_growth_threshold - 1.0)
+        defaults: dict[str, Any] = {
+            "tree_id": 0,
+            "tree_code": "",
+            "age": 20.0,
+            "diameter": max(10.0, float(value.get("height", 0) or 0) * 2.0),
+            "crown_width": 0.0,
+            "slope": 0.0,
+            "maximum_sag_winter": round(float(rules["max_sag"]) * 0.7, 3),
+            "maximum_sag_summer": float(rules["max_sag"]),
+            "vertical_distance": clearance,
+            "horizontal_distance": clearance,
+            "wind_offset_distance": 0.0,
+            "wind_speed": 0.0,
+            "rainfall": 0.0,
+            "humidity": 60.0,
+            "temperature": neutral_temperature,
+            "sunlight_hours": neutral_sunlight,
+            "line_name": "",
+            "tower_section": "",
+            "gps_longitude": "",
+            "gps_latitude": "",
+        }
+
+        def selected_value(field: str) -> Any:
+            if field in provided and value.get(field) not in (None, ""):
+                return value[field]
+            return defaults[field]
+
         result = {
-            "tree_id": int(value.get("tree_id", 0)),
-            "tree_code": str(value.get("tree_code", value.get("tree_id", ""))),
+            "tree_id": int(selected_value("tree_id")),
+            "tree_code": str(selected_value("tree_code")),
             "species": str(value.get("species", "其他")),
             "height": float(value.get("height", 0)),
-            "crown_width": float(value.get("crown_width", 0)),
-            "age": float(value.get("age", 0)),
-            "diameter": float(value.get("diameter", 0)),
-            "slope": float(value.get("slope", 0)),
-            "vertical_distance": float(value.get("vertical_distance", clearance)),
-            "horizontal_distance": float(value.get("horizontal_distance", clearance)),
+            "crown_width": float(selected_value("crown_width")),
+            "age": float(selected_value("age")),
+            "diameter": float(selected_value("diameter")),
+            "slope": float(selected_value("slope")),
+            "vertical_distance": float(selected_value("vertical_distance")),
+            "horizontal_distance": float(selected_value("horizontal_distance")),
             "clearance_distance": clearance,
-            "wind_offset_distance": float(value.get("wind_offset_distance", 0)),
+            "wind_offset_distance": float(selected_value("wind_offset_distance")),
             "voltage_level_kv": float(value.get("voltage_level_kv", 110)),
-            "maximum_sag_winter": float(value.get("maximum_sag_winter", 3.5)),
-            "maximum_sag_summer": float(value.get("maximum_sag_summer", 5)),
+            "maximum_sag_winter": float(selected_value("maximum_sag_winter")),
+            "maximum_sag_summer": float(selected_value("maximum_sag_summer")),
             "observation_date": observed_on.isoformat(),
             "observation_year": observed_on.year,
             "observation_month": observed_on.month,
             "observation_day": observed_on.day,
-            "wind_speed": float(value.get("wind_speed", 0)),
-            "rainfall": float(value.get("rainfall", 0)),
-            "humidity": float(value.get("humidity", 0)),
-            "temperature": float(value.get("temperature", 20)),
-            "sunlight_hours": float(value.get("sunlight_hours", 8)),
-            "line_name": str(value.get("line_name", "未填写线路")),
-            "tower_section": str(value.get("tower_section", "未填写杆塔区间")),
-            "gps_longitude": str(value.get("gps_longitude", "未填写")),
-            "gps_latitude": str(value.get("gps_latitude", "未填写")),
+            "wind_speed": float(selected_value("wind_speed")),
+            "rainfall": float(selected_value("rainfall")),
+            "humidity": float(selected_value("humidity")),
+            "temperature": float(selected_value("temperature")),
+            "sunlight_hours": float(selected_value("sunlight_hours")),
+            "line_name": str(selected_value("line_name")),
+            "tower_section": str(selected_value("tower_section")),
+            "gps_longitude": str(selected_value("gps_longitude")),
+            "gps_latitude": str(selected_value("gps_latitude")),
         }
         result["distance_to_wire"] = result["clearance_distance"]
         result["month"] = result["observation_month"]
+        result["_selection_active"] = selection_active
+        result["_provided_fields"] = sorted({*provided, "observation_date"})
+        result["_omitted_fields"] = sorted(set(OPTIONAL_INPUT_FIELDS) - provided)
+        result["_imputations"] = {
+            field: {
+                "used_value": result[field],
+                "reason": self._imputation_reason(field),
+            }
+            for field in result["_omitted_fields"]
+        }
         return result
+
+    @staticmethod
+    def _imputation_reason(field: str) -> str:
+        if field in {"vertical_distance", "horizontal_distance"}:
+            return "未提供该方向距离，模型暂以已提供的净空距离代替"
+        if field in {"maximum_sag_winter", "maximum_sag_summer"}:
+            return "未提供现场弧垂，模型采用所选电压等级标准的季节情景值"
+        if field in {"age", "diameter"}:
+            return "未提供生长特征，模型采用透明的通用树木估计值"
+        if field in {"wind_speed", "rainfall", "wind_offset_distance", "slope"}:
+            return "未提供风险事件数据，当前情景按不额外加险的中性值计算"
+        if field in {"humidity", "temperature", "sunlight_hours"}:
+            return "未提供生长气象数据，模型采用不触发生长加分的中性情景值"
+        if field == "crown_width":
+            return "未提供冠幅；当前模型不让该缺失值直接加分"
+        return "未提供档案数据，仅在报告中标记为缺失"
+
+    @staticmethod
+    def _observed_snapshot(value: dict[str, Any]) -> dict[str, Any]:
+        omitted = set(value.get("_omitted_fields", []))
+        result = {
+            key: field_value
+            for key, field_value in value.items()
+            if not key.startswith("_")
+        }
+        for field in omitted:
+            result[field] = None
+        result["distance_to_wire"] = result.get("clearance_distance")
+        return result
+
+    @staticmethod
+    def _input_availability(value: dict[str, Any]) -> dict[str, Any]:
+        provided = list(value.get("_provided_fields", []))
+        omitted = list(value.get("_omitted_fields", []))
+        return {
+            "selection_enabled": bool(value.get("_selection_active")),
+            "required_fields": list(REQUIRED_INPUT_FIELDS),
+            "provided_fields": provided,
+            "omitted_fields": omitted,
+            "provided_count": len([field for field in provided if field in ALL_INPUT_FIELDS]),
+            "optional_omitted_count": len(omitted),
+            "field_labels": INPUT_FIELD_LABELS,
+            "imputations": value.get("_imputations", {}),
+            "status": (
+                "已采用 "
+                f"{len([field for field in provided if field in ALL_INPUT_FIELDS])} 个输入项，"
+                f"{len(omitted)} 个可选项未提供"
+                if value.get("_selection_active")
+                else "兼容旧版请求：按原有字段默认规则计算"
+            ),
+        }
 
     @staticmethod
     def _validate_snapshot(value: dict[str, Any]) -> None:
@@ -361,9 +597,16 @@ class ForecastService:
             warnings.append("观测日期晚于系统当前日期，请确认是否为情景模拟")
         if value["maximum_sag_summer"] < value["maximum_sag_winter"]:
             warnings.append("夏季最大弧垂小于冬季最大弧垂，请复核测量口径")
-        if value["crown_width"] <= 0:
+        omitted = set(value.get("_omitted_fields", []))
+        if omitted:
+            warnings.append(
+                f"本次有 {len(omitted)} 个可选字段未启用；模型替代值已在“数据采用情况”中逐项公开"
+            )
+        if value["crown_width"] <= 0 and "crown_width" not in omitted:
             warnings.append("未填写有效冠幅；当前不影响评分，但工单信息不完整")
-        if value["gps_longitude"] == "未填写" or value["gps_latitude"] == "未填写":
+        if not omitted and (
+            value["gps_longitude"] == "未填写" or value["gps_latitude"] == "未填写"
+        ):
             warnings.append("GPS 坐标不完整，工单无法准确定位")
         return warnings
 
@@ -392,22 +635,29 @@ class ForecastService:
                 continue
             try:
                 merged = {**current, **record}
-                if record.get("observation_month") and not record.get(
-                    "observation_date"
-                ):
+                if record.get("observation_month") and not record.get("observation_date"):
                     merged.pop("observation_date", None)
                     merged["observation_year"] = int(
-                        record.get(
-                            "observation_year", current["observation_year"]
-                        )
+                        record.get("observation_year", current["observation_year"])
                         or current["observation_year"]
                     )
-                    merged["observation_day"] = int(
-                        record.get("observation_day", 1) or 1
-                    )
+                    merged["observation_day"] = int(record.get("observation_day", 1) or 1)
                 normalized = self._normalize_snapshot(merged)
             except (TypeError, ValueError):
                 continue
+            for field in (
+                "risk_level",
+                "risk_score",
+                "standard_analysis",
+                "hazard_occurred",
+                "incident_occurred",
+                "treatment_performed",
+                "handled",
+                "repeat_alert",
+                "created_at",
+            ):
+                if field in record:
+                    normalized[field] = record[field]
             if normalized["height"] <= 0 or normalized["clearance_distance"] <= 0:
                 continue
             if normalized["observation_date"] >= current["observation_date"]:
@@ -431,12 +681,9 @@ class ForecastService:
             state["observation_month"] = projected_day.month
             state["month"] = projected_day.month
             state["age"] = current["age"] + day_index / 365.2425
-            monthly_height, monthly_diameter = self._growth_for_month(
-                state, projected_day.month
-            )
+            monthly_height, monthly_diameter = self._growth_for_month(state, projected_day.month)
             days_in_month = (
-                add_months(projected_day.replace(day=1), 1)
-                - projected_day.replace(day=1)
+                add_months(projected_day.replace(day=1), 1) - projected_day.replace(day=1)
             ).days
             total_height_growth += monthly_height / days_in_month
             total_diameter_growth += monthly_diameter / days_in_month
@@ -494,30 +741,21 @@ class ForecastService:
         month_index: int,
     ) -> dict[str, Any]:
         state = dict(previous)
-        target_on = add_months(
-            date.fromisoformat(baseline["observation_date"]), month_index
-        )
+        target_on = add_months(date.fromisoformat(baseline["observation_date"]), month_index)
         month = target_on.month
-        baseline_summer = math.cos(
-            2 * math.pi * (baseline["observation_month"] - 7) / 12
-        )
+        baseline_summer = math.cos(2 * math.pi * (baseline["observation_month"] - 7) / 12)
         next_summer = math.cos(2 * math.pi * (month - 7) / 12)
-        state["temperature"] = baseline["temperature"] + 8 * (
-            next_summer - baseline_summer
-        )
+        state["temperature"] = baseline["temperature"] + 8 * (next_summer - baseline_summer)
         state["sunlight_hours"] = max(
             1,
             baseline["sunlight_hours"] + 2.5 * (next_summer - baseline_summer),
         )
-        baseline_rain_season = math.cos(
-            2 * math.pi * (baseline["observation_month"] - 7.5) / 12
-        )
+        baseline_rain_season = math.cos(2 * math.pi * (baseline["observation_month"] - 7.5) / 12)
         next_rain_season = math.cos(2 * math.pi * (month - 7.5) / 12)
         previous_rainfall = state["rainfall"]
         state["rainfall"] = max(
             0,
-            baseline["rainfall"]
-            + 24 * (next_rain_season - baseline_rain_season),
+            baseline["rainfall"] + 24 * (next_rain_season - baseline_rain_season),
         )
         state["humidity"] = min(
             100,
@@ -539,12 +777,8 @@ class ForecastService:
         state["diameter"] += diameter_growth
         encroachment = height_growth * 0.45
         state["vertical_distance"] = max(0, state["vertical_distance"] - encroachment)
-        state["horizontal_distance"] = max(
-            0, state["horizontal_distance"] - height_growth * 0.16
-        )
-        state["clearance_distance"] = max(
-            0, state["clearance_distance"] - encroachment
-        )
+        state["horizontal_distance"] = max(0, state["horizontal_distance"] - height_growth * 0.16)
+        state["clearance_distance"] = max(0, state["clearance_distance"] - encroachment)
         state["distance_to_wire"] = state["clearance_distance"]
         state["_height_growth"] = height_growth
         state["_diameter_growth"] = diameter_growth
@@ -559,9 +793,7 @@ class ForecastService:
     ) -> dict[str, Any]:
         state = records[-1]
         rule = self._rule_result(state, standard)
-        lstm = self._temporal_predictor_for_prediction().predict(
-            records, state["species"]
-        )
+        lstm = self._temporal_predictor_for_prediction().predict(records, state["species"])
         lstm_score = float(lstm["risk_score"])
         combined_score = (
             float(rule["risk_score"])
@@ -614,9 +846,7 @@ class ForecastService:
             "predicted_wind_offset_distance": round(state["wind_offset_distance"], 3),
             "predicted_sag": wire["current_sag"],
             "monthly_height_growth": round(float(state.get("_height_growth", 0)), 4),
-            "monthly_diameter_growth": round(
-                float(state.get("_diameter_growth", 0)), 4
-            ),
+            "monthly_diameter_growth": round(float(state.get("_diameter_growth", 0)), 4),
             "predicted_temperature": round(state["temperature"], 2),
             "predicted_sunlight_hours": round(state["sunlight_hours"], 2),
             "predicted_rainfall": round(state["rainfall"], 2),
@@ -628,14 +858,89 @@ class ForecastService:
         }
 
     @staticmethod
-    def _urgency(
-        maximum_score: float, standard: PredictionStandards
-    ) -> tuple[str, str]:
+    def _attach_comprehensive_risk(
+        assessment: dict[str, Any],
+        baseline: dict[str, Any],
+        standard: PredictionStandards,
+        historical_risk: dict[str, Any],
+        *,
+        horizon_months: int,
+        baseline_effective_clearance: float,
+    ) -> None:
+        """Attach the authoritative four-level D/G/M/H assessment in-place."""
+        if horizon_months == 0:
+            effective = float(
+                assessment.get("standard_analysis", {}).get(
+                    "effective_clearance", baseline["clearance_distance"]
+                )
+            )
+            forecast_clearance = effective
+            weather_snapshot = baseline
+        else:
+            effective = float(
+                assessment.get(
+                    "predicted_effective_clearance",
+                    assessment.get(
+                        "predicted_clearance_distance",
+                        baseline["clearance_distance"],
+                    ),
+                )
+            )
+            forecast_clearance = effective
+            weather_snapshot = {
+                "wind_speed": assessment.get("predicted_wind_speed", baseline["wind_speed"]),
+                "rainfall": assessment.get("predicted_rainfall", baseline["rainfall"]),
+                "temperature": assessment.get("predicted_temperature", baseline["temperature"]),
+                "sunlight_hours": assessment.get(
+                    "predicted_sunlight_hours", baseline["sunlight_hours"]
+                ),
+            }
+        safety_clearance = standard.rules_for_voltage(baseline["voltage_level_kv"])[
+            "min_clearance_distance"
+        ]
+        result = comprehensive_risk(
+            effective_clearance=effective,
+            safety_clearance=safety_clearance,
+            baseline_clearance=baseline_effective_clearance,
+            forecast_clearance=forecast_clearance,
+            weather_snapshot=weather_snapshot,
+            historical=historical_risk,
+            standard=standard,
+        )
+        assessment["comprehensive_risk"] = result
+        assessment["comprehensive_risk_index"] = result["index"]
+        assessment["comprehensive_risk_score"] = result["score"]
+        assessment["hazard_level"] = result["hazard_level"]
+        assessment["hazard_code"] = result["hazard_code"]
+        assessment["warning_color"] = result["warning_color"]
+        assessment["risk_escalation_indicator"] = result["risk_escalation_indicator"]
+        assessment["hazard_suggestion"] = result["action"]
+        if horizon_months > 0:
+            assessment["clearance_interval"] = clearance_interval(
+                forecast_clearance,
+                horizon_months,
+                historical_risk,
+            )
+
+    @staticmethod
+    def _urgency(maximum_score: float, standard: PredictionStandards) -> tuple[str, str]:
         if maximum_score >= standard.high_risk_score:
             return "最高级（I级危险）", "⚠⚠⚠"
         if maximum_score >= standard.medium_risk_score:
             return "较高级（II级关注）", "⚠⚠"
         return "常规级（III级巡检）", "⚠"
+
+    @staticmethod
+    def _comprehensive_urgency(
+        maximum_score: float, standard: PredictionStandards
+    ) -> tuple[str, str]:
+        if maximum_score >= standard.emergency_hazard_index * 100:
+            return "最高级（I级危险）", "⚠⚠⚠"
+        if maximum_score >= standard.major_hazard_index * 100:
+            return "较高级（II级关注）", "⚠⚠"
+        if maximum_score >= standard.general_hazard_index * 100:
+            return "关注级（III级监测）", "⚠"
+        return "安全级（IV级巡检）", "✓"
 
     @staticmethod
     def _risk_timeline_analysis(
@@ -644,7 +949,15 @@ class ForecastService:
         forecasts: list[dict[str, Any]],
         standard: PredictionStandards,
     ) -> dict[str, Any]:
-        severity = {"低风险": 0, "中风险": 1, "高风险": 2}
+        severity = {
+            "安全": 0,
+            "低风险": 0,
+            "一般隐患": 1,
+            "中风险": 1,
+            "重大隐患": 2,
+            "高风险": 2,
+            "紧急隐患": 3,
+        }
         current_score = float(current_assessment["risk_score"])
         current_level = str(current_assessment["risk_level"])
         previous_score = current_score
@@ -655,9 +968,7 @@ class ForecastService:
             level = str(item["risk_level"])
             change_previous = score - previous_score
             change_current = score - current_score
-            category_increase = severity.get(level, 0) > severity.get(
-                current_level, 0
-            )
+            category_increase = severity.get(level, 0) > severity.get(current_level, 0)
             significant = category_increase or change_current >= 3
             timeline.append(
                 {
@@ -666,6 +977,10 @@ class ForecastService:
                     "target_year_month": item["target_year_month"],
                     "risk_level": level,
                     "risk_score": round(score, 2),
+                    "hazard_level": item.get("hazard_level"),
+                    "comprehensive_risk_score": item.get(
+                        "comprehensive_risk_score"
+                    ),
                     "change_from_previous": round(change_previous, 2),
                     "change_from_current": round(change_current, 2),
                     "trend": (
@@ -682,9 +997,7 @@ class ForecastService:
             previous_score = score
             previous_level = level
 
-        first_increase = next(
-            (item for item in timeline if item["significant_increase"]), None
-        )
+        first_increase = next((item for item in timeline if item["significant_increase"]), None)
         peak = max(
             timeline,
             key=lambda item: (
@@ -693,11 +1006,7 @@ class ForecastService:
             ),
         )
         first_medium = next(
-            (
-                item
-                for item in timeline
-                if item["risk_score"] >= standard.medium_risk_score
-            ),
+            (item for item in timeline if item["risk_score"] >= standard.medium_risk_score),
             None,
         )
         first_high = next(
@@ -708,9 +1017,9 @@ class ForecastService:
             ),
             None,
         )
-        minimum_clearance = standard.rules_for_voltage(
-            current_snapshot["voltage_level_kv"]
-        )["min_clearance_distance"]
+        minimum_clearance = standard.rules_for_voltage(current_snapshot["voltage_level_kv"])[
+            "min_clearance_distance"
+        ]
         first_clearance_violation = next(
             (
                 item
@@ -725,21 +1034,15 @@ class ForecastService:
             ),
             None,
         )
-        current_violations = current_assessment.get(
-            "standard_analysis", {}
-        ).get("violations", [])
+        current_violations = current_assessment.get("standard_analysis", {}).get("violations", [])
         current_effective_clearance = float(
             current_assessment.get("standard_analysis", {}).get(
                 "effective_clearance",
                 current_snapshot["clearance_distance"],
             )
         )
-        current_clearance_violation = (
-            current_effective_clearance < minimum_clearance
-            or any(
-                item.get("field") == "clearance_distance"
-                for item in current_violations
-            )
+        current_clearance_violation = current_effective_clearance < minimum_clearance or any(
+            item.get("field") == "clearance_distance" for item in current_violations
         )
 
         observed_on = date.fromisoformat(current_snapshot["observation_date"])
@@ -770,9 +1073,7 @@ class ForecastService:
                 "recommended_deadline": "立即安排，最晚7天内完成现场复测和修剪评估",
                 "trigger_month": observed_on.strftime("%Y年%m月"),
                 "trigger_reason": (
-                    "当前净空已经不符合标准"
-                    if current_clearance_violation
-                    else "当前已达到高风险"
+                    "当前净空已经不符合标准" if current_clearance_violation else "当前已达到高风险"
                 ),
                 "lead_time_months": 0,
             }
@@ -863,9 +1164,9 @@ class ForecastService:
             action = "缩短巡检周期，安排定向修剪并复核净空"
         else:
             action = "保持常规巡检，持续采集月度树高与净空"
-        voltage_minimum = standard.rules_for_voltage(
-            input_snapshot["voltage_level_kv"]
-        )["min_clearance_distance"]
+        voltage_minimum = standard.rules_for_voltage(input_snapshot["voltage_level_kv"])[
+            "min_clearance_distance"
+        ]
         return {
             "action": action,
             "deadline": maintenance["recommended_deadline"],
@@ -874,22 +1175,15 @@ class ForecastService:
                 if violated_names
                 else maintenance["trigger_reason"]
             ),
-            "risk_increase_conclusion": risk_timeline[
-                "risk_increase_conclusion"
-            ],
-            "recommended_trim_month": maintenance[
-                "recommended_trim_month"
-            ],
+            "risk_increase_conclusion": risk_timeline["risk_increase_conclusion"],
+            "recommended_trim_month": maintenance["recommended_trim_month"],
             "trigger_month": maintenance["trigger_month"],
             "target_month_goal": (
-                f"{target['target_year_month']}前保持净空距离不低于"
-                f" {voltage_minimum:g} m"
+                f"{target['target_year_month']}前保持净空距离不低于 {voltage_minimum:g} m"
             ),
         }
 
-    def _rule_result(
-        self, state: dict[str, Any], standard: PredictionStandards
-    ) -> dict[str, Any]:
+    def _rule_result(self, state: dict[str, Any], standard: PredictionStandards) -> dict[str, Any]:
         result = self.rule_predictor.predict(
             TreeInput(
                 species=state["species"],

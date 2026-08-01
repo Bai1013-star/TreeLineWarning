@@ -22,8 +22,24 @@ class PredictionStandards:
     rainfall_warning: float = 50.0
     temperature_growth_threshold: float = 30.0
     sunlight_growth_threshold: float = 10.0
+    slope_warning_angle: float = 25.0
     medium_risk_score: float = 40.0
     high_risk_score: float = 70.0
+    general_hazard_index: float = 0.20
+    major_hazard_index: float = 0.40
+    emergency_hazard_index: float = 0.70
+    risk_weight_distance: float = 0.40
+    risk_weight_growth: float = 0.25
+    risk_weight_weather: float = 0.20
+    risk_weight_history: float = 0.15
+    weather_weight_wind: float = 0.40
+    weather_weight_rainfall: float = 0.25
+    weather_weight_temperature: float = 0.20
+    weather_weight_sunlight: float = 0.15
+    history_weight_exceedance: float = 0.35
+    history_weight_incident: float = 0.30
+    history_weight_repeat: float = 0.20
+    history_weight_treatment_recurrence: float = 0.15
     voltage_standards: dict[str, dict[str, float]] = field(
         default_factory=lambda: {
             "10": {
@@ -84,19 +100,15 @@ class PredictionStandards:
     )
 
     @classmethod
-    def from_mapping(
-        cls, value: Mapping[str, Any] | None
-    ) -> PredictionStandards:
+    def from_mapping(cls, value: Mapping[str, Any] | None) -> PredictionStandards:
         if not value:
             return cls()
         allowed = cls.__dataclass_fields__
         cleaned = {key: item for key, item in value.items() if key in allowed}
+        defaults = cls()
         for key in allowed:
-            if key.startswith(("min_", "max_")) or key.endswith(
-                ("_speed", "_warning", "_threshold", "_score")
-            ):
-                if key in cleaned:
-                    cleaned[key] = float(cleaned[key])
+            if key in cleaned and isinstance(getattr(defaults, key), (int, float)):
+                cleaned[key] = float(cleaned[key])
         result = cls(**cleaned)
         result.validate()
         return result
@@ -104,14 +116,48 @@ class PredictionStandards:
     def validate(self) -> None:
         values = asdict(self)
         for key, value in values.items():
-            if isinstance(value, (int, float)) and value < 0:
-                raise ValueError(f"{key} 不能小于 0")
+            if isinstance(value, (int, float)):
+                if not math.isfinite(float(value)):
+                    raise ValueError(f"{key} must be finite")
+                if value < 0:
+                    raise ValueError(f"{key} 不能小于 0")
         if self.wind_high_speed <= self.wind_warning_speed:
             raise ValueError("高风速阈值必须大于预警风速阈值")
         if self.high_risk_score <= self.medium_risk_score:
             raise ValueError("高风险分数阈值必须大于中风险分数阈值")
         if self.high_risk_score > 100:
             raise ValueError("高风险分数阈值不能超过 100")
+        if not (
+            0
+            < self.general_hazard_index
+            < self.major_hazard_index
+            < self.emergency_hazard_index
+            <= 1
+        ):
+            raise ValueError("四级风险指数阈值必须满足 0 < 一般 < 重大 < 紧急 <= 1")
+        weight_groups = {
+            "综合风险 D/G/M/H": (
+                self.risk_weight_distance,
+                self.risk_weight_growth,
+                self.risk_weight_weather,
+                self.risk_weight_history,
+            ),
+            "气象因素": (
+                self.weather_weight_wind,
+                self.weather_weight_rainfall,
+                self.weather_weight_temperature,
+                self.weather_weight_sunlight,
+            ),
+            "历史因素": (
+                self.history_weight_exceedance,
+                self.history_weight_incident,
+                self.history_weight_repeat,
+                self.history_weight_treatment_recurrence,
+            ),
+        }
+        for label, weights in weight_groups.items():
+            if not math.isclose(sum(weights), 1.0, rel_tol=0, abs_tol=1e-6):
+                raise ValueError(f"{label}权重之和必须等于 1")
         for voltage, rules in self.voltage_standards.items():
             try:
                 float(voltage)
@@ -124,7 +170,11 @@ class PredictionStandards:
                 "max_sag",
             )
             for key in required:
-                if key not in rules or float(rules[key]) < 0:
+                if (
+                    key not in rules
+                    or not math.isfinite(float(rules[key]))
+                    or float(rules[key]) < 0
+                ):
                     raise ValueError(f"{voltage}kV 的 {key} 配置无效")
 
     def to_dict(self) -> dict[str, Any]:
@@ -142,10 +192,7 @@ class PredictionStandards:
             self.voltage_standards,
             key=lambda value: abs(float(value) - voltage_level_kv),
         )
-        rules = {
-            key: float(value)
-            for key, value in self.voltage_standards[closest].items()
-        }
+        rules = {key: float(value) for key, value in self.voltage_standards[closest].items()}
         rules["matched_voltage_level_kv"] = float(closest)
         return rules
 
@@ -223,10 +270,7 @@ def analyze_wire(
     rules = standards.rules_for_voltage(voltage_level_kv)
     month = min(12, max(1, int(observation_month)))
     summer_factor = (math.cos(2 * math.pi * (month - 7) / 12) + 1) / 2
-    current_sag = (
-        maximum_sag_winter
-        + (maximum_sag_summer - maximum_sag_winter) * summer_factor
-    )
+    current_sag = maximum_sag_winter + (maximum_sag_summer - maximum_sag_winter) * summer_factor
     maximum_sag = max(maximum_sag_winter, maximum_sag_summer)
     return {
         "voltage_level_kv": voltage_level_kv,
