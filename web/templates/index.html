@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>TreeLineWarning 树线风险预警平台</title>
+  <style>
+    :root{--ink:#17251f;--green:#176b4d;--green2:#0f5138;--pale:#edf6f0;--line:#d8e5dc;--muted:#66786e;--danger:#a52e2e}
+    *{box-sizing:border-box}body{margin:0;background:#f4f7f4;color:var(--ink);font:15px/1.5 "Microsoft YaHei",sans-serif}
+    header{background:var(--ink);color:#fff;padding:24px max(22px,calc((100vw - 1220px)/2));display:flex;align-items:center;justify-content:space-between;gap:20px}
+    .header-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}.calendar-badge{padding:8px 12px;border:1px solid #ffffff55;border-radius:9px;color:#d8eadf;font-size:13px}
+    h1,h2,h3,p{margin-top:0}h1{margin-bottom:4px;font-size:25px}header p{margin-bottom:0;color:#bcd4c6}
+    button{border:0;border-radius:9px;padding:11px 17px;background:var(--green);color:#fff;font-weight:700;cursor:pointer}button:hover{background:var(--green2)}
+    button.secondary{background:#e4eee8;color:var(--green)}button.ghost{background:transparent;border:1px solid #ffffff66}
+    .layout{max-width:1220px;margin:24px auto;padding:0 18px;display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:20px}
+    .panel,.input-section{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 5px 20px #263a3010}
+    .main-panel{padding:22px}.input-section{padding:18px;margin-bottom:15px;box-shadow:none}.input-section h3{font-size:16px;margin-bottom:4px}.section-note{color:var(--muted);font-size:12px;margin-bottom:14px}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px}label,.input-field{display:grid;gap:5px;color:#52645b;font-size:13px}
+    .input-mode{margin:14px 0 16px;padding:14px 16px;background:#f8fbf9;border:1px solid var(--line);border-radius:11px}.input-mode-head{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}.input-mode-actions{display:flex;gap:8px;flex-wrap:wrap}.input-mode-actions button{padding:8px 12px}.field-heading{display:flex;align-items:center;justify-content:space-between;gap:7px;min-height:26px}.required-badge{padding:2px 7px;border-radius:999px;background:#dceee3;color:var(--green);font-size:10px;font-weight:800}.field-toggle{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--green);cursor:pointer;white-space:nowrap}.field-toggle input{width:auto;margin:0}.optional-field.is-disabled{background:#f3f5f3;border-radius:9px;padding:8px;opacity:.72}.optional-field.is-disabled input:not([type=checkbox]),.optional-field.is-disabled select{background:#e8ece9;color:#829087}.optional-field.is-disabled .field-standard{color:#8a958e}.selection-summary{margin-top:8px;font-weight:700;color:var(--green)}
+    .field-standard{min-height:18px;color:#728178;font-size:11px;line-height:1.35}.standard-exceeded{background:#fff4b8;border-radius:9px;padding:7px}.standard-exceeded .field-standard{color:#7a5800;font-weight:700}.standard-exceeded input,.standard-exceeded select{border-color:#d5a900;background:#fffbea}
+    input,select,textarea{width:100%;border:1px solid #c9d8ce;border-radius:8px;padding:9px 10px;font:inherit;background:#fff}
+    input:focus,select:focus,textarea:focus{outline:2px solid #75ad91;border-color:transparent}
+    .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;align-items:center}.result{display:none;margin-top:18px;padding:18px;border-radius:12px;background:var(--pale);border-left:5px solid var(--green)}
+    .score{font-size:38px;font-weight:800;color:var(--green)}.standard-tag{display:inline-block;border-radius:999px;padding:5px 9px;background:#deeee4;color:var(--green);font-size:12px;margin-bottom:10px}
+    .violations{color:var(--danger);margin:8px 0 0;padding-left:20px}.side{padding:19px;height:max-content;position:sticky;top:18px}.history{display:grid;gap:6px}.record{border-bottom:1px solid var(--line);padding:10px 0}.muted{color:var(--muted);font-size:12px}
+    pre,textarea{white-space:pre-wrap;background:#f7f9f7}pre{padding:12px;border-radius:8px;max-height:420px;overflow:auto}details{margin-top:22px;border-top:1px solid var(--line);padding-top:16px}summary{cursor:pointer;font-weight:700}
+    textarea{min-height:150px;margin-top:10px;font:13px/1.45 Consolas,monospace}.choice-row{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 14px}.choice{display:flex;grid-template-columns:auto auto;align-items:center;gap:5px;padding:7px 10px;background:#f0f5f1;border-radius:8px}.choice input{width:auto}
+    .forecast-table-wrap{overflow:auto}.forecast-table,.voltage-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:12px}.forecast-table th,.forecast-table td,.voltage-table th,.voltage-table td{padding:9px 7px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}.voltage-table input{min-width:86px}
+    .trend-card{margin-top:14px;padding:14px;background:#f7f9f7;border-radius:10px}
+    .target-picker{display:grid;grid-template-columns:minmax(220px,360px) 1fr;gap:14px;align-items:end;margin:10px 0 15px}.model-note{padding:10px 12px;border-radius:8px;background:#eef5f0;color:#456052;font-size:12px}
+    .training-panel{margin-top:18px}.training-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.training-card{border:1px solid var(--line);border-radius:11px;padding:15px;background:#fbfcfb}.training-card h4{margin:0 0 6px}.training-card textarea{min-height:210px}.file-drop{display:block;border:1px dashed #8eaa99;border-radius:9px;padding:13px;background:#f2f7f3;margin:10px 0}.inline-link{display:inline-block;margin-top:10px;color:var(--green);font-weight:700}.training-status{margin-top:14px;padding:14px;border-radius:10px;background:#f5f8f6;border:1px solid var(--line)}.training-status.good{border-left:5px solid var(--green)}.training-status.warn{border-left:5px solid #b56a18}.training-status.bad{border-left:5px solid var(--danger)}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:11px}.metric{padding:10px;border-radius:8px;background:#edf4ef}.metric strong{display:block;font-size:19px;color:var(--green)}.training-actions label{display:flex;align-items:center;gap:7px}.training-actions select{width:auto;min-width:100px}.preview-table td,.preview-table th{font-size:12px}.error-list{margin:9px 0 0;padding-left:20px;color:var(--danger)}button:disabled{cursor:not-allowed;opacity:.55}.run-list{display:grid;gap:7px;margin-top:10px}.run-item{padding:9px 11px;background:#f7f9f7;border-radius:8px;font-size:12px}
+    .decision-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.decision-card{padding:13px;border-radius:10px;border:1px solid var(--line);background:#f7f9f7}.decision-card strong{display:block;margin-bottom:5px}.decision-card.risk{border-left:5px solid #b56a18}.decision-card.trim{border-left:5px solid var(--green)}.decision-card.immediate{border-left-color:var(--danger);background:#fff4f2}.decision-detail{font-size:12px;color:var(--muted);margin-top:5px}
+    .hazard-badge{display:inline-block;padding:3px 8px;border-radius:999px;font-weight:800}.hazard-safe{background:#dff3e5;color:#176b4d}.hazard-general{background:#dceeff;color:#19588a}.hazard-major{background:#fff1a8;color:#765500}.hazard-emergency{background:#ffd8d2;color:#9f241f}.exceeded-row{background:#fff4b8}.formula-list{display:grid;gap:9px}.formula-item{padding:10px 12px;background:#f7f9f7;border-left:4px solid #638b73;border-radius:7px}.formula-item code{display:block;color:#273c31;white-space:normal;margin:3px 0}.formula-data{font-size:12px;color:#52645b}.factor-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0}.factor{padding:10px;background:#edf4ef;border-radius:8px}.factor strong{display:block;font-size:20px}.caution-note{padding:10px 12px;background:#fff8d7;border-left:4px solid #d5a900;border-radius:7px;font-size:12px}
+    .work-order{display:none;margin-top:22px;background:#fff;border:4px double #26342d;padding:10px;color:#121815}.work-order.visible{display:block}.work-order-title{text-align:center;font-size:20px;font-weight:800;border-bottom:4px double #26342d;padding:10px;margin:-2px -2px 0}.work-meta{display:grid;grid-template-columns:1fr 1fr;gap:5px 24px;padding:12px 10px;border-bottom:4px double #26342d}.work-section{padding:12px 10px;border-bottom:1px solid #89948d}.work-section h3{font-size:15px;margin:0 0 8px}.work-lines{display:grid;gap:5px}.work-order .forecast-table th{background:#edf3ef}.work-order-footer{padding:12px 10px;display:grid;gap:5px}.danger-text{color:#a52e2e;font-weight:800}.report-toolbar{display:flex;justify-content:flex-end;margin:10px 0}.plain-report{white-space:pre-wrap;background:#f7f9f7;padding:16px;border-radius:10px}
+    dialog{border:0;border-radius:16px;padding:0;width:min(850px,calc(100vw - 28px));box-shadow:0 25px 80px #0006}dialog::backdrop{background:#101b16b8}
+    .modal-head{padding:20px 22px;background:var(--ink);color:#fff;display:flex;justify-content:space-between;align-items:center}.modal-head h2{margin:0;font-size:19px}.close{background:transparent;font-size:22px;padding:3px 8px}
+    .modal-body{padding:22px;max-height:76vh;overflow:auto}.settings-group{margin-bottom:20px}.settings-group h3{font-size:15px;border-bottom:1px solid var(--line);padding-bottom:7px}.modal-actions{display:flex;justify-content:flex-end;gap:9px}
+    @media(max-width:900px){.layout{grid-template-columns:1fr}.side{position:static}.grid{grid-template-columns:repeat(2,1fr)}.training-grid,.decision-grid{grid-template-columns:1fr}}@media(max-width:560px){header{align-items:flex-start;flex-direction:column}.header-actions{justify-content:flex-start}.grid,.target-picker,.work-meta,.metric-grid{grid-template-columns:1fr}.main-panel{padding:14px}}
+    @media print{body{background:#fff}header,.side,.main-panel>section:not(#reportOutput),.main-panel>.actions,.main-panel>.result,.main-panel>details,.standard-tag,.input-mode,.report-toolbar{display:none!important}.layout{display:block;max-width:none;margin:0;padding:0}.panel,.main-panel{border:0;box-shadow:none;padding:0}.work-order{display:block!important;margin:0;border-color:#000}.forecast-table{font-size:11px}}
+  </style>
+</head>
+<body>
+<header>
+  <div><h1>TreeLineWarning</h1><p>树木—电线风险分析、短时预警与长期趋势预测</p></div>
+  <div class="header-actions">
+    <div class="calendar-badge" id="calendarBadge">正在读取日期…</div>
+    <button class="ghost" id="openSettings">⚙ 设置判断标准</button>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="panel main-panel">
+    <div class="standard-tag" id="activeStandard">正在读取当前标准…</div>
+    <div class="standard-tag" id="observationContext">正在读取观测日期…</div>
+
+    <div class="input-mode">
+      <div class="input-mode-head">
+        <div><strong>按已有数据选择输入项</strong><div class="muted">带“必填”的核心项始终参与；其他字段勾选“使用此项”后才会进入预测、数据库和报告。</div></div>
+        <div class="input-mode-actions"><button class="secondary" id="selectAllOptional" type="button">全选可选项</button><button class="secondary" id="selectCoreOnly" type="button">只保留核心项</button></div>
+      </div>
+      <div class="selection-summary" id="selectionSummary">正在初始化数据选择…</div>
+    </div>
+
+    <section class="input-section">
+      <h3>观测批次与位置</h3>
+      <p class="section-note">观测日期是所有短时日期、未来月份和季节判断的统一起点；位置字段用于历史匹配与工单定位。</p>
+      <div class="grid" id="contextFields"></div>
+    </section>
+    <section class="input-section">
+      <h3>一、树木本身</h3>
+      <p class="section-note">树种使用下拉选择；其他数值框可输入，也可用上下箭头调整。</p>
+      <div class="grid" id="treeFields"></div>
+    </section>
+    <section class="input-section">
+      <h3>二、电线本身</h3>
+      <p class="section-note">电压等级关联行业距离标准；冬夏弧垂用于模拟导线热胀冷缩。</p>
+      <div class="grid" id="wireFields"></div>
+    </section>
+    <section class="input-section">
+      <h3>三、树线之间</h3>
+      <p class="section-note">分别判断垂直、水平、净空、风偏距离，并叠加最大弧垂工况。</p>
+      <div class="grid" id="lineFields"></div>
+    </section>
+    <section class="input-section">
+      <h3>四、气象条件</h3>
+      <p class="section-note">短时风险侧重风雨；长期趋势同时考虑温度、日照和季节生长。</p>
+      <div class="grid" id="weatherFields"></div>
+    </section>
+
+    <div class="actions">
+      <button id="predict">当前综合判断</button>
+      <button id="forecast">生成分期预测</button>
+      <button class="secondary" id="report">生成历史综合报告</button>
+    </div>
+    <div class="result" id="result">
+      <div class="score" id="score"></div><strong id="level"></strong>
+      <p id="suggestion"></p><div class="muted" id="usedStandard"></div>
+      <ul class="violations" id="violations"></ul>
+    </div>
+
+    <section class="input-section" style="margin-top:18px">
+      <h3>预测期限</h3>
+      <p class="section-note">一天的树木生长影响很小，但气象与弧垂仍参与短时判断；月度预测融合 LSTM。</p>
+      <strong>短时预测</strong>
+      <div class="choice-row">
+        <label class="choice"><input type="checkbox" name="shortHorizon" value="1" checked>1天</label>
+        <label class="choice"><input type="checkbox" name="shortHorizon" value="7" checked>1周</label>
+        <label class="choice"><input type="checkbox" name="shortHorizon" value="14" checked>2周</label>
+        <label class="choice"><input type="checkbox" name="shortHorizon" value="30" checked>1个月</label>
+      </div>
+      <strong>长时预测</strong>
+      <div class="target-picker">
+        <label>选择要分析的未来月份
+          <select id="targetMonth"></select>
+        </label>
+        <div class="model-note">选择框决定报告重点月份；系统始终扫描未来 12 个月，自动指出风险首次增大的月份、峰值月份，以及最晚应在何时修剪。</div>
+      </div>
+      <div id="forecastOutput"></div>
+    </section>
+
+    <section class="input-section training-panel" id="trainingPanel">
+      <h3>五、历史数据与 LSTM 增量训练</h3>
+      <p class="section-note">把同一棵树按日期排列的多次观测导入后，系统会先校验并预览，再用于现有“近期、季节、树种特征三重注意力 LSTM”的增量训练。仅当验证误差下降时才发布新模型。</p>
+      <div class="training-grid">
+        <div class="training-card">
+          <h4>上传历史数据文件</h4>
+          <p class="muted">支持 Excel（.xlsx/.xlsm）、CSV、TSV、TXT 和 JSON，最大 10 MB、50,000 行；Excel 第一行为字段名。</p>
+          <label class="file-drop">选择历史数据文件
+            <input id="historyFile" type="file" accept=".xlsx,.xlsm,.csv,.tsv,.txt,.json">
+          </label>
+          <button id="importHistoryFile">解析并校验文件</button>
+          <a class="inline-link" href="/training/template.csv">下载 CSV 示例模板</a>
+        </div>
+        <div class="training-card">
+          <h4>直接复制粘贴表格</h4>
+          <label>数据格式
+            <select id="pasteFormat"><option value="auto">自动识别</option><option value="tsv">制表符表格（Excel 复制）</option><option value="csv">CSV</option><option value="json">JSON</option></select>
+          </label>
+          <textarea id="historyPaste" spellcheck="false">tree_id	species	observation_date	height	diameter	vertical_distance	horizontal_distance	clearance_distance	wind_offset_distance	voltage_level_kv	maximum_sag_winter	maximum_sag_summer	wind_speed	rainfall	humidity	temperature	sunlight_hours	risk_score
+1	杨树	2026-01-15	17.20	33.20	6.40	6.20	5.40	0.80	110	3.50	5.00	6	20	60	5	5	32
+1	杨树	2026-02-15	17.22	33.24	6.39	6.19	5.39	0.80	110	3.50	5.00	7	28	62	8	6	35
+1	杨树	2026-03-15	17.26	33.31	6.37	6.18	5.37	0.90	110	3.50	5.00	9	42	66	14	7	43</textarea>
+          <button id="importHistoryText">解析并校验粘贴数据</button>
+        </div>
+      </div>
+      <div id="trainingImportResult"></div>
+      <div class="actions training-actions">
+        <label>训练轮数
+          <select id="trainingEpochs"><option value="5">5（快速）</option><option value="15" selected>15（推荐）</option><option value="30">30（充分）</option><option value="50">50（上限）</option></select>
+        </label>
+        <label>学习率
+          <select id="trainingLearningRate"><option value="0.001">0.001</option><option value="0.0005" selected>0.0005（推荐）</option><option value="0.0001">0.0001（保守）</option></select>
+        </label>
+        <button id="trainHistory" disabled>开始增量训练</button>
+        <span class="muted" id="modelStatus">正在读取模型状态…</span>
+      </div>
+      <div id="trainingTrainResult"></div>
+      <div id="trainingHistory"></div>
+    </section>
+    <section class="work-order" id="reportOutput"></section>
+  </section>
+
+  <aside class="panel side"><h2>最近预测</h2><div class="history" id="history"><span class="muted">正在读取…</span></div></aside>
+</main>
+
+<dialog id="settingsDialog">
+  <div class="modal-head"><h2>地区、行业和电压等级标准</h2><button class="close" id="closeSettings" aria-label="关闭">×</button></div>
+  <div class="modal-body">
+    <div class="settings-group"><h3>标准档案</h3><div class="grid">
+      <label>标准名称<input id="s_profile_name"></label><label>适用地区<input id="s_region"></label><label>适用行业<input id="s_industry"></label>
+    </div></div>
+    <div class="settings-group"><h3>通用回退距离标准（m）</h3><div class="grid">
+      <label>最小垂直距离<input type="number" step="0.1" id="s_min_vertical_distance"></label>
+      <label>最小水平距离<input type="number" step="0.1" id="s_min_horizontal_distance"></label>
+      <label>最小净空距离<input type="number" step="0.1" id="s_min_clearance_distance"></label>
+      <label>最大允许风偏距离<input type="number" step="0.1" id="s_max_wind_offset_distance"></label>
+    </div></div>
+    <div class="settings-group"><h3>气象与风险阈值</h3><div class="grid">
+      <label>预警风速 (m/s)<input type="number" step="0.1" id="s_wind_warning_speed"></label>
+      <label>高风险风速 (m/s)<input type="number" step="0.1" id="s_wind_high_speed"></label>
+      <label>降雨预警值 (mm)<input type="number" step="0.1" id="s_rainfall_warning"></label>
+      <label>生长温度阈值 (°C)<input type="number" step="0.1" id="s_temperature_growth_threshold"></label>
+      <label>日照时长阈值 (h)<input type="number" step="0.1" id="s_sunlight_growth_threshold"></label>
+      <label>坡度关注值 (°)<input type="number" step="0.1" id="s_slope_warning_angle"></label>
+      <label>中风险起始分<input type="number" step="1" id="s_medium_risk_score"></label>
+      <label>高风险起始分<input type="number" step="1" id="s_high_risk_score"></label>
+    </div></div>
+    <div class="settings-group"><h3>四级综合风险指数阈值（0–1）</h3><div class="grid">
+      <label>一般隐患起始值<input type="number" step="0.01" id="s_general_hazard_index"></label>
+      <label>重大隐患起始值<input type="number" step="0.01" id="s_major_hazard_index"></label>
+      <label>紧急隐患起始值<input type="number" step="0.01" id="s_emergency_hazard_index"></label>
+    </div></div>
+    <div class="settings-group"><h3>综合风险权重（合计必须为 1）</h3><div class="grid">
+      <label>距离 D 权重<input type="number" step="0.01" id="s_risk_weight_distance"></label>
+      <label>生长 G 权重<input type="number" step="0.01" id="s_risk_weight_growth"></label>
+      <label>气象 M 权重<input type="number" step="0.01" id="s_risk_weight_weather"></label>
+      <label>历史 H 权重<input type="number" step="0.01" id="s_risk_weight_history"></label>
+    </div></div>
+    <div class="settings-group"><h3>气象 M 内部权重（合计必须为 1）</h3><div class="grid">
+      <label>风速权重<input type="number" step="0.01" id="s_weather_weight_wind"></label>
+      <label>降雨权重<input type="number" step="0.01" id="s_weather_weight_rainfall"></label>
+      <label>温度权重<input type="number" step="0.01" id="s_weather_weight_temperature"></label>
+      <label>日照权重<input type="number" step="0.01" id="s_weather_weight_sunlight"></label>
+    </div></div>
+    <div class="settings-group"><h3>历史 H 内部权重（合计必须为 1）</h3><div class="grid">
+      <label>距离超标率权重<input type="number" step="0.01" id="s_history_weight_exceedance"></label>
+      <label>事故/高危率权重<input type="number" step="0.01" id="s_history_weight_incident"></label>
+      <label>重复预警率权重<input type="number" step="0.01" id="s_history_weight_repeat"></label>
+      <label>处置后复发率权重<input type="number" step="0.01" id="s_history_weight_treatment_recurrence"></label>
+    </div></div>
+    <div class="settings-group">
+      <h3>各电压等级行业参数（m）</h3>
+      <p class="section-note">初始值是通用参考配置；实际项目请按当地现行规范、线路类型和设计资料调整。</p>
+      <div class="forecast-table-wrap"><table class="voltage-table">
+        <thead><tr><th>电压等级</th><th>最小垂直</th><th>最小水平</th><th>最小净空</th><th>最大弧垂</th></tr></thead>
+        <tbody id="voltageStandards"></tbody>
+      </table></div>
+    </div>
+    <div class="modal-actions"><button class="secondary" id="cancelSettings">取消</button><button id="saveSettings">保存并应用</button></div>
+  </div>
+</dialog>
+
+<script>
+const $=id=>document.getElementById(id);
+const now=new Date(),currentMonth=now.getMonth()+1;
+const localDate=`${now.getFullYear()}-${String(currentMonth).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+const seasonOf=m=>[3,4,5].includes(m)?'春季':[6,7,8].includes(m)?'夏季':[9,10,11].includes(m)?'秋季':'冬季';
+$('calendarBadge').textContent=`当前：${now.getFullYear()}年${currentMonth}月 · ${seasonOf(currentMonth)}`;
+ const yearOptions=Array.from({length:8},(_,i)=>now.getFullYear()-5+i);
+ const groups={
+ context:[['observation_year','观测年份',now.getFullYear(),yearOptions],['observation_month','观测月份',currentMonth,[1,2,3,4,5,6,7,8,9,10,11,12]],['observation_day','观测日期',now.getDate(),Array.from({length:31},(_,i)=>i+1)],['line_name','线路名称','10kV 飞云线'],['tower_section','杆塔区间','#12 至 #13'],['gps_longitude','GPS 经度','117.1234'],['gps_latitude','GPS 纬度','36.5678']],
+ tree:[['tree_id','树木编号',1],['tree_code','树木档案编号','TREE-001'],['species','树种','松树',['松树','杉树','杨树','柳树','柏树','樟树','其他']],['height','树高 (m)',20],['age','树龄',30],['diameter','胸径 (cm)',45],['crown_width','冠幅 (m)',5.2],['slope','立地坡度 (°)',20]],
+ wire:[['voltage_level_kv','电压等级 (kV)',110,[10,35,66,110,220,330,500,750,1000]],['maximum_sag_winter','冬季最大弧垂 (m)',3.5],['maximum_sag_summer','夏季最大弧垂 (m)',5]],
+ line:[['vertical_distance','垂直距离 (m)',6],['horizontal_distance','水平距离 (m)',6],['clearance_distance','净空距离 (m)',5],['wind_offset_distance','风偏距离 (m)',1]],
+ weather:[['wind_speed','风速 (m/s)',15],['rainfall','降雨量 (mm)',50],['humidity','湿度 (%)',70],['temperature','温度 (°C)',25],['sunlight_hours','日照时长 (h)',8]]
+};
+const allFields=[...groups.context,...groups.tree,...groups.wire,...groups.line,...groups.weather];
+const textFields=new Set(['tree_code','line_name','tower_section','gps_longitude','gps_latitude']);
+const requiredFields=new Set(['observation_year','observation_month','observation_day','species','height','voltage_level_kv','clearance_distance']);
+const optionalFields=new Set(allFields.map(([id])=>id).filter(id=>!requiredFields.has(id)));
+const fieldLabels=Object.fromEntries(allFields.map(([id,label])=>[id,label.replace(/\s*\([^)]*\)\s*$/,'')]));
+const optionLabel=(id,x)=>id==='observation_year'?x+'年':id==='observation_month'?x+'月':id==='observation_day'?x+'日':x;
+function renderFields(target,items){$(target).innerHTML=items.map(([id,label,value,options])=>{const required=requiredFields.has(id),control=required?'<span class="required-badge">必填</span>':`<label class="field-toggle" for="use_${id}"><input type="checkbox" id="use_${id}" data-use-field="${id}">使用此项</label>`;return`<div class="input-field ${required?'required-field':'optional-field is-disabled'}" data-field="${id}"><div class="field-heading"><span>${label}</span>${control}</div>${options?`<select id="${id}" ${required?'':'disabled'}>${options.map(x=>`<option value="${x}" ${String(x)===String(value)?'selected':''}>${optionLabel(id,x)}</option>`).join('')}</select>`:`<input type="${textFields.has(id)?'text':'number'}" step="0.1" id="${id}" value="${value}" ${required?'':'disabled'}>`}<span class="field-standard" id="std_${id}">标准：读取中…</span></div>`}).join('')}
+renderFields('contextFields',groups.context);renderFields('treeFields',groups.tree);renderFields('wireFields',groups.wire);renderFields('lineFields',groups.line);renderFields('weatherFields',groups.weather);
+const fieldSelected=id=>requiredFields.has(id)||Boolean($('use_'+id)?.checked);
+function updateSelectionSummary(){const count=[...optionalFields].filter(fieldSelected).length;$('selectionSummary').textContent=`当前采用 ${requiredFields.size} 个核心项 + ${count} 个可选项；未勾选的 ${optionalFields.size-count} 项不会作为实测数据保存。`}
+function applyFieldSelection(id){const selected=fieldSelected(id),input=$(id),container=document.querySelector(`.input-field[data-field="${id}"]`);if(input)input.disabled=!selected;if(container)container.classList.toggle('is-disabled',!selected);updateSelectionSummary();updateFieldStandards()}
+document.querySelectorAll('[data-use-field]').forEach(toggle=>toggle.addEventListener('change',()=>applyFieldSelection(toggle.dataset.useField)));
+$('selectAllOptional').onclick=()=>{document.querySelectorAll('[data-use-field]').forEach(toggle=>{toggle.checked=true;applyFieldSelection(toggle.dataset.useField)})};
+$('selectCoreOnly').onclick=()=>{document.querySelectorAll('[data-use-field]').forEach(toggle=>{toggle.checked=false;applyFieldSelection(toggle.dataset.useField)})};
+updateSelectionSummary();
+const payload=()=>{const selected=allFields.map(([id])=>id).filter(fieldSelected),data={selected_fields:selected};selected.forEach(id=>{data[id]=id==='species'||textFields.has(id)?$(id).value:Number($(id).value)});data.observation_date=`${data.observation_year}-${String(data.observation_month).padStart(2,'0')}-${String(data.observation_day).padStart(2,'0')}`;return data};
+function addMonthsClamped(base,offset){const first=new Date(base.getFullYear(),base.getMonth()+offset,1);const lastDay=new Date(first.getFullYear(),first.getMonth()+1,0).getDate();first.setDate(Math.min(base.getDate(),lastDay));return first}
+function selectedObservationDate(){return new Date(Number($('observation_year').value),Number($('observation_month').value)-1,Number($('observation_day').value))}
+function renderObservationDays(){const year=Number($('observation_year').value),month=Number($('observation_month').value),selected=Number($('observation_day').value)||1,maxDay=new Date(year,month,0).getDate();$('observation_day').innerHTML=Array.from({length:maxDay},(_,i)=>`<option value="${i+1}" ${i+1===Math.min(selected,maxDay)?'selected':''}>${i+1}日</option>`).join('')}
+function renderTargetMonths(){const selected=Number($('targetMonth').value)||6;const base=selectedObservationDate();$('observationContext').textContent=`本次观测：${base.getFullYear()}年${base.getMonth()+1}月${base.getDate()}日 · ${seasonOf(base.getMonth()+1)}（未来月份从此日期起算）`;$('targetMonth').innerHTML='';for(let offset=1;offset<=12;offset++){const d=addMonthsClamped(base,offset);const option=document.createElement('option');option.value=offset;option.textContent=`${d.getFullYear()}年${d.getMonth()+1}月（观测后${offset}个月 · ${seasonOf(d.getMonth()+1)}）`;if(offset===selected)option.selected=true;$('targetMonth').appendChild(option)}}
+renderObservationDays();renderTargetMonths();
+$('observation_year').addEventListener('change',()=>{renderObservationDays();renderTargetMonths()});
+$('observation_month').addEventListener('change',()=>{renderObservationDays();renderTargetMonths()});
+$('observation_day').addEventListener('change',renderTargetMonths);
+
+let currentStandard={};const voltageLevels=['10','35','66','110','220','330','500','750','1000'];
+allFields.forEach(([id])=>$(id).addEventListener('input',updateFieldStandards));
+const standardKeys=['profile_name','region','industry','min_vertical_distance','min_horizontal_distance','min_clearance_distance','max_wind_offset_distance','wind_warning_speed','wind_high_speed','rainfall_warning','temperature_growth_threshold','sunlight_growth_threshold','slope_warning_angle','medium_risk_score','high_risk_score','general_hazard_index','major_hazard_index','emergency_hazard_index','risk_weight_distance','risk_weight_growth','risk_weight_weather','risk_weight_history','weather_weight_wind','weather_weight_rainfall','weather_weight_temperature','weather_weight_sunlight','history_weight_exceedance','history_weight_incident','history_weight_repeat','history_weight_treatment_recurrence'];
+function renderVoltageStandards(rules){$('voltageStandards').innerHTML=voltageLevels.map(v=>{const r=rules[v]||{};return`<tr><td>${v} kV</td>${['min_vertical_distance','min_horizontal_distance','min_clearance_distance','max_sag'].map(k=>`<td><input type="number" step="0.1" data-voltage="${v}" data-rule="${k}" value="${r[k]??0}"></td>`).join('')}</tr>`}).join('')}
+function voltageRule(){const rules=currentStandard.voltage_standards||{},selected=String(Number($('voltage_level_kv').value));if(rules[selected])return{...rules[selected],matched:selected};const closest=Object.keys(rules).sort((a,b)=>Math.abs(Number(a)-Number(selected))-Math.abs(Number(b)-Number(selected)))[0];return{...(rules[closest]||{}),matched:closest||selected}}
+function setFieldStandard(id,text,exceeded=false){const note=$('std_'+id),label=document.querySelector(`.input-field[data-field="${id}"]`);if(optionalFields.has(id)&&!fieldSelected(id)){text='未启用，不作为实测数据参与直接判定';exceeded=false}if(note)note.textContent=`标准：${text}`;if(label)label.classList.toggle('standard-exceeded',Boolean(exceeded))}
+function updateFieldStandards(){if(!currentStandard.profile_name)return;const r=voltageRule(),n=id=>Number($(id).value);['observation_year','observation_month','observation_day','line_name','tower_section','gps_longitude','gps_latitude'].forEach(id=>setFieldStandard(id,'档案项，无统一数值阈值'));['tree_id','tree_code','species','height','age','diameter','crown_width'].forEach(id=>setFieldStandard(id,'测量/档案项，无统一风险阈值'));setFieldStandard('slope',`关注值 ≤ ${currentStandard.slope_warning_angle}°`,n('slope')>currentStandard.slope_warning_angle);setFieldStandard('voltage_level_kv',`匹配 ${r.matched}kV 行业参数`);setFieldStandard('maximum_sag_winter',`≤ ${r.max_sag}m`,n('maximum_sag_winter')>r.max_sag);setFieldStandard('maximum_sag_summer',`≤ ${r.max_sag}m`,n('maximum_sag_summer')>r.max_sag);setFieldStandard('vertical_distance',`≥ ${r.min_vertical_distance}m`,n('vertical_distance')<r.min_vertical_distance);setFieldStandard('horizontal_distance',`≥ ${r.min_horizontal_distance}m`,n('horizontal_distance')<r.min_horizontal_distance);setFieldStandard('clearance_distance',`≥ ${r.min_clearance_distance}m`,n('clearance_distance')<r.min_clearance_distance);setFieldStandard('wind_offset_distance',`≤ ${currentStandard.max_wind_offset_distance}m`,n('wind_offset_distance')>currentStandard.max_wind_offset_distance);setFieldStandard('wind_speed',`预警 ≥ ${currentStandard.wind_warning_speed}m/s；高风险 ≥ ${currentStandard.wind_high_speed}m/s`,n('wind_speed')>=currentStandard.wind_warning_speed);setFieldStandard('rainfall',`风险关注 ≥ ${currentStandard.rainfall_warning}mm`,n('rainfall')>=currentStandard.rainfall_warning);setFieldStandard('humidity','有效范围 0–100%',n('humidity')<0||n('humidity')>100);setFieldStandard('temperature',`生长加速关注 ≥ ${currentStandard.temperature_growth_threshold}℃`,n('temperature')>=currentStandard.temperature_growth_threshold);setFieldStandard('sunlight_hours',`生长加速关注 ≥ ${currentStandard.sunlight_growth_threshold}h`,n('sunlight_hours')>=currentStandard.sunlight_growth_threshold)}
+async function loadStandard(){currentStandard=await fetch('/settings/standards').then(r=>r.json());$('activeStandard').textContent=`当前标准：${currentStandard.profile_name} · ${currentStandard.region} · ${currentStandard.industry}`;standardKeys.forEach(k=>{if($('s_'+k))$('s_'+k).value=currentStandard[k]});renderVoltageStandards(currentStandard.voltage_standards||{});updateFieldStandards()}
+function showResult(x){$('result').style.display='block';const comprehensive=x.comprehensive_risk_score;$('score').textContent=comprehensive??x.risk_score;$('level').textContent=x.hazard_level||x.risk_level;$('suggestion').textContent=x.hazard_suggestion||x.suggestion;const p=x.standard_profile||{};$('usedStandard').textContent=p.profile_name?`判断依据：${p.profile_name} / ${p.region} / ${p.industry}${comprehensive!=null?`；综合风险 R=${x.comprehensive_risk_index}，辅助模型分=${x.risk_score}`:''}`:'';const list=x.standard_analysis?.violations||[];$('violations').innerHTML=list.map(v=>`<li>${v.label}：实际 ${v.actual} m，标准 ${v.standard} m</li>`).join('')}
+function renderForecast(x){const rows=[...x.short_term_forecast,...x.long_term_forecast],analysis=x.risk_timeline_analysis,maintenance=analysis.maintenance_decision,peak=analysis.peak_risk;$('forecastOutput').innerHTML=`<div class="trend-card"><strong>${x.calendar_context.selected_target_year_month}：${x.selected_target_prediction.risk_level}</strong> · 从 ${x.calendar_context.observation_date} 起算 · ${x.growth_trend.direction} · 树高变化 ${x.growth_trend.height_change} m · 净空变化 ${x.growth_trend.clearance_change} m · 历史数据 ${x.historical_context.status}</div><div class="decision-grid"><div class="decision-card risk"><strong>风险何时增大</strong><div>${esc(analysis.risk_increase_conclusion)}</div><div class="decision-detail">未来12个月风险峰值：${esc(peak.target_year_month)}，${peak.risk_level}，${peak.risk_score}分</div></div><div class="decision-card trim ${maintenance.status==='立即处置'?'immediate':''}"><strong>什么时候应修剪：${esc(maintenance.status)}</strong><div>${esc(maintenance.recommended_deadline)}</div><div class="decision-detail">触发依据：${esc(maintenance.trigger_reason)}${maintenance.trigger_month?` · 触发月 ${esc(maintenance.trigger_month)}`:''}</div></div></div><div class="forecast-table-wrap"><table class="forecast-table"><thead><tr><th>目标时间</th><th>季节/导线工况</th><th>风险等级</th><th>风险分</th><th>较观测时</th><th>预测树高</th><th>预测胸径</th><th>预测净空</th><th>预测弧垂</th><th>方法</th></tr></thead><tbody>${rows.map(v=>{const timeline=v.horizon_type==='长时'?analysis.timeline.find(t=>t.horizon_months===v.horizon_months):null;return`<tr><td>${v.horizon_type==='短时'?v.target_date:v.target_year_month}</td><td>${v.season} / ${v.wire_condition}</td><td>${v.risk_level}</td><td>${v.risk_score}</td><td>${timeline?`${timeline.change_from_current>=0?'+':''}${timeline.change_from_current}分 · ${timeline.trend}`:'短时'}</td><td>${v.predicted_height} m</td><td>${v.predicted_diameter} cm</td><td>${v.predicted_clearance_distance} m</td><td>${v.predicted_sag} m</td><td>${v.prediction_method}</td></tr>`}).join('')}</tbody></table></div>`}
+const esc=value=>String(value??'-').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function appendEnvironmentSection(x){const rows=x.long_term_forecast.map(v=>`<tr><td>${esc(v.target_year_month)}</td><td>${v.predicted_age}</td><td>${v.monthly_height_growth}</td><td>${v.monthly_diameter_growth}</td><td>${v.predicted_temperature}</td><td>${v.predicted_sunlight_hours}</td><td>${v.predicted_rainfall}</td><td>${v.predicted_humidity}</td><td>${v.predicted_wind_speed}</td></tr>`).join('');$('reportOutput').insertAdjacentHTML('beforeend',`<div class="work-section"><h3>【月度生长与气象明细】</h3><div class="forecast-table-wrap"><table class="forecast-table"><thead><tr><th>月份</th><th>树龄</th><th>当月增高(m)</th><th>当月增径(cm)</th><th>温度(℃)</th><th>日照(h)</th><th>降雨(mm)</th><th>湿度(%)</th><th>风速(m/s)</th></tr></thead><tbody>${rows}</tbody></table></div></div>`)}
+function renderWorkOrder(x){const i=x.input_snapshot,l=x.location_information,c=x.current_assessment,t=x.selected_target_prediction,w=x.work_order,a=x.treatment_advice,r=x.risk_timeline_analysis,m=r.maintenance_decision,p=r.peak_risk;const shortRows=x.short_term_forecast.map(v=>`<div>⏰ ${esc(v.target_date)}（${esc(v.period)}后）：${esc(v.risk_level)}（${v.risk_score}分），${esc(v.season)} / ${esc(v.wire_condition)}，树高 ${v.predicted_height}m，净空 ${v.predicted_clearance_distance}m，弧垂 ${v.predicted_sag}m</div>`).join('');const monthRows=x.long_term_forecast.map(v=>{const timeline=r.timeline.find(item=>item.horizon_months===v.horizon_months);return`<tr><td>${esc(v.target_year_month)}</td><td>${esc(v.season)} / ${esc(v.wire_condition)}</td><td>${esc(v.risk_level)}</td><td>${v.risk_score}</td><td>${timeline.change_from_current>=0?'+':''}${timeline.change_from_current}</td><td>${v.predicted_height}</td><td>${v.predicted_diameter}</td><td>${v.predicted_vertical_distance}</td><td>${v.predicted_horizontal_distance}</td><td>${v.predicted_clearance_distance}</td><td>${v.predicted_sag}</td></tr>`}).join('');const violations=(c.standard_analysis?.violations||[]).map(v=>`${esc(v.label)}（实际 ${v.actual}m / 标准 ${v.standard}m）`).join('；')||'当前距离均满足所选标准';const quality=x.data_quality.warnings.length?x.data_quality.warnings.map(v=>`<div>⚠ ${esc(v)}</div>`).join(''):'<div>基础数据校验通过</div>';const notes=x.report_notes.map(v=>`<div>• ${esc(v)}</div>`).join('');$('reportOutput').classList.add('visible');$('reportOutput').innerHTML=`<div class="report-toolbar"><button onclick="window.print()">打印 / 保存为 PDF</button></div><div class="work-order-title">${esc(x.report_type)}</div><div class="work-meta"><div>工单编号：${esc(w.work_order_id)}</div><div>生成时间：${esc(w.generated_at)}</div><div>紧急程度：<span class="danger-text">${esc(w.urgency_icon)} ${esc(w.urgency)}</span></div><div>采用标准：${esc(x.applied_standard.profile_name)} / ${esc(x.applied_standard.region)} / ${esc(x.applied_standard.industry)}</div></div><div class="work-section"><h3>【位置与档案信息】</h3><div class="work-lines"><div>线路名称：${esc(l.line_name)}　　杆塔区间：${esc(l.tower_section)}</div><div>GPS 坐标：${esc(l.gps_longitude)} E，${esc(l.gps_latitude)} N</div><div>树木编号：${esc(l.tree_code)}　　树种：${esc(l.species)}　　树高：${l.height}m　　冠幅：${l.crown_width}m</div></div></div><div class="work-section"><h3>【观测状态 · ${esc(x.calendar_context.observation_date)} / ${esc(x.calendar_context.observation_season)}】</h3><div class="work-lines"><div>风险等级：<strong>${esc(c.risk_level)}（${c.risk_score}分）</strong>　${esc(c.suggestion)}</div><div>垂直距离 ${i.vertical_distance}m　|　水平距离 ${i.horizontal_distance}m　|　净空距离 ${i.clearance_distance}m　|　风偏距离 ${i.wind_offset_distance}m</div><div>电压 ${i.voltage_level_kv}kV　|　冬季最大弧垂 ${i.maximum_sag_winter}m　|　夏季最大弧垂 ${i.maximum_sag_summer}m</div><div>温度 ${i.temperature}℃　|　日照 ${i.sunlight_hours}h　|　风速 ${i.wind_speed}m/s　|　降雨 ${i.rainfall}mm　|　湿度 ${i.humidity}%</div><div>标准核验：${violations}</div></div></div><div class="work-section"><h3>【短时预警（从观测日期起算）】</h3><div class="work-lines">${shortRows}</div></div><div class="work-section"><h3>【目标月份研判】</h3><div class="work-lines"><div><strong>${esc(x.calendar_context.selected_target_year_month)}（${esc(x.calendar_context.selected_target_season)}）：${esc(t.risk_level)}，${t.risk_score}分</strong></div><div>预测树高 ${t.predicted_height}m，胸径 ${t.predicted_diameter}cm，净空 ${t.predicted_clearance_distance}m，弧垂 ${t.predicted_sag}m</div><div>生长趋势：${esc(x.growth_trend.direction)}；树高累计变化 ${x.growth_trend.height_change}m；胸径累计变化 ${x.growth_trend.diameter_change}cm；净空累计变化 ${x.growth_trend.clearance_change}m</div></div></div><div class="work-section"><h3>【风险增大月份与修剪时点】</h3><div class="work-lines"><div><strong>${esc(r.risk_increase_conclusion)}</strong></div><div>未来12个月风险峰值：${esc(p.target_year_month)}，${esc(p.risk_level)}，${p.risk_score}分</div><div>修剪决策：<strong>${esc(m.status)}</strong></div><div>建议时间：${esc(m.recommended_deadline)}</div><div>触发依据：${esc(m.trigger_reason)}${m.trigger_month?`（预计触发月：${esc(m.trigger_month)}）`:''}</div><div>适用净空标准：不低于 ${r.minimum_clearance_standard}m</div></div></div><div class="work-section"><h3>【未来12个月逐月预测数据】</h3><div class="forecast-table-wrap"><table class="forecast-table"><thead><tr><th>月份</th><th>季节/导线工况</th><th>风险</th><th>分数</th><th>较观测时</th><th>树高(m)</th><th>胸径(cm)</th><th>垂直(m)</th><th>水平(m)</th><th>净空(m)</th><th>弧垂(m)</th></tr></thead><tbody>${monthRows}</tbody></table></div></div><div class="work-section"><h3>【数据质量检查】</h3><div class="work-lines">${quality}</div></div><div class="work-section"><h3>【模型与历史因素】</h3><div class="work-lines"><div>风险模型：${esc(x.model_context.risk_model)}</div><div>生长模型：${esc(x.model_context.growth_model)}</div><div>历史数据：${esc(x.historical_context.status)}（${x.historical_context.record_count}条）— ${esc(x.historical_context.effect)}</div></div></div><div class="work-section"><h3>【处置建议】</h3><div class="work-lines"><div>✂ ${esc(a.action)}</div><div>📅 建议完成时间：${esc(a.deadline)}</div><div>🎯 ${esc(a.target_month_goal)}</div><div>⚠ ${esc(a.trigger)}</div></div></div><div class="work-section"><h3>【附件】</h3><div class="work-lines">${x.attachments.map(v=>`<div>－ ${esc(v)}</div>`).join('')}</div></div><div class="work-section"><h3>【研判说明】</h3><div class="work-lines">${notes}</div></div><div class="work-order-footer"><div>签发系统：${esc(w.system_signature)}</div><div>责任人：${esc(w.responsible_unit)}</div></div>`}
+function hazardBadge(item){const code=item.hazard_code||'safe';return`<span class="hazard-badge hazard-${esc(code)}">${esc(item.hazard_level||item.risk_level)}</span>`}
+function renderForecastDetailed(x){
+  const rows=[...x.short_term_forecast,...x.long_term_forecast],analysis=x.risk_timeline_analysis,maintenance=analysis.maintenance_decision,peak=analysis.peak_risk,target=x.selected_target_prediction,risk=target.comprehensive_risk||{},f=risk.factors||{};
+  const factorCards=['D','G','M','H'].map(k=>`<div class="factor"><span>${{D:'距离',G:'生长',M:'气象',H:'历史'}[k]} ${k}</span><strong>${f[k]??'-'}</strong><span>权重 ${risk.weights?.[k]??'-'} · 贡献 ${risk.contributions?.[k]??'-'}</span></div>`).join('');
+  const tableRows=rows.map(v=>{const timeline=v.horizon_type==='长时'?analysis.timeline.find(t=>t.horizon_months===v.horizon_months):null,interval=v.clearance_interval,violated=v.predicted_effective_clearance<analysis.minimum_clearance_standard;return`<tr class="${violated?'exceeded-row':''}"><td>${esc(v.horizon_type==='短时'?v.target_date:v.target_year_month)}</td><td>${esc(v.season)} / ${esc(v.wire_condition)}</td><td>${hazardBadge(v)}</td><td>${v.comprehensive_risk_score}（R=${v.comprehensive_risk_index}）</td><td>${v.risk_score}</td><td>${timeline?`${timeline.change_from_current>=0?'+':''}${timeline.change_from_current} · ${timeline.trend}`:'短时情景'}</td><td>${v.predicted_height}m</td><td>${v.predicted_diameter}cm</td><td>${v.predicted_effective_clearance}m${interval?`<br><span class="muted">95% ${interval.lower}–${interval.upper}m</span>`:''}</td><td>${v.predicted_sag}m</td></tr>`}).join('');
+  $('forecastOutput').innerHTML=`<div class="trend-card"><strong>${esc(x.calendar_context.selected_target_year_month)}：${hazardBadge(target)}　综合风险 ${target.comprehensive_risk_score} 分（R=${target.comprehensive_risk_index}）</strong><div>从 ${esc(x.calendar_context.observation_date)} 起算 · ${esc(x.growth_trend.direction)} · 树高变化 ${x.growth_trend.height_change}m · 净空变化 ${x.growth_trend.clearance_change}m · 历史 H=${x.historical_context.historical_risk_index}</div></div><div class="factor-grid">${factorCards}</div><div class="caution-note">${esc(risk.substitution)}；风险升级情景指标 ${risk.risk_escalation_indicator ?? '-'}（实验性项目默认参数，尚未完成工程校准）。模型状态：${esc(risk.model_status||'experimental')}；参数来源：${esc(risk.parameter_source||'project_default_unverified')}。</div><div class="decision-grid"><div class="decision-card risk"><strong>风险何时增大</strong><div>${esc(analysis.risk_increase_conclusion)}</div><div class="decision-detail">未来12个月峰值：${esc(peak.target_year_month)}，${esc(peak.risk_level)}，综合风险 ${peak.risk_score}分</div></div><div class="decision-card trim ${maintenance.status==='立即处置'?'immediate':''}"><strong>什么时候应修剪：${esc(maintenance.status)}</strong><div>${esc(maintenance.recommended_deadline)}</div><div class="decision-detail">触发依据：${esc(maintenance.trigger_reason)}${maintenance.trigger_month?` · 触发月 ${esc(maintenance.trigger_month)}`:''}</div></div></div><div class="forecast-table-wrap"><table class="forecast-table"><thead><tr><th>目标时间</th><th>季节/导线工况</th><th>四级风险</th><th>综合风险指数</th><th>LSTM/规则辅助分</th><th>较观测时</th><th>预测树高</th><th>预测胸径</th><th>有效净空/95%区间</th><th>预测弧垂</th></tr></thead><tbody>${tableRows}</tbody></table></div>`;
+}
+function reportViewWithMissingData(x){
+  const availability=x.input_availability||{},omitted=new Set(availability.omitted_fields||[]),imputations=availability.imputations||{};
+  const display=(field,value)=>{if(!omitted.has(String(field)))return value;const used=imputations[field]?.used_value;return used===''||used==null?'未提供':`未提供（模型采用 ${used}）`};
+  return{...x,input_snapshot:new Proxy(x.input_snapshot||{},{get:(target,field)=>display(field,target[field])}),location_information:new Proxy(x.location_information||{},{get:(target,field)=>display(field,target[field])})};
+}
+function renderWorkOrderDetailed(x){
+  renderWorkOrder(reportViewWithMissingData(x));
+  const c=x.current_assessment,t=x.selected_target_prediction,h=x.historical_context.calculation;
+  const summary=`<div class="work-section"><h3>【四级综合风险总览（报告主结论）】</h3><div class="work-lines"><div>当前：${hazardBadge(c)}　R=${c.comprehensive_risk_index}（${c.comprehensive_risk_score}分）；辅助模型：${esc(c.risk_level)} ${c.risk_score}分</div><div>目标月 ${esc(t.target_year_month)}：${hazardBadge(t)}　R=${t.comprehensive_risk_index}（${t.comprehensive_risk_score}分）；风险升级情景指标 ${t.risk_escalation_indicator ?? '-'}</div><div>目标月预测净空：${t.predicted_effective_clearance}m；95%情景区间 ${t.clearance_interval.lower}–${t.clearance_interval.upper}m</div><div>历史隐患指数 H=${h.index}（超标率 ${h.distance_exceedance_rate}，事故/高危率 ${h.incident_rate}，重复预警率 ${h.repeat_alert_rate}，处置后复发率 ${h.treatment_recurrence_rate}）</div><div>模型状态：${esc(t.comprehensive_risk?.model_status||'experimental')}；参数来源：${esc(t.comprehensive_risk?.parameter_source||'project_default_unverified')}。</div><div class="caution-note">实验性项目默认参数，尚未完成工程校准。${esc(h.data_completeness)}</div></div></div>`;
+  const availability=x.input_availability||{},imputations=availability.imputations||{},labels=availability.field_labels||fieldLabels,omittedRows=(availability.omitted_fields||[]).map(field=>{const item=imputations[field]||{},used=item.used_value;return`<tr><td>${esc(labels[field]||field)}</td><td>未提供</td><td>${used===''||used==null?'不参与数值计算':esc(used)}</td><td>${esc(item.reason||'仅标记为缺失')}</td></tr>`}).join('')||'<tr><td colspan="4">所有可选字段均已提供</td></tr>';
+  const dataUsage=`<div class="work-section"><h3>【本次数据采用情况】</h3><div class="work-lines"><div><strong>${esc(availability.status||'未收到数据选择元信息')}</strong></div><div>核心必填项：${(availability.required_fields||[]).map(field=>esc(labels[field]||field)).join('、')}</div><div class="caution-note">未提供项不会作为实测值保存；下表中的替代值只用于让模型完成情景计算，正式处置前应现场补测。</div></div><div class="forecast-table-wrap"><table class="forecast-table"><thead><tr><th>未提供项</th><th>实测状态</th><th>模型采用值</th><th>采用原因</th></tr></thead><tbody>${omittedRows}</tbody></table></div></div>`;
+  const meta=$('reportOutput').querySelector('.work-meta');if(meta)meta.insertAdjacentHTML('afterend',summary+dataUsage);
+}
+function appendCalculationSections(x){
+  const ledger=x.calculation_ledger||{},comparisonRows=(ledger.standard_comparisons||[]).map(v=>`<tr class="${v.exceeded?'exceeded-row':''}"><td>${esc(v.category)}</td><td>${esc(v.label)}</td><td>${esc(v.actual)}</td><td>${esc(v.standard)}</td><td>${esc(v.status)}</td></tr>`).join('');
+  const formulas=[...(ledger.point_cloud_distance_formulas||[]),...(ledger.risk_formulas||[])].map(v=>`<div class="formula-item"><strong>${esc(v.name)}</strong><code>${esc(v.formula)}</code><div class="formula-data">代入：${esc(v.data)}</div></div>`).join('');
+  const levels=(ledger.risk_level_intervals||[]).map(v=>`<tr><td>${esc(v.level)}</td><td>${esc(v.range)}</td><td>${esc(v.color)}</td></tr>`).join('');
+  const monthly=x.long_term_forecast.map(v=>`<tr class="${v.predicted_effective_clearance<x.risk_timeline_analysis.minimum_clearance_standard?'exceeded-row':''}"><td>${esc(v.target_year_month)}</td><td>${hazardBadge(v)}</td><td>${v.comprehensive_risk_index}</td><td>${v.comprehensive_risk_score}</td><td>${v.risk_score}</td><td>${v.predicted_height}</td><td>${v.predicted_effective_clearance}</td><td>${v.clearance_interval.lower}–${v.clearance_interval.upper}</td><td>${v.risk_escalation_indicator ?? '-'}</td></tr>`).join('');
+  $('reportOutput').insertAdjacentHTML('beforeend',`<div class="work-section"><h3>【逐项标准对照】</h3><p class="section-note">每项均显示本次所选标准；黄色表示超出关注范围或不满足下限。</p><div class="forecast-table-wrap"><table class="forecast-table"><thead><tr><th>板块</th><th>数据项</th><th>实际值</th><th>所设标准</th><th>核验</th></tr></thead><tbody>${comparisonRows}</tbody></table></div></div><div class="work-section"><h3>【公式、系数与逐步代入】</h3><div class="formula-list">${formulas}</div><div class="forecast-table-wrap"><table class="forecast-table"><thead><tr><th>四级风险</th><th>指数范围</th><th>预警色</th></tr></thead><tbody>${levels}</tbody></table></div></div><div class="work-section"><h3>【未来12个月四级风险与不确定性】</h3><div class="forecast-table-wrap"><table class="forecast-table"><thead><tr><th>月份</th><th>等级</th><th>综合风险指数 R</th><th>综合分</th><th>辅助模型分</th><th>树高(m)</th><th>有效净空(m)</th><th>95%区间(m)</th><th>风险升级情景指标</th></tr></thead><tbody>${monthly}</tbody></table></div></div>`);
+}
+function formatHistoryReport(x){const s=x.summary,t=x.tree_metrics,w=x.wire_metrics,l=x.tree_line_metrics,m=x.weather_metrics,a=x.applied_standard;return`${x.report_title}\n\n采用标准：${a.profile_name||'-'} / ${a.region||'-'} / ${a.industry||'-'}\n\n一、风险总览\n预测记录：${s.total_predictions}\n高风险记录：${s.high_risk_count}\n标准不合规记录：${s.standard_non_compliant_count}\n风险分布：${JSON.stringify(s.risk_distribution)}\n\n二、树木数据\n平均树高：${t.average_height??'-'} m\n平均胸径：${t.average_diameter??'-'} cm\n树种分布：${JSON.stringify(t.species_distribution)}\n\n三、电线数据\n电压等级：${w.voltage_levels_kv.join(', ')||'-'} kV\n平均冬季最大弧垂：${w.average_winter_maximum_sag??'-'} m\n平均夏季最大弧垂：${w.average_summer_maximum_sag??'-'} m\n\n四、树线距离\n平均垂直距离：${l.average_vertical_distance??'-'} m\n平均水平距离：${l.average_horizontal_distance??'-'} m\n平均净空距离：${l.average_clearance_distance??'-'} m\n平均风偏距离：${l.average_wind_offset_distance??'-'} m\n\n五、气象数据\n平均风速：${m.average_wind_speed??'-'} m/s\n平均降雨：${m.average_rainfall??'-'} mm\n平均湿度：${m.average_humidity??'-'} %\n平均温度：${m.average_temperature??'-'} °C\n平均日照：${m.average_sunlight_hours??'-'} h\n\n六、优先处置\n${x.priority_actions.length?x.priority_actions.map(v=>`树木 ${v.tree_id}：${v.risk_level}，${v.prediction}`).join('\n'):'暂无高风险优先处置项'}`}
+async function loadHistory(){const x=await fetch('/history').then(r=>r.json());$('history').innerHTML=x.history.slice(0,10).map(v=>`<div class="record"><strong>${v.tree_id||'-'} · ${v.risk_level}</strong><div>${v.prediction}</div><span class="muted">观测 ${v.observation_date||((v.observation_year||'-')+'年'+(v.observation_month||'-')+'月')} · ${v.voltage_level_kv||'-'} kV · ${v.standard_profile?.profile_name||'旧记录'}</span></div>`).join('')||'<span class="muted">暂无记录</span>'}
+let activeTrainingDatasetId=null;
+async function readResponse(response){const data=await response.json().catch(()=>({detail:'服务器返回了无法读取的结果'}));if(!response.ok)throw new Error(data.detail||'操作失败');return data}
+function renderTrainingImport(x){
+  activeTrainingDatasetId=x.dataset_id;
+  $('trainHistory').disabled=!x.trainable;
+  const preview=(x.preview||[]).map(v=>`<tr><td>${esc(v.tree_id)}</td><td>${esc(v.species)}</td><td>${esc(v.observation_date)}</td><td>${v.height}</td><td>${v.clearance_distance}</td><td>${v.temperature}</td><td>${v.sunlight_hours}</td><td>${v.risk_score}</td></tr>`).join('');
+  const errors=(x.errors||[]).map(v=>`<li>第 ${v.row} 行：${esc(v.message)}</li>`).join('');
+  $('trainingImportResult').innerHTML=`<div class="training-status ${x.trainable?'good':'warn'}"><strong>${esc(x.source_name)} 已解析</strong>${x.sheet_name?` · 工作表 ${esc(x.sheet_name)}`:''}<div class="metric-grid"><div class="metric"><strong>${x.valid_row_count}</strong>有效行</div><div class="metric"><strong>${x.invalid_row_count}</strong>无效行</div><div class="metric"><strong>${x.tree_count}</strong>棵树</div><div class="metric"><strong>${x.trainable_sequence_count}</strong>时序样本</div></div>${preview?`<div class="forecast-table-wrap"><table class="forecast-table preview-table"><thead><tr><th>树号</th><th>树种</th><th>日期</th><th>树高</th><th>净空</th><th>温度</th><th>日照</th><th>风险分</th></tr></thead><tbody>${preview}</tbody></table></div>`:''}${errors?`<strong>需要修正的行</strong><ul class="error-list">${errors}</ul>`:''}<p class="muted">${x.trainable?'数据已达到训练条件，可点击“开始增量训练”。':'可训练时序样本不足；同一树号至少要有连续观测，并且总计至少形成 2 个样本。'}</p></div>`;
+}
+async function importHistoryFile(){
+  const file=$('historyFile').files[0];
+  if(!file){alert('请先选择历史数据文件');return}
+  const button=$('importHistoryFile'),original=button.textContent;
+  button.disabled=true;button.textContent='正在解析…';
+  try{const form=new FormData();form.append('file',file);renderTrainingImport(await readResponse(await fetch('/training/import/file',{method:'POST',body:form})));await loadTrainingHistory()}
+  catch(error){$('trainingImportResult').innerHTML=`<div class="training-status bad"><strong>导入失败</strong><div>${esc(error.message)}</div></div>`}
+  finally{button.disabled=false;button.textContent=original}
+}
+async function importHistoryText(){
+  const button=$('importHistoryText'),original=button.textContent;
+  button.disabled=true;button.textContent='正在解析…';
+  try{renderTrainingImport(await readResponse(await fetch('/training/import/text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('historyPaste').value,format:$('pasteFormat').value})})));await loadTrainingHistory()}
+  catch(error){$('trainingImportResult').innerHTML=`<div class="training-status bad"><strong>导入失败</strong><div>${esc(error.message)}</div></div>`}
+  finally{button.disabled=false;button.textContent=original}
+}
+async function trainHistory(){
+  if(!activeTrainingDatasetId){alert('请先导入并校验历史数据');return}
+  const button=$('trainHistory'),original=button.textContent;
+  button.disabled=true;button.textContent='训练中，请稍候…';
+  $('trainingTrainResult').innerHTML='<div class="training-status">正在进行增量训练和验证集评估，请不要关闭页面。</div>';
+  try{
+    const x=await readResponse(await fetch(`/training/train/${activeTrainingDatasetId}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({epochs:Number($('trainingEpochs').value),learning_rate:Number($('trainingLearningRate').value)})}));
+    $('trainingTrainResult').innerHTML=`<div class="training-status ${x.deployed?'good':'warn'}"><strong>${esc(x.message)}</strong><div class="metric-grid"><div class="metric"><strong>${x.sequence_samples}</strong>总样本</div><div class="metric"><strong>${x.before_validation_mae}</strong>训练前 MAE</div><div class="metric"><strong>${x.after_validation_mae}</strong>训练后 MAE</div><div class="metric"><strong>${x.improvement}</strong>改善值</div></div><p class="muted">${x.deployed?'新模型已生效，后续月度预测将使用它。原模型已自动备份。':'本次数据没有在验证集上证明更好，因此没有覆盖现有模型。可以增加更多连续月份和更多树木的真实记录后再训练。'}</p></div>`;
+    await Promise.all([loadTrainingHistory(),loadModelStatus()]);
+  }catch(error){$('trainingTrainResult').innerHTML=`<div class="training-status bad"><strong>训练未完成</strong><div>${esc(error.message)}</div></div>`}
+  finally{button.disabled=false;button.textContent=original}
+}
+async function loadTrainingHistory(){
+  try{
+    const x=await readResponse(await fetch('/training/history'));
+    const datasets=(x.datasets||[]).slice(0,5).map(v=>`<div class="run-item">数据集 #${v.id} · ${esc(v.source_name)} · 有效 ${v.valid_row_count} 行 · 时序样本 ${v.trainable_sequence_count} · ${esc(v.created_at)}</div>`).join('');
+    const runs=(x.runs||[]).slice(0,5).map(v=>`<div class="run-item">训练 #${v.id} · 数据集 #${v.dataset_id} · ${v.deployed?'已发布':'未发布'} · 验证 MAE ${v.metrics.before_validation_mae} → ${v.metrics.after_validation_mae} · ${esc(v.created_at)}</div>`).join('');
+    $('trainingHistory').innerHTML=(datasets||runs)?`<details><summary>最近导入与训练记录</summary><div class="run-list">${runs}${datasets}</div></details>`:'';
+  }catch(error){$('trainingHistory').innerHTML=''}
+}
+async function loadModelStatus(){try{const x=await readResponse(await fetch('/model/status'));const latest=(x.recent_training_runs||[])[0];$('modelStatus').textContent=x.trained?`LSTM 可用${latest?` · 最近训练${latest.deployed?'已发布':'未发布'}`:''}`:'LSTM 尚未训练'}catch(error){$('modelStatus').textContent='模型状态读取失败'}}
+
+$('predict').onclick=async()=>{const r=await fetch('/predict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload())});const x=await r.json();if(!r.ok){alert(x.detail||'预测失败');return}showResult(x);loadHistory()};
+$('forecast').onclick=async()=>{const short_horizons_days=[...document.querySelectorAll('[name=shortHorizon]:checked')].map(x=>Number(x.value));const target=Number($('targetMonth').value);const long_horizons_months=Array.from({length:12},(_,i)=>i+1);if(!short_horizons_days.length){alert('短时预测期限至少选择一项');return}const r=await fetch('/predict/forecast',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tree_data:payload(),short_horizons_days,long_horizons_months,selected_horizon_months:target})});const x=await r.json();if(!r.ok){alert(x.detail||'分期预测失败');return}showResult(x.current_assessment);renderForecastDetailed(x);renderWorkOrderDetailed(x);appendEnvironmentSection(x);appendCalculationSections(x);loadHistory();$('reportOutput').scrollIntoView({behavior:'smooth'})};
+$('report').onclick=async()=>{const x=await fetch('/report').then(r=>r.json());$('reportOutput').classList.add('visible');$('reportOutput').innerHTML=`<div class="plain-report">${esc(formatHistoryReport(x)).replace(/\n/g,'<br>')}</div>`};
+$('importHistoryFile').onclick=importHistoryFile;
+$('importHistoryText').onclick=importHistoryText;
+$('trainHistory').onclick=trainHistory;
+
+$('openSettings').onclick=()=>$('settingsDialog').showModal();$('closeSettings').onclick=$('cancelSettings').onclick=()=>$('settingsDialog').close();
+$('saveSettings').onclick=async()=>{const data=Object.fromEntries(standardKeys.map(k=>[k,['profile_name','region','industry'].includes(k)?$('s_'+k).value:Number($('s_'+k).value)]));data.voltage_standards={};document.querySelectorAll('[data-voltage]').forEach(input=>{const v=input.dataset.voltage;data.voltage_standards[v]??={};data.voltage_standards[v][input.dataset.rule]=Number(input.value)});const r=await fetch('/settings/standards',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const x=await r.json();if(!r.ok){alert(x.detail||'标准保存失败');return}$('settingsDialog').close();await loadStandard();alert('新标准已保存，后续预测和报告将按此标准判断。')};
+loadModelStatus();loadTrainingHistory();loadStandard();loadHistory();
+</script>
+</body>
+</html>
