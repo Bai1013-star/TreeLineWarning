@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
 import inspect
+from dataclasses import FrozenInstanceError
 from typing import get_type_hints
 
+import core.contracts.tree_inputs as tree_inputs
 import numpy as np
 import pytest
-
-import core.contracts.tree_inputs as tree_inputs
 from core.contracts import (
     HeightAboveGroundSet,
     PointFeatureSet,

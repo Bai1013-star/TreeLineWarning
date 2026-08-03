@@ -20,7 +20,6 @@ from core.contracts.features import PointFeatureSet
 from core.contracts.ground import HeightAboveGroundSet
 from core.contracts.vegetation_instances import VegetationInstancePointSet
 
-
 _SHA256_FIELDS = (
     "v2_npz_sha256",
     "v2_json_sha256",
