@@ -126,6 +126,10 @@ from core.contracts.frv_source import (
     FrvSourceProviderConfig,
     FrvSourceProviderReference,
     FrvSourceVlrPolicyState,
+    derive_frv_source_original_index_digest,
+    derive_frv_source_point_content_digest,
+    derive_frv_source_provider_config_digest,
+    validate_frv_source_provider_reference,
 )
 from core.contracts.ground import (
     GroundEstimationConfig,
@@ -494,4 +498,8 @@ __all__ = [
     "FrvSourceHeaderMetadata",
     "FrvSourceProviderReference",
     "FrvSourceChunk",
+    "derive_frv_source_provider_config_digest",
+    "derive_frv_source_point_content_digest",
+    "derive_frv_source_original_index_digest",
+    "validate_frv_source_provider_reference",
 ]

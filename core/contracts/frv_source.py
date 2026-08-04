@@ -14,8 +14,12 @@ canonical FRV JSON serialization.
 
 from __future__ import annotations
 
+import hashlib
 import math
-from collections.abc import Mapping
+import os
+import re
+import struct
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -24,8 +28,20 @@ from typing import Any
 
 import numpy as np
 
-from core.contracts.frv import FrvCanonicalPointContentSpec, SourceIdentity
-from core.contracts.frv_a2 import FrvA2ArtifactComponentBinding, FrvA2ProviderRole
+from core.contracts.frv import (
+    FrvCanonicalPointContentSpec,
+    SourceIdentity,
+    canonical_frv_json_bytes,
+    frv_digest,
+    validate_source_identity_record_digest,
+)
+from core.contracts.frv_a2 import (
+    FrvA2ArtifactComponentBinding,
+    FrvA2ArtifactComponentKind,
+    FrvA2DomainKind,
+    FrvA2ProviderRole,
+    _derive_artifact_reference_id,
+)
 
 # ---------------------------------------------------------------------------
 # Public constants (frozen names and values)
@@ -298,6 +314,57 @@ def _frozen_ndarray(
 
 
 # ---------------------------------------------------------------------------
+# FRVSRCFG1 provider-config digest
+# ---------------------------------------------------------------------------
+
+
+def derive_frv_source_provider_config_digest(
+    *,
+    schema_version: str,
+    source_model: FrvSourceModel,
+    coordinate_conversion_policy: FrvSourceCoordinateConversionPolicy,
+    invalid_point_policy: FrvSourceInvalidPointPolicy,
+    canonical_content_policy: FrvSourceCanonicalContentPolicy,
+    pass_through_dimensions: tuple[FrvSourcePassThroughDimension, ...],
+) -> str:
+    """Return the FRVSRCFG1 digest for the frozen provider-config payload.
+
+    The payload uses the exact frozen framing from the P-SOURCE plan: it never
+    includes ``provider_config_digest``, chunk size, paths, or runtime values,
+    and pass-through dimensions keep their frozen declaration order.
+    """
+
+    _require_exact_str(schema_version, "schema_version")
+    _require_enum(source_model, FrvSourceModel, "source_model")
+    _require_enum(
+        coordinate_conversion_policy,
+        FrvSourceCoordinateConversionPolicy,
+        "coordinate_conversion_policy",
+    )
+    _require_enum(
+        invalid_point_policy, FrvSourceInvalidPointPolicy, "invalid_point_policy"
+    )
+    _require_enum(
+        canonical_content_policy,
+        FrvSourceCanonicalContentPolicy,
+        "canonical_content_policy",
+    )
+    dimensions = _validate_enum_tuple(
+        pass_through_dimensions, FrvSourcePassThroughDimension, "pass_through_dimensions"
+    )
+    payload = {
+        "digest_domain": "FRVSRCFG1",
+        "schema_version": schema_version,
+        "source_model": source_model.value,
+        "coordinate_conversion_policy": coordinate_conversion_policy.value,
+        "invalid_point_policy": invalid_point_policy.value,
+        "canonical_content_policy": canonical_content_policy.value,
+        "pass_through_dimensions": [dimension.value for dimension in dimensions],
+    }
+    return frv_digest(payload)
+
+
+# ---------------------------------------------------------------------------
 # FrvSourceProviderConfig
 # ---------------------------------------------------------------------------
 
@@ -346,6 +413,16 @@ class FrvSourceProviderConfig:
             ),
         )
         _require_sha(self.provider_config_digest, "provider_config_digest")
+        computed = derive_frv_source_provider_config_digest(
+            schema_version=self.schema_version,
+            source_model=self.source_model,
+            coordinate_conversion_policy=self.coordinate_conversion_policy,
+            invalid_point_policy=self.invalid_point_policy,
+            canonical_content_policy=self.canonical_content_policy,
+            pass_through_dimensions=self.pass_through_dimensions,
+        )
+        if self.provider_config_digest != computed:
+            raise ValueError("provider_config_digest does not match canonical FRVSRCFG1 fields")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -637,6 +714,321 @@ class FrvSourceChunk:
         object.__setattr__(self, "attributes", MappingProxyType(frozen_attributes))
 
 
+# ---------------------------------------------------------------------------
+# FRVPCD1 / FRVA2IDX1 streaming digests and stream continuity
+# ---------------------------------------------------------------------------
+
+_FRV_SOURCE_EXACT_SPEC_FIELDS = (
+    ("original_index", "ORIGINAL_INDEX", "<i8"),
+    ("x", "X_COORDINATE", "<f8"),
+    ("y", "Y_COORDINATE", "<f8"),
+    ("z", "Z_COORDINATE", "<f8"),
+)
+
+
+def _check_exact_point_content_spec(
+    canonical_point_content_spec: FrvCanonicalPointContentSpec,
+) -> None:
+    """Require the frozen exact four-field P-SOURCE point-content spec."""
+
+    if type(canonical_point_content_spec) is not FrvCanonicalPointContentSpec:
+        raise TypeError(
+            "canonical_point_content_spec must be a FrvCanonicalPointContentSpec"
+        )
+    spec = canonical_point_content_spec
+    if spec.row_order != "ORIGINAL_INDEX_ASCENDING":
+        raise ValueError("canonical point-content spec must use ORIGINAL_INDEX_ASCENDING")
+    if spec.quantization_policy != "EXACT_TYPED_VALUE":
+        raise ValueError("canonical point-content spec must use EXACT_TYPED_VALUE")
+    if spec.missing_value_policy != "EXPLICIT_VALIDITY_BYTE":
+        raise ValueError("canonical point-content spec must use EXPLICIT_VALIDITY_BYTE")
+    fields = spec.ordered_field_specs
+    if len(fields) != len(_FRV_SOURCE_EXACT_SPEC_FIELDS):
+        raise ValueError("canonical point-content spec must contain exactly four fields")
+    for field, (name, role, dtype) in zip(
+        fields, _FRV_SOURCE_EXACT_SPEC_FIELDS, strict=True
+    ):
+        if (
+            field.field_name != name
+            or field.semantic_role != role
+            or field.dtype_code != dtype
+            or field.byte_order != "LITTLE_ENDIAN"
+            or field.scale != 1.0
+            or field.offset != 0.0
+            or field.required is not True
+            or field.null_policy != "FORBID_NULL"
+        ):
+            raise ValueError(
+                "canonical point-content spec must be the frozen exact four-field spec"
+            )
+
+
+def _iter_stream_chunks(chunks: Iterable[FrvSourceChunk]):
+    """Validate stream-level continuity and yield each validated chunk.
+
+    Checks chunk_id continuity from 0, start_index continuity (each equals the
+    accumulated point count), a single shared source_id, no chunk after the
+    final is_last chunk, and a final is_last chunk for any non-empty stream.
+    """
+
+    expected_chunk_id = 0
+    expected_start = 0
+    previous_source_id: str | None = None
+    chunk_count = 0
+    saw_final = False
+    for chunk in chunks:
+        if type(chunk) is not FrvSourceChunk:
+            raise TypeError("chunks must contain FrvSourceChunk values")
+        if saw_final:
+            raise ValueError("chunks must not appear after the final is_last chunk")
+        if chunk.chunk_id != expected_chunk_id:
+            raise ValueError("chunk_id values must be strictly consecutive from 0")
+        if chunk.start_index != expected_start:
+            raise ValueError("start_index must equal the accumulated point count")
+        if previous_source_id is not None and chunk.source_id != previous_source_id:
+            raise ValueError("all chunks must share one source_id")
+        if (
+            len(chunk.xyz) != chunk.point_count
+            or len(chunk.original_index) != chunk.point_count
+        ):
+            raise ValueError("chunk array length must match point_count")
+        expected_chunk_id += 1
+        expected_start += chunk.point_count
+        previous_source_id = chunk.source_id
+        chunk_count += 1
+        saw_final = chunk.is_last
+        yield chunk
+    if chunk_count > 0 and not saw_final:
+        raise ValueError("non-empty streams must end with an is_last chunk")
+
+
+def derive_frv_source_point_content_digest(
+    chunks: Iterable[FrvSourceChunk],
+    *,
+    canonical_point_content_spec: FrvCanonicalPointContentSpec,
+) -> str:
+    """Return the FRVPCD1 streaming digest over full-resolution point content.
+
+    The framing is the frozen ``b"FRVPCD1\\0"`` + uint64 spec-header length +
+    canonical spec JSON + ordered little-endian row bytes (original_index <i8,
+    x/y/z <f8), with ``-0.0`` normalized to ``+0.0``.  The digest is
+    chunk-boundary invariant and never materializes the full source.
+    """
+
+    _check_exact_point_content_spec(canonical_point_content_spec)
+    spec_header = canonical_frv_json_bytes(canonical_point_content_spec.to_digest_dict())
+    hasher = hashlib.sha256()
+    hasher.update(b"FRVPCD1\0")
+    hasher.update(struct.pack("<Q", len(spec_header)))
+    hasher.update(spec_header)
+    for chunk in _iter_stream_chunks(chunks):
+        for row in range(chunk.point_count):
+            original_index = int(chunk.original_index[row])
+            x = float(chunk.xyz[row, 0]) + 0.0
+            y = float(chunk.xyz[row, 1]) + 0.0
+            z = float(chunk.xyz[row, 2]) + 0.0
+            hasher.update(struct.pack("<qddd", original_index, x, y, z))
+    return hasher.hexdigest()
+
+
+def derive_frv_source_original_index_digest(
+    chunks: Iterable[FrvSourceChunk],
+    *,
+    source_content_identity_digest: str,
+) -> str:
+    """Return the FRVA2IDX1 streaming digest over the original-index domain.
+
+    The framing byte-for-byte reproduces the existing A2
+    ``frv_a2_index_domain_digest`` for role ORIGINAL_INDEX, domain FULL_SOURCE,
+    and the global index sequence 0..N-1, without materializing the full index
+    list.  The original_index values in every chunk must equal that exact
+    global sequence.
+    """
+
+    _require_sha(source_content_identity_digest, "source_content_identity_digest")
+    total = 0
+    for chunk in _iter_stream_chunks(chunks):
+        for row in range(chunk.point_count):
+            if int(chunk.original_index[row]) != chunk.start_index + row:
+                raise ValueError("original_index must equal the global 0..N-1 sequence")
+        total += chunk.point_count
+    hasher = hashlib.sha256()
+    hasher.update(b"FRVA2IDX1\0")
+    hasher.update(b"ORIGINAL_INDEX")
+    hasher.update(b"\0")
+    hasher.update(source_content_identity_digest.encode("utf-8"))
+    hasher.update(b"\0")
+    hasher.update(FrvA2DomainKind.FULL_SOURCE.value.encode("utf-8"))
+    hasher.update(b"\0")
+    hasher.update(struct.pack("<Q", total))
+    for index in range(total):
+        hasher.update(struct.pack("<Q", index))
+    return hasher.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# P-SOURCE v1 Windows lexical comparison key (private)
+# ---------------------------------------------------------------------------
+
+
+def _check_path_component(component: str) -> None:
+    if not component:
+        raise ValueError("path must not contain empty components")
+    if component in (".", ".."):
+        raise ValueError("path must not contain dot segments")
+    if "\x00" in component:
+        raise ValueError("path must not contain a NUL character")
+    if component != component.rstrip(" ."):
+        raise ValueError("path must not contain trailing whitespace or dots")
+    if ":" in component:
+        raise ValueError("path must not contain a colon outside the drive letter")
+
+
+def _frv_source_windows_path_comparison_key(value: str) -> str:
+    """Return the frozen pure lexical Windows comparison key for *value*.
+
+    Only absolute Windows drive paths and absolute UNC paths are accepted.
+    Relative paths, device-namespace paths, dot segments, empty components,
+    trailing whitespace/dots, NUL, and extra colons are rejected.  The key
+    uppercases the drive letter, case-folds the server/share and every path
+    component, unifies separators to ``\\``, and performs no filesystem
+    access, resolution, or cwd dependence.
+    """
+
+    path_text = os.fspath(value)
+    if type(path_text) is not str:
+        raise TypeError("path must be a built-in str")
+    if not path_text:
+        raise ValueError("path must be non-empty")
+    if "\x00" in path_text:
+        raise ValueError("path must not contain a NUL character")
+    normalized = path_text.replace("/", "\\")
+    if normalized.startswith("\\\\?\\") or normalized.startswith("\\\\.\\"):
+        raise ValueError("device namespace paths are not supported")
+    if normalized.startswith("\\\\"):
+        rest = normalized[2:]
+        parts = rest.split("\\")
+        if len(parts) < 2 or parts[0] == "" or parts[1] == "":
+            raise ValueError("UNC path must include a server and share")
+        for component in parts:
+            _check_path_component(component)
+        head = parts[0].casefold() + "\\" + parts[1].casefold()
+        tail = "\\".join(component.casefold() for component in parts[2:])
+        return "\\\\" + (head if not tail else head + "\\" + tail)
+    match = re.match(r"^([A-Za-z]):\\(.*)$", normalized)
+    if match is None:
+        raise ValueError("path must be an absolute Windows drive or UNC path")
+    drive = match.group(1).upper()
+    rest = match.group(2)
+    if not rest:
+        return drive + ":\\"
+    components = rest.split("\\")
+    for component in components:
+        _check_path_component(component)
+    return drive + ":\\" + "\\".join(component.casefold() for component in components)
+
+
+# ---------------------------------------------------------------------------
+# Full P-SOURCE reference validator
+# ---------------------------------------------------------------------------
+
+
+def validate_frv_source_provider_reference(
+    reference: FrvSourceProviderReference,
+    *,
+    provider_config: FrvSourceProviderConfig,
+    expected_configuration_digest: str,
+) -> None:
+    """Validate the full frozen cross-binding of a P-SOURCE reference.
+
+    On success returns ``None``.  Argument or field type errors raise
+    ``TypeError``; contract cross-binding mismatches raise ``ValueError``.
+    """
+
+    if type(reference) is not FrvSourceProviderReference:
+        raise TypeError("reference must be a FrvSourceProviderReference")
+    if type(provider_config) is not FrvSourceProviderConfig:
+        raise TypeError("provider_config must be a FrvSourceProviderConfig")
+    _require_sha(expected_configuration_digest, "expected_configuration_digest")
+
+    if reference.provider_role is not FrvA2ProviderRole.SOURCE_SCAN:
+        raise ValueError("provider_role must be SOURCE_SCAN")
+    if reference.provider_key != FRV_SOURCE_PROVIDER_KEY:
+        raise ValueError("provider_key must be source_scan")
+
+    computed_config_digest = derive_frv_source_provider_config_digest(
+        schema_version=provider_config.schema_version,
+        source_model=provider_config.source_model,
+        coordinate_conversion_policy=provider_config.coordinate_conversion_policy,
+        invalid_point_policy=provider_config.invalid_point_policy,
+        canonical_content_policy=provider_config.canonical_content_policy,
+        pass_through_dimensions=provider_config.pass_through_dimensions,
+    )
+    if provider_config.provider_config_digest != computed_config_digest:
+        raise ValueError("provider_config digest does not match canonical FRVSRCFG1 fields")
+    if reference.provider_config_digest != provider_config.provider_config_digest:
+        raise ValueError("provider_config_digest must match the provider config")
+    if reference.configuration_digest != expected_configuration_digest:
+        raise ValueError("configuration_digest must match the expected configuration digest")
+
+    components = reference.artifact_components
+    if len(components) != 1:
+        raise ValueError("exactly one artifact component is required")
+    component = components[0]
+    if component.component_kind is not FrvA2ArtifactComponentKind.SOURCE_FILE:
+        raise ValueError("artifact component must be a SOURCE_FILE component")
+    if component.component_key != "source_file":
+        raise ValueError("artifact component key must be source_file")
+    if component.sha256 != reference.source_identity.source_file_sha256:
+        raise ValueError("artifact component sha256 must match the source identity")
+
+    expected_reference_id = _derive_artifact_reference_id(
+        reference.provider_role, reference.provider_key, reference.artifact_components
+    )
+    if reference.artifact_reference_id != expected_reference_id:
+        raise ValueError("artifact_reference_id does not match the canonical artifact components")
+
+    runtime_key = _frv_source_windows_path_comparison_key(
+        os.fspath(reference.runtime_access_path)
+    )
+    resolved_key = _frv_source_windows_path_comparison_key(
+        reference.source_identity.resolved_access_path
+    )
+    if runtime_key != resolved_key:
+        raise ValueError("runtime_access_path must match the resolved access path")
+
+    source = reference.source_identity
+    if source.relocation_audit.resolved_path_raw != source.resolved_access_path:
+        raise ValueError("relocation audit resolved_path_raw must match resolved_access_path")
+    validate_source_identity_record_digest(source)
+
+    if reference.interface_version != FRV_SOURCE_PROVIDER_INTERFACE_VERSION:
+        raise ValueError("interface_version must match the frozen interface version")
+    if reference.schema_version != FRV_SOURCE_PROVIDER_SCHEMA_VERSION:
+        raise ValueError("schema_version must match the frozen schema version")
+    if reference.algorithm_version != FRV_SOURCE_PROVIDER_ALGORITHM_VERSION:
+        raise ValueError("algorithm_version must match the frozen algorithm version")
+
+    if source.canonical_point_content_digest is None:
+        if reference.canonical_point_content_spec is not None:
+            raise ValueError(
+                "canonical_point_content_spec must be null when the source "
+                "declares no canonical content"
+            )
+    else:
+        if reference.canonical_point_content_spec is None:
+            raise ValueError(
+                "canonical_point_content_spec is required when the source "
+                "declares canonical content"
+            )
+        if (
+            reference.canonical_point_content_spec.spec_digest
+            != source.canonical_point_content_spec_digest
+        ):
+            raise ValueError("canonical_point_content_spec digest must match the source identity")
+        _check_exact_point_content_spec(reference.canonical_point_content_spec)
+
+
 __all__ = [
     "FRV_SOURCE_PROVIDER_KEY",
     "FRV_SOURCE_PROVIDER_INTERFACE_VERSION",
@@ -646,6 +1038,10 @@ __all__ = [
     "FRV_SOURCE_PROVIDER_ALGORITHM_VERSION",
     "FRV_SOURCE_PROVIDER_CONFIG_DIGEST_DOMAIN",
     "FRV_SOURCE_DEFAULT_CHUNK_SIZE",
+    "derive_frv_source_provider_config_digest",
+    "derive_frv_source_point_content_digest",
+    "derive_frv_source_original_index_digest",
+    "validate_frv_source_provider_reference",
     "FrvSourceModel",
     "FrvSourceCoordinateConversionPolicy",
     "FrvSourceInvalidPointPolicy",
