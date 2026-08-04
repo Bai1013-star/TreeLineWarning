@@ -19,28 +19,32 @@ import math
 import os
 import re
 import struct
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal, Protocol
 
 import numpy as np
 
 from core.contracts.frv import (
     FrvCanonicalPointContentSpec,
+    FrvQualityFlag,
     SourceIdentity,
     canonical_frv_json_bytes,
     frv_digest,
+    validate_frv_flag_mask,
     validate_source_identity_record_digest,
 )
 from core.contracts.frv_a2 import (
     FrvA2ArtifactComponentBinding,
     FrvA2ArtifactComponentKind,
     FrvA2DomainKind,
+    FrvA2FailureRecord,
     FrvA2ProviderRole,
     _derive_artifact_reference_id,
+    validate_frv_a2_failure_record,
 )
 
 # ---------------------------------------------------------------------------
@@ -1029,6 +1033,59 @@ def validate_frv_source_provider_reference(
         _check_exact_point_content_spec(reference.canonical_point_content_spec)
 
 
+# ---------------------------------------------------------------------------
+# C3-A: P-SOURCE load error and single-use load session protocol
+# ---------------------------------------------------------------------------
+
+
+class FrvSourceLoadError(Exception):
+    """P-SOURCE load failure carrying a frozen A2 failure record.
+
+    The failure record is validated by the existing A2 authority and stored
+    verbatim.  ``quality_flags`` is validated by the existing closed
+    ``FrvQualityFlag`` bitmask authority (any unknown bit is rejected).
+    ``str(error)`` is exactly ``failure_record.detail``; no class name, quality
+    flags, underlying exception text, or path is appended.  A raw exception may
+    only be attached by Python's native ``raise ... from`` chaining
+    (``error.__cause__``); C3-A performs no IO failure mapping.
+    """
+
+    def __init__(
+        self,
+        *,
+        failure_record: FrvA2FailureRecord,
+        quality_flags: int,
+    ) -> None:
+        if type(failure_record) is not FrvA2FailureRecord:
+            raise TypeError("failure_record must be a FrvA2FailureRecord")
+        validate_frv_a2_failure_record(failure_record)
+        if type(quality_flags) is not int:
+            raise TypeError("quality_flags must be a built-in int")
+        if quality_flags < 0:
+            raise ValueError("quality_flags must be nonnegative")
+        validate_frv_flag_mask(quality_flags, FrvQualityFlag, "quality_flags")
+        self.failure_record = failure_record
+        self.quality_flags = quality_flags
+        super().__init__(failure_record.detail)
+
+
+class FrvSourceLoadSession(Protocol):
+    """Single-use P-SOURCE load session interface (C3-A contracts only).
+
+    C3-A freezes the five-method interface.  ``iter_chunks`` is a single-use
+    runtime contract, ``finalize`` succeeds only after a complete natural
+    iteration, ``close`` is idempotent, ``__enter__`` returns the session, and
+    ``__exit__`` returns ``False``.  No runtime implementation exists yet; the
+    future result type is intentionally left as a forward annotation.
+    """
+
+    def iter_chunks(self) -> Iterator[FrvSourceChunk]: ...
+    def finalize(self) -> FrvSourceProviderResult: ...  # noqa: F821 (C3-B forward ref)
+    def close(self) -> None: ...
+    def __enter__(self) -> FrvSourceLoadSession: ...
+    def __exit__(self, exc_type, exc, traceback) -> Literal[False]: ...
+
+
 __all__ = [
     "FRV_SOURCE_PROVIDER_KEY",
     "FRV_SOURCE_PROVIDER_INTERFACE_VERSION",
@@ -1055,4 +1112,6 @@ __all__ = [
     "FrvSourceHeaderMetadata",
     "FrvSourceProviderReference",
     "FrvSourceChunk",
+    "FrvSourceLoadError",
+    "FrvSourceLoadSession",
 ]

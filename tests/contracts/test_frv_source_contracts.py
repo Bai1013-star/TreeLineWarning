@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gc
 import hashlib
+import inspect
 import json
 import math
 import struct
@@ -18,19 +19,28 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+from unittest import mock
 
 import core.contracts as contracts
 import core.contracts.frv as frv
 import core.contracts.frv_source as source
 import numpy as np
 import pytest
-from core.contracts.frv import canonical_frv_json_bytes
+from core.contracts.frv import (
+    FrvErrorCode,
+    FrvQualityFlag,
+    canonical_frv_json_bytes,
+    validate_frv_flag_mask,
+)
 from core.contracts.frv_a2 import (
     FrvA2ArtifactComponentBinding,
     FrvA2ArtifactComponentKind,
     FrvA2DomainKind,
+    FrvA2FailurePhase,
+    FrvA2FailureRecord,
     FrvA2ProviderRole,
     frv_a2_index_domain_digest,
+    validate_frv_a2_failure_record,
 )
 from core.contracts.frv_source import (
     FRV_SOURCE_DEFAULT_CHUNK_SIZE,
@@ -49,6 +59,8 @@ from core.contracts.frv_source import (
     FrvSourceFormat,
     FrvSourceHeaderMetadata,
     FrvSourceInvalidPointPolicy,
+    FrvSourceLoadError,
+    FrvSourceLoadSession,
     FrvSourceModel,
     FrvSourcePassThroughDimension,
     FrvSourceProviderConfig,
@@ -979,23 +991,26 @@ def test_public_symbols_importable_from_core_contracts() -> None:
         FrvSourceHeaderMetadata,
         FrvSourceProviderReference,
         FrvSourceChunk,
+        FrvSourceLoadError,
+        FrvSourceLoadSession,
     )
     assert all(item is not None for item in imported)
     assert contracts.FrvSourceProviderConfig is source.FrvSourceProviderConfig
     assert contracts.FrvSourcePassThroughDimension is source.FrvSourcePassThroughDimension
     assert contracts.FRV_SOURCE_PROVIDER_KEY == "source_scan"
+    assert contracts.FrvSourceLoadError is source.FrvSourceLoadError
+    assert contracts.FrvSourceLoadSession is source.FrvSourceLoadSession
 
 
 def test_no_unauthorized_future_public_symbols() -> None:
     for name in (
-        "FrvSourceLoadSession",
         "FrvSourceProviderProof",
         "FrvSourceProviderResult",
-        "FrvSourceLoadError",
-        "load_frv_source",
         "validate_finalized_frv_source_provider_result",
         "to_frv_a2_provider_binding_evidence",
-        "FrvSourceProviderProof",
+        "load_frv_source",
+        "_FRV_SOURCE_FINALIZED_CAPABILITY",
+        "_create_finalized_frv_source_provider_result",
     ):
         assert not hasattr(contracts, name)
 
@@ -2210,3 +2225,282 @@ def test_frva2idx1_no_full_source_materialization() -> None:
         derive_frv_source_original_index_digest(
             reference[:-1] + [bad_last], source_content_identity_digest=SHA
         )
+
+
+# ---------------------------------------------------------------------------
+# 18. C3-A: load error and single-use load session protocol
+# ---------------------------------------------------------------------------
+
+
+def _failure_record(
+    *,
+    phase: FrvA2FailurePhase = FrvA2FailurePhase.STRUCTURE_INTEGRITY,
+    reason_flags: int = 0,
+) -> FrvA2FailureRecord:
+    role = FrvA2ProviderRole.SOURCE_SCAN
+    key = "source_scan"
+    field = "manifest"
+    error = FrvErrorCode.FRV_PROVIDER_INVALID
+    detail = f"{phase.value}:{role.value}:{key}:{field}:{error.value}:{reason_flags}"
+    return FrvA2FailureRecord(phase, role, key, field, error, reason_flags, detail)
+
+
+def _quality_flag_known_mask() -> int:
+    known = 0
+    for member in FrvQualityFlag.__members__.values():
+        known |= int(member.value)
+    return known
+
+
+def _quality_flag_next_unknown_bit() -> int:
+    return max(int(member.value) for member in FrvQualityFlag.__members__.values()) * 2
+
+
+def test_source_load_error_normal_construction() -> None:
+    record = _failure_record()
+    error = FrvSourceLoadError(failure_record=record, quality_flags=0b101)
+    assert isinstance(error, Exception)
+    assert error.failure_record is record
+    assert error.quality_flags == 0b101
+    assert str(error) == record.detail
+    assert error.args == (record.detail,)
+
+
+def test_source_load_error_constructor_signature() -> None:
+    parameters = list(inspect.signature(FrvSourceLoadError.__init__).parameters.values())
+    assert [parameter.name for parameter in parameters] == [
+        "self",
+        "failure_record",
+        "quality_flags",
+    ]
+    assert parameters[1].kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameters[2].kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_source_load_error_rejects_positional_construction() -> None:
+    record = _failure_record()
+    with pytest.raises(TypeError):
+        FrvSourceLoadError(record, 0)  # type: ignore[misc]
+
+
+def test_source_load_error_rejects_wrong_failure_record_type() -> None:
+    with pytest.raises(TypeError, match="failure_record"):
+        FrvSourceLoadError(failure_record=None, quality_flags=0)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="failure_record"):
+        FrvSourceLoadError(failure_record={}, quality_flags=0)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="failure_record"):
+        FrvSourceLoadError(failure_record="record", quality_flags=0)  # type: ignore[arg-type]
+
+
+def test_source_load_error_rejects_failure_record_duck_type() -> None:
+    class _FailureDuck:
+        phase = FrvA2FailurePhase.STRUCTURE_INTEGRITY
+        provider_role = FrvA2ProviderRole.SOURCE_SCAN
+        provider_key = "source_scan"
+        field_name = "manifest"
+        error_code = FrvErrorCode.FRV_PROVIDER_INVALID
+        reason_flags = 0
+        detail = "duck"
+
+    with pytest.raises(TypeError, match="failure_record"):
+        FrvSourceLoadError(failure_record=_FailureDuck(), quality_flags=0)  # type: ignore[arg-type]
+
+
+def test_source_load_error_rejects_failure_record_subclass() -> None:
+    record = _failure_record()
+
+    class _FailureSubclass(FrvA2FailureRecord):
+        pass
+
+    subclass_instance = _FailureSubclass.__new__(_FailureSubclass)
+    for name in FrvA2FailureRecord.__dataclass_fields__:
+        object.__setattr__(subclass_instance, name, getattr(record, name))
+    with pytest.raises(TypeError, match="failure_record"):
+        FrvSourceLoadError(failure_record=subclass_instance, quality_flags=0)  # type: ignore[arg-type]
+
+
+def test_source_load_error_rejects_invalid_failure_record() -> None:
+    raw = FrvA2FailureRecord.__new__(FrvA2FailureRecord)
+    for name in FrvA2FailureRecord.__dataclass_fields__:
+        object.__setattr__(raw, name, getattr(_failure_record(), name))
+    object.__setattr__(raw, "reason_flags", -1)
+    with pytest.raises(ValueError, match="reason_flags"):
+        FrvSourceLoadError(failure_record=raw, quality_flags=0)
+
+
+def test_source_load_error_delegates_to_failure_record_validator() -> None:
+    record = _failure_record()
+    with mock.patch(
+        "core.contracts.frv_source.validate_frv_a2_failure_record",
+        wraps=validate_frv_a2_failure_record,
+    ) as mocked:
+        error = FrvSourceLoadError(failure_record=record, quality_flags=0)
+        mocked.assert_called_once_with(record)
+        assert error.failure_record is record
+
+
+def test_source_load_error_rejects_wrong_quality_flags_type() -> None:
+    record = _failure_record()
+    for bad in (None, "0", 1.0, [0], 0.5):
+        with pytest.raises(TypeError, match="quality_flags"):
+            FrvSourceLoadError(failure_record=record, quality_flags=bad)  # type: ignore[arg-type]
+
+
+def test_source_load_error_rejects_bool_quality_flags() -> None:
+    record = _failure_record()
+    with pytest.raises(TypeError, match="quality_flags"):
+        FrvSourceLoadError(failure_record=record, quality_flags=True)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="quality_flags"):
+        FrvSourceLoadError(failure_record=record, quality_flags=False)  # type: ignore[arg-type]
+
+
+def test_source_load_error_rejects_int_subclass_quality_flags() -> None:
+    record = _failure_record()
+
+    class _IntSubclass(int):
+        pass
+
+    with pytest.raises(TypeError, match="quality_flags"):
+        FrvSourceLoadError(  # type: ignore[arg-type]
+            failure_record=record, quality_flags=_IntSubclass(0)
+        )
+
+
+def test_source_load_error_rejects_negative_quality_flags() -> None:
+    record = _failure_record()
+    with pytest.raises(ValueError, match="nonnegative"):
+        FrvSourceLoadError(failure_record=record, quality_flags=-1)
+
+
+def test_source_load_error_quality_flags_zero_accepted() -> None:
+    record = _failure_record()
+    error = FrvSourceLoadError(failure_record=record, quality_flags=0)
+    assert error.quality_flags == 0
+
+
+def test_source_load_error_quality_flags_single_known_bit_accepted() -> None:
+    record = _failure_record()
+    flags = int(FrvQualityFlag.ORIGINAL_INDEX_INVALID)
+    error = FrvSourceLoadError(failure_record=record, quality_flags=flags)
+    assert error.quality_flags == flags
+
+
+def test_source_load_error_quality_flags_combined_known_bits_accepted() -> None:
+    record = _failure_record()
+    flags = int(FrvQualityFlag.ORIGINAL_INDEX_INVALID) | int(
+        FrvQualityFlag.STREAM_INCOMPLETE
+    )
+    error = FrvSourceLoadError(failure_record=record, quality_flags=flags)
+    assert error.quality_flags == flags
+
+
+def test_source_load_error_quality_flags_rejects_unknown_bit() -> None:
+    record = _failure_record()
+    unknown = _quality_flag_next_unknown_bit()
+    assert unknown & ~_quality_flag_known_mask()
+    with pytest.raises(ValueError, match="unknown flag bit"):
+        FrvSourceLoadError(failure_record=record, quality_flags=unknown)
+
+
+def test_source_load_error_quality_flags_rejects_known_plus_unknown_bit() -> None:
+    record = _failure_record()
+    mixed = int(FrvQualityFlag.ORIGINAL_INDEX_INVALID) | _quality_flag_next_unknown_bit()
+    with pytest.raises(ValueError, match="unknown flag bit"):
+        FrvSourceLoadError(failure_record=record, quality_flags=mixed)
+
+
+def test_source_load_error_delegates_to_flag_mask_validator() -> None:
+    record = _failure_record()
+    flags = int(FrvQualityFlag.ORIGINAL_INDEX_INVALID)
+    with mock.patch(
+        "core.contracts.frv_source.validate_frv_flag_mask",
+        wraps=validate_frv_flag_mask,
+    ) as mocked:
+        error = FrvSourceLoadError(failure_record=record, quality_flags=flags)
+        mocked.assert_called_once_with(flags, FrvQualityFlag, "quality_flags")
+        assert error.quality_flags == flags
+
+
+def test_source_load_error_supports_from_chaining() -> None:
+    record = _failure_record()
+    raw_error = RuntimeError("raw io detail")
+    try:
+        raise FrvSourceLoadError(failure_record=record, quality_flags=1) from raw_error
+    except FrvSourceLoadError as error:
+        assert error.__cause__ is raw_error
+        assert str(error) == record.detail
+        assert "raw io detail" not in str(error)
+        assert error.args == (record.detail,)
+        assert not hasattr(error, "raw_exception")
+        assert not hasattr(error, "partial_result")
+
+
+def test_source_load_session_is_protocol() -> None:
+    from typing import Protocol
+
+    assert issubclass(FrvSourceLoadSession, Protocol)
+    with pytest.raises(TypeError):
+        FrvSourceLoadSession()  # type: ignore[call-arg]
+
+
+def test_source_load_session_not_runtime_checkable() -> None:
+    class _Dummy:
+        def iter_chunks(self): ...
+        def finalize(self): ...
+        def close(self): ...
+        def __enter__(self): ...
+        def __exit__(self, exc_type, exc, traceback): ...
+
+    with pytest.raises(TypeError):
+        issubclass(_Dummy, FrvSourceLoadSession)
+
+
+def test_source_load_session_exact_method_names() -> None:
+    methods = {
+        name
+        for name in vars(FrvSourceLoadSession)
+        if not name.startswith("_") or name in ("__enter__", "__exit__")
+    }
+    assert methods == {"iter_chunks", "finalize", "close", "__enter__", "__exit__"}
+    for forbidden in ("state", "reader", "handle", "path", "result", "failure", "loader"):
+        assert not hasattr(FrvSourceLoadSession, forbidden)
+
+
+def test_source_load_session_method_signatures() -> None:
+    assert list(inspect.signature(FrvSourceLoadSession.iter_chunks).parameters) == ["self"]
+    assert list(inspect.signature(FrvSourceLoadSession.finalize).parameters) == ["self"]
+    assert list(inspect.signature(FrvSourceLoadSession.close).parameters) == ["self"]
+    assert list(inspect.signature(FrvSourceLoadSession.__enter__).parameters) == ["self"]
+    assert list(inspect.signature(FrvSourceLoadSession.__exit__).parameters) == [
+        "self",
+        "exc_type",
+        "exc",
+        "traceback",
+    ]
+
+
+def test_source_load_session_return_annotations() -> None:
+    def _annotation_text(method) -> str:
+        return str(inspect.signature(method).return_annotation).strip("'\"")
+
+    assert _annotation_text(FrvSourceLoadSession.iter_chunks) == "Iterator[FrvSourceChunk]"
+    assert _annotation_text(FrvSourceLoadSession.finalize) == "FrvSourceProviderResult"
+    assert _annotation_text(FrvSourceLoadSession.close) == "None"
+    assert _annotation_text(FrvSourceLoadSession.__enter__) == "FrvSourceLoadSession"
+    assert _annotation_text(FrvSourceLoadSession.__exit__) == "Literal[False]"
+
+
+def test_c3a_public_exports_present() -> None:
+    assert contracts.FrvSourceLoadError is source.FrvSourceLoadError
+    assert contracts.FrvSourceLoadSession is source.FrvSourceLoadSession
+    assert issubclass(source.FrvSourceLoadError, Exception)
+    for name in (
+        "FrvSourceProviderProof",
+        "FrvSourceProviderResult",
+        "validate_finalized_frv_source_provider_result",
+        "to_frv_a2_provider_binding_evidence",
+        "load_frv_source",
+        "_FRV_SOURCE_FINALIZED_CAPABILITY",
+        "_create_finalized_frv_source_provider_result",
+    ):
+        assert not hasattr(contracts, name)
