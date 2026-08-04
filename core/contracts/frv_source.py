@@ -20,7 +20,7 @@ import os
 import re
 import struct
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
@@ -35,15 +35,21 @@ from core.contracts.frv import (
     canonical_frv_json_bytes,
     frv_digest,
     validate_frv_flag_mask,
+    validate_source_content_identity_digest,
     validate_source_identity_record_digest,
 )
 from core.contracts.frv_a2 import (
     FrvA2ArtifactComponentBinding,
     FrvA2ArtifactComponentKind,
     FrvA2DomainKind,
+    FrvA2EvidenceClass,
     FrvA2FailureRecord,
+    FrvA2ProviderBindingEvidence,
+    FrvA2ProviderReadiness,
     FrvA2ProviderRole,
     _derive_artifact_reference_id,
+    frv_a2_index_domain_digest,
+    frv_a2_provider_binding_digest,
     validate_frv_a2_failure_record,
 )
 
@@ -749,18 +755,18 @@ def _check_exact_point_content_spec(
     fields = spec.ordered_field_specs
     if len(fields) != len(_FRV_SOURCE_EXACT_SPEC_FIELDS):
         raise ValueError("canonical point-content spec must contain exactly four fields")
-    for field, (name, role, dtype) in zip(
+    for field_spec, (name, role, dtype) in zip(
         fields, _FRV_SOURCE_EXACT_SPEC_FIELDS, strict=True
     ):
         if (
-            field.field_name != name
-            or field.semantic_role != role
-            or field.dtype_code != dtype
-            or field.byte_order != "LITTLE_ENDIAN"
-            or field.scale != 1.0
-            or field.offset != 0.0
-            or field.required is not True
-            or field.null_policy != "FORBID_NULL"
+            field_spec.field_name != name
+            or field_spec.semantic_role != role
+            or field_spec.dtype_code != dtype
+            or field_spec.byte_order != "LITTLE_ENDIAN"
+            or field_spec.scale != 1.0
+            or field_spec.offset != 0.0
+            or field_spec.required is not True
+            or field_spec.null_policy != "FORBID_NULL"
         ):
             raise ValueError(
                 "canonical point-content spec must be the frozen exact four-field spec"
@@ -1080,10 +1086,421 @@ class FrvSourceLoadSession(Protocol):
     """
 
     def iter_chunks(self) -> Iterator[FrvSourceChunk]: ...
-    def finalize(self) -> FrvSourceProviderResult: ...  # noqa: F821 (C3-B forward ref)
+    def finalize(self) -> FrvSourceProviderResult: ...
     def close(self) -> None: ...
     def __enter__(self) -> FrvSourceLoadSession: ...
     def __exit__(self, exc_type, exc, traceback) -> Literal[False]: ...
+
+
+# ---------------------------------------------------------------------------
+# C3-B/C3-C: success proof, finalized result, and BND1 evidence adapter
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class FrvSourceProviderProof:
+    """Frozen, serializable exact-schema success proof (C3-B).
+
+    A proof records a completed P-SOURCE success state.  Construction is
+    structural only: cross-binding checks (frozen role/key/versions, digest
+    recomputation, identity/header/domain binding) are enforced by the
+    finalized-result validator, not by ``__post_init__``.
+    """
+
+    schema_version: str
+    provider_key: str
+    provider_role: FrvA2ProviderRole
+    interface_version: str
+    algorithm_version: str
+    configuration_digest: str
+    provider_config_digest: str
+    artifact_reference_id: str
+    artifact_components: tuple[FrvA2ArtifactComponentBinding, ...]
+    source_content_identity_digest: str
+    source_identity_record_digest: str
+    source_point_count: int
+    source_bounds_min_xyz: tuple[float, float, float]
+    source_bounds_max_xyz: tuple[float, float, float]
+    coordinate_frame: str
+    units: str
+    origin_xyz: tuple[float, float, float]
+    transform_declaration: str
+    domain_kind: FrvA2DomainKind
+    domain_count: int
+    original_index_domain_digest: str
+    sample_index_domain_digest: None
+    canonical_point_content_digest: str | None
+    canonical_point_content_spec_digest: str | None
+    header: FrvSourceHeaderMetadata
+    pass_through_dimensions: tuple[FrvSourcePassThroughDimension, ...]
+
+    def __post_init__(self) -> None:
+        _require_exact_str(self.schema_version, "schema_version")
+        _require_exact_str(self.provider_key, "provider_key")
+        _require_enum(self.provider_role, FrvA2ProviderRole, "provider_role")
+        _require_exact_str(self.interface_version, "interface_version")
+        _require_exact_str(self.algorithm_version, "algorithm_version")
+        _require_sha(self.configuration_digest, "configuration_digest")
+        _require_sha(self.provider_config_digest, "provider_config_digest")
+        _require_artifact_reference_id(self.artifact_reference_id, "artifact_reference_id")
+        components = _require_tuple(self.artifact_components, "artifact_components")
+        for index, component in enumerate(components):
+            if type(component) is not FrvA2ArtifactComponentBinding:
+                raise ValueError(
+                    f"artifact_components[{index}] must be a FrvA2ArtifactComponentBinding"
+                )
+        _require_sha(self.source_content_identity_digest, "source_content_identity_digest")
+        _require_sha(self.source_identity_record_digest, "source_identity_record_digest")
+        object.__setattr__(
+            self,
+            "source_point_count",
+            _require_positive_int(self.source_point_count, "source_point_count"),
+        )
+        object.__setattr__(
+            self,
+            "source_bounds_min_xyz",
+            _validate_vec3(self.source_bounds_min_xyz, "source_bounds_min_xyz"),
+        )
+        object.__setattr__(
+            self,
+            "source_bounds_max_xyz",
+            _validate_vec3(self.source_bounds_max_xyz, "source_bounds_max_xyz"),
+        )
+        _require_exact_str(self.coordinate_frame, "coordinate_frame")
+        _require_exact_str(self.units, "units")
+        object.__setattr__(self, "origin_xyz", _validate_vec3(self.origin_xyz, "origin_xyz"))
+        _require_exact_str(self.transform_declaration, "transform_declaration")
+        _require_enum(self.domain_kind, FrvA2DomainKind, "domain_kind")
+        object.__setattr__(
+            self, "domain_count", _require_positive_int(self.domain_count, "domain_count")
+        )
+        _require_sha(self.original_index_domain_digest, "original_index_domain_digest")
+        if self.sample_index_domain_digest is not None:
+            raise ValueError("sample_index_domain_digest must be None")
+        if (self.canonical_point_content_digest is None) != (
+            self.canonical_point_content_spec_digest is None
+        ):
+            raise ValueError(
+                "canonical point content digest and spec digest must both be set or both be null"
+            )
+        if self.canonical_point_content_digest is not None:
+            _require_sha(self.canonical_point_content_digest, "canonical_point_content_digest")
+            _require_sha(
+                self.canonical_point_content_spec_digest,
+                "canonical_point_content_spec_digest",
+            )
+        if type(self.header) is not FrvSourceHeaderMetadata:
+            raise ValueError("header must be a FrvSourceHeaderMetadata")
+        object.__setattr__(
+            self,
+            "pass_through_dimensions",
+            _validate_enum_tuple(
+                self.pass_through_dimensions,
+                FrvSourcePassThroughDimension,
+                "pass_through_dimensions",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "provider_key": self.provider_key,
+            "provider_role": self.provider_role.value,
+            "interface_version": self.interface_version,
+            "algorithm_version": self.algorithm_version,
+            "configuration_digest": self.configuration_digest,
+            "provider_config_digest": self.provider_config_digest,
+            "artifact_reference_id": self.artifact_reference_id,
+            "artifact_components": [
+                component.to_dict() for component in self.artifact_components
+            ],
+            "source_content_identity_digest": self.source_content_identity_digest,
+            "source_identity_record_digest": self.source_identity_record_digest,
+            "source_point_count": self.source_point_count,
+            "source_bounds_min_xyz": list(self.source_bounds_min_xyz),
+            "source_bounds_max_xyz": list(self.source_bounds_max_xyz),
+            "coordinate_frame": self.coordinate_frame,
+            "units": self.units,
+            "origin_xyz": list(self.origin_xyz),
+            "transform_declaration": self.transform_declaration,
+            "domain_kind": self.domain_kind.value,
+            "domain_count": self.domain_count,
+            "original_index_domain_digest": self.original_index_domain_digest,
+            "sample_index_domain_digest": self.sample_index_domain_digest,
+            "canonical_point_content_digest": self.canonical_point_content_digest,
+            "canonical_point_content_spec_digest": self.canonical_point_content_spec_digest,
+            "header": self.header.to_dict(),
+            "pass_through_dimensions": [
+                dimension.value for dimension in self.pass_through_dimensions
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> FrvSourceProviderProof:
+        values = _exact_fields(data, set(cls.__dataclass_fields__), cls.__name__)
+        values["provider_role"] = _enum_from_value(
+            values["provider_role"], FrvA2ProviderRole, "provider_role"
+        )
+        values["domain_kind"] = _enum_from_value(
+            values["domain_kind"], FrvA2DomainKind, "domain_kind"
+        )
+        values["artifact_components"] = tuple(
+            FrvA2ArtifactComponentBinding.from_dict(item)
+            for item in _tuple_from_json(values["artifact_components"], "artifact_components")
+        )
+        for name in ("source_bounds_min_xyz", "source_bounds_max_xyz", "origin_xyz"):
+            values[name] = _tuple_from_json(values[name], name)
+        values["header"] = FrvSourceHeaderMetadata.from_dict(values["header"])
+        values["pass_through_dimensions"] = tuple(
+            _enum_from_value(
+                item, FrvSourcePassThroughDimension, "pass_through_dimensions[]"
+            )
+            for item in _tuple_from_json(
+                values["pass_through_dimensions"], "pass_through_dimensions"
+            )
+        )
+        return cls(**values)
+
+
+class _FRV_SOURCE_FINALIZED_CAPABILITY:
+    """Module-private identity-only finalized P-SOURCE capability token.
+
+    The class object itself is the singleton.  It is never exported,
+    serialized, hashed, or compared by value; identity is the only check.
+    """
+
+    __slots__ = ()
+
+
+_MISSING = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class FrvSourceProviderResult:
+    """Non-serializable finalized success wrapper (C3-B).
+
+    The only public read-only attributes are ``proof`` and ``source_identity``.
+    There is no public constructor: instances are created exclusively by the
+    module-private factory after full cross-binding validation.  The private
+    capability slot is excluded from repr, equality, serialization, digest,
+    proof, and BND1.
+    """
+
+    proof: FrvSourceProviderProof
+    source_identity: SourceIdentity
+    _finalized_capability: Any = field(init=False, repr=False, compare=False)
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        raise TypeError("FrvSourceProviderResult has no public constructor")
+
+
+def _create_finalized_frv_source_provider_result(
+    proof: FrvSourceProviderProof,
+    source_identity: SourceIdentity,
+    *,
+    capability,
+) -> FrvSourceProviderResult:
+    """Private factory for a finalized P-SOURCE result (single authority).
+
+    The concrete session ``finalize()`` is the only authorized production
+    caller.  Construction requires the exact module-private capability identity
+    and passes the full proof/source cross-binding validation.
+    """
+
+    if type(proof) is not FrvSourceProviderProof:
+        raise TypeError("proof must be a FrvSourceProviderProof")
+    if type(source_identity) is not SourceIdentity:
+        raise TypeError("source_identity must be a SourceIdentity")
+    if capability is not _FRV_SOURCE_FINALIZED_CAPABILITY:
+        raise ValueError("capability must be the module-private finalized capability")
+    _validate_finalized_bindings(proof, source_identity)
+    result = object.__new__(FrvSourceProviderResult)
+    object.__setattr__(result, "proof", proof)
+    object.__setattr__(result, "source_identity", source_identity)
+    object.__setattr__(result, "_finalized_capability", capability)
+    return result
+
+
+def _validate_finalized_bindings(
+    proof: FrvSourceProviderProof, source_identity: SourceIdentity
+) -> None:
+    """Full cross-binding checks shared by the factory and public validator."""
+
+    if proof.provider_role is not FrvA2ProviderRole.SOURCE_SCAN:
+        raise ValueError("provider_role must be SOURCE_SCAN")
+    if proof.provider_key != FRV_SOURCE_PROVIDER_KEY:
+        raise ValueError("provider_key must be source_scan")
+    if (
+        proof.interface_version != FRV_SOURCE_PROVIDER_INTERFACE_VERSION
+        or proof.schema_version != FRV_SOURCE_PROVIDER_SCHEMA_VERSION
+        or proof.algorithm_version != FRV_SOURCE_PROVIDER_ALGORITHM_VERSION
+    ):
+        raise ValueError("proof versions must match the frozen P-SOURCE versions")
+
+    computed_config_digest = derive_frv_source_provider_config_digest(
+        schema_version=FRV_SOURCE_PROVIDER_CONFIG_SCHEMA_VERSION,
+        source_model=FrvSourceModel.SINGLE_FILE_ONLY,
+        coordinate_conversion_policy=FrvSourceCoordinateConversionPolicy.FORBID,
+        invalid_point_policy=FrvSourceInvalidPointPolicy.FAIL_CLOSED,
+        canonical_content_policy=FrvSourceCanonicalContentPolicy.VERIFY_IF_DECLARED,
+        pass_through_dimensions=proof.pass_through_dimensions,
+    )
+    if proof.provider_config_digest != computed_config_digest:
+        raise ValueError("provider_config_digest does not match canonical FRVSRCFG1 fields")
+
+    components = proof.artifact_components
+    if len(components) != 1:
+        raise ValueError("exactly one artifact component is required")
+    component = components[0]
+    if component.component_kind is not FrvA2ArtifactComponentKind.SOURCE_FILE:
+        raise ValueError("artifact component must be a SOURCE_FILE component")
+    if component.component_key != "source_file":
+        raise ValueError("artifact component key must be source_file")
+    if component.sha256 != source_identity.source_file_sha256:
+        raise ValueError("artifact component sha256 must match the source identity")
+    expected_reference_id = _derive_artifact_reference_id(
+        proof.provider_role, proof.provider_key, proof.artifact_components
+    )
+    if proof.artifact_reference_id != expected_reference_id:
+        raise ValueError("artifact_reference_id does not match the canonical artifact components")
+
+    if proof.source_content_identity_digest != source_identity.source_content_identity_digest:
+        raise ValueError("source_content_identity_digest must match the source identity")
+    if proof.source_identity_record_digest != source_identity.source_identity_record_digest:
+        raise ValueError("source_identity_record_digest must match the source identity")
+
+    if proof.source_point_count != source_identity.source_point_count:
+        raise ValueError("source_point_count must match the source identity")
+    if proof.source_point_count != proof.header.point_count:
+        raise ValueError("source_point_count must match the header point count")
+    if proof.domain_count != proof.source_point_count:
+        raise ValueError("domain_count must equal the source point count")
+    if proof.source_point_count <= 0:
+        raise ValueError("source point count must be positive")
+
+    if proof.source_bounds_min_xyz != tuple(source_identity.source_bounds_min_xyz):
+        raise ValueError("source_bounds_min_xyz must match the source identity")
+    if proof.source_bounds_max_xyz != tuple(source_identity.source_bounds_max_xyz):
+        raise ValueError("source_bounds_max_xyz must match the source identity")
+    if proof.source_bounds_min_xyz != tuple(proof.header.min_xyz):
+        raise ValueError("source_bounds_min_xyz must match the header")
+    if proof.source_bounds_max_xyz != tuple(proof.header.max_xyz):
+        raise ValueError("source_bounds_max_xyz must match the header")
+
+    if proof.coordinate_frame != "LOCAL_CARTESIAN_XYZ":
+        raise ValueError("coordinate_frame must be LOCAL_CARTESIAN_XYZ")
+    if proof.coordinate_frame != source_identity.coordinate_frame:
+        raise ValueError("coordinate_frame must match the source identity")
+    if proof.units != "m":
+        raise ValueError("units must be m")
+    if proof.units != source_identity.units:
+        raise ValueError("units must match the source identity")
+    if proof.origin_xyz != tuple(source_identity.origin_context):
+        raise ValueError("origin_xyz must match the source identity origin context")
+
+    if (proof.canonical_point_content_digest is None) != (
+        proof.canonical_point_content_spec_digest is None
+    ):
+        raise ValueError("canonical point content digest pair must be consistent")
+    if proof.canonical_point_content_digest != source_identity.canonical_point_content_digest:
+        raise ValueError("canonical_point_content_digest must match the source identity")
+    if proof.canonical_point_content_spec_digest != (
+        source_identity.canonical_point_content_spec_digest
+    ):
+        raise ValueError("canonical_point_content_spec_digest must match the source identity")
+
+    if proof.domain_kind is not FrvA2DomainKind.FULL_SOURCE:
+        raise ValueError("domain_kind must be FULL_SOURCE")
+    expected_index_digest = frv_a2_index_domain_digest(
+        "ORIGINAL_INDEX",
+        proof.source_content_identity_digest,
+        FrvA2DomainKind.FULL_SOURCE,
+        tuple(range(proof.domain_count)),
+    )
+    if proof.original_index_domain_digest != expected_index_digest:
+        raise ValueError("original_index_domain_digest does not match the full 0..N-1 domain")
+    if proof.sample_index_domain_digest is not None:
+        raise ValueError("sample_index_domain_digest must be None")
+    if proof.transform_declaration != "identity":
+        raise ValueError("transform_declaration must be identity")
+
+    validate_source_identity_record_digest(source_identity)
+    validate_source_content_identity_digest(source_identity)
+
+
+def validate_finalized_frv_source_provider_result(
+    result: FrvSourceProviderResult,
+) -> None:
+    """Validate the frozen finalized-result cross-bindings; return ``None``."""
+
+    if type(result) is not FrvSourceProviderResult:
+        raise TypeError("result must be a FrvSourceProviderResult")
+    if getattr(result, "_finalized_capability", _MISSING) is not (
+        _FRV_SOURCE_FINALIZED_CAPABILITY
+    ):
+        raise ValueError("result must carry the module-private finalized capability")
+    proof = getattr(result, "proof", _MISSING)
+    if type(proof) is not FrvSourceProviderProof:
+        raise ValueError("result.proof must be a FrvSourceProviderProof")
+    source_identity = getattr(result, "source_identity", _MISSING)
+    if type(source_identity) is not SourceIdentity:
+        raise ValueError("result.source_identity must be a SourceIdentity")
+    _validate_finalized_bindings(proof, source_identity)
+
+
+def to_frv_a2_provider_binding_evidence(
+    result: FrvSourceProviderResult,
+) -> FrvA2ProviderBindingEvidence:
+    """Return the success-only ``FRVA2BND1`` formal provider evidence.
+
+    The finalized-result validator runs before any field is read; only a
+    successfully finalized result can reach the mapping.  ``binding_digest`` is
+    recomputed by the existing ``frv_a2_provider_binding_digest`` authority.
+    """
+
+    validate_finalized_frv_source_provider_result(result)
+    proof = result.proof
+    evidence = FrvA2ProviderBindingEvidence.__new__(FrvA2ProviderBindingEvidence)
+    object.__setattr__(evidence, "provider_key", "source_scan")
+    object.__setattr__(evidence, "provider_role", FrvA2ProviderRole.SOURCE_SCAN)
+    object.__setattr__(evidence, "evidence_class", FrvA2EvidenceClass.FORMAL_PROVIDER)
+    object.__setattr__(evidence, "public_module", "algorithms.io.source_provider")
+    object.__setattr__(evidence, "public_type_name", "FrvSourceProviderResult")
+    object.__setattr__(evidence, "public_loader_name", "load_frv_source")
+    object.__setattr__(
+        evidence, "interface_version", FRV_SOURCE_PROVIDER_INTERFACE_VERSION
+    )
+    object.__setattr__(evidence, "schema_version", FRV_SOURCE_PROVIDER_SCHEMA_VERSION)
+    object.__setattr__(evidence, "algorithm_version", FRV_SOURCE_PROVIDER_ALGORITHM_VERSION)
+    object.__setattr__(evidence, "configuration_digest", proof.configuration_digest)
+    object.__setattr__(evidence, "provider_config_digest", proof.provider_config_digest)
+    object.__setattr__(evidence, "artifact_reference_id", proof.artifact_reference_id)
+    object.__setattr__(evidence, "artifact_components", proof.artifact_components)
+    object.__setattr__(
+        evidence, "source_content_identity_digest", proof.source_content_identity_digest
+    )
+    object.__setattr__(
+        evidence, "source_identity_record_digest", proof.source_identity_record_digest
+    )
+    object.__setattr__(evidence, "coordinate_frame", "LOCAL_CARTESIAN_XYZ")
+    object.__setattr__(evidence, "units", "m")
+    object.__setattr__(evidence, "origin_xyz", proof.origin_xyz)
+    object.__setattr__(evidence, "transform_declaration", "identity")
+    object.__setattr__(evidence, "domain_kind", FrvA2DomainKind.FULL_SOURCE)
+    object.__setattr__(evidence, "domain_count", proof.domain_count)
+    object.__setattr__(
+        evidence, "original_index_domain_digest", proof.original_index_domain_digest
+    )
+    object.__setattr__(evidence, "sample_index_domain_digest", None)
+    object.__setattr__(evidence, "provider_readiness", FrvA2ProviderReadiness.VALIDATED)
+    object.__setattr__(evidence, "quality_flags", 0)
+    object.__setattr__(evidence, "reason_flags", 0)
+    object.__setattr__(evidence, "error_codes", ())
+    object.__setattr__(evidence, "upstream_binding_digests", ())
+    object.__setattr__(evidence, "review_codes", ())
+    object.__setattr__(evidence, "limitation_codes", ())
+    object.__setattr__(evidence, "binding_digest", frv_a2_provider_binding_digest(evidence))
+    return evidence
 
 
 __all__ = [
@@ -1114,4 +1531,8 @@ __all__ = [
     "FrvSourceChunk",
     "FrvSourceLoadError",
     "FrvSourceLoadSession",
+    "FrvSourceProviderProof",
+    "FrvSourceProviderResult",
+    "validate_finalized_frv_source_provider_result",
+    "to_frv_a2_provider_binding_evidence",
 ]

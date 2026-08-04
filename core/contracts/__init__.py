@@ -126,11 +126,15 @@ from core.contracts.frv_source import (
     FrvSourceModel,
     FrvSourcePassThroughDimension,
     FrvSourceProviderConfig,
+    FrvSourceProviderProof,
     FrvSourceProviderReference,
+    FrvSourceProviderResult,
     FrvSourceVlrPolicyState,
     derive_frv_source_original_index_digest,
     derive_frv_source_point_content_digest,
     derive_frv_source_provider_config_digest,
+    to_frv_a2_provider_binding_evidence,
+    validate_finalized_frv_source_provider_result,
     validate_frv_source_provider_reference,
 )
 from core.contracts.ground import (
@@ -502,8 +506,12 @@ __all__ = [
     "FrvSourceChunk",
     "FrvSourceLoadError",
     "FrvSourceLoadSession",
+    "FrvSourceProviderProof",
+    "FrvSourceProviderResult",
     "derive_frv_source_provider_config_digest",
     "derive_frv_source_point_content_digest",
     "derive_frv_source_original_index_digest",
     "validate_frv_source_provider_reference",
+    "validate_finalized_frv_source_provider_result",
+    "to_frv_a2_provider_binding_evidence",
 ]

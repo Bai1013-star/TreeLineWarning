@@ -15,7 +15,7 @@ import json
 import math
 import struct
 import weakref
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -36,11 +36,16 @@ from core.contracts.frv_a2 import (
     FrvA2ArtifactComponentBinding,
     FrvA2ArtifactComponentKind,
     FrvA2DomainKind,
+    FrvA2EvidenceClass,
     FrvA2FailurePhase,
     FrvA2FailureRecord,
+    FrvA2ProviderBindingEvidence,
+    FrvA2ProviderReadiness,
     FrvA2ProviderRole,
     frv_a2_index_domain_digest,
+    frv_a2_provider_binding_digest,
     validate_frv_a2_failure_record,
+    validate_frv_a2_provider_binding_evidence,
 )
 from core.contracts.frv_source import (
     FRV_SOURCE_DEFAULT_CHUNK_SIZE,
@@ -64,11 +69,15 @@ from core.contracts.frv_source import (
     FrvSourceModel,
     FrvSourcePassThroughDimension,
     FrvSourceProviderConfig,
+    FrvSourceProviderProof,
     FrvSourceProviderReference,
+    FrvSourceProviderResult,
     FrvSourceVlrPolicyState,
     derive_frv_source_original_index_digest,
     derive_frv_source_point_content_digest,
     derive_frv_source_provider_config_digest,
+    to_frv_a2_provider_binding_evidence,
+    validate_finalized_frv_source_provider_result,
     validate_frv_source_provider_reference,
 )
 
@@ -993,6 +1002,10 @@ def test_public_symbols_importable_from_core_contracts() -> None:
         FrvSourceChunk,
         FrvSourceLoadError,
         FrvSourceLoadSession,
+        FrvSourceProviderProof,
+        FrvSourceProviderResult,
+        validate_finalized_frv_source_provider_result,
+        to_frv_a2_provider_binding_evidence,
     )
     assert all(item is not None for item in imported)
     assert contracts.FrvSourceProviderConfig is source.FrvSourceProviderConfig
@@ -1000,14 +1013,12 @@ def test_public_symbols_importable_from_core_contracts() -> None:
     assert contracts.FRV_SOURCE_PROVIDER_KEY == "source_scan"
     assert contracts.FrvSourceLoadError is source.FrvSourceLoadError
     assert contracts.FrvSourceLoadSession is source.FrvSourceLoadSession
+    assert contracts.FrvSourceProviderProof is source.FrvSourceProviderProof
+    assert contracts.FrvSourceProviderResult is source.FrvSourceProviderResult
 
 
 def test_no_unauthorized_future_public_symbols() -> None:
     for name in (
-        "FrvSourceProviderProof",
-        "FrvSourceProviderResult",
-        "validate_finalized_frv_source_provider_result",
-        "to_frv_a2_provider_binding_evidence",
         "load_frv_source",
         "_FRV_SOURCE_FINALIZED_CAPABILITY",
         "_create_finalized_frv_source_provider_result",
@@ -2495,10 +2506,431 @@ def test_c3a_public_exports_present() -> None:
     assert contracts.FrvSourceLoadSession is source.FrvSourceLoadSession
     assert issubclass(source.FrvSourceLoadError, Exception)
     for name in (
-        "FrvSourceProviderProof",
-        "FrvSourceProviderResult",
-        "validate_finalized_frv_source_provider_result",
-        "to_frv_a2_provider_binding_evidence",
+        "load_frv_source",
+        "_FRV_SOURCE_FINALIZED_CAPABILITY",
+        "_create_finalized_frv_source_provider_result",
+    ):
+        assert not hasattr(contracts, name)
+
+
+# ---------------------------------------------------------------------------
+# 19. C3-B/C3-C: proof, finalized result, validator, and BND1 adapter
+# ---------------------------------------------------------------------------
+
+
+def _valid_proof(**overrides: Any) -> source.FrvSourceProviderProof:
+    identity = _source_identity(path=_SYNTHETIC_WINDOWS_SOURCE_PATH_TEXT)
+    defaults: dict[str, Any] = {
+        "schema_version": source.FRV_SOURCE_PROVIDER_SCHEMA_VERSION,
+        "provider_key": "source_scan",
+        "provider_role": FrvA2ProviderRole.SOURCE_SCAN,
+        "interface_version": source.FRV_SOURCE_PROVIDER_INTERFACE_VERSION,
+        "algorithm_version": source.FRV_SOURCE_PROVIDER_ALGORITHM_VERSION,
+        "configuration_digest": SHA,
+        "provider_config_digest": _config().provider_config_digest,
+        "artifact_reference_id": _ARTIFACT_REFERENCE_ID,
+        "artifact_components": (_component(),),
+        "source_content_identity_digest": identity.source_content_identity_digest,
+        "source_identity_record_digest": identity.source_identity_record_digest,
+        "source_point_count": 3,
+        "source_bounds_min_xyz": (0.0, 0.0, 0.0),
+        "source_bounds_max_xyz": (1.0, 1.0, 1.0),
+        "coordinate_frame": "LOCAL_CARTESIAN_XYZ",
+        "units": "m",
+        "origin_xyz": (0.0, 0.0, 0.0),
+        "transform_declaration": "identity",
+        "domain_kind": FrvA2DomainKind.FULL_SOURCE,
+        "domain_count": 3,
+        "original_index_domain_digest": frv_a2_index_domain_digest(
+            "ORIGINAL_INDEX",
+            identity.source_content_identity_digest,
+            FrvA2DomainKind.FULL_SOURCE,
+            tuple(range(3)),
+        ),
+        "sample_index_domain_digest": None,
+        "canonical_point_content_digest": None,
+        "canonical_point_content_spec_digest": None,
+        "header": _header(point_count=3),
+        "pass_through_dimensions": (),
+    }
+    defaults.update(overrides)
+    return source.FrvSourceProviderProof(**defaults)
+
+
+def _valid_result() -> source.FrvSourceProviderResult:
+    proof = _valid_proof()
+    identity = _source_identity(path=_SYNTHETIC_WINDOWS_SOURCE_PATH_TEXT)
+    return source._create_finalized_frv_source_provider_result(
+        proof, identity, capability=source._FRV_SOURCE_FINALIZED_CAPABILITY
+    )
+
+
+def test_proof_normal_construction_and_frozen_slots() -> None:
+    proof = _valid_proof()
+    assert isinstance(proof, source.FrvSourceProviderProof)
+    assert fields(proof)[0].name == "schema_version"
+    assert fields(proof)[-1].name == "pass_through_dimensions"
+    with pytest.raises(FrozenInstanceError):
+        proof.provider_key = "other"  # type: ignore[misc]
+
+
+def test_proof_exact_field_order() -> None:
+    proof = _valid_proof()
+    assert [f.name for f in fields(proof)] == [
+        "schema_version",
+        "provider_key",
+        "provider_role",
+        "interface_version",
+        "algorithm_version",
+        "configuration_digest",
+        "provider_config_digest",
+        "artifact_reference_id",
+        "artifact_components",
+        "source_content_identity_digest",
+        "source_identity_record_digest",
+        "source_point_count",
+        "source_bounds_min_xyz",
+        "source_bounds_max_xyz",
+        "coordinate_frame",
+        "units",
+        "origin_xyz",
+        "transform_declaration",
+        "domain_kind",
+        "domain_count",
+        "original_index_domain_digest",
+        "sample_index_domain_digest",
+        "canonical_point_content_digest",
+        "canonical_point_content_spec_digest",
+        "header",
+        "pass_through_dimensions",
+    ]
+
+
+def test_proof_rejects_bool_and_invalid_types() -> None:
+    with pytest.raises(ValueError):
+        _valid_proof(source_point_count=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        _valid_proof(domain_count=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        _valid_proof(provider_role="source_scan")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        _valid_proof(domain_kind="full_source")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        _valid_proof(configuration_digest="not-a-sha")
+    with pytest.raises(TypeError):
+        _valid_proof(provider_key=123)  # type: ignore[arg-type]
+
+
+def test_proof_rejects_invalid_counts() -> None:
+    with pytest.raises(ValueError):
+        _valid_proof(source_point_count=0)
+    with pytest.raises(ValueError):
+        _valid_proof(domain_count=0)
+    with pytest.raises(ValueError):
+        _valid_proof(source_point_count=-1)
+
+
+def test_proof_rejects_invalid_bounds_and_nonfinite() -> None:
+    with pytest.raises(ValueError):
+        _valid_proof(source_bounds_min_xyz=(0.0, 0.0))  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        _valid_proof(origin_xyz=(0.0, 0.0, float("nan")))  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        _valid_proof(source_bounds_max_xyz=(0.0, 0.0, float("inf")))  # type: ignore[arg-type]
+
+
+def test_proof_rejects_invalid_nested_objects() -> None:
+    with pytest.raises(ValueError):
+        _valid_proof(artifact_components=("not-a-binding",))  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        _valid_proof(header={})  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        _valid_proof(pass_through_dimensions=("unknown_dimension",))  # type: ignore[arg-type]
+
+
+def test_proof_rejects_inconsistent_canonical_pair_and_sample() -> None:
+    with pytest.raises(ValueError):
+        _valid_proof(canonical_point_content_digest="b" * 64)
+    with pytest.raises(ValueError):
+        _valid_proof(sample_index_domain_digest="b" * 64)  # type: ignore[arg-type]
+
+
+def test_proof_is_not_result() -> None:
+    assert _valid_proof() != _valid_result()
+    assert not isinstance(_valid_result(), source.FrvSourceProviderProof)
+
+
+def test_result_frozen_slots_init_false_and_exact_fields() -> None:
+    result = _valid_result()
+    assert [f.name for f in fields(source.FrvSourceProviderResult)] == [
+        "proof",
+        "source_identity",
+        "_finalized_capability",
+    ]
+    assert fields(source.FrvSourceProviderResult)[2].init is False
+    assert fields(source.FrvSourceProviderResult)[2].repr is False
+    assert fields(source.FrvSourceProviderResult)[2].compare is False
+    with pytest.raises(FrozenInstanceError):
+        result.proof = None  # type: ignore[misc]
+
+
+def test_result_direct_construction_fails() -> None:
+    with pytest.raises(TypeError):
+        source.FrvSourceProviderResult(  # type: ignore[call-arg]
+            proof=_valid_proof(), source_identity=_source_identity()
+        )
+
+
+def test_result_no_arg_construction_rejected() -> None:
+    with pytest.raises(TypeError):
+        source.FrvSourceProviderResult()  # type: ignore[call-arg]
+
+
+def test_result_positional_construction_rejected() -> None:
+    with pytest.raises(TypeError):
+        source.FrvSourceProviderResult(  # type: ignore[call-arg]
+            _valid_proof(), _source_identity(path=_SYNTHETIC_WINDOWS_SOURCE_PATH_TEXT)
+        )
+
+
+def _forge_result(**fields: Any) -> source.FrvSourceProviderResult:
+    result = object.__new__(source.FrvSourceProviderResult)
+    for name, value in fields.items():
+        object.__setattr__(result, name, value)
+    return result
+
+
+def test_validator_rejects_empty_shell_with_value_error() -> None:
+    shell = object.__new__(source.FrvSourceProviderResult)
+    with pytest.raises(ValueError):
+        validate_finalized_frv_source_provider_result(shell)
+
+
+def test_validator_rejects_missing_field_forged_objects() -> None:
+    identity = _source_identity(path=_SYNTHETIC_WINDOWS_SOURCE_PATH_TEXT)
+    proof = _valid_proof()
+    capability = source._FRV_SOURCE_FINALIZED_CAPABILITY
+    cases: list[dict[str, Any]] = [
+        {},  # empty shell
+        {"source_identity": identity, "_finalized_capability": capability},  # missing proof
+        {"proof": proof, "_finalized_capability": capability},  # missing source_identity
+        {"proof": proof, "source_identity": identity},  # missing capability
+        {  # wrong capability identity
+            "proof": proof,
+            "source_identity": identity,
+            "_finalized_capability": object(),
+        },
+        {  # wrong proof type
+            "proof": "not-a-proof",
+            "source_identity": identity,
+            "_finalized_capability": capability,
+        },
+        {  # broken binding
+            "proof": _valid_proof(provider_role=FrvA2ProviderRole.HAG),
+            "source_identity": identity,
+            "_finalized_capability": capability,
+        },
+    ]
+    for case_fields in cases:
+        forged = _forge_result(**case_fields)
+        with pytest.raises(ValueError):
+            validate_finalized_frv_source_provider_result(forged)
+
+
+def test_result_repr_hides_capability_and_no_serialization() -> None:
+    result = _valid_result()
+    assert "capability" not in repr(result)
+    assert not hasattr(result, "capability")
+    assert not hasattr(result, "to_dict")
+    assert not hasattr(result, "from_dict")
+
+
+def test_result_equality_ignores_capability() -> None:
+    assert _valid_result() == _valid_result()
+
+
+def test_factory_rejects_wrong_types() -> None:
+    identity = _source_identity(path=_SYNTHETIC_WINDOWS_SOURCE_PATH_TEXT)
+    with pytest.raises(TypeError, match="proof"):
+        source._create_finalized_frv_source_provider_result(  # type: ignore[arg-type]
+            "not-a-proof",
+            identity,
+            capability=source._FRV_SOURCE_FINALIZED_CAPABILITY,
+        )
+    with pytest.raises(TypeError, match="source_identity"):
+        source._create_finalized_frv_source_provider_result(  # type: ignore[arg-type]
+            _valid_proof(),
+            "not-an-identity",
+            capability=source._FRV_SOURCE_FINALIZED_CAPABILITY,
+        )
+
+
+def test_factory_rejects_wrong_capability() -> None:
+    identity = _source_identity(path=_SYNTHETIC_WINDOWS_SOURCE_PATH_TEXT)
+    with pytest.raises(ValueError, match="capability"):
+        source._create_finalized_frv_source_provider_result(
+            _valid_proof(), identity, capability="wrong"
+        )
+
+
+def test_factory_rejects_invalid_binding() -> None:
+    identity = _source_identity(path=_SYNTHETIC_WINDOWS_SOURCE_PATH_TEXT)
+    bad_proof = _valid_proof(provider_config_digest="b" * 64)
+    with pytest.raises(ValueError, match="FRVSRCFG1"):
+        source._create_finalized_frv_source_provider_result(
+            bad_proof, identity, capability=source._FRV_SOURCE_FINALIZED_CAPABILITY
+        )
+
+
+def test_forged_result_rejected() -> None:
+    forged = object.__new__(source.FrvSourceProviderResult)
+    object.__setattr__(forged, "proof", _valid_proof())
+    object.__setattr__(
+        forged,
+        "source_identity",
+        _source_identity(path=_SYNTHETIC_WINDOWS_SOURCE_PATH_TEXT),
+    )
+    object.__setattr__(forged, "_finalized_capability", object())
+    with pytest.raises(ValueError, match="capability"):
+        validate_finalized_frv_source_provider_result(forged)
+
+
+def test_validator_success_returns_none() -> None:
+    assert validate_finalized_frv_source_provider_result(_valid_result()) is None
+
+
+def test_validator_rejects_wrong_type() -> None:
+    with pytest.raises(TypeError, match="result"):
+        validate_finalized_frv_source_provider_result("not-a-result")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="result"):
+        validate_finalized_frv_source_provider_result(None)  # type: ignore[arg-type]
+
+
+def test_validator_binding_error_matrix() -> None:
+    identity = _source_identity(path=_SYNTHETIC_WINDOWS_SOURCE_PATH_TEXT)
+    bad_component = FrvA2ArtifactComponentBinding(
+        component_key="source_file",
+        component_kind=FrvA2ArtifactComponentKind.MANIFEST_JSON,
+        sha256=SHA,
+        size_bytes=123,
+    )
+    cases: list[tuple[dict[str, Any], str]] = [
+        ({"provider_role": FrvA2ProviderRole.HAG}, "provider_role"),
+        ({"provider_key": "other"}, "provider_key"),
+        ({"interface_version": "wrong"}, "version"),
+        ({"provider_config_digest": "b" * 64}, "FRVSRCFG1"),
+        ({"artifact_components": (bad_component,)}, "SOURCE_FILE"),
+        ({"source_point_count": 5}, "source_point_count"),
+        ({"domain_count": 5}, "domain_count"),
+        ({"source_bounds_min_xyz": (0.0, 0.0, 5.0)}, "source_bounds_min_xyz"),
+        ({"coordinate_frame": "OTHER"}, "coordinate_frame"),
+        ({"units": "ft"}, "units"),
+        ({"origin_xyz": (0.0, 0.0, 5.0)}, "origin_xyz"),
+        ({"domain_kind": FrvA2DomainKind.DECLARED_SUBSET}, "FULL_SOURCE"),
+        ({"transform_declaration": "non_identity"}, "transform_declaration"),
+    ]
+    for overrides, message in cases:
+        with pytest.raises(ValueError) as excinfo:
+            source._create_finalized_frv_source_provider_result(
+                _valid_proof(**overrides),
+                identity,
+                capability=source._FRV_SOURCE_FINALIZED_CAPABILITY,
+            )
+        assert message in str(excinfo.value)
+
+
+def test_validator_canonical_binding_success() -> None:
+    spec = _exact_canonical_spec()
+    identity = _source_identity(
+        path=_SYNTHETIC_WINDOWS_SOURCE_PATH_TEXT,
+        canonical_digest="b" * 64,
+        canonical_spec_digest=spec.spec_digest,
+        canonical_spec_version=frv.FRV_CANONICAL_POINT_CONTENT_SCHEMA_VERSION,
+    )
+    proof = _valid_proof(
+        source_content_identity_digest=identity.source_content_identity_digest,
+        source_identity_record_digest=identity.source_identity_record_digest,
+        original_index_domain_digest=frv_a2_index_domain_digest(
+            "ORIGINAL_INDEX",
+            identity.source_content_identity_digest,
+            FrvA2DomainKind.FULL_SOURCE,
+            tuple(range(3)),
+        ),
+        canonical_point_content_digest="b" * 64,
+        canonical_point_content_spec_digest=spec.spec_digest,
+    )
+    result = source._create_finalized_frv_source_provider_result(
+        proof, identity, capability=source._FRV_SOURCE_FINALIZED_CAPABILITY
+    )
+    assert validate_finalized_frv_source_provider_result(result) is None
+
+
+def test_adapter_success_and_exact_mapping() -> None:
+    result = _valid_result()
+    evidence = to_frv_a2_provider_binding_evidence(result)
+    assert isinstance(evidence, FrvA2ProviderBindingEvidence)
+    validate_frv_a2_provider_binding_evidence(evidence)
+    assert evidence.provider_key == "source_scan"
+    assert evidence.provider_role is FrvA2ProviderRole.SOURCE_SCAN
+    assert evidence.evidence_class is FrvA2EvidenceClass.FORMAL_PROVIDER
+    assert evidence.public_module == "algorithms.io.source_provider"
+    assert evidence.public_type_name == "FrvSourceProviderResult"
+    assert evidence.public_loader_name == "load_frv_source"
+    assert evidence.interface_version == source.FRV_SOURCE_PROVIDER_INTERFACE_VERSION
+    assert evidence.schema_version == source.FRV_SOURCE_PROVIDER_SCHEMA_VERSION
+    assert evidence.algorithm_version == source.FRV_SOURCE_PROVIDER_ALGORITHM_VERSION
+    assert evidence.configuration_digest == result.proof.configuration_digest
+    assert evidence.provider_config_digest == result.proof.provider_config_digest
+    assert evidence.artifact_reference_id == result.proof.artifact_reference_id
+    assert evidence.artifact_components == result.proof.artifact_components
+    assert evidence.source_content_identity_digest == result.proof.source_content_identity_digest
+    assert evidence.source_identity_record_digest == result.proof.source_identity_record_digest
+    assert evidence.coordinate_frame == "LOCAL_CARTESIAN_XYZ"
+    assert evidence.units == "m"
+    assert evidence.origin_xyz == result.proof.origin_xyz
+    assert evidence.transform_declaration == "identity"
+    assert evidence.domain_kind is FrvA2DomainKind.FULL_SOURCE
+    assert evidence.domain_count == result.proof.domain_count
+    assert evidence.original_index_domain_digest == result.proof.original_index_domain_digest
+    assert evidence.sample_index_domain_digest is None
+    assert evidence.provider_readiness is FrvA2ProviderReadiness.VALIDATED
+    assert evidence.quality_flags == 0
+    assert evidence.reason_flags == 0
+    assert evidence.error_codes == ()
+    assert evidence.upstream_binding_digests == ()
+    assert evidence.review_codes == ()
+    assert evidence.limitation_codes == ()
+    assert evidence.binding_digest == frv_a2_provider_binding_digest(evidence)
+
+
+def test_adapter_wrong_result_type() -> None:
+    with pytest.raises(TypeError, match="result"):
+        to_frv_a2_provider_binding_evidence("not-a-result")  # type: ignore[arg-type]
+
+
+def test_adapter_forged_result_rejected() -> None:
+    forged = object.__new__(source.FrvSourceProviderResult)
+    object.__setattr__(forged, "proof", _valid_proof())
+    object.__setattr__(
+        forged,
+        "source_identity",
+        _source_identity(path=_SYNTHETIC_WINDOWS_SOURCE_PATH_TEXT),
+    )
+    object.__setattr__(forged, "_finalized_capability", object())
+    with pytest.raises(ValueError, match="capability"):
+        to_frv_a2_provider_binding_evidence(forged)
+
+
+def test_c3bc3c_exports_present_and_private_absent() -> None:
+    assert contracts.FrvSourceProviderProof is source.FrvSourceProviderProof
+    assert contracts.FrvSourceProviderResult is source.FrvSourceProviderResult
+    assert contracts.validate_finalized_frv_source_provider_result is (
+        source.validate_finalized_frv_source_provider_result
+    )
+    assert contracts.to_frv_a2_provider_binding_evidence is (
+        source.to_frv_a2_provider_binding_evidence
+    )
+    for name in (
         "load_frv_source",
         "_FRV_SOURCE_FINALIZED_CAPABILITY",
         "_create_finalized_frv_source_provider_result",
