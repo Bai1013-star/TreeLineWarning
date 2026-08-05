@@ -9,6 +9,7 @@ description = "Tree-line clearance analysis contracts and pipeline scaffolding."
 requires-python = ">=3.10"
 dependencies = [
     "Pillow>=12.3",
+    "laspy==2.7.0",
     "plotly>=6.9",
 ]
 

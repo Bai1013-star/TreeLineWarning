@@ -16,6 +16,7 @@ from algorithms.io.samples import (
     validate_scene_sample_artifacts,
     validate_scene_sample_outputs,
 )
+from algorithms.io.source_provider import load_frv_source
 
 __all__ = [
     "DEFAULT_CHUNK_SIZE",
@@ -26,6 +27,7 @@ __all__ = [
     "discover_las_sources",
     "iter_las_chunks",
     "load_and_validate_scene_simple_selection",
+    "load_frv_source",
     "precheck_crop",
     "read_las_header_summary",
     "read_las_header_summary_for_source",
