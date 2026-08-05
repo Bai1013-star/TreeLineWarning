@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     "Pillow>=12.3",
     "laspy==2.7.0",
+    "numpy>=1.26,<3",
     "plotly>=6.9",
 ]
 

@@ -26,6 +26,7 @@ from algorithms.vegetation.canopy_segmentation import (
     CanopySegmentationResult,
     segment_canopy_regions,
 )
+from algorithms.vegetation.hag_provider import load_frv_hag
 from algorithms.vegetation.instances import (
     VegetationInstanceError,
     generate_vegetation_instances_preview,
@@ -73,6 +74,7 @@ __all__ = [
     "VegetationCandidateError",
     "detect_treetop_candidates",
     "generate_vegetation_candidate_preview",
+    "load_frv_hag",
     "load_vegetation_candidates",
     "load_tree_segmentation_artifact",
     "run_vegetation_candidate_selection",
