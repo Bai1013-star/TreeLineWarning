@@ -26,6 +26,19 @@ from algorithms.vegetation.canopy_segmentation import (
     CanopySegmentationResult,
     segment_canopy_regions,
 )
+from algorithms.vegetation.frv_artifacts import (
+    FRV_BLOCK_MAGIC,
+    FRV_EVIDENCE_BLOCK_MAGIC,
+    build_frv_payload_schema,
+    compute_art1_artifact_sha256,
+    decode_frv_block,
+    encode_frv_block,
+)
+from algorithms.vegetation.frv_membership import (
+    build_frv_membership,
+    load_frv_membership_result,
+)
+from algorithms.vegetation.geometry_provider import load_frv_geometry
 from algorithms.vegetation.hag_provider import load_frv_hag
 from algorithms.vegetation.instances import (
     VegetationInstanceError,
@@ -51,6 +64,8 @@ from algorithms.vegetation.treetop_candidates import (
     TreetopDetectionErrorCode,
     detect_treetop_candidates,
 )
+from algorithms.vegetation.v4_inputs import build_v4_input_handoff
+from algorithms.vegetation.wire_provider import load_frv_wire
 
 __all__ = [
     "CanopyHeightModelConfig",
@@ -71,10 +86,21 @@ __all__ = [
     "TreetopDetectionConfig",
     "TreetopDetectionError",
     "TreetopDetectionErrorCode",
+    "FRV_BLOCK_MAGIC",
+    "FRV_EVIDENCE_BLOCK_MAGIC",
     "VegetationCandidateError",
+    "build_frv_membership",
+    "build_frv_payload_schema",
+    "build_v4_input_handoff",
+    "compute_art1_artifact_sha256",
+    "decode_frv_block",
     "detect_treetop_candidates",
+    "encode_frv_block",
     "generate_vegetation_candidate_preview",
+    "load_frv_geometry",
     "load_frv_hag",
+    "load_frv_membership_result",
+    "load_frv_wire",
     "load_vegetation_candidates",
     "load_tree_segmentation_artifact",
     "run_vegetation_candidate_selection",
