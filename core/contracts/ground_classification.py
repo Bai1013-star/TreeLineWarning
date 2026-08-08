@@ -686,15 +686,23 @@ class FgcCoverageComponent:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> FgcCoverageComponent:
-        allowed = {"min_ix", "max_ix", "min_iy", "max_iy", "is_edge"}
+        allowed = {"min_ix", "max_ix", "min_iy", "max_iy", "width_cells", "is_edge"}
         reject_unknown_fields(data, allowed, cls.__name__)
-        return cls(
+        component = cls(
             min_ix=int(data["min_ix"]),
             max_ix=int(data["max_ix"]),
             min_iy=int(data["min_iy"]),
             max_iy=int(data["max_iy"]),
             is_edge=bool(data["is_edge"]),
         )
+        # ``to_dict`` emits the derived ``width_cells``; round-trip it only if
+        # present and verify it matches the component bounds so a tampered value
+        # is never silently accepted.
+        if "width_cells" in data:
+            declared = int(data["width_cells"])
+            if declared != component.width_cells():
+                raise ValueError("width_cells does not match the component bounds")
+        return component
 
 
 @dataclass(frozen=True)
