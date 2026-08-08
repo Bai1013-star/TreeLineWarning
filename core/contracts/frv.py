@@ -42,7 +42,8 @@ FRV_SCOPE_COVERAGE_MANIFEST_SCHEMA_VERSION = "frv-scope-coverage-manifest-v1"
 FRV_MANUAL_OVERRIDE_SCHEMA_VERSION = "frv-manual-override-v1"
 FRV_ARTIFACT_PAYLOAD_SCHEMA_VERSION = "frv-artifact-payload-v1"
 FRV_ARTIFACT_BLOCK_SCHEMA_VERSION = "frv-artifact-block-v1"
-FRV_MEMBERSHIP_ARTIFACT_SCHEMA_VERSION = "frv-membership-artifact-v1"
+FRV_MEMBERSHIP_ARTIFACT_SCHEMA_VERSION = "frv-membership-artifact-v2"
+FRV_MEMBERSHIP_ARTIFACT_LEGACY_SCHEMA_VERSION = "frv-membership-artifact-v1"
 FRV_ARTIFACT_BINDING_SCHEMA_VERSION = "frv-artifact-binding-v1"
 
 FRV_PAYLOAD_ENCODING_ID = "FRV-BLOCK-PAYLOAD-1"
@@ -524,10 +525,17 @@ class FrvSafetyCompletenessEffect(str, Enum):
 
 
 class FrvConfigurationPurpose(str, Enum):
-    """Closed configuration purpose; only one purpose carries production binding."""
+    """Closed configuration purpose; only formal purposes carry runtime binding.
+
+    ``REVIEWED_FIXED_POLICY`` is the reviewed/frozen pure-algorithm policy: it is
+    deterministic, traceable, and a formal review/evaluation authority, but it is
+    deliberately *not* statistically calibrated, independently held-out
+    validated, production-calibrated, or production-certified.
+    """
 
     TEST_ONLY = "TEST_ONLY"
     CALIBRATION_CANDIDATE = "CALIBRATION_CANDIDATE"
+    REVIEWED_FIXED_POLICY = "REVIEWED_FIXED_POLICY"
     PRODUCTION_APPROVED = "PRODUCTION_APPROVED"
 
 
@@ -655,6 +663,22 @@ def _check_configuration(config: FrvConfiguration) -> None:
         if config.calibration_record_digest is None:
             raise ValueError("PRODUCTION_APPROVED requires a non-null calibration record digest")
         _sha256(config.calibration_record_digest, "calibration_record_digest")
+    elif purpose is FrvConfigurationPurpose.REVIEWED_FIXED_POLICY:
+        if config.configuration_is_runtime_complete is not True:
+            raise ValueError("REVIEWED_FIXED_POLICY configuration must be runtime complete")
+        if (
+            config.wire_provider_interface_version is None
+            or config.wire_provider_config_digest is None
+        ):
+            raise ValueError(
+                "REVIEWED_FIXED_POLICY requires a non-null wire provider binding"
+            )
+        if config.scope_mode is not FrvScopeMode.EXHAUSTIVE_REGION:
+            raise ValueError("REVIEWED_FIXED_POLICY requires EXHAUSTIVE_REGION scope mode")
+        if config.calibration_record_digest is not None:
+            raise ValueError(
+                "REVIEWED_FIXED_POLICY requires a null calibration record digest"
+            )
     elif purpose is FrvConfigurationPurpose.CALIBRATION_CANDIDATE:
         if config.configuration_is_runtime_complete is not False:
             raise ValueError("CALIBRATION_CANDIDATE configuration cannot be runtime complete")
@@ -2819,6 +2843,7 @@ def _artifact_id_payload(artifact: FullResolutionVegetationMembershipArtifact) -
         "source_content_identity_digest": artifact.source_content_identity_digest,
         "scope_union_id": artifact.scope_union_id,
         "configuration_digest": artifact.configuration_digest,
+        "configuration_purpose": artifact.configuration_purpose,
     }
 
 
@@ -2830,6 +2855,14 @@ def _check_artifact(artifact: FullResolutionVegetationMembershipArtifact) -> Non
     expected_id = "frv-membership-" + frv_digest(_artifact_id_payload(artifact))
     if artifact.artifact_id != expected_id:
         raise ValueError("artifact_id does not match canonical semantic inputs")
+    # The configuration purpose is mandatory artifact authority: no artifact may
+    # be silently assigned a trusted purpose, and a missing/None purpose fails
+    # closed here rather than defaulting to any authority.
+    validate_frv_enum_value(
+        artifact.configuration_purpose,
+        FrvConfigurationPurpose,
+        "configuration_purpose",
+    )
     _sha256(artifact.source_content_identity_digest, "source_content_identity_digest")
     _sha256(artifact.source_identity_record_digest, "source_identity_record_digest")
     _sha256(artifact.source_file_sha256, "source_file_sha256")
@@ -3008,6 +3041,7 @@ class FullResolutionVegetationMembershipArtifact:
     limitation_digest: str
     provenance_digest: str
     manifest_digest: str
+    configuration_purpose: FrvConfigurationPurpose | None = None
 
     def __post_init__(self) -> None:
         _check_artifact(self)
@@ -3038,6 +3072,11 @@ class FullResolutionVegetationMembershipArtifact:
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> FullResolutionVegetationMembershipArtifact:
         values = _from_dict_values(cls, data)
+        values["configuration_purpose"] = _enum_from_value(
+            values["configuration_purpose"],
+            FrvConfigurationPurpose,
+            "configuration_purpose",
+        )
         raw_blocks = values["block_descriptors"]
         if not isinstance(raw_blocks, Sequence) or isinstance(raw_blocks, (str, bytes, bytearray)):
             raise ValueError("block_descriptors must be a non-string sequence")

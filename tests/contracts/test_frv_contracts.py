@@ -573,6 +573,7 @@ def artifact_dict(
         "canonical_inventory_digest": SHA,
         "required_inventory_digest": SHA,
         "configuration_digest": SHA,
+        "configuration_purpose": "PRODUCTION_APPROVED",
         "payload_schema_digest": schema.payload_schema_digest,
         "block_schema_version": frv.FRV_ARTIFACT_BLOCK_SCHEMA_VERSION,
         "artifact_sha256": "c" * 64,
@@ -614,6 +615,7 @@ def artifact_dict(
             "source_content_identity_digest",
             "scope_union_id",
             "configuration_digest",
+            "configuration_purpose",
         )
     }
     payload["artifact_id"] = "frv-membership-" + frv_digest(id_payload)
@@ -838,10 +840,11 @@ def test_safety_completeness_effect_exact_two_values() -> None:
         frv.FrvSafetyCompletenessEffect("INVALID_EFFECT")
 
 
-def test_configuration_purpose_exact_three_values() -> None:
+def test_configuration_purpose_exact_four_values() -> None:
     assert {
         frv.FrvConfigurationPurpose.TEST_ONLY,
         frv.FrvConfigurationPurpose.CALIBRATION_CANDIDATE,
+        frv.FrvConfigurationPurpose.REVIEWED_FIXED_POLICY,
         frv.FrvConfigurationPurpose.PRODUCTION_APPROVED,
     } == set(frv.FrvConfigurationPurpose)
 
@@ -1096,7 +1099,99 @@ def test_allow_flags_must_be_exactly_false() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. Canonical point-content specification
+# 7. REVIEWED_FIXED_POLICY purpose and calibration authority
+# ---------------------------------------------------------------------------
+
+
+def _reviewed_config_dict(**overrides: Any) -> dict[str, Any]:
+    """A formal REVIEWED_FIXED_POLICY configuration dict (null calibration)."""
+    payload = config_dict(
+        configuration_purpose="REVIEWED_FIXED_POLICY",
+        calibration_record_digest=None,
+    )
+    payload.update(overrides)
+    payload["configuration_digest"] = _digest_of(payload, "configuration_digest")
+    return payload
+
+
+def test_reviewed_fixed_policy_exists_and_is_formal() -> None:
+    assert frv.FrvConfigurationPurpose.REVIEWED_FIXED_POLICY.value == (
+        "REVIEWED_FIXED_POLICY"
+    )
+    reviewed = FrvConfiguration.from_dict(_reviewed_config_dict())
+    assert reviewed.configuration_purpose is (
+        frv.FrvConfigurationPurpose.REVIEWED_FIXED_POLICY
+    )
+    assert reviewed.configuration_is_runtime_complete is True
+    assert reviewed.formal_completeness_allowed is True
+    assert reviewed.membership_artifact_publication_allowed is True
+    assert reviewed.scope_mode is frv.FrvScopeMode.EXHAUSTIVE_REGION
+    assert reviewed.calibration_record_digest is None
+
+
+def test_reviewed_with_non_null_calibration_digest_rejected() -> None:
+    with pytest.raises(ValueError, match="null calibration record digest"):
+        FrvConfiguration.from_dict(
+            _reviewed_config_dict(calibration_record_digest=SHA)
+        )
+    with pytest.raises(ValueError, match="null calibration record digest"):
+        FrvConfiguration.from_dict(
+            _reviewed_config_dict(calibration_record_digest="0" * 64)
+        )
+
+
+def test_reviewed_requires_runtime_complete_wire_and_exhaustive_region() -> None:
+    with pytest.raises(ValueError, match="runtime complete"):
+        FrvConfiguration.from_dict(
+            _reviewed_config_dict(configuration_is_runtime_complete=False)
+        )
+    with pytest.raises(ValueError, match="non-null wire provider binding"):
+        FrvConfiguration.from_dict(
+            _reviewed_config_dict(wire_provider_config_digest=None)
+        )
+    with pytest.raises(ValueError, match="EXHAUSTIVE_REGION"):
+        FrvConfiguration.from_dict(_reviewed_config_dict(scope_mode=3))
+
+
+def test_production_approved_strict_digest_unchanged() -> None:
+    production = FrvConfiguration.from_dict(config_dict())
+    assert production.configuration_purpose is (
+        frv.FrvConfigurationPurpose.PRODUCTION_APPROVED
+    )
+    assert production.calibration_record_digest == SHA
+    with pytest.raises(ValueError, match="non-null calibration record digest"):
+        FrvConfiguration.from_dict(config_dict(calibration_record_digest=None))
+
+
+def test_reviewed_and_production_configuration_digests_differ() -> None:
+    reviewed = FrvConfiguration.from_dict(_reviewed_config_dict())
+    production = FrvConfiguration.from_dict(config_dict())
+    assert reviewed.configuration_digest != production.configuration_digest
+    assert reviewed.configuration_purpose is not production.configuration_purpose
+
+
+def test_reviewed_policy_digest_remains_bound() -> None:
+    reviewed = FrvConfiguration.from_dict(_reviewed_config_dict())
+    assert reviewed.feature_policy_digest == SHA
+    other = FrvConfiguration.from_dict(
+        _reviewed_config_dict(feature_policy_digest="f" * 64)
+    )
+    assert other.configuration_digest != reviewed.configuration_digest
+
+
+def test_no_production_semantic_weakening() -> None:
+    # PRODUCTION_APPROVED still requires runtime complete + wire binding +
+    # EXHAUSTIVE_REGION + strict non-null SHA-256 calibration.
+    production = FrvConfiguration.from_dict(config_dict())
+    assert production.configuration_is_runtime_complete is True
+    assert production.wire_provider_config_digest is not None
+    assert production.scope_mode is frv.FrvScopeMode.EXHAUSTIVE_REGION
+    assert len(production.calibration_record_digest) == 64
+    assert all(c in "0123456789abcdef" for c in production.calibration_record_digest)
+
+
+# ---------------------------------------------------------------------------
+# 8. Canonical point-content specification
 # ---------------------------------------------------------------------------
 
 
@@ -1230,7 +1325,7 @@ def test_point_spec_rejects_unknown_dtype_and_illegal_null_policy() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8. SourceIdentity dual digests and acyclic audits
+# 9. SourceIdentity dual digests and acyclic audits
 # ---------------------------------------------------------------------------
 
 
@@ -1314,7 +1409,7 @@ def test_relocation_audit_warning_flags_zero_only() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 9. Geometry encoding spec versus content references
+# 10. Geometry encoding spec versus content references
 # ---------------------------------------------------------------------------
 
 
@@ -1340,7 +1435,7 @@ def test_scope_upstream_references_sorted_unique() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 10. Approved hard rejection evidence
+# 11. Approved hard rejection evidence
 # ---------------------------------------------------------------------------
 
 
@@ -1365,7 +1460,7 @@ def test_hard_rejection_safety_completeness_effect() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 11. Coverage records: disposition exclusivity and binding
+# 12. Coverage records: disposition exclusivity and binding
 # ---------------------------------------------------------------------------
 
 
@@ -1420,7 +1515,7 @@ def test_out_of_frv_policy_prohibited() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 12. Coverage manifest: rows, conservation, completeness
+# 13. Coverage manifest: rows, conservation, completeness
 # ---------------------------------------------------------------------------
 
 
@@ -1528,7 +1623,7 @@ def test_b5_all_approved_case() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 13. Manual override request/approval/conflict structure
+# 14. Manual override request/approval/conflict structure
 # ---------------------------------------------------------------------------
 
 
@@ -1651,7 +1746,7 @@ def test_override_cycle_members_empty_for_content_addressed_chain() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 14. Payload schema, supporting-region schema, and blocks
+# 15. Payload schema, supporting-region schema, and blocks
 # ---------------------------------------------------------------------------
 
 
@@ -1887,7 +1982,7 @@ def test_block_descriptor_inventory_order_and_non_overlap() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 15. Membership artifact: semantic ID, conservation, digest domain
+# 16. Membership artifact: semantic ID, conservation, digest domain
 # ---------------------------------------------------------------------------
 
 
@@ -1973,7 +2068,7 @@ def test_validate_artifact_payload_digest_domain() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 16. Binding record consistency and public imports
+# 17. Binding record consistency and public imports
 # ---------------------------------------------------------------------------
 
 
@@ -2065,7 +2160,7 @@ def test_v2_v3_contracts_remain_importable_and_unchanged() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 17. Targeted review-fix tests (R-001 .. R-012)
+# 18. Targeted review-fix tests (R-001 .. R-012)
 # ---------------------------------------------------------------------------
 
 
@@ -2166,7 +2261,7 @@ def test_configuration_schema_references_exact_binding() -> None:
         "scope_schema_version": "frv-scope-definition-v2",
         "scope_geometry_encoding_version": "frv-scope-geometry-encoding-v2",
         "coverage_manifest_schema_version": "frv-scope-coverage-manifest-v2",
-        "artifact_schema_version": "frv-membership-artifact-v2",
+        "artifact_schema_version": "frv-membership-artifact-v3",
         "block_schema_version": "frv-artifact-block-v2",
         "payload_schema_version": "frv-artifact-payload-v2",
         "override_schema_version": "frv-manual-override-v2",
@@ -2607,7 +2702,7 @@ def test_payload_schema_rejects_encoding_id_mismatch() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 18. Final targeted review-fix tests (F-006 / F-012 / F-013)
+# 19. Final targeted review-fix tests (F-006 / F-012 / F-013)
 # ---------------------------------------------------------------------------
 
 _REQUIRED_REFERENCE_TABLE_FIELDS = (
@@ -2742,7 +2837,7 @@ def test_override_chain_rejects_duplicate_descriptors() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 19. Final single-point correction tests (F-012 ordered_block_ids strict type)
+# 20. Final single-point correction tests (F-012 ordered_block_ids strict type)
 # ---------------------------------------------------------------------------
 
 
@@ -2836,7 +2931,7 @@ def test_frvart1_ordered_block_ids_list_in_descriptor_order() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 20. Final strict string-type correction tests (F-012 element type)
+# 21. Final strict string-type correction tests (F-012 element type)
 # ---------------------------------------------------------------------------
 
 

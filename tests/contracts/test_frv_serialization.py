@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import core.contracts.frv as frv
+import pytest
 from core.contracts.frv import (
     FRVApprovedHardRejectionEvidence,
     FRVArtifactBindingRecord,
@@ -218,3 +219,107 @@ def test_optional_fields_serialize_as_null_not_omitted() -> None:
         )
     )
     assert no_canonical.to_dict()["canonical_point_content_digest"] is None
+
+
+# ---------------------------------------------------------------------------
+# Membership artifact authority serialization / schema migration
+# ---------------------------------------------------------------------------
+
+
+def _make_artifact(purpose: str) -> FullResolutionVegetationMembershipArtifact:
+    schema = FRVArtifactPayloadSchema.from_dict(schema_dict())
+    block = FRVArtifactBlockDescriptor.from_dict(block_dict(schema))
+    return FullResolutionVegetationMembershipArtifact.from_dict(
+        artifact_dict([block], schema, configuration_purpose=purpose)
+    )
+
+
+def test_artifact_authority_serializes_and_round_trips() -> None:
+    for purpose in (
+        frv.FrvConfigurationPurpose.REVIEWED_FIXED_POLICY,
+        frv.FrvConfigurationPurpose.PRODUCTION_APPROVED,
+    ):
+        artifact = _make_artifact(purpose.value)
+        assert artifact.configuration_purpose is purpose
+        restored = FullResolutionVegetationMembershipArtifact.from_dict(
+            artifact.to_dict()
+        )
+        assert restored.configuration_purpose is purpose
+        assert restored == artifact
+
+
+def test_artifact_manifest_digest_binds_configuration_purpose() -> None:
+    reviewed = _make_artifact("REVIEWED_FIXED_POLICY")
+    production = _make_artifact("PRODUCTION_APPROVED")
+    # The manifest digest binds the purpose: relabelling changes authority.
+    assert reviewed.manifest_digest != production.manifest_digest
+    # The purpose is part of the canonical digest payload.
+    assert frv.frv_digest(reviewed.to_digest_dict()) == reviewed.manifest_digest
+    assert reviewed.artifact_id == reviewed.computed_artifact_id()
+
+
+def test_relabelling_artifact_purpose_breaks_digest_authority() -> None:
+    artifact = _make_artifact("REVIEWED_FIXED_POLICY")
+    # Rewriting the purpose without recomputing the manifest digest must be
+    # rejected: the stored digest no longer binds the semantic authority.
+    payload = artifact.to_dict()
+    payload["configuration_purpose"] = "PRODUCTION_APPROVED"
+    with pytest.raises(ValueError):
+        FullResolutionVegetationMembershipArtifact.from_dict(payload)
+
+
+def test_artifact_explicit_schema_version_v2() -> None:
+    artifact = _make_artifact("REVIEWED_FIXED_POLICY")
+    assert artifact.artifact_schema_version == frv.FRV_MEMBERSHIP_ARTIFACT_SCHEMA_VERSION
+    assert artifact.artifact_schema_version == "frv-membership-artifact-v2"
+    assert frv.FRV_MEMBERSHIP_ARTIFACT_LEGACY_SCHEMA_VERSION == (
+        "frv-membership-artifact-v1"
+    )
+
+
+def test_legacy_v1_artifact_is_not_granted_a_trusted_purpose() -> None:
+    schema = FRVArtifactPayloadSchema.from_dict(schema_dict())
+    block = FRVArtifactBlockDescriptor.from_dict(block_dict(schema))
+    legacy = artifact_dict([block], schema)
+    legacy["artifact_schema_version"] = frv.FRV_MEMBERSHIP_ARTIFACT_LEGACY_SCHEMA_VERSION
+    legacy["artifact_id"] = "frv-membership-" + frv.frv_digest(
+        {
+            key: legacy[key]
+            for key in (
+                "artifact_schema_version",
+                "algorithm_version",
+                "decision_rule_version",
+                "source_content_identity_digest",
+                "scope_union_id",
+                "configuration_digest",
+                "configuration_purpose",
+            )
+        }
+    )
+    legacy["manifest_digest"] = frv.frv_digest(
+        {key: value for key, value in legacy.items() if key != "manifest_digest"}
+    )
+    # The legacy v1 schema is rejected: it never gains reviewed or production
+    # authority by default.
+    with pytest.raises(ValueError):
+        FullResolutionVegetationMembershipArtifact.from_dict(legacy)
+
+
+def test_missing_artifact_authority_fails_closed() -> None:
+    schema = FRVArtifactPayloadSchema.from_dict(schema_dict())
+    block = FRVArtifactBlockDescriptor.from_dict(block_dict(schema))
+    payload = artifact_dict([block], schema)
+    del payload["configuration_purpose"]
+    with pytest.raises(ValueError, match="configuration_purpose"):
+        FullResolutionVegetationMembershipArtifact.from_dict(payload)
+    with pytest.raises(ValueError, match="configuration_purpose"):
+        FullResolutionVegetationMembershipArtifact.from_dict(
+            {**artifact_dict([block], schema), "configuration_purpose": None}
+        )
+
+
+def test_artifact_reviewed_round_trip_digest_stable() -> None:
+    artifact = _make_artifact("REVIEWED_FIXED_POLICY")
+    restored = FullResolutionVegetationMembershipArtifact.from_dict(artifact.to_dict())
+    assert restored.manifest_digest == artifact.manifest_digest
+    assert restored.artifact_id == artifact.artifact_id

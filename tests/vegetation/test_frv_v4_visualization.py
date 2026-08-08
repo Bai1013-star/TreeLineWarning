@@ -1188,3 +1188,96 @@ def test_blocked_mode_end_to_end_outputs(tmp_path: Path) -> None:
     assert summary["display_budget"]["total_displayed_point_count"] == 0
     checklist = vis_result.checklist_path.read_text("utf-8")
     assert "DATA_OR_ARTIFACT_BLOCKED" in checklist
+
+
+# ---------------------------------------------------------------------------
+# REVIEWED_FIXED_POLICY authority disclosure
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def ready_reviewed(tmp_path_factory: pytest.TempPathFactory):
+    root = Path(tmp_path_factory.mktemp("vis_ready_reviewed"))
+    packed = run_membership_ready(root, reviewed=True)
+    result, las_path, _col, _ground, reference, source_result, configuration, *_ = packed
+    v4_root = root / "v4out_reviewed"
+    build_v4_input_handoff(
+        reference,
+        source_result,
+        result,
+        frv_configuration=configuration,
+        output_dir=v4_root,
+        source_chunk_size=40,
+    )
+    return result, las_path, v4_root
+
+
+def _run_reviewed_ready(ready_reviewed, tmp_path: Path, **kwargs) -> vis.FrvV4VisualizationResult:
+    result, las_path, v4_root = ready_reviewed
+    return _run_vis(
+        result.output_reference.root_path,
+        v4_root,
+        las_path,
+        tmp_path,
+        **kwargs,
+    )
+
+
+def test_reviewed_summary_discloses_authority(ready_reviewed, tmp_path: Path) -> None:
+    vis_result = _run_reviewed_ready(ready_reviewed, tmp_path)
+    summary = vis_result.summary
+    authority = summary["authority"]
+    assert authority["configuration_purpose"] == "REVIEWED_FIXED_POLICY"
+    assert "REVIEW/EVALUATION AUTHORITY" in authority["authority_label"]
+    assert authority["review_evaluation_authority"] is True
+    assert authority["claim_boundary"] == [
+        "NOT DATA CALIBRATED",
+        "NOT HELD-OUT VALIDATED",
+        "NOT PRODUCTION CERTIFIED",
+    ]
+
+
+def test_reviewed_checklist_discloses_authority(ready_reviewed, tmp_path: Path) -> None:
+    vis_result = _run_reviewed_ready(ready_reviewed, tmp_path)
+    checklist = vis_result.checklist_path.read_text("utf-8")
+    assert "REVIEWED_FIXED_POLICY — REVIEW/EVALUATION AUTHORITY" in checklist
+    assert "NOT DATA CALIBRATED" in checklist
+    assert "NOT HELD-OUT VALIDATED" in checklist
+    assert "NOT PRODUCTION CERTIFIED" in checklist
+
+
+def test_reviewed_html_discloses_authority(ready_reviewed, tmp_path: Path) -> None:
+    vis_result = _run_reviewed_ready(ready_reviewed, tmp_path)
+    html = vis_result.html_path.read_text("utf-8")
+    assert "REVIEWED_FIXED_POLICY" in html
+    # Plotly JSON-escapes "/" as / in the annotation payload; the readable
+    # label still renders, so assert on the slash-free authority wording.
+    assert "EVALUATION AUTHORITY" in html
+    assert "NOT DATA CALIBRATED" in html
+
+
+def test_reviewed_no_production_certified_claim(ready_reviewed, tmp_path: Path) -> None:
+    vis_result = _run_reviewed_ready(ready_reviewed, tmp_path)
+    authority = vis_result.summary["authority"]
+    assert authority["production_certified"] is False
+    assert authority["production_calibrated"] is False
+    assert authority["data_calibrated"] is False
+    assert authority["held_out_validated"] is False
+    summary_text = json.dumps(vis_result.summary)
+    assert '"production_certified": true' not in summary_text
+    assert '"data_calibrated": true' not in summary_text
+
+
+def test_production_summary_discloses_production_authority(ready, tmp_path: Path) -> None:
+    vis_result = _run_ready(ready, tmp_path)
+    authority = vis_result.summary["authority"]
+    assert authority["configuration_purpose"] == "PRODUCTION_APPROVED"
+    assert authority["production_certified"] is False
+
+
+def test_build_summary_authority_defaults_to_no_authority() -> None:
+    authority = vis._authority_display(None)
+    assert authority["configuration_purpose"] is None
+    assert "NO UPSTREAM AUTHORITY DISCLOSED" in authority["authority_label"]
+    assert authority["claim_boundary"] == []
+    assert authority["production_certified"] is False

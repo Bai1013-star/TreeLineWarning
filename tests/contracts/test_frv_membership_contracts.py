@@ -38,6 +38,11 @@ from core.contracts.frv_membership import (
 )
 from core.contracts.frv_source import FrvSourceProviderResult
 
+from tests.contracts.test_frv_contracts import (
+    artifact_dict,
+    block_dict,
+    schema_dict,
+)
 from tests.io.test_source_provider import _source_identity
 
 SHA = "a" * 64
@@ -480,3 +485,78 @@ def test_scope_policy_digest_domains_frozen() -> None:
     assert FRV_SCOPE_POLICY_DIGEST_DOMAIN == "FRVSCPPOL1"
     assert FRV_SCOPE_GEOMETRY_DIGEST_DOMAIN == "FRVSCPGEO1"
     assert FRV_MEMBERSHIP_POLICY_DIGEST_DOMAIN == "FRVMEMPOL1"
+
+
+# ---------------------------------------------------------------------------
+# Membership artifact configuration_purpose contract
+# ---------------------------------------------------------------------------
+
+
+def _artifact(purpose: str) -> frv.FullResolutionVegetationMembershipArtifact:
+    schema = frv.FRVArtifactPayloadSchema.from_dict(schema_dict())
+    block = frv.FRVArtifactBlockDescriptor.from_dict(block_dict(schema))
+    return frv.FullResolutionVegetationMembershipArtifact.from_dict(
+        artifact_dict([block], schema, configuration_purpose=purpose)
+    )
+
+
+def test_artifact_configuration_purpose_contract_validation() -> None:
+    # The artifact is a faithful record of the validated configuration purpose:
+    # every closed enum member is serializable, and the semantic authority is
+    # enforced by the formal consumers (which reject test/calibration).
+    for purpose in ("TEST_ONLY", "CALIBRATION_CANDIDATE", "REVIEWED_FIXED_POLICY",
+                    "PRODUCTION_APPROVED"):
+        artifact = _artifact(purpose)
+        assert isinstance(artifact.configuration_purpose, frv.FrvConfigurationPurpose)
+        assert artifact.configuration_purpose.value == purpose
+
+
+def test_artifact_supported_formal_purposes_validate_digest_domain() -> None:
+    for purpose in (
+        frv.FrvConfigurationPurpose.REVIEWED_FIXED_POLICY,
+        frv.FrvConfigurationPurpose.PRODUCTION_APPROVED,
+    ):
+        artifact = _artifact(purpose.value)
+        frv.validate_artifact_payload_digest_domain(artifact)
+        assert artifact.manifest_digest == artifact.computed_digest()
+        assert artifact.artifact_id == artifact.computed_artifact_id()
+
+
+def test_artifact_missing_or_unsupported_purpose_fails_closed() -> None:
+    schema = frv.FRVArtifactPayloadSchema.from_dict(schema_dict())
+    block = frv.FRVArtifactBlockDescriptor.from_dict(block_dict(schema))
+    with pytest.raises(ValueError, match="configuration_purpose"):
+        frv.FullResolutionVegetationMembershipArtifact.from_dict(
+            {
+                key: value
+                for key, value in artifact_dict([block], schema).items()
+                if key != "configuration_purpose"
+            }
+        )
+    with pytest.raises(ValueError, match="configuration_purpose"):
+        frv.FullResolutionVegetationMembershipArtifact.from_dict(
+            {**artifact_dict([block], schema), "configuration_purpose": "OTHER"}
+        )
+
+
+def test_artifact_id_binds_configuration_purpose() -> None:
+    reviewed = _artifact("REVIEWED_FIXED_POLICY")
+    production = _artifact("PRODUCTION_APPROVED")
+    assert reviewed.artifact_id != production.artifact_id
+    assert reviewed.artifact_id == reviewed.computed_artifact_id()
+    assert production.artifact_id == production.computed_artifact_id()
+
+
+def test_manifest_digest_binds_configuration_purpose() -> None:
+    reviewed = _artifact("REVIEWED_FIXED_POLICY")
+    production = _artifact("PRODUCTION_APPROVED")
+    assert reviewed.manifest_digest != production.manifest_digest
+    assert frv.frv_digest(reviewed.to_digest_dict()) == reviewed.manifest_digest
+
+
+def test_semantic_authority_cannot_be_altered_independently() -> None:
+    artifact = _artifact("REVIEWED_FIXED_POLICY")
+    payload = artifact.to_dict()
+    payload["configuration_purpose"] = "PRODUCTION_APPROVED"
+    with pytest.raises(ValueError):
+        frv.FullResolutionVegetationMembershipArtifact.from_dict(payload)

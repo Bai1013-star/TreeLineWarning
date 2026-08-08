@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from core.contracts.frv import SourceIdentity
+from core.contracts.frv import FrvConfigurationPurpose, SourceIdentity
 from core.contracts.v4_inputs import V4InputHandoffResult
 from core.contracts.v4_tree_segmentation import (
     ASSIGNMENT_MIN,
@@ -63,6 +63,7 @@ from core.contracts.v4_tree_segmentation import (
     V4AssignmentReasonFlag,
     V4AssociationLookupKind,
     V4AssociationQualityFlag,
+    V4ConfigStatus,
     V4ProfileQualityFlag,
     V4ProfileSampleState,
     V4RotatingProfileEvidence,
@@ -4237,12 +4238,62 @@ def _local_apex_pairs(
     return pairs
 
 
+def _check_authority_guard(
+    handoff: V4InputHandoffResult, config: V4TreeSegmentationConfig
+) -> None:
+    """Enforce the frozen upstream/downstream authority matrix.
+
+    Formal V4 execution requires matching formal authority.  The upstream FRV
+    authority is recovered only from the validated, digest-bound embedded
+    membership artifact (never from a caller assertion).  TEST_ONLY and
+    CALIBRATION_CANDIDATE V4 statuses retain their existing non-formal
+    behavior; every formal status requires a matching formal upstream purpose.
+    This guard is provenance/authority-only: it changes neither Algorithm-V1
+    nor point meaning.
+    """
+
+    if config.status in (
+        V4ConfigStatus.TEST_ONLY,
+        V4ConfigStatus.CALIBRATION_CANDIDATE,
+    ):
+        return
+    view = handoff.validated_membership
+    artifact = getattr(view, "membership_artifact", None)
+    upstream = (
+        getattr(artifact, "configuration_purpose", None)
+        if artifact is not None
+        else None
+    )
+    if upstream not in (
+        FrvConfigurationPurpose.REVIEWED_FIXED_POLICY,
+        FrvConfigurationPurpose.PRODUCTION_APPROVED,
+    ):
+        raise V4TreeSegmentationError(
+            code=V4TreeSegmentationErrorCode.CONFIG_STATUS_UNSUPPORTED,
+            field_name="configuration_purpose",
+        )
+    if upstream is FrvConfigurationPurpose.REVIEWED_FIXED_POLICY:
+        if config.status is V4ConfigStatus.REVIEWED_FIXED_POLICY:
+            return
+        raise V4TreeSegmentationError(
+            code=V4TreeSegmentationErrorCode.CONFIG_STATUS_UNSUPPORTED,
+            field_name="status",
+        )
+    if config.status is V4ConfigStatus.PRODUCTION_APPROVED:
+        return
+    raise V4TreeSegmentationError(
+        code=V4TreeSegmentationErrorCode.CONFIG_STATUS_UNSUPPORTED,
+        field_name="status",
+    )
+
+
 def segment_v4_trees(
     handoff: V4InputHandoffResult,
     config: V4TreeSegmentationConfig,
 ) -> V4TreeSegmentationResult:
     """Run the full V4 single-tree segmentation pipeline."""
 
+    _check_authority_guard(handoff, config)
     population = _canonical_population(handoff)
     scales = derive_algorithm_scales(config)
     grid = _build_grid(population, scales, config)

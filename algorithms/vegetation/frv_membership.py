@@ -555,8 +555,17 @@ def _production_policy_failure(
 
     validate_frv_scope_policy_config(scope_policy)
     validate_frv_membership_policy_config(membership_policy)
+    # Formal FRV execution/publication is limited to reviewed-fixed and
+    # production-approved purposes.  TEST_ONLY and CALIBRATION_CANDIDATE never
+    # enter this gate.  The reviewed mode is deliberately not data calibrated,
+    # so its configuration carries a null calibration record digest; the gate
+    # binds the same policy digest and provider closure as production.
     valid = (
-        configuration.configuration_purpose is FrvConfigurationPurpose.PRODUCTION_APPROVED
+        configuration.configuration_purpose
+        in (
+            FrvConfigurationPurpose.REVIEWED_FIXED_POLICY,
+            FrvConfigurationPurpose.PRODUCTION_APPROVED,
+        )
         and configuration.configuration_is_runtime_complete is True
         and configuration.formal_completeness_allowed is True
         and configuration.membership_artifact_publication_allowed is True
@@ -2331,6 +2340,7 @@ def _compute_artifact_id(
         ),
         "scope_union_id": scope_context["scope_union_id"],
         "configuration_digest": configuration.configuration_digest,
+        "configuration_purpose": configuration.configuration_purpose,
     }
     return "frv-membership-" + frv_digest(payload)
 
@@ -2517,6 +2527,7 @@ def _build_artifact(
         "canonical_inventory_digest": inventory_digests["canonical_inventory_digest"],
         "required_inventory_digest": inventory_digests["required_inventory_digest"],
         "configuration_digest": frv_configuration.configuration_digest,
+        "configuration_purpose": frv_configuration.configuration_purpose,
         "payload_schema_digest": schema.payload_schema_digest,
         "block_schema_version": FRV_ARTIFACT_BLOCK_SCHEMA_VERSION,
         "artifact_sha256": "",

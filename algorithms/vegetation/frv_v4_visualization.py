@@ -43,6 +43,7 @@ from typing import Any
 import laspy
 import numpy as np
 from core.contracts.frv import (
+    FrvConfigurationPurpose,
     FrvHagEvidenceState,
     FrvMembershipState,
     FrvQualityFlag,
@@ -403,6 +404,7 @@ class FrvV4InputData:
     layers: dict[str, _LayerSource]
     regions: tuple[FrvV4RegionRecord, ...]
     identity_checks: dict[str, bool]
+    configuration_purpose: FrvConfigurationPurpose | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1607,6 +1609,8 @@ def _load_frv_v4_input_inner(
                 "excluded point count does not match the coverage report"
             )
 
+        artifact = result.membership_artifact
+        assert artifact is not None
         return FrvV4InputData(
             mode="ready",
             source_identity=source_identity,
@@ -1614,6 +1618,7 @@ def _load_frv_v4_input_inner(
             layers=layers,
             regions=(),
             identity_checks=checks,
+            configuration_purpose=artifact.configuration_purpose,
         )
 
     if state is FrvMembershipExecutionState.COVERAGE_BLOCKED:
@@ -1787,6 +1792,54 @@ _HOVER_TEMPLATE = (
 # ---------------------------------------------------------------------------
 
 
+def _authority_display(purpose: FrvConfigurationPurpose | None) -> dict[str, Any]:
+    """Derive the frozen authority-disclosure section from the upstream purpose.
+
+    ``REVIEWED_FIXED_POLICY`` is shown as a review/evaluation authority with an
+    explicit no-calibration claim boundary.  No reviewed-fixed path ever claims
+    production calibration, held-out validation, or production certification.
+    """
+
+    if purpose is FrvConfigurationPurpose.REVIEWED_FIXED_POLICY:
+        return {
+            "configuration_purpose": "REVIEWED_FIXED_POLICY",
+            "authority_label": (
+                "REVIEWED_FIXED_POLICY — REVIEW/EVALUATION AUTHORITY"
+            ),
+            "review_evaluation_authority": True,
+            "production_calibrated": False,
+            "data_calibrated": False,
+            "held_out_validated": False,
+            "production_certified": False,
+            "claim_boundary": [
+                "NOT DATA CALIBRATED",
+                "NOT HELD-OUT VALIDATED",
+                "NOT PRODUCTION CERTIFIED",
+            ],
+        }
+    if purpose is FrvConfigurationPurpose.PRODUCTION_APPROVED:
+        return {
+            "configuration_purpose": "PRODUCTION_APPROVED",
+            "authority_label": "PRODUCTION_APPROVED",
+            "review_evaluation_authority": False,
+            "production_calibrated": False,
+            "data_calibrated": False,
+            "held_out_validated": False,
+            "production_certified": False,
+            "claim_boundary": [],
+        }
+    return {
+        "configuration_purpose": None,
+        "authority_label": "NO UPSTREAM AUTHORITY DISCLOSED",
+        "review_evaluation_authority": False,
+        "production_calibrated": False,
+        "data_calibrated": False,
+        "held_out_validated": False,
+        "production_certified": False,
+        "claim_boundary": [],
+    }
+
+
 def build_summary(
     *,
     mode: str,
@@ -1800,6 +1853,7 @@ def build_summary(
     budget: DisplayBudget,
     show_flags: Mapping[str, bool],
     output_paths: Mapping[str, Path],
+    authority: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the frozen FRV-VIS-A1 summary JSON document."""
 
@@ -1925,6 +1979,11 @@ def build_summary(
         "tool": TOOL_NAME,
         "summary_schema_version": SUMMARY_SCHEMA_VERSION,
         "mode": mode,
+        "authority": (
+            authority
+            if authority is not None
+            else _authority_display(None)
+        ),
         "source": {
             "source_id": source_identity.source_id,
             "source_content_identity_digest": (
@@ -2013,12 +2072,17 @@ def build_checklist_markdown(*, summary: Mapping[str, Any]) -> str:
     """Generate the pre-filled human acceptance checklist markdown."""
 
     source = summary["source"]
+    authority = summary.get("authority", {})
+    authority_lines = [f"- Authority: `{authority.get('authority_label')}`"]
+    for boundary in authority.get("claim_boundary", []):
+        authority_lines.append(f"  - Claim boundary: `{boundary}`")
     lines = [
         "# FRV-VIS-A1 Human Acceptance Checklist",
         "",
         f"- Tool: `{summary['tool']}`",
         f"- Schema version: `{summary['summary_schema_version']}`",
         f"- Mode: `{summary['mode']}`",
+        *authority_lines,
         f"- Source id: `{source['source_id']}`",
         f"- Source content identity digest: `{source['source_content_identity_digest']}`",
         f"- Source point count: {source['source_point_count']}",
@@ -2087,7 +2151,9 @@ def _build_trace(display: _DisplayLayer) -> go.Scatter3d:
     )
 
 
-def _render_blocked_table(regions: Sequence[FrvV4RegionRecord], title: str) -> str:
+def _render_blocked_table(
+    regions: Sequence[FrvV4RegionRecord], title: str, authority_text: str = ""
+) -> str:
     keys = [region.key for region in regions]
     scopes = [region.scope_id if region.scope_id is not None else "n/a" for region in regions]
     states = [region.coverage_state for region in regions]
@@ -2119,24 +2185,41 @@ def _render_blocked_table(regions: Sequence[FrvV4RegionRecord], title: str) -> s
             )
         ]
     )
-    figure.update_layout(
-        title={"text": title, "x": 0.5},
-        annotations=[
+    annotations: list[dict[str, Any]] = [
+        {
+            "text": (
+                "Blocked / unrecovered regions carry no verified geometry. "
+                "No point or bounding box is fabricated."
+            ),
+            "xref": "paper",
+            "yref": "paper",
+            "x": 0.02,
+            "y": 0.95,
+            "showarrow": False,
+            "font": {"color": "#d62728"},
+        }
+    ]
+    if authority_text:
+        annotations.append(
             {
-                "text": (
-                    "Blocked / unrecovered regions carry no verified geometry. "
-                    "No point or bounding box is fabricated."
-                ),
+                "text": authority_text,
                 "xref": "paper",
                 "yref": "paper",
                 "x": 0.02,
-                "y": 0.95,
+                "y": 0.92,
                 "showarrow": False,
-                "font": {"color": "#d62728"},
             }
-        ],
-    )
+        )
+    figure.update_layout(title={"text": title, "x": 0.5}, annotations=annotations)
     return figure.to_html(include_plotlyjs=True, full_html=True)
+
+
+def _authority_html_text(authority: dict[str, Any] | None) -> str:
+    if not authority:
+        return ""
+    parts = [str(authority.get("authority_label") or "")]
+    parts.extend(str(item) for item in authority.get("claim_boundary", []))
+    return " | ".join(part for part in parts if part)
 
 
 def render_html(
@@ -2145,26 +2228,37 @@ def render_html(
     display_layers: Sequence[_DisplayLayer],
     regions: Sequence[FrvV4RegionRecord],
     mode: str,
+    authority: dict[str, Any] | None = None,
 ) -> str:
     """Render the self-contained interactive Plotly HTML document."""
 
+    authority_text = _authority_html_text(authority)
     if mode == "blocked" or not display_layers:
         if mode == "blocked" and regions:
-            return _render_blocked_table(regions, title)
+            return _render_blocked_table(regions, title, authority_text=authority_text)
         figure = go.Figure()
-        figure.update_layout(
-            title={"text": title, "x": 0.5},
-            annotations=[
+        annotations: list[dict[str, Any]] = [
+            {
+                "text": "No measured points to display for this input.",
+                "xref": "paper",
+                "yref": "paper",
+                "x": 0.5,
+                "y": 0.5,
+                "showarrow": False,
+            }
+        ]
+        if authority_text:
+            annotations.append(
                 {
-                    "text": "No measured points to display for this input.",
+                    "text": authority_text,
                     "xref": "paper",
                     "yref": "paper",
                     "x": 0.5,
-                    "y": 0.5,
+                    "y": 0.9,
                     "showarrow": False,
                 }
-            ],
-        )
+            )
+        figure.update_layout(title={"text": title, "x": 0.5}, annotations=annotations)
         return figure.to_html(include_plotlyjs=True, full_html=True)
 
     traces = [_build_trace(display) for display in display_layers]
@@ -2261,8 +2355,20 @@ def render_html(
         ],
     }
 
+    annotations: list[dict[str, Any]] = []
+    if authority_text:
+        annotations.append(
+            {
+                "text": authority_text,
+                "xref": "paper",
+                "yref": "paper",
+                "x": 0.02,
+                "y": 0.98,
+                "showarrow": False,
+            }
+        )
     if regions:
-        layout["annotations"] = [
+        annotations.append(
             {
                 "text": (
                     "Blocked / unrecovered regions carry no verified geometry; "
@@ -2271,11 +2377,13 @@ def render_html(
                 "xref": "paper",
                 "yref": "paper",
                 "x": 0.02,
-                "y": 0.98,
+                "y": 0.95,
                 "showarrow": False,
                 "font": {"color": "#d62728"},
             }
-        ]
+        )
+    if annotations:
+        layout["annotations"] = annotations
 
     figure.update_layout(**layout)
     return figure.to_html(include_plotlyjs=True, full_html=True)
@@ -2651,6 +2759,7 @@ def run_frv_v4_visualization(
         "excluded": show_excluded,
         "review": show_review,
     }
+    authority = _authority_display(data.configuration_purpose)
     summary = build_summary(
         mode=data.mode,
         source_identity=data.source_identity,
@@ -2665,6 +2774,7 @@ def run_frv_v4_visualization(
         output_paths={
             name: path for name, path in output_paths.items() if path is not None
         },
+        authority=authority,
     )
 
     title = (
@@ -2676,6 +2786,7 @@ def run_frv_v4_visualization(
         display_layers=display_layers,
         regions=data.regions,
         mode=data.mode,
+        authority=authority,
     )
 
     checklist_text: str | None = None

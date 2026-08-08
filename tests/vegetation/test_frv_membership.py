@@ -580,8 +580,13 @@ def run_provider_chain(
     geometry_config=None,
     wire_config=None,
     offsets: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    reviewed: bool = False,
 ) -> tuple:
-    """Write the LAS and run source -> hag -> geometry -> wire (empty authority)."""
+    """Write the LAS and run source -> hag -> geometry -> wire (empty authority).
+
+    ``reviewed=True`` builds a REVIEWED_FIXED_POLICY configuration (null
+    calibration record) instead of the production-approved default.
+    """
 
     las_path = tmp_path / "s.las"
     column_indexes, ground_indexes = write_scene_las(las_path, offsets=offsets)
@@ -591,9 +596,14 @@ def run_provider_chain(
     source_config = _provider_config(
         pass_through_dimensions=(FrvSourcePassThroughDimension.CLASSIFICATION,)
     )
-    configuration = _production_configuration(
-        source_config, hag_config, geometry_config, wire_config
-    )
+    if reviewed:
+        configuration = _reviewed_configuration(
+            source_config, hag_config, geometry_config, wire_config
+        )
+    else:
+        configuration = _production_configuration(
+            source_config, hag_config, geometry_config, wire_config
+        )
     if tuple(float(v) for v in offsets) == (0.0, 0.0, 0.0):
         reference = _source_reference(las_path, source_config, configuration)
     else:
@@ -682,12 +692,36 @@ def _production_configuration(
     return frv.FrvConfiguration.from_dict(base)
 
 
+def _reviewed_configuration(
+    source_config, hag_config, geometry_config, wire_config
+) -> frv.FrvConfiguration:
+    """REVIEWED_FIXED_POLICY formal configuration: null calibration record."""
+    base = _configuration().to_digest_dict()
+    base["scan_provider_config_digest"] = source_config.provider_config_digest
+    base["hag_provider_interface_version"] = hag_config.interface_version
+    base["hag_provider_config_digest"] = hag_config.provider_config_digest
+    base["geometry_provider_interface_version"] = geometry_config.interface_version
+    base["geometry_provider_config_digest"] = geometry_config.provider_config_digest
+    base["wire_provider_interface_version"] = wire_config.interface_version
+    base["wire_provider_config_digest"] = wire_config.provider_config_digest
+    base["scope_policy_digest"] = default_frv_scope_policy_config().policy_digest
+    base["feature_policy_digest"] = default_frv_membership_policy_config().policy_digest
+    base["configuration_purpose"] = frv.FrvConfigurationPurpose.REVIEWED_FIXED_POLICY
+    base["configuration_is_runtime_complete"] = True
+    base["formal_completeness_allowed"] = True
+    base["membership_artifact_publication_allowed"] = True
+    base["calibration_record_digest"] = None
+    base["configuration_digest"] = frv.frv_digest(base)
+    return frv.FrvConfiguration.from_dict(base)
+
+
 def run_membership_ready(
     root: Path,
     *,
     source_chunk_size: int = 40,
     all_candidates: bool = True,
     offsets: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    reviewed: bool = False,
 ) -> tuple:
     """Run the full provider chain + evidence pairs + membership publication.
 
@@ -695,7 +729,12 @@ def run_membership_ready(
     reference, source_result, configuration, scope_reference, authority)``.
     """
 
-    chain = run_provider_chain(root, source_chunk_size=source_chunk_size, offsets=offsets)
+    chain = run_provider_chain(
+        root,
+        source_chunk_size=source_chunk_size,
+        offsets=offsets,
+        reviewed=reviewed,
+    )
     (
         las_path,
         column_indexes,
@@ -1165,3 +1204,225 @@ def test_membership_consumer_path_wire_relation_valid_outside(
     # The W1 authority carries a real wire relation domain, so the membership
     # decision path consumed WIRE_RELATION_VALID outside-domain points.
     assert result.decision_evidence_artifact is not None
+
+
+# ---------------------------------------------------------------------------
+# REVIEWED_FIXED_POLICY formal membership authority
+# ---------------------------------------------------------------------------
+
+
+def _calibration_candidate_configuration(
+    source_config, hag_config, geometry_config, wire_config
+) -> frv.FrvConfiguration:
+    base = _configuration().to_digest_dict()
+    base["scan_provider_config_digest"] = source_config.provider_config_digest
+    base["hag_provider_interface_version"] = hag_config.interface_version
+    base["hag_provider_config_digest"] = hag_config.provider_config_digest
+    base["geometry_provider_interface_version"] = geometry_config.interface_version
+    base["geometry_provider_config_digest"] = geometry_config.provider_config_digest
+    base["wire_provider_interface_version"] = wire_config.interface_version
+    base["wire_provider_config_digest"] = wire_config.provider_config_digest
+    base["scope_policy_digest"] = default_frv_scope_policy_config().policy_digest
+    base["feature_policy_digest"] = default_frv_membership_policy_config().policy_digest
+    base["configuration_purpose"] = frv.FrvConfigurationPurpose.CALIBRATION_CANDIDATE
+    base["configuration_is_runtime_complete"] = False
+    base["formal_completeness_allowed"] = False
+    base["membership_artifact_publication_allowed"] = False
+    base["calibration_record_digest"] = None
+    base["configuration_digest"] = frv.frv_digest(base)
+    return frv.FrvConfiguration.from_dict(base)
+
+
+def test_reviewed_membership_executes_and_publishes(tmp_path: Path) -> None:
+    """REVIEWED_FIXED_POLICY runs the full formal chain and publishes READY.
+
+    The artifact's configuration purpose is derived from the validated
+    configuration, never from a caller assertion.
+    """
+    result = run_membership_ready(tmp_path, reviewed=True)[0]
+    assert result.execution_state is FrvMembershipExecutionState.READY_FOR_V4
+    artifact = result.membership_artifact
+    assert artifact is not None
+    assert (
+        artifact.configuration_purpose
+        is frv.FrvConfigurationPurpose.REVIEWED_FIXED_POLICY
+    )
+    assert result.artifact_binding is not None
+    assert result.artifact_binding.semantic_artifact_id == artifact.artifact_id
+    assert artifact.manifest_digest == artifact.computed_digest()
+    assert artifact.artifact_id == artifact.computed_artifact_id()
+    # Reload keeps the propagated authority.
+    reloaded = load_frv_membership_result(result.output_reference.root_path)
+    assert (
+        reloaded.membership_artifact.configuration_purpose
+        is frv.FrvConfigurationPurpose.REVIEWED_FIXED_POLICY
+    )
+    # Conservation stays exact for the reviewed path.
+    five = (
+        artifact.verified_vegetation_candidate_count
+        + artifact.excluded_non_candidate_count
+        + artifact.review_required_membership_count
+        + artifact.manual_include_count
+        + artifact.manual_exclude_count
+    )
+    assert five == artifact.evaluated_point_count
+    assert result.coverage_manifest.routing_complete is True
+    assert result.result_digest == result.computed_digest()
+
+
+def test_calibration_candidate_cannot_formally_publish(tmp_path: Path) -> None:
+    """CALIBRATION_CANDIDATE still cannot enter formal publication."""
+    chain = run_provider_chain(tmp_path, source_chunk_size=40)
+    las_path = chain[0]
+    reference = chain[3]
+    source_result = chain[6]
+    authority = chain[10]
+    hag_config = _hag_config()
+    geometry_config = _geometry_config()
+    wire_config = _wire_config()
+    configuration = _calibration_candidate_configuration(
+        chain[4], hag_config, geometry_config, wire_config
+    )
+    scope_ref = build_evidence_pairs(
+        tmp_path, las_path=las_path, column_indexes=chain[1], ground_indexes=chain[2]
+    )
+    out = tmp_path / "out"
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    result = build_frv_membership(
+        reference,
+        source_result,
+        scope_ref,
+        authority,
+        (),
+        frv_configuration=configuration,
+        hag_config=hag_config,
+        geometry_config=geometry_config,
+        wire_config=wire_config,
+        scope_policy=default_frv_scope_policy_config(),
+        membership_policy=default_frv_membership_policy_config(),
+        output_dir=out,
+        scratch_dir=scratch,
+        source_chunk_size=40,
+    )
+    assert result.execution_state is FrvMembershipExecutionState.COVERAGE_BLOCKED
+    assert result.membership_artifact is None
+    phases = {failure.phase.value for failure in result.failure_records}
+    assert "production_policy" in phases
+    assert out.exists() is False
+
+
+def test_reviewed_policy_mismatch_rejects(tmp_path: Path) -> None:
+    """A policy mismatch rejects the reviewed formal gate (fail closed)."""
+    chain = run_provider_chain(tmp_path, source_chunk_size=40)
+    las_path = chain[0]
+    reference = chain[3]
+    source_result = chain[6]
+    authority = chain[10]
+    hag_config = _hag_config()
+    geometry_config = _geometry_config()
+    wire_config = _wire_config()
+    configuration = _reviewed_configuration(
+        chain[4], hag_config, geometry_config, wire_config
+    )
+    base = configuration.to_digest_dict()
+    base["feature_policy_digest"] = "f" * 64
+    base["configuration_digest"] = frv.frv_digest(base)
+    mismatched = frv.FrvConfiguration.from_dict(base)
+    scope_ref = build_evidence_pairs(
+        tmp_path, las_path=las_path, column_indexes=chain[1], ground_indexes=chain[2]
+    )
+    out = tmp_path / "out"
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    result = build_frv_membership(
+        reference,
+        source_result,
+        scope_ref,
+        authority,
+        (),
+        frv_configuration=mismatched,
+        hag_config=hag_config,
+        geometry_config=geometry_config,
+        wire_config=wire_config,
+        scope_policy=default_frv_scope_policy_config(),
+        membership_policy=default_frv_membership_policy_config(),
+        output_dir=out,
+        scratch_dir=scratch,
+        source_chunk_size=40,
+    )
+    assert result.execution_state is FrvMembershipExecutionState.COVERAGE_BLOCKED
+    assert result.membership_artifact is None
+    assert out.exists() is False
+
+
+def test_reviewed_and_production_decisions_numerically_identical(tmp_path: Path) -> None:
+    """The reviewed path produces identical membership decisions to production.
+
+    The same scene, policy, provider, and source data must yield the same
+    per-point membership state, routing, and conservation, differing only in the
+    artifact's authority/provenance fields.
+    """
+    from algorithms.vegetation.v4_inputs import _read_artifact_rows
+
+    reviewed_root = tmp_path / "reviewed"
+    production_root = tmp_path / "production"
+    reviewed_root.mkdir()
+    production_root.mkdir()
+    reviewed = run_membership_ready(reviewed_root, reviewed=True)[0]
+    production = run_membership_ready(production_root)[0]
+    assert reviewed.execution_state is FrvMembershipExecutionState.READY_FOR_V4
+    assert production.execution_state is FrvMembershipExecutionState.READY_FOR_V4
+
+    reviewed_payload, _ = _read_artifact_rows(reviewed)
+    production_payload, _ = _read_artifact_rows(production)
+    assert set(reviewed_payload) == set(production_payload)
+    decision_fields = (
+        "membership_state",
+        "reason_flags",
+        "input_quality_flags",
+        "hag_evidence_state",
+        "segmentation_hag_readiness",
+    )
+    for index in reviewed_payload:
+        for field in decision_fields:
+            assert int(reviewed_payload[index][field]) == int(
+                production_payload[index][field]
+            ), (index, field)
+
+    for name in (
+        "verified_vegetation_candidate_count",
+        "excluded_non_candidate_count",
+        "review_required_membership_count",
+        "manual_include_count",
+        "manual_exclude_count",
+        "unique_in_scope_point_count",
+        "evaluated_point_count",
+        "canonical_inventory_count",
+        "required_inventory_count",
+        "approved_hard_rejection_count",
+    ):
+        assert getattr(reviewed.membership_artifact, name) == getattr(
+            production.membership_artifact, name
+        ), name
+    assert reviewed.membership_artifact.manifest_digest != (
+        production.membership_artifact.manifest_digest
+    )
+
+
+def test_reviewed_execution_is_deterministic(tmp_path: Path) -> None:
+    """Two identical reviewed executions produce identical decisions."""
+    from algorithms.vegetation.v4_inputs import _read_artifact_rows
+
+    first_root = tmp_path / "a"
+    second_root = tmp_path / "b"
+    first_root.mkdir()
+    second_root.mkdir()
+    first = run_membership_ready(first_root, reviewed=True)[0]
+    second = run_membership_ready(second_root, reviewed=True)[0]
+    first_payload, _ = _read_artifact_rows(first)
+    second_payload, _ = _read_artifact_rows(second)
+    for index in first_payload:
+        assert int(first_payload[index]["membership_state"]) == int(
+            second_payload[index]["membership_state"]
+        )

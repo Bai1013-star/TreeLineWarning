@@ -865,3 +865,75 @@ def test_configuration_aware_required_roles_and_calibration_policy() -> None:
         configuration_digest=calibration.configuration_digest,
     )
     validate_frv_a2_readiness_record(calibration_record, calibration)
+
+
+def test_reviewed_fixed_policy_requires_all_formal_roles() -> None:
+    """REVIEWED_FIXED_POLICY reaches complete readiness with all four roles.
+
+    The existing A2 required-role logic already handles the reviewed
+    configuration when the required wire binding exists; no production code
+    change is required.
+    """
+    from tests.contracts.test_frv_contracts import config_dict
+
+    reviewed = FrvConfiguration.from_dict(
+        config_dict(
+            configuration_purpose="REVIEWED_FIXED_POLICY",
+            calibration_record_digest=None,
+        )
+    )
+    providers = [
+        _binding(
+            provider_key="source_provider",
+            provider_role=FrvA2ProviderRole.SOURCE_SCAN,
+            configuration_digest=reviewed.configuration_digest,
+            provider_config_digest=reviewed.scan_provider_config_digest,
+        ),
+        _binding(
+            provider_key="hag_provider",
+            provider_role=FrvA2ProviderRole.HAG,
+            configuration_digest=reviewed.configuration_digest,
+            provider_config_digest=reviewed.hag_provider_config_digest,
+        ),
+        _binding(
+            provider_key="geometry_provider",
+            provider_role=FrvA2ProviderRole.GEOMETRY,
+            configuration_digest=reviewed.configuration_digest,
+            provider_config_digest=reviewed.geometry_provider_config_digest,
+        ),
+        _binding(
+            provider_key="wire_provider",
+            provider_role=FrvA2ProviderRole.WIRE,
+            configuration_digest=reviewed.configuration_digest,
+            provider_config_digest=reviewed.wire_provider_config_digest,
+        ),
+    ]
+    record = _readiness(providers, configuration_digest=reviewed.configuration_digest)
+    validate_frv_a2_readiness_record(record, reviewed)
+    assert record.aggregate_readiness is FrvA2AggregateReadiness.READY_FOR_A3
+    assert record.limitation_codes == ()
+    assert record.review_codes == ()
+
+
+def test_reviewed_missing_wire_role_fails_closed() -> None:
+    from tests.contracts.test_frv_contracts import config_dict
+
+    reviewed = FrvConfiguration.from_dict(
+        config_dict(
+            configuration_purpose="REVIEWED_FIXED_POLICY",
+            calibration_record_digest=None,
+        )
+    )
+    missing_wire = _readiness(
+        _complete_base_providers(
+            configuration_digest=reviewed.configuration_digest,
+            provider_config_digests=(
+                reviewed.scan_provider_config_digest,
+                reviewed.hag_provider_config_digest,
+                reviewed.geometry_provider_config_digest,
+            ),
+        ),
+        configuration_digest=reviewed.configuration_digest,
+    )
+    with pytest.raises(ValueError, match="required formal role wire"):
+        validate_frv_a2_readiness_record(missing_wire, reviewed)

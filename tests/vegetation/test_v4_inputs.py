@@ -1053,3 +1053,172 @@ def test_v2_loader_rejects_rehashed_changed_normal_index(ready) -> None:
     with pytest.raises(V4InputLoadError) as excinfo:
         load_v4_input_handoff(reference.root_path)
     assert excinfo.value.code is V4InputErrorCode.ORIGINAL_INDEX_INVALID
+
+
+# ---------------------------------------------------------------------------
+# REVIEWED_FIXED_POLICY upstream authority for V4 handoff
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def reviewed_ready(tmp_path_factory: pytest.TempPathFactory):
+    root = Path(tmp_path_factory.mktemp("v4_reviewed_ready"))
+    packed = run_membership_ready(root, reviewed=True)
+    result = packed[0]
+    assert result.execution_state is FrvMembershipExecutionState.READY_FOR_V4
+    return packed
+
+
+def _build_reviewed_handoff(reviewed_ready, name: str):
+    result, _las, _col, _ground, reference, source_result, configuration, _ref, _auth = (
+        reviewed_ready
+    )
+    out = result.output_reference.root_path.parent / name
+    handoff = build_v4_input_handoff(
+        reference,
+        source_result,
+        result,
+        frv_configuration=configuration,
+        output_dir=out,
+        source_chunk_size=40,
+    )
+    assert handoff.output_reference is not None
+    return handoff
+
+
+def test_reviewed_handoff_authority_survives_build_and_reload(reviewed_ready) -> None:
+    handoff = _build_reviewed_handoff(reviewed_ready, "v4_reviewed_survives")
+    view = handoff.validated_membership
+    assert (
+        view.membership_artifact.configuration_purpose.value
+        == "REVIEWED_FIXED_POLICY"
+    )
+    loaded = load_v4_input_handoff(handoff.output_reference.root_path)
+    assert loaded.handoff_digest == handoff.handoff_digest
+    assert (
+        loaded.validated_membership.membership_artifact.configuration_purpose.value
+        == "REVIEWED_FIXED_POLICY"
+    )
+
+
+def test_reviewed_and_production_routing_identical(
+    reviewed_ready, ready
+) -> None:
+    reviewed = _build_reviewed_handoff(reviewed_ready, "v4_reviewed_routing")
+    production = _build_tiny_block_handoff(ready, "v4_production_routing")
+    reviewed_report = reviewed.coverage_report
+    production_report = production.coverage_report
+    for name in (
+        "normal_segmentation_count",
+        "measured_point_review_count",
+        "excluded_audit_count",
+        "frv_unique_in_scope_point_count",
+    ):
+        assert getattr(reviewed_report, name) == getattr(
+            production_report, name
+        ), name
+    reviewed_normal = set(int(v) for v in reviewed.recovered_vegetation.original_index)
+    reviewed_review = set(
+        int(v) for v in reviewed.unresolved_measured_points.original_index
+    )
+    production_normal = set(
+        int(v) for v in production.recovered_vegetation.original_index
+    )
+    production_review = set(
+        int(v) for v in production.unresolved_measured_points.original_index
+    )
+    assert reviewed_normal == production_normal
+    assert reviewed_review == production_review
+    assert reviewed_normal.isdisjoint(reviewed_review)
+    assert (
+        reviewed_report.frv_unique_in_scope_point_count
+        == len(reviewed_normal) + len(reviewed_review) + reviewed_report.excluded_audit_count
+    )
+
+
+def test_v2_loader_rejects_missing_upstream_authority(reviewed_ready) -> None:
+    handoff = _build_reviewed_handoff(reviewed_ready, "v4_reviewed_missing_auth")
+    view_path = handoff.output_reference.validated_view_json_path
+    payload = json.loads(view_path.read_text("utf-8"))
+    del payload["membership_artifact"]["configuration_purpose"]
+    view_path.write_text(json.dumps(payload), "utf-8")
+    with pytest.raises(V4InputLoadError) as excinfo:
+        load_v4_input_handoff(handoff.output_reference.root_path)
+    assert excinfo.value.code is V4InputErrorCode.FRV_ARTIFACT_INVALID
+
+
+def test_v2_loader_rejects_relabelled_reviewed_authority(reviewed_ready) -> None:
+    handoff = _build_reviewed_handoff(reviewed_ready, "v4_reviewed_relabelled")
+    view_path = handoff.output_reference.validated_view_json_path
+    payload = json.loads(view_path.read_text("utf-8"))
+    payload["membership_artifact"]["configuration_purpose"] = (
+        "PRODUCTION_APPROVED"
+    )
+    view_path.write_text(json.dumps(payload), "utf-8")
+    with pytest.raises(V4InputLoadError):
+        load_v4_input_handoff(handoff.output_reference.root_path)
+
+
+def test_v2_loader_rejects_unsupported_upstream_purpose(reviewed_ready) -> None:
+    handoff = _build_reviewed_handoff(reviewed_ready, "v4_reviewed_bad_purpose")
+    view_path = handoff.output_reference.validated_view_json_path
+    payload = json.loads(view_path.read_text("utf-8"))
+    payload["membership_artifact"]["configuration_purpose"] = "TEST_ONLY"
+    view_path.write_text(json.dumps(payload), "utf-8")
+    with pytest.raises(V4InputLoadError):
+        load_v4_input_handoff(handoff.output_reference.root_path)
+
+
+def test_validate_upstream_frv_authority_rejects_non_formal() -> None:
+    from core.contracts.frv import (
+        FRV_MEMBERSHIP_ARTIFACT_LEGACY_SCHEMA_VERSION,
+        FRVArtifactBlockDescriptor,
+        FRVArtifactPayloadSchema,
+        FullResolutionVegetationMembershipArtifact,
+    )
+
+    from tests.contracts.test_frv_contracts import artifact_dict, block_dict, schema_dict
+
+    payload_schema = FRVArtifactPayloadSchema.from_dict(schema_dict())
+    block = FRVArtifactBlockDescriptor.from_dict(block_dict(payload_schema))
+
+    def _artifact(purpose: str) -> FullResolutionVegetationMembershipArtifact:
+        return FullResolutionVegetationMembershipArtifact.from_dict(
+            artifact_dict([block], payload_schema, configuration_purpose=purpose)
+        )
+
+    v4i._validate_upstream_frv_authority(_artifact("REVIEWED_FIXED_POLICY"))
+    v4i._validate_upstream_frv_authority(_artifact("PRODUCTION_APPROVED"))
+    with pytest.raises(V4InputLoadError):
+        v4i._validate_upstream_frv_authority(_artifact("TEST_ONLY"))
+    with pytest.raises(V4InputLoadError):
+        v4i._validate_upstream_frv_authority(_artifact("CALIBRATION_CANDIDATE"))
+    with pytest.raises(V4InputLoadError):
+        v4i._validate_upstream_frv_authority(None)
+
+    legacy = artifact_dict([block], payload_schema)
+    legacy["artifact_schema_version"] = FRV_MEMBERSHIP_ARTIFACT_LEGACY_SCHEMA_VERSION
+    legacy["artifact_id"] = "frv-membership-" + frv_digest(
+        {
+            key: legacy[key]
+            for key in (
+                "artifact_schema_version",
+                "algorithm_version",
+                "decision_rule_version",
+                "source_content_identity_digest",
+                "scope_union_id",
+                "configuration_digest",
+                "configuration_purpose",
+            )
+        }
+    )
+    legacy["manifest_digest"] = frv_digest(
+        {key: value for key, value in legacy.items() if key != "manifest_digest"}
+    )
+    legacy_artifact = FullResolutionVegetationMembershipArtifact.__new__(
+        FullResolutionVegetationMembershipArtifact
+    )
+    for name, value in legacy.items():
+        object.__setattr__(legacy_artifact, name, value)
+    with pytest.raises(V4InputLoadError):
+        v4i._validate_upstream_frv_authority(legacy_artifact)

@@ -10,6 +10,7 @@ chain.  Every scene is deterministic (no RNG), and every point carries a unique
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import numpy as np
 import pytest
@@ -129,6 +130,7 @@ def make_handoff(
         (0.0, 0.0, 0.0),
         (14.0, 6.0, 7.0),
     ),
+    membership_artifact: Any = None,
 ) -> V4InputHandoffResult:
     n = len(scene_points)
     if n == 0:
@@ -180,6 +182,8 @@ def make_handoff(
     )
     view = V4ValidatedFrvMembershipView.__new__(V4ValidatedFrvMembershipView)
     object.__setattr__(view, "source_identity", source)
+    if membership_artifact is not None:
+        object.__setattr__(view, "membership_artifact", membership_artifact)
     object.__setattr__(view, "view_digest", "d" * 64)
     report = V4RecoveryCoverageReport.__new__(V4RecoveryCoverageReport)
     object.__setattr__(report, "report_digest", "e" * 64)
@@ -1510,3 +1514,144 @@ def _solver_claims(apices, handoff, config):
     scales = derive_algorithm_scales(config)
     grid = _build_grid(population, scales, config)
     return _responsibility_solver(apices, grid, scales, config)
+
+
+# ---------------------------------------------------------------------------
+# REVIEWED_FIXED_POLICY pre-algorithm authority guard
+# ---------------------------------------------------------------------------
+
+
+def _artifact_with_purpose(purpose: str):
+    from core.contracts.frv import (
+        FRVArtifactBlockDescriptor,
+        FRVArtifactPayloadSchema,
+        FullResolutionVegetationMembershipArtifact,
+    )
+
+    from tests.contracts.test_frv_contracts import artifact_dict, block_dict, schema_dict
+
+    payload_schema = FRVArtifactPayloadSchema.from_dict(schema_dict())
+    block = FRVArtifactBlockDescriptor.from_dict(block_dict(payload_schema))
+    return FullResolutionVegetationMembershipArtifact.from_dict(
+        artifact_dict([block], payload_schema, configuration_purpose=purpose)
+    )
+
+
+def test_authority_guard_reviewed_upstream_reviewed_status_allowed() -> None:
+    from core.contracts.frv import FrvConfigurationPurpose
+
+    artifact = _artifact_with_purpose(FrvConfigurationPurpose.REVIEWED_FIXED_POLICY.value)
+    handoff = make_handoff(two_trees_scene(), membership_artifact=artifact)
+    config = make_config(status=V4ConfigStatus.REVIEWED_FIXED_POLICY)
+    result = segment_v4_trees(handoff, config)
+    assert result.tree_records
+    assert result.audit.total_points > 0
+
+
+def test_authority_guard_reviewed_upstream_production_status_rejected() -> None:
+    from core.contracts.frv import FrvConfigurationPurpose
+    from core.contracts.v4_tree_segmentation import V4TreeSegmentationError
+
+    artifact = _artifact_with_purpose(FrvConfigurationPurpose.REVIEWED_FIXED_POLICY.value)
+    handoff = make_handoff(two_trees_scene(), membership_artifact=artifact)
+    config = make_config(status=V4ConfigStatus.PRODUCTION_APPROVED)
+    with pytest.raises(V4TreeSegmentationError):
+        segment_v4_trees(handoff, config)
+
+
+def test_authority_guard_production_upstream_production_status_allowed() -> None:
+    from core.contracts.frv import FrvConfigurationPurpose
+
+    artifact = _artifact_with_purpose(FrvConfigurationPurpose.PRODUCTION_APPROVED.value)
+    handoff = make_handoff(two_trees_scene(), membership_artifact=artifact)
+    config = make_config(status=V4ConfigStatus.PRODUCTION_APPROVED)
+    result = segment_v4_trees(handoff, config)
+    assert result.tree_records
+
+
+def test_authority_guard_missing_upstream_rejected_for_formal_v4() -> None:
+    from core.contracts.v4_tree_segmentation import V4TreeSegmentationError
+
+    # The synthetic handoff carries no embedded membership artifact: the
+    # upstream authority is missing, so any formal V4 status fails closed.
+    handoff = make_handoff(two_trees_scene())
+    for status in (
+        V4ConfigStatus.REVIEWED_FIXED_POLICY,
+        V4ConfigStatus.PRODUCTION_APPROVED,
+    ):
+        with pytest.raises(V4TreeSegmentationError):
+            segment_v4_trees(handoff, make_config(status=status))
+
+
+def test_authority_guard_nonformal_upstream_rejected_for_formal_v4() -> None:
+    from core.contracts.frv import FrvConfigurationPurpose
+    from core.contracts.v4_tree_segmentation import V4TreeSegmentationError
+
+    for purpose in (
+        FrvConfigurationPurpose.TEST_ONLY,
+        FrvConfigurationPurpose.CALIBRATION_CANDIDATE,
+    ):
+        artifact = _artifact_with_purpose(purpose.value)
+        handoff = make_handoff(two_trees_scene(), membership_artifact=artifact)
+        for status in (
+            V4ConfigStatus.REVIEWED_FIXED_POLICY,
+            V4ConfigStatus.PRODUCTION_APPROVED,
+        ):
+            with pytest.raises(V4TreeSegmentationError):
+                segment_v4_trees(handoff, make_config(status=status))
+
+
+def test_authority_guard_does_not_change_numerical_output() -> None:
+    """The authority gate leaves Algorithm-V1 numerical output unchanged.
+
+    Two otherwise equivalent valid executions that reach the computational
+    core (reviewed and production) produce the same segmentation result.
+    """
+    from core.contracts.frv import FrvConfigurationPurpose
+
+    scene = two_trees_scene()
+    reviewed_artifact = _artifact_with_purpose(
+        FrvConfigurationPurpose.REVIEWED_FIXED_POLICY.value
+    )
+    production_artifact = _artifact_with_purpose(
+        FrvConfigurationPurpose.PRODUCTION_APPROVED.value
+    )
+    reviewed = segment_v4_trees(
+        make_handoff(scene, membership_artifact=reviewed_artifact),
+        make_config(status=V4ConfigStatus.REVIEWED_FIXED_POLICY),
+    )
+    production = segment_v4_trees(
+        make_handoff(scene, membership_artifact=production_artifact),
+        make_config(status=V4ConfigStatus.PRODUCTION_APPROVED),
+    )
+    # The numerical segmentation output is identical: same tree IDs, point
+    # assignments, members, and conservation.  (The result digest itself binds
+    # the input handoff/config digests, which differ by authority.)
+    assert np.array_equal(
+        reviewed.tree_id_by_point, production.tree_id_by_point
+    )
+    assert np.array_equal(
+        reviewed.assignment_state_by_point, production.assignment_state_by_point
+    )
+    assert np.array_equal(
+        reviewed.ordered_tree_member_original_index,
+        production.ordered_tree_member_original_index,
+    )
+    assert reviewed.audit.total_points == production.audit.total_points
+    assert len(reviewed.tree_records) == len(production.tree_records)
+    for reviewed_record, production_record in zip(
+        reviewed.tree_records, production.tree_records, strict=True
+    ):
+        assert reviewed_record.tree_id == production_record.tree_id
+        assert reviewed_record.member_count == production_record.member_count
+
+
+def test_authority_guard_production_upstream_reviewed_status_rejected() -> None:
+    from core.contracts.frv import FrvConfigurationPurpose
+    from core.contracts.v4_tree_segmentation import V4TreeSegmentationError
+
+    # Matrix row E: contradictory upstream/downstream authority fails closed.
+    artifact = _artifact_with_purpose(FrvConfigurationPurpose.PRODUCTION_APPROVED.value)
+    handoff = make_handoff(two_trees_scene(), membership_artifact=artifact)
+    with pytest.raises(V4TreeSegmentationError):
+        segment_v4_trees(handoff, make_config(status=V4ConfigStatus.REVIEWED_FIXED_POLICY))

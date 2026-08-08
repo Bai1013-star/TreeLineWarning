@@ -21,9 +21,12 @@ from typing import Any
 import laspy
 import numpy as np
 from core.contracts.frv import (
+    FRV_MEMBERSHIP_ARTIFACT_LEGACY_SCHEMA_VERSION,
     FrvConfiguration,
+    FrvConfigurationPurpose,
     FrvMembershipState,
     FrvSegmentationHagReadiness,
+    FullResolutionVegetationMembershipArtifact,
     SourceIdentity,
     frv_digest,
 )
@@ -1651,6 +1654,41 @@ def _unresolved_set_from_arrays(
     return set_obj
 
 
+def _validate_upstream_frv_authority(artifact: Any) -> None:
+    """Recover and validate the digest-bound upstream FRV authority.
+
+    The V4 handoff trusts only the configuration purpose embedded in the
+    validated, digest-bound membership artifact.  There is no second
+    caller-controlled authority source.  Missing purpose, a legacy v1 artifact,
+    TEST_ONLY / CALIBRATION_CANDIDATE, an unknown value, or a purpose that
+    contradicts the formal publisher's configuration all fail closed; nothing is
+    silently defaulted to a trusted authority.
+    """
+
+    if not isinstance(artifact, FullResolutionVegetationMembershipArtifact):
+        raise V4InputLoadError(
+            code=V4InputErrorCode.FRV_ARTIFACT_INVALID,
+            field_name="membership_artifact",
+        )
+    if (
+        artifact.artifact_schema_version
+        == FRV_MEMBERSHIP_ARTIFACT_LEGACY_SCHEMA_VERSION
+    ):
+        raise V4InputLoadError(
+            code=V4InputErrorCode.FRV_ARTIFACT_INVALID,
+            field_name="configuration_purpose",
+        )
+    purpose = artifact.configuration_purpose
+    if purpose not in (
+        FrvConfigurationPurpose.REVIEWED_FIXED_POLICY,
+        FrvConfigurationPurpose.PRODUCTION_APPROVED,
+    ):
+        raise V4InputLoadError(
+            code=V4InputErrorCode.FRV_ARTIFACT_INVALID,
+            field_name="configuration_purpose",
+        )
+
+
 def load_v4_input_handoff(root_path: Path) -> V4InputHandoffResult:
     """Load and re-validate a formal digest-bound v2 V4 input handoff root.
 
@@ -1836,6 +1874,10 @@ def load_v4_input_handoff(root_path: Path) -> V4InputHandoffResult:
             code=V4InputErrorCode.FRV_ARTIFACT_INVALID,
             field_name="frv_artifact_binding",
         )
+
+    # Recover the upstream FRV authority from the validated, digest-bound
+    # embedded membership artifact (reviewed-fixed or production-approved only).
+    _validate_upstream_frv_authority(artifact)
 
     if (
         manifest.source_content_identity_digest
