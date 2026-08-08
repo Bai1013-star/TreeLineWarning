@@ -568,3 +568,61 @@ def test_scene_sample_preview_marks_bounds_and_avoids_full_read(
     assert "Approved crop bounds" in result.html_path.read_text(encoding="utf-8")
     assert before.st_size == after.st_size
     assert before.st_mtime == after.st_mtime
+
+
+def test_scene_sample_binds_classified_parent_lineage(tmp_path: Path) -> None:
+    """The lineage adapter binds the classified parent without crop changes."""
+    project = tmp_path / "project"
+    raw = project / "data" / "raw"
+    samples = project / "data" / "samples"
+    raw.mkdir(parents=True)
+    samples.mkdir(parents=True)
+    source = raw / "classified_parent.las"
+    output = samples / "scene_simple.las"
+    index_map = samples / "scene_simple_index_map.npz"
+    manifest = samples / "scene_simple_manifest.json"
+    bounds = CropBounds(min_xyz=(102.0, 202.0, 2.0), max_xyz=(104.0, 204.0, 4.0))
+    write_scene_source(source)
+
+    # Without lineage the manifest must not carry the field.
+    result_plain = create_scene_sample(
+        source_path=source,
+        output_path=output,
+        index_map_path=index_map,
+        manifest_path=manifest,
+        bounds=bounds,
+        source_id="source",
+        selection_record=selection_payload(source, bounds),
+        chunk_size=2,
+        project_root=project,
+    )
+    assert result_plain.get("parent_lineage") is None
+
+    output2 = samples / "scene_simple_lineaged.las"
+    index_map2 = samples / "scene_simple_lineaged_index_map.npz"
+    manifest2 = samples / "scene_simple_lineaged_manifest.json"
+    lineage = {
+        "classified_parent_source_id": "scene-1--fgc-v1--0123456789abcdef",
+        "classified_parent_source_file_sha256": "a" * 64,
+        "classified_parent_identity_record_digest": "b" * 64,
+        "parent_original_index_map_digest": "c" * 64,
+        "sample_las_sha256": "d" * 64,
+        "sample_point_count": 3,
+    }
+    result = create_scene_sample(
+        source_path=source,
+        output_path=output2,
+        index_map_path=index_map2,
+        manifest_path=manifest2,
+        bounds=bounds,
+        source_id="source",
+        selection_record=selection_payload(source, bounds),
+        chunk_size=2,
+        project_root=project,
+        parent_lineage=lineage,
+    )
+    assert result["output_point_count"] == 3  # crop selection unchanged
+    assert result["parent_lineage"] == lineage
+    payload = json.loads(manifest2.read_text(encoding="utf-8"))
+    assert payload["parent_lineage"]["classified_parent_source_id"].startswith("scene-1--fgc-v1--")
+    assert payload["parent_lineage"]["parent_original_index_map_digest"] == "c" * 64

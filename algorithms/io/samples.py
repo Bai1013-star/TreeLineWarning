@@ -66,12 +66,8 @@ class CropPrecheck:
             "boundary_counts": dict(self.boundary_counts),
             "z_max_boundary_count": self.z_max_boundary_count,
             "z_max_boundary_ratio": self.z_max_boundary_ratio,
-            "kept_min_xyz": (
-                list(self.kept_min_xyz) if self.kept_min_xyz is not None else None
-            ),
-            "kept_max_xyz": (
-                list(self.kept_max_xyz) if self.kept_max_xyz is not None else None
-            ),
+            "kept_min_xyz": (list(self.kept_min_xyz) if self.kept_min_xyz is not None else None),
+            "kept_max_xyz": (list(self.kept_max_xyz) if self.kept_max_xyz is not None else None),
         }
 
 
@@ -237,8 +233,7 @@ def boundary_proximity_report(
     """Count points near each approved crop boundary with z_max detail."""
     tolerances = tuple(float(value) for value in tolerances_m)
     counts = {
-        boundary: {f"{tolerance:.2f}": 0 for tolerance in tolerances}
-        for boundary in BOUNDARY_NAMES
+        boundary: {f"{tolerance:.2f}": 0 for tolerance in tolerances} for boundary in BOUNDARY_NAMES
     }
     total_points = 0
     z_max_xyz_parts: list[np.ndarray] = []
@@ -260,9 +255,7 @@ def boundary_proximity_report(
         }
         for boundary, values in distances.items():
             for tolerance in tolerances:
-                counts[boundary][f"{tolerance:.2f}"] += int(
-                    np.count_nonzero(values <= tolerance)
-                )
+                counts[boundary][f"{tolerance:.2f}"] += int(np.count_nonzero(values <= tolerance))
 
         z_mask = distances["z_max"] <= 0.10
         if int(np.count_nonzero(z_mask)):
@@ -401,8 +394,16 @@ def create_scene_sample(
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     project_root: Path | str | None = None,
     overwrite: bool = False,
+    parent_lineage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Create the scene_simple LAS, original-index sidecar, and manifest."""
+    """Create the scene_simple LAS, original-index sidecar, and manifest.
+
+    ``parent_lineage`` optionally binds a classified FGC parent: its
+    SourceIdentity, source SHA and identity-record digest, crop bounds,
+    index-map SHA and parent-index mapping digest, sample LAS SHA, and sample
+    point count.  It is recorded in the manifest only and never changes crop
+    selection geometry.
+    """
     source = Path(source_path)
     output = Path(output_path)
     index_map = Path(index_map_path)
@@ -482,6 +483,7 @@ def create_scene_sample(
             "source_file_after": source_after.to_dict(),
             "source_file_unchanged": source_before == source_after,
             "validation": validation,
+            "parent_lineage": _json_safe_lineage(parent_lineage),
             "algorithm": {
                 "name": ALGORITHM_NAME,
                 "version": ALGORITHM_VERSION,
@@ -640,6 +642,15 @@ def _write_index_map(
         if tmp_path.exists():
             tmp_path.unlink()
         raise
+
+
+def _json_safe_lineage(lineage: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return a JSON-safe copy of the classified-parent lineage binding."""
+    if lineage is None:
+        return None
+    from core.contracts._json import json_safe
+
+    return json_safe(lineage, "parent_lineage")  # type: ignore[return-value]
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
