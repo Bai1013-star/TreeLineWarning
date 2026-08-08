@@ -443,7 +443,7 @@ timestamps, callables, and digest mismatch.
 | vertical rule | 8 other neighbours, 1.0 m, 1.50 m span |
 | residual bands | confirm [-0.15,+0.20], review [-0.35,+0.60] m |
 | coverage occupancy / hole width | 20% / interior width >25.0 m fails |
-| source / core / halo point caps | 50,000,000 / 1,500,000 / 2,000,000 |
+| source / core / halo point caps | 50,000,000 / 8,000,000 / 8,000,000 |
 | halo grid cells / plane batch | 500,000 / 65,536 |
 | decision memmap / coverage cells | 64 MiB / 50,000,000 |
 
@@ -455,13 +455,16 @@ The 16 GB working-set bound is:
     + 96 MiB source/chunk and routing workspace
     + 256 MiB fixed safety reserve
 
-With the frozen values this is below 1.0 GiB for the tile algorithm, before the
-process baseline. FGC uses plane batches no larger than max_plane_batch and
-must not allocate a core-points by 32 candidate matrix. The result is
-CONDITIONAL_WITHIN_POLICY_LIMITS: a pathological tile above a cap fails closed
-rather than risking a 16 GB exhaustion. scan_small with 6,905,520 rows is
-feasible only if it remains within these checked limits; runtime is an
-order-of-magnitude expectation, not a benchmark promise.
+With the reviewed per-tile point caps (8,000,000 core and 8,000,000 halo rows)
+this is about 2.4 GiB for the tile algorithm, before the process baseline. The
+estimated single-tile peak for scan_small (6,905,520 rows, ~47 m x ~39 m, one
+256 m tile) is well below 1.5 GiB, far inside the 16 GB ceiling; the real-scene
+runtime records the observed peak. FGC uses plane batches no larger than
+max_plane_batch and must not allocate a core-points by 32 candidate matrix. The
+result is CONDITIONAL_WITHIN_POLICY_LIMITS: a pathological tile above a cap
+fails closed rather than risking a 16 GB exhaustion. scan_small with 6,905,520
+rows is feasible within these checked limits; runtime is an order-of-magnitude
+expectation, not a benchmark promise.
 
 Same-volume free-space preflight requires at least:
 

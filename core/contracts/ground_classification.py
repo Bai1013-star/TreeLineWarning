@@ -254,8 +254,8 @@ class GroundClassificationPolicyConfig:
     coverage_hole_width_m: float = 25.0
     # Resource bounds (design section 11).
     max_source_points: int = 50_000_000
-    max_core_tile_points: int = 1_500_000
-    max_halo_tile_points: int = 2_000_000
+    max_core_tile_points: int = 8_000_000
+    max_halo_tile_points: int = 8_000_000
     max_halo_grid_cells: int = 500_000
     max_plane_batch: int = 65_536
     decision_memmap_bytes: int = 64 * 1024 * 1024

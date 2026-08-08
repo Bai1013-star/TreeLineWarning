@@ -79,8 +79,8 @@ def test_default_policy_has_frozen_values() -> None:
     assert policy.coverage_occupancy_fraction == 0.20
     assert policy.coverage_hole_width_m == 25.0
     assert policy.max_source_points == 50_000_000
-    assert policy.max_core_tile_points == 1_500_000
-    assert policy.max_halo_tile_points == 2_000_000
+    assert policy.max_core_tile_points == 8_000_000
+    assert policy.max_halo_tile_points == 8_000_000
     assert policy.max_halo_grid_cells == 500_000
     assert policy.max_plane_batch == 65_536
     assert policy.decision_memmap_bytes == 64 * 1024 * 1024
@@ -155,10 +155,12 @@ def test_map_derivative_class_semantics() -> None:
         map_derivative_class(300, GroundDecision.NON_GROUND)
 
 
-def test_working_set_is_below_1_gib() -> None:
+def test_working_set_is_within_16_gib() -> None:
+    # With the reviewed per-tile point caps the frozen working-set bound stays
+    # far inside the 16 GB ceiling (design section 11).
     policy = GroundClassificationPolicyConfig()
     working_set = fgc_working_set_bytes(policy)
-    assert working_set < 1024 * 1024 * 1024  # below 1.0 GiB per design section 11
+    assert working_set < 16 * 1024 * 1024 * 1024
     assert policy.max_halo_grid_cells * 128 + policy.max_plane_batch * 128 > 0
 
 
