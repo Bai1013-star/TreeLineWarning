@@ -416,10 +416,16 @@ class _FrvSourceLoadSession:
         self, las_header: Any, non_crs_vlr_count: int
     ) -> FrvSourceHeaderMetadata:
         point_format = las_header.point_format
-        dimension_names = tuple(str(name) for name in point_format.dimension_names)
+        # laspy 2.7 ``dimension_names`` reports standard AND extra dimensions
+        # together; use the authoritative standard-only API so Extra Bytes
+        # dimensions (e.g. NormalX/NormalY/NormalZ) are classified exclusively
+        # as ``extra_dimensions`` and never leak into ``dimensions``.
+        standard_dimension_names = tuple(
+            str(name) for name in point_format.standard_dimension_names
+        )
         standard_names = {
             name.lower()
-            for name in dimension_names
+            for name in standard_dimension_names
             if name.lower() not in ("x", "y", "z")
         }
         dimensions = tuple(sorted(standard_names))

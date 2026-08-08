@@ -74,6 +74,34 @@ def write_las(path: Path, *, point_count: int = 7, point_format: int = 7) -> Non
     las.write(path)
 
 
+def write_las_with_extra_dimensions(
+    path: Path,
+    *,
+    point_count: int = 7,
+    extra_names: tuple[str, ...] = (),
+) -> None:
+    header = laspy.LasHeader(point_format=7, version="1.4")
+    header.scales = np.array([0.01, 0.01, 0.01])
+    header.offsets = np.array([100.0, 200.0, 0.0])
+    for name in extra_names:
+        header.add_extra_dim(laspy.ExtraBytesParams(name=name, type=np.float64))
+    las = laspy.LasData(header)
+    idx = np.arange(point_count)
+    las.x = 100.0 + idx.astype(np.float64)
+    las.y = 200.0 + idx.astype(np.float64)
+    las.z = idx.astype(np.float64)
+    dims = tuple(las.point_format.dimension_names)
+    if "intensity" in dims:
+        las.intensity = (idx + 10).astype(np.uint16)
+    if "classification" in dims:
+        las.classification = (idx % 5).astype(np.uint8)
+    if "point_source_id" in dims:
+        las.point_source_id = (idx + 20).astype(np.uint16)
+    for name in extra_names:
+        setattr(las, name, (idx + 1).astype(np.float64))
+    las.write(path)
+
+
 def _bounds_for(count: int) -> tuple[list[float], list[float]]:
     return (
         [100.0, 200.0, 0.0],
@@ -294,6 +322,47 @@ def _setup(
     return reference, config, configuration
 
 
+def _setup_las(
+    path: Path,
+    *,
+    count: int = 7,
+    pass_through_dimensions=(),
+    canonical_spec=None,
+) -> tuple[FrvSourceProviderReference, FrvSourceProviderConfig, frv.FrvConfiguration]:
+    """Build the reference from an already-written LAS file (no rewrite)."""
+
+    file_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    file_size = path.stat().st_size
+    canonical_digest = None
+    canonical_spec_digest = None
+    canonical_spec_version = None
+    if canonical_spec is not None:
+        canonical_digest = _expected_frvpcd1(path, count, canonical_spec)
+        canonical_spec_digest = canonical_spec.spec_digest
+        canonical_spec_version = frv.FRV_CANONICAL_POINT_CONTENT_SCHEMA_VERSION
+    config = _provider_config(pass_through_dimensions=pass_through_dimensions)
+    configuration = _configuration()
+    identity = _source_identity(
+        str(path),
+        file_sha,
+        count,
+        _bounds_for(count),
+        canonical_digest=canonical_digest,
+        canonical_spec_digest=canonical_spec_digest,
+        canonical_spec_version=canonical_spec_version,
+    )
+    reference = _reference(
+        path,
+        identity,
+        config,
+        configuration,
+        component_sha=file_sha,
+        component_size=file_size,
+        canonical_spec=canonical_spec,
+    )
+    return reference, config, configuration
+
+
 # ---------------------------------------------------------------------------
 # API and dependency
 # ---------------------------------------------------------------------------
@@ -423,6 +492,116 @@ def test_header_metadata_matches_las(tmp_path: Path) -> None:
     assert header.min_xyz == (100.0, 200.0, 0.0)
     assert header.max_xyz == (106.0, 206.0, 6.0)
     assert header.compression_state.value == "uncompressed"
+
+
+def _load_header(
+    reference, config, configuration, *, chunk_size: int = 3
+) -> contracts.FrvSourceHeaderMetadata:
+    session = _load(reference, config, configuration, chunk_size=chunk_size)
+    with session:
+        list(session.iter_chunks())
+        result = session.finalize()
+    contracts.validate_finalized_frv_source_provider_result(result)
+    return result.proof.header
+
+
+def test_standard_only_las_header_dimensions(tmp_path: Path) -> None:
+    """A LAS with no Extra Bytes yields empty extra_dimensions only."""
+
+    path = tmp_path / "standard_only.las"
+    write_las_with_extra_dimensions(path, point_count=7)
+    reference, config, configuration = _setup_las(path, count=7)
+    header = _load_header(reference, config, configuration)
+    assert header.extra_dimensions == ()
+    assert set(header.dimensions) == {
+        "blue",
+        "classification",
+        "edge_of_flight_line",
+        "gps_time",
+        "green",
+        "intensity",
+        "key_point",
+        "number_of_returns",
+        "overlap",
+        "point_source_id",
+        "red",
+        "return_number",
+        "scan_angle",
+        "scan_direction_flag",
+        "scanner_channel",
+        "synthetic",
+        "user_data",
+        "withheld",
+    }
+
+
+def test_normal_extra_bytes_are_extra_dimensions_only(tmp_path: Path) -> None:
+    """NormalX/NormalY/NormalZ Extra Bytes must land in extra_dimensions only."""
+
+    path = tmp_path / "normals.las"
+    write_las_with_extra_dimensions(
+        path, point_count=7, extra_names=("NormalX", "NormalY", "NormalZ")
+    )
+    reference, config, configuration = _setup_las(path, count=7)
+    header = _load_header(reference, config, configuration)
+    assert header.extra_dimensions == ("normalx", "normaly", "normalz")
+    assert "normalx" not in header.dimensions
+    assert "normaly" not in header.dimensions
+    assert "normalz" not in header.dimensions
+    assert set(header.dimensions) & set(header.extra_dimensions) == set()
+
+
+def test_arbitrary_extra_dimension_generic(tmp_path: Path) -> None:
+    """A non-Normal custom Extra Bytes name is classified as extra, not a
+    NormalX/Y/Z special case."""
+
+    path = tmp_path / "custom.las"
+    write_las_with_extra_dimensions(path, point_count=7, extra_names=("custom_field",))
+    reference, config, configuration = _setup_las(path, count=7)
+    header = _load_header(reference, config, configuration)
+    assert header.extra_dimensions == ("custom_field",)
+    assert "custom_field" not in header.dimensions
+    assert set(header.dimensions) & set(header.extra_dimensions) == set()
+
+
+def test_multiple_extra_dimensions_deterministic_order(tmp_path: Path) -> None:
+    """Multiple Extra Bytes dimensions are sorted/canonicalized deterministically
+    and never appear in dimensions."""
+
+    path = tmp_path / "multiple.las"
+    write_las_with_extra_dimensions(
+        path,
+        point_count=7,
+        extra_names=("Zebra", "Alpha", "NormalX", "mId"),
+    )
+    reference, config, configuration = _setup_las(path, count=7)
+    header = _load_header(reference, config, configuration)
+    assert header.extra_dimensions == ("alpha", "mid", "normalx", "zebra")
+    assert header.extra_dimensions == tuple(sorted(header.extra_dimensions))
+    assert set(header.dimensions) & set(header.extra_dimensions) == set()
+
+
+def test_header_dimension_classification_matches_laspy(tmp_path: Path) -> None:
+    """The provider's dimensions/extra_dimensions partition exactly mirrors
+    laspy's standard_dimension_names / extra_dimension_names classification."""
+
+    path = tmp_path / "partition.las"
+    write_las_with_extra_dimensions(
+        path, point_count=7, extra_names=("NormalX", "NormalY", "NormalZ")
+    )
+    reference, config, configuration = _setup_las(path, count=7)
+    header = _load_header(reference, config, configuration)
+    with laspy.open(path) as reader:
+        point_format = reader.header.point_format
+        laspy_standard = {
+            str(name).lower()
+            for name in point_format.standard_dimension_names
+            if str(name).lower() not in ("x", "y", "z")
+        }
+        laspy_extra = {str(name).lower() for name in point_format.extra_dimension_names}
+    assert set(header.dimensions) == laspy_standard
+    assert set(header.extra_dimensions) == laspy_extra
+    assert laspy_standard & laspy_extra == set()
 
 
 def test_close_idempotent(tmp_path: Path) -> None:
