@@ -10,10 +10,14 @@ from pathlib import Path
 import core.contracts.v4_inputs as v4
 import numpy as np
 import pytest
+from core.contracts.frv import frv_digest
 from core.contracts.v4_inputs import (
     V4_COVERAGE_DIGEST_DOMAIN,
     V4_HANDOFF_DIGEST_DOMAIN,
+    V4_HANDOFF_MANIFEST_SCHEMA_VERSION_V2,
+    V4_INPUT_MANIFEST_DIGEST_DOMAIN,
     V4_RECOVERED_INDEX_DIGEST_DOMAIN,
+    V4InputArtifactManifest,
     V4InputErrorCode,
     V4InputHandoffResult,
     V4InputLoadError,
@@ -326,6 +330,87 @@ def test_handoff_result_coverage_only() -> None:
             output_reference=None,
             handoff_digest=SHA,
         )
+
+
+def _manifest(**overrides) -> V4InputArtifactManifest:
+    fields = {
+        "schema_version": V4_HANDOFF_MANIFEST_SCHEMA_VERSION_V2,
+        "source_content_identity_digest": SHA,
+        "source_identity_record_digest": _SHA_B,
+        "origin_context": (500000.0, 4200000.0, 125.0),
+        "frv_membership_artifact_digest": _SHA_C,
+        "report_digest": SHA,
+        "source_proof_digest": _SHA_B,
+        "hag_proof_digest": _SHA_C,
+        "geometry_proof_digest": SHA,
+        "wire_proof_digest": _SHA_B,
+        "normal_block_count": 2,
+        "review_block_count": 1,
+        "normal_row_count": 5,
+        "review_row_count": 2,
+        "normal_block_paths": (
+            "normal/v4nrm-block-00000000.v4blk",
+            "normal/v4nrm-block-00000001.v4blk",
+        ),
+        "review_block_paths": ("review/v4rev-block-00000000.v4blk",),
+        "normal_block_digests": (SHA, _SHA_B),
+        "review_block_digests": (_SHA_C,),
+        "normal_set_digest": SHA,
+        "review_set_digest": _SHA_B,
+        "handoff_digest": _SHA_C,
+        "manifest_digest": "0" * 64,
+    }
+    fields.update(overrides)
+    manifest = V4InputArtifactManifest(
+        **{key: value for key, value in fields.items() if key != "manifest_digest"},
+        manifest_digest=frv_digest(
+            {"digest_domain": V4_INPUT_MANIFEST_DIGEST_DOMAIN, **{
+                key: value for key, value in fields.items() if key != "manifest_digest"
+            }}
+        ),
+    )
+    return manifest
+
+
+def test_v2_manifest_digest_oracle() -> None:
+    manifest = _manifest()
+    expected = frv_digest(
+        {
+            "digest_domain": V4_INPUT_MANIFEST_DIGEST_DOMAIN,
+            **{
+                key: value
+                for key, value in manifest.to_digest_dict().items()
+                if key != "digest_domain"
+            },
+        }
+    )
+    assert manifest.manifest_digest == expected
+    assert manifest.manifest_digest == manifest.computed_digest()
+    assert V4_INPUT_MANIFEST_DIGEST_DOMAIN == "V4INPMF1"
+    assert V4_HANDOFF_MANIFEST_SCHEMA_VERSION_V2 == "v4-input-handoff-v2"
+
+
+def test_v2_manifest_round_trip() -> None:
+    manifest = _manifest()
+    parsed = V4InputArtifactManifest.from_dict(manifest.to_dict())
+    assert parsed == manifest
+
+
+def test_v2_manifest_rejects_bad_path_inventory() -> None:
+    with pytest.raises(ValueError):
+        _manifest(normal_block_paths=("normal/wrong-name.v4blk", "normal/x.v4blk"))
+    with pytest.raises(ValueError):
+        _manifest(normal_block_paths=("normal\\v4nrm-block-00000000.v4blk",))
+
+
+def test_v2_manifest_rejects_count_mismatch() -> None:
+    with pytest.raises(ValueError):
+        _manifest(normal_block_count=3)
+
+
+def test_v2_manifest_rejects_v1_schema() -> None:
+    with pytest.raises(ValueError):
+        _manifest(schema_version="v4-input-handoff-v1")
 
 
 def test_error_codes_frozen() -> None:

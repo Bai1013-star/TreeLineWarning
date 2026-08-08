@@ -44,12 +44,14 @@ V4_UNRESOLVED_SET_SCHEMA_VERSION = "v4-unresolved-measured-point-set-v1"
 V4_UNRECOVERED_REGION_SCHEMA_VERSION = "v4-unrecovered-region-record-v1"
 V4_RECOVERY_COVERAGE_SCHEMA_VERSION = "v4-recovery-coverage-v1"
 V4_HANDOFF_SCHEMA_VERSION = "v4-input-handoff-v1"
+V4_HANDOFF_MANIFEST_SCHEMA_VERSION_V2 = "v4-input-handoff-v2"
 V4_VALIDATED_VIEW_DIGEST_DOMAIN = "V4FRVVIEW1"
 V4_RECOVERED_INDEX_DIGEST_DOMAIN = "V4RECIDX1"
 V4_RECOVERED_SET_DIGEST_DOMAIN = "V4NRM1"
 V4_UNRESOLVED_SET_DIGEST_DOMAIN = "V4REV1"
 V4_COVERAGE_DIGEST_DOMAIN = "V4COV1"
 V4_HANDOFF_DIGEST_DOMAIN = "V4INP1"
+V4_INPUT_MANIFEST_DIGEST_DOMAIN = "V4INPMF1"
 V4_BLOCK_MAGIC_NORMAL = "V4NRMBLK1"
 V4_BLOCK_MAGIC_REVIEW = "V4REVBLK1"
 V4_DEFAULT_BLOCK_RECORD_COUNT = 250000
@@ -191,12 +193,19 @@ def _require_ndarray(
                 raise ValueError(f"{name} must not contain IEEE negative zero")
 
 
-def _sorted_unique_sha_tuple(value: Any, name: str) -> tuple[str, ...]:
+def _unique_sha_tuple(value: Any, name: str) -> tuple[str, ...]:
+    """Validate a positional SHA-256 inventory without imposing sort order.
+
+    The block digest tuple is positionally aligned with the canonical block
+    path inventory (ordinal/path order); SHA values themselves are NOT required
+    to be lexicographically sorted.  Only SHA format and uniqueness are
+    enforced here; positional alignment is checked against the canonical paths.
+    """
     items = _tuple_from_json(value, name)
     for item in items:
         _require_sha(item, f"{name}[]")
-    if len(set(items)) != len(items) or tuple(sorted(items)) != items:
-        raise ValueError(f"{name} must be sorted and unique")
+    if len(set(items)) != len(items):
+        raise ValueError(f"{name} must be unique")
     return items
 
 
@@ -837,6 +846,192 @@ class V4InputOutputReference:
 
 
 # ---------------------------------------------------------------------------
+# V4InputArtifactManifest (v2 digest-bound handoff manifest)
+# ---------------------------------------------------------------------------
+
+
+def _require_relative_block_paths(value: Any, name: str) -> tuple[str, ...]:
+    items = _tuple_from_json(value, name)
+    for item in items:
+        text = _require_exact_str(item, f"{name}[]")
+        if text != text.strip() or "\\" in text:
+            raise ValueError(f"{name}[] must be a canonical relative path")
+    if len(set(items)) != len(items):
+        raise ValueError(f"{name} must be unique")
+    return items
+
+
+def _require_finite_vec3(value: Any, name: str) -> tuple[float, float, float]:
+    if type(value) not in (list, tuple) or len(value) != 3:
+        raise ValueError(f"{name} must be a three-value JSON array")
+    return (
+        _require_finite_float(value[0], f"{name}[0]"),
+        _require_finite_float(value[1], f"{name}[1]"),
+        _require_finite_float(value[2], f"{name}[2]"),
+    )
+
+
+def _check_input_artifact_manifest(manifest: V4InputArtifactManifest) -> None:
+    if type(manifest.schema_version) is not str:
+        raise ValueError("schema_version must be a built-in str")
+    if manifest.schema_version != V4_HANDOFF_MANIFEST_SCHEMA_VERSION_V2:
+        raise ValueError("unsupported V4 input manifest schema version")
+    _require_sha(
+        manifest.source_content_identity_digest, "source_content_identity_digest"
+    )
+    _require_sha(
+        manifest.source_identity_record_digest, "source_identity_record_digest"
+    )
+    _require_sha(
+        manifest.frv_membership_artifact_digest, "frv_membership_artifact_digest"
+    )
+    _require_sha(manifest.report_digest, "report_digest")
+    for name in ("normal_block_count", "review_block_count"):
+        _require_nonnegative_int(getattr(manifest, name), name)
+    for name in ("normal_row_count", "review_row_count"):
+        _require_nonnegative_int(getattr(manifest, name), name)
+    normal_paths = _require_relative_block_paths(
+        manifest.normal_block_paths, "normal_block_paths"
+    )
+    review_paths = _require_relative_block_paths(
+        manifest.review_block_paths, "review_block_paths"
+    )
+    normal_digests = _unique_sha_tuple(
+        manifest.normal_block_digests, "normal_block_digests"
+    )
+    review_digests = _unique_sha_tuple(
+        manifest.review_block_digests, "review_block_digests"
+    )
+    if len(normal_paths) != manifest.normal_block_count:
+        raise ValueError("normal_block_paths length must equal normal_block_count")
+    if len(review_paths) != manifest.review_block_count:
+        raise ValueError("review_block_paths length must equal review_block_count")
+    if len(normal_digests) != manifest.normal_block_count:
+        raise ValueError("normal_block_digests length must equal normal_block_count")
+    if len(review_digests) != manifest.review_block_count:
+        raise ValueError("review_block_digests length must equal review_block_count")
+    if not all(
+        path == f"normal/v4nrm-block-{ordinal:08d}.v4blk"
+        for ordinal, path in enumerate(normal_paths)
+    ):
+        raise ValueError("normal_block_paths must use the canonical block inventory")
+    if not all(
+        path == f"review/v4rev-block-{ordinal:08d}.v4blk"
+        for ordinal, path in enumerate(review_paths)
+    ):
+        raise ValueError("review_block_paths must use the canonical block inventory")
+    for name in (
+        "source_proof_digest",
+        "hag_proof_digest",
+        "geometry_proof_digest",
+        "wire_proof_digest",
+    ):
+        _require_sha(getattr(manifest, name), name)
+    _require_sha(manifest.normal_set_digest, "normal_set_digest")
+    _require_sha(manifest.review_set_digest, "review_set_digest")
+    _require_sha(manifest.handoff_digest, "handoff_digest")
+    _require_sha(manifest.manifest_digest, "manifest_digest")
+    if manifest.manifest_digest != manifest.computed_digest():
+        raise ValueError("manifest_digest does not match canonical V4INPMF1 fields")
+
+
+@dataclass(frozen=True, slots=True)
+class V4InputArtifactManifest:
+    """Digest-bound V4 input handoff manifest (schema v2).
+
+    The v2 manifest persists the canonical normal/review block relative paths,
+    per-block SHA-256 digests, the set digests and the final handoff digest so a
+    separate process can re-validate every published byte before segmentation.
+    The ``manifest_digest`` binds the complete v2 manifest inventory.
+    """
+
+    schema_version: str
+    source_content_identity_digest: str
+    source_identity_record_digest: str
+    origin_context: tuple[float, float, float]
+    frv_membership_artifact_digest: str
+    report_digest: str
+    source_proof_digest: str
+    hag_proof_digest: str
+    geometry_proof_digest: str
+    wire_proof_digest: str
+    normal_block_count: int
+    review_block_count: int
+    normal_row_count: int
+    review_row_count: int
+    normal_block_paths: tuple[str, ...]
+    review_block_paths: tuple[str, ...]
+    normal_block_digests: tuple[str, ...]
+    review_block_digests: tuple[str, ...]
+    normal_set_digest: str
+    review_set_digest: str
+    handoff_digest: str
+    manifest_digest: str
+
+    def __post_init__(self) -> None:
+        _check_input_artifact_manifest(self)
+
+    def to_digest_dict(self) -> dict[str, Any]:
+        return {
+            "digest_domain": V4_INPUT_MANIFEST_DIGEST_DOMAIN,
+            "schema_version": self.schema_version,
+            "source_content_identity_digest": self.source_content_identity_digest,
+            "source_identity_record_digest": self.source_identity_record_digest,
+            "origin_context": list(self.origin_context),
+            "frv_membership_artifact_digest": self.frv_membership_artifact_digest,
+            "report_digest": self.report_digest,
+            "source_proof_digest": self.source_proof_digest,
+            "hag_proof_digest": self.hag_proof_digest,
+            "geometry_proof_digest": self.geometry_proof_digest,
+            "wire_proof_digest": self.wire_proof_digest,
+            "normal_block_count": self.normal_block_count,
+            "review_block_count": self.review_block_count,
+            "normal_row_count": self.normal_row_count,
+            "review_row_count": self.review_row_count,
+            "normal_block_paths": list(self.normal_block_paths),
+            "review_block_paths": list(self.review_block_paths),
+            "normal_block_digests": list(self.normal_block_digests),
+            "review_block_digests": list(self.review_block_digests),
+            "normal_set_digest": self.normal_set_digest,
+            "review_set_digest": self.review_set_digest,
+            "handoff_digest": self.handoff_digest,
+        }
+
+    def computed_digest(self) -> str:
+        return frv_digest(self.to_digest_dict())
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = dict(self.to_digest_dict())
+        payload.pop("digest_domain")
+        payload["manifest_digest"] = self.manifest_digest
+        return payload
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> V4InputArtifactManifest:
+        values = _exact_fields(data, set(cls.__dataclass_fields__), cls.__name__)
+        values["origin_context"] = _require_finite_vec3(
+            values["origin_context"], "origin_context"
+        )
+        values["normal_block_paths"] = _require_relative_block_paths(
+            values["normal_block_paths"], "normal_block_paths"
+        )
+        values["review_block_paths"] = _require_relative_block_paths(
+            values["review_block_paths"], "review_block_paths"
+        )
+        values["normal_block_digests"] = _unique_sha_tuple(
+            values["normal_block_digests"], "normal_block_digests"
+        )
+        values["review_block_digests"] = _unique_sha_tuple(
+            values["review_block_digests"], "review_block_digests"
+        )
+        return cls(**values)
+
+
+def validate_v4_input_artifact_manifest(manifest: V4InputArtifactManifest) -> None:
+    _check_input_artifact_manifest(manifest)
+
+
+# ---------------------------------------------------------------------------
 # V4InputHandoffResult
 # ---------------------------------------------------------------------------
 
@@ -998,12 +1193,14 @@ __all__ = [
     "V4_UNRECOVERED_REGION_SCHEMA_VERSION",
     "V4_RECOVERY_COVERAGE_SCHEMA_VERSION",
     "V4_HANDOFF_SCHEMA_VERSION",
+    "V4_HANDOFF_MANIFEST_SCHEMA_VERSION_V2",
     "V4_VALIDATED_VIEW_DIGEST_DOMAIN",
     "V4_RECOVERED_INDEX_DIGEST_DOMAIN",
     "V4_RECOVERED_SET_DIGEST_DOMAIN",
     "V4_UNRESOLVED_SET_DIGEST_DOMAIN",
     "V4_COVERAGE_DIGEST_DOMAIN",
     "V4_HANDOFF_DIGEST_DOMAIN",
+    "V4_INPUT_MANIFEST_DIGEST_DOMAIN",
     "V4_BLOCK_MAGIC_NORMAL",
     "V4_BLOCK_MAGIC_REVIEW",
     "V4_DEFAULT_BLOCK_RECORD_COUNT",
@@ -1016,10 +1213,12 @@ __all__ = [
     "V4UnrecoveredRegionRecord",
     "V4RecoveryCoverageReport",
     "V4InputOutputReference",
+    "V4InputArtifactManifest",
     "V4InputHandoffResult",
     "V4InputLoadError",
     "frv_v4_recovered_index_digest",
     "frv_v4_handoff_digest",
     "validate_frv_validated_membership_view",
     "validate_frv_recovery_coverage_report",
+    "validate_v4_input_artifact_manifest",
 ]

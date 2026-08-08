@@ -822,6 +822,52 @@ def test_identity_mismatch_rejected(ready, tmp_path: Path) -> None:
         _run_vis(frv_root, v4_copy, las_path, tmp_path / "out")
 
 
+def test_ready_manifest_v1_read_compatibility(ready, tmp_path: Path) -> None:
+    """FRV-VIS-A1 keeps read compatibility with persisted v1 manifests."""
+
+    result, las_path, v4_root = ready
+    frv_root, v4_copy = _copy_roots(result.output_reference.root_path, v4_root, tmp_path)
+    manifest_path = v4_copy / "handoff_manifest.json"
+    payload = json.loads(manifest_path.read_text("utf-8"))
+    payload["schema_version"] = "v4-input-handoff-v1"
+    for key in (
+        "source_identity_record_digest",
+        "origin_context",
+        "normal_row_count",
+        "review_row_count",
+        "normal_block_paths",
+        "review_block_paths",
+        "normal_block_digests",
+        "review_block_digests",
+        "normal_set_digest",
+        "review_set_digest",
+        "handoff_digest",
+        "manifest_digest",
+        "source_proof_digest",
+        "hag_proof_digest",
+        "geometry_proof_digest",
+        "wire_proof_digest",
+    ):
+        payload.pop(key)
+    manifest_path.write_text(json.dumps(payload), "utf-8")
+    # v1 has no persisted block digests, so the viewer reads it as before.
+    data = _run_vis(frv_root, v4_copy, las_path, tmp_path / "out")
+    assert data.mode == "ready"
+
+
+def test_ready_v2_block_hash_verified(ready, tmp_path: Path) -> None:
+    """A v2 manifest verifies every published block SHA-256 on read."""
+
+    result, las_path, v4_root = ready
+    _frv, v4_copy = _copy_roots(result.output_reference.root_path, v4_root, tmp_path)
+    block = next((v4_copy / "normal").glob("*.v4blk"))
+    data = bytearray(block.read_bytes())
+    data[-1] ^= 0xFF
+    block.write_bytes(bytes(data))
+    with pytest.raises(vis.FrvV4ValidationError):
+        _run_vis(result.output_reference.root_path, v4_copy, las_path, tmp_path / "out")
+
+
 def test_corrupt_normal_block_rejected(ready, tmp_path: Path) -> None:
     result, las_path, v4_root = ready
     _frv, v4_copy = _copy_roots(result.output_reference.root_path, v4_root, tmp_path)

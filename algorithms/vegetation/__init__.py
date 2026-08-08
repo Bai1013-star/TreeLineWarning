@@ -64,7 +64,15 @@ from algorithms.vegetation.treetop_candidates import (
     TreetopDetectionErrorCode,
     detect_treetop_candidates,
 )
-from algorithms.vegetation.v4_inputs import build_v4_input_handoff
+from algorithms.vegetation.v4_inputs import (
+    build_v4_input_handoff,
+    load_v4_input_handoff,
+)
+from algorithms.vegetation.v4_tree_artifacts import (
+    load_v4_tree_segmentation_artifact,
+    publish_v4_tree_segmentation_artifact,
+)
+from algorithms.vegetation.v4_tree_segmentation import segment_v4_trees
 from algorithms.vegetation.wire_provider import load_frv_wire
 
 __all__ = [
@@ -93,6 +101,10 @@ __all__ = [
     "build_frv_payload_schema",
     "build_v4_input_handoff",
     "compute_art1_artifact_sha256",
+    "load_v4_input_handoff",
+    "load_v4_tree_segmentation_artifact",
+    "publish_v4_tree_segmentation_artifact",
+    "segment_v4_trees",
     "decode_frv_block",
     "detect_treetop_candidates",
     "encode_frv_block",

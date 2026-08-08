@@ -13,15 +13,18 @@ produces a coverage-only handoff; a NO_SCOPE result raises
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import laspy
 import numpy as np
 from core.contracts.frv import (
     FrvConfiguration,
     FrvMembershipState,
     FrvSegmentationHagReadiness,
+    SourceIdentity,
     frv_digest,
 )
 from core.contracts.frv_membership import (
@@ -43,8 +46,11 @@ from core.contracts.frv_source import (
     validate_finalized_frv_source_provider_result,
 )
 from core.contracts.v4_inputs import (
+    V4_HANDOFF_MANIFEST_SCHEMA_VERSION_V2,
+    V4_INPUT_MANIFEST_DIGEST_DOMAIN,
     V4_RECOVERY_COVERAGE_SCHEMA_VERSION,
     V4_UNRECOVERED_REGION_SCHEMA_VERSION,
+    V4InputArtifactManifest,
     V4InputErrorCode,
     V4InputHandoffResult,
     V4InputLoadError,
@@ -57,6 +63,8 @@ from core.contracts.v4_inputs import (
     V4ValidatedFrvMembershipView,
     frv_v4_handoff_digest,
     frv_v4_recovered_index_digest,
+    validate_frv_recovery_coverage_report,
+    validate_frv_validated_membership_view,
 )
 
 from algorithms.io.source_provider import load_frv_source
@@ -219,7 +227,7 @@ def build_v4_input_handoff(
     )
 
     view = _build_validated_view(membership_result, reloaded)
-    handoff_reference = _publish_ready_handoff(
+    handoff_reference, manifest = _publish_ready_handoff(
         output_dir=output_dir,
         reference_dir=root_path,
         view=view,
@@ -233,22 +241,10 @@ def build_v4_input_handoff(
         payload_rows=payload_rows,
         evidence_rows=evidence_rows,
         membership_artifact_digest=reloaded.membership_artifact.manifest_digest,
-    )
-
-    normal_set_digest = frv_digest(
-        {
-            "digest_domain": "V4NRM1",
-            "block_digests": list(_set_block_digests(handoff_reference.normal_block_paths)),
-        }
-    )
-    review_set_digest = unresolved_set.set_digest
-    handoff_digest = frv_v4_handoff_digest(
-        source_content_identity_digest=source_result.source_identity.source_content_identity_digest,
-        frv_membership_artifact_digest=reloaded.membership_artifact.manifest_digest,
-        report_digest=coverage_report.report_digest,
-        normal_set_digest=normal_set_digest,
-        review_set_digest=review_set_digest,
-        unrecovered_regions=(),
+        source_proof_digest=reloaded.source_proof_digest,
+        hag_proof_digest=reloaded.hag_proof_digest or ("0" * 64),
+        geometry_proof_digest=reloaded.geometry_proof_digest or ("0" * 64),
+        wire_proof_digest=reloaded.wire_proof_digest or ("0" * 64),
     )
     return _make_handoff(
         validated_membership=view,
@@ -257,7 +253,7 @@ def build_v4_input_handoff(
         unrecovered_regions=(),
         coverage_report=coverage_report,
         output_reference=handoff_reference,
-        handoff_digest=handoff_digest,
+        handoff_digest=manifest.handoff_digest,
     )
 
 
@@ -286,15 +282,18 @@ def _check_signature_types(
 
 
 def _make_handoff(*args: Any, **kwargs: Any) -> V4InputHandoffResult:
-    result = V4InputHandoffResult.__new__(V4InputHandoffResult)
-    object.__setattr__(result, "validated_membership", kwargs["validated_membership"])
-    object.__setattr__(result, "recovered_vegetation", kwargs["recovered_vegetation"])
-    object.__setattr__(result, "unresolved_measured_points", kwargs["unresolved_measured_points"])
-    object.__setattr__(result, "unrecovered_regions", kwargs["unrecovered_regions"])
-    object.__setattr__(result, "coverage_report", kwargs["coverage_report"])
-    object.__setattr__(result, "output_reference", kwargs["output_reference"])
-    object.__setattr__(result, "handoff_digest", kwargs["handoff_digest"])
-    return result
+    # Construct through the real constructor so the full handoff invariants
+    # (_check_handoff_result) run on every reconstructed result; a __new__
+    # object is never trusted without validation.
+    return V4InputHandoffResult(
+        validated_membership=kwargs["validated_membership"],
+        recovered_vegetation=kwargs["recovered_vegetation"],
+        unresolved_measured_points=kwargs["unresolved_measured_points"],
+        unrecovered_regions=kwargs["unrecovered_regions"],
+        coverage_report=kwargs["coverage_report"],
+        output_reference=kwargs["output_reference"],
+        handoff_digest=kwargs["handoff_digest"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1127,12 +1126,75 @@ def _publish_ready_handoff(
     payload_rows: Mapping[int, dict[str, np.ndarray]],
     evidence_rows: Mapping[int, dict[str, np.ndarray]],
     membership_artifact_digest: str,
-) -> V4InputOutputReference:
+    source_proof_digest: str,
+    hag_proof_digest: str,
+    geometry_proof_digest: str,
+    wire_proof_digest: str,
+) -> tuple[V4InputOutputReference, V4InputArtifactManifest]:
     normal_blocks = _encode_normal_blocks(
         normal_indexes, normal_xyz, payload_rows
     )
     review_blocks = _encode_review_blocks_from_sets(
         review_indexes, review_xyz, payload_rows, evidence_rows
+    )
+    normal_block_digests = tuple(
+        hashlib.sha256(block).hexdigest() for block in normal_blocks
+    )
+    review_block_digests = tuple(
+        hashlib.sha256(block).hexdigest() for block in review_blocks
+    )
+    normal_set_digest = frv_digest(
+        {
+            "digest_domain": "V4NRM1",
+            "block_digests": list(normal_block_digests),
+        }
+    )
+    review_set_digest = unresolved_set.set_digest
+    handoff_digest = frv_v4_handoff_digest(
+        source_content_identity_digest=view.source_identity.source_content_identity_digest,
+        frv_membership_artifact_digest=membership_artifact_digest,
+        report_digest=coverage_report.report_digest,
+        normal_set_digest=normal_set_digest,
+        review_set_digest=review_set_digest,
+        unrecovered_regions=(),
+    )
+    _manifest_fields = {
+        "schema_version": V4_HANDOFF_MANIFEST_SCHEMA_VERSION_V2,
+        "source_content_identity_digest": view.source_identity.source_content_identity_digest,
+        "source_identity_record_digest": view.source_identity.source_identity_record_digest,
+        "origin_context": tuple(float(value) for value in view.source_identity.origin_context),
+        "frv_membership_artifact_digest": membership_artifact_digest,
+        "report_digest": coverage_report.report_digest,
+        "source_proof_digest": source_proof_digest,
+        "hag_proof_digest": hag_proof_digest,
+        "geometry_proof_digest": geometry_proof_digest,
+        "wire_proof_digest": wire_proof_digest,
+        "normal_block_count": len(normal_blocks),
+        "review_block_count": len(review_blocks),
+        "normal_row_count": len(normal_indexes),
+        "review_row_count": len(review_indexes),
+        "normal_block_paths": tuple(
+            f"normal/v4nrm-block-{ordinal:08d}.v4blk"
+            for ordinal in range(len(normal_blocks))
+        ),
+        "review_block_paths": tuple(
+            f"review/v4rev-block-{ordinal:08d}.v4blk"
+            for ordinal in range(len(review_blocks))
+        ),
+        "normal_block_digests": normal_block_digests,
+        "review_block_digests": review_block_digests,
+        "normal_set_digest": normal_set_digest,
+        "review_set_digest": review_set_digest,
+        "handoff_digest": handoff_digest,
+    }
+    manifest = V4InputArtifactManifest(
+        **_manifest_fields,
+        manifest_digest=frv_digest(
+            {
+                "digest_domain": V4_INPUT_MANIFEST_DIGEST_DOMAIN,
+                **_manifest_fields,
+            }
+        ),
     )
 
     def publish(staging: Path) -> None:
@@ -1144,34 +1206,25 @@ def _publish_ready_handoff(
             (staging / f"review/v4rev-block-{ordinal:08d}.v4blk").write_bytes(data)
         write_canonical_json(staging / "validated_view.json", view.to_dict())
         write_canonical_json(staging / "coverage_report.json", coverage_report.to_dict())
-        write_canonical_json(
-            staging / "handoff_manifest.json",
-            {
-                "schema_version": "v4-input-handoff-v1",
-                "source_content_identity_digest": (
-                    view.source_identity.source_content_identity_digest
-                ),
-                "frv_membership_artifact_digest": membership_artifact_digest,
-                "report_digest": coverage_report.report_digest,
-                "normal_block_count": len(normal_blocks),
-                "review_block_count": len(review_blocks),
-            },
-        )
+        write_canonical_json(staging / "handoff_manifest.json", manifest.to_dict())
 
     publish_directory(scratch_dir=reference_dir, target_dir=output_dir, publish=publish)
-    return V4InputOutputReference(
-        root_path=output_dir,
-        validated_view_json_path=output_dir / "validated_view.json",
-        coverage_json_path=output_dir / "coverage_report.json",
-        normal_block_paths=tuple(
-            output_dir / f"normal/v4nrm-block-{ordinal:08d}.v4blk"
-            for ordinal in range(len(normal_blocks))
+    return (
+        V4InputOutputReference(
+            root_path=output_dir,
+            validated_view_json_path=output_dir / "validated_view.json",
+            coverage_json_path=output_dir / "coverage_report.json",
+            normal_block_paths=tuple(
+                output_dir / f"normal/v4nrm-block-{ordinal:08d}.v4blk"
+                for ordinal in range(len(normal_blocks))
+            ),
+            review_block_paths=tuple(
+                output_dir / f"review/v4rev-block-{ordinal:08d}.v4blk"
+                for ordinal in range(len(review_blocks))
+            ),
+            handoff_manifest_path=output_dir / "handoff_manifest.json",
         ),
-        review_block_paths=tuple(
-            output_dir / f"review/v4rev-block-{ordinal:08d}.v4blk"
-            for ordinal in range(len(review_blocks))
-        ),
-        handoff_manifest_path=output_dir / "handoff_manifest.json",
+        manifest,
     )
 
 
@@ -1261,8 +1314,779 @@ def _set_block_digests(paths: tuple[Path, ...]) -> tuple[str, ...]:
     return tuple(hashlib.sha256(path.read_bytes()).hexdigest() for path in paths)
 
 
+# ---------------------------------------------------------------------------
+# Public v2 handoff loader
+# ---------------------------------------------------------------------------
+
+
+def _decode_v4_block_file(
+    path: Path,
+    *,
+    magic: bytes,
+    schema_order: tuple[str, ...],
+    dtypes: Mapping[str, np.dtype],
+) -> dict[str, np.ndarray]:
+    row_shapes: dict[str, tuple[int, ...]] = {
+        name: () for name in schema_order
+    }
+    if "xyz_local_m" in row_shapes:
+        row_shapes["xyz_local_m"] = (3,)
+    _header, arrays = decode_frv_block(
+        path.read_bytes(),
+        magic=magic,
+        schema_order=schema_order,
+        dtypes=dtypes,
+        row_shapes=row_shapes,
+    )
+    return arrays
+
+
+def _normal_block_dtypes() -> dict[str, np.dtype]:
+    return {name: np.dtype(dtype) for name, dtype in _NORMAL_FIELDS}
+
+
+def _review_block_dtypes() -> dict[str, np.dtype]:
+    return {name: np.dtype(dtype) for name, dtype in _REVIEW_FIELDS}
+
+
+def _load_ready_blocks_from_manifest(
+    root: Path,
+    manifest: V4InputArtifactManifest,
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    normal_paths = [root / path for path in manifest.normal_block_paths]
+    review_paths = [root / path for path in manifest.review_block_paths]
+    for path in normal_paths + review_paths:
+        if not path.is_file():
+            raise V4InputLoadError(
+                code=V4InputErrorCode.OUTPUT_PUBLICATION_FAILED,
+                field_name="block",
+            )
+    for expected, path in zip(manifest.normal_block_digests, normal_paths, strict=True):
+        if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            raise V4InputLoadError(
+                code=V4InputErrorCode.FRV_ARTIFACT_INVALID, field_name="normal_block"
+            )
+    for expected, path in zip(manifest.review_block_digests, review_paths, strict=True):
+        if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            raise V4InputLoadError(
+                code=V4InputErrorCode.FRV_ARTIFACT_INVALID, field_name="review_block"
+            )
+    normal_arrays = [
+        _decode_v4_block_file(
+            path, magic=V4_NORMAL_BLOCK_MAGIC, schema_order=_normal_dtype_order(),
+            dtypes=_normal_block_dtypes(),
+        )
+        for path in normal_paths
+    ]
+    review_arrays = [
+        _decode_v4_block_file(
+            path, magic=V4_REVIEW_BLOCK_MAGIC, schema_order=_review_dtype_order(),
+            dtypes=_review_block_dtypes(),
+        )
+        for path in review_paths
+    ]
+    return _concatenate_block_arrays(normal_arrays), _concatenate_block_arrays(
+        review_arrays
+    )
+
+
+def _normal_dtype_order() -> tuple[str, ...]:
+    return tuple(name for name, _dtype in _NORMAL_FIELDS)
+
+
+def _review_dtype_order() -> tuple[str, ...]:
+    return tuple(name for name, _dtype in _REVIEW_FIELDS)
+
+
+def _concatenate_block_arrays(blocks: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
+    if not blocks:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.FRV_ARTIFACT_INVALID, field_name="block"
+        )
+    names = tuple(blocks[0])
+    result: dict[str, np.ndarray] = {}
+    for name in names:
+        parts = [block[name] for block in blocks]
+        result[name] = np.concatenate(parts, axis=0)
+        result[name].setflags(write=False)
+    return result
+
+
+def _validate_source_row_identity(
+    source_identity: SourceIdentity,
+    normal: Mapping[str, np.ndarray],
+    review: Mapping[str, np.ndarray],
+) -> None:
+    """Bind every persisted V4 row identity back to the trusted source bytes.
+
+    The v2 block/set/report/manifest digests are an integrity chain, not an
+    authenticity primitive: an internally rehashed block must still fail when
+    its ``original_index`` no longer names the persisted measured XYZ.  Replay
+    the frozen LAS source once, verify its content hash/count, and compare only
+    the requested normal/review rows under the authoritative origin context.
+    """
+
+    source_path = Path(source_identity.resolved_access_path)
+    if not source_path.is_file() or source_path.suffix.lower() != ".las":
+        raise V4InputLoadError(
+            code=V4InputErrorCode.SOURCE_IDENTITY_FAILED,
+            field_name="source_replay",
+        )
+    hasher = hashlib.sha256()
+    try:
+        with source_path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                hasher.update(chunk)
+    except OSError as exc:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.SOURCE_IDENTITY_FAILED,
+            field_name="source_replay",
+        ) from exc
+    if hasher.hexdigest() != source_identity.source_file_sha256:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.SOURCE_IDENTITY_FAILED,
+            field_name="source_file_sha256",
+        )
+
+    normal_indexes = np.asarray(normal["original_index"], dtype=np.int64)
+    review_indexes = np.asarray(review["original_index"], dtype=np.int64)
+    requested = np.concatenate((normal_indexes, review_indexes))
+    if requested.size and (
+        int(requested.min()) < 0
+        or int(requested.max()) >= source_identity.source_point_count
+    ):
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ORIGINAL_INDEX_INVALID,
+            field_name="original_index",
+        )
+    expected_by_index = {
+        int(index): np.asarray(xyz, dtype=np.float64)
+        for indexes, xyz_rows in (
+            (normal_indexes, normal["xyz_local_m"]),
+            (review_indexes, review["xyz_local_m"]),
+        )
+        for index, xyz in zip(indexes, np.asarray(xyz_rows), strict=True)
+    }
+    origin = np.asarray(source_identity.origin_context, dtype=np.float64)
+    seen: set[int] = set()
+    sorted_targets = sorted(expected_by_index)
+    target_cursor = 0
+    offset = 0
+    try:
+        with laspy.open(source_path) as reader:
+            if int(reader.header.point_count) != source_identity.source_point_count:
+                raise V4InputLoadError(
+                    code=V4InputErrorCode.SOURCE_IDENTITY_FAILED,
+                    field_name="source_point_count",
+                )
+            for points in reader.chunk_iterator(250_000):
+                stop = offset + len(points)
+                while (
+                    target_cursor < len(sorted_targets)
+                    and sorted_targets[target_cursor] < stop
+                ):
+                    index = sorted_targets[target_cursor]
+                    target_cursor += 1
+                    if index < offset:
+                        continue
+                    row = index - offset
+                    actual_local = np.asarray(
+                        [points.x[row], points.y[row], points.z[row]],
+                        dtype=np.float64,
+                    ) - origin
+                    if not np.allclose(
+                        actual_local,
+                        expected_by_index[index],
+                        rtol=0.0,
+                        atol=1e-9,
+                    ):
+                        raise V4InputLoadError(
+                            code=V4InputErrorCode.ORIGINAL_INDEX_INVALID,
+                            field_name="source_row_identity",
+                        )
+                    seen.add(index)
+                offset = stop
+    except V4InputLoadError:
+        raise
+    except (OSError, ValueError, laspy.errors.LaspyException) as exc:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.SOURCE_IDENTITY_FAILED,
+            field_name="source_replay",
+        ) from exc
+    if seen != set(expected_by_index):
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ORIGINAL_INDEX_INVALID,
+            field_name="source_row_identity",
+        )
+
+
+def _check_normal_routes(normal: dict[str, np.ndarray]) -> None:
+    membership = np.asarray(normal["membership_state"], dtype=np.uint8)
+    readiness = np.asarray(normal["segmentation_hag_readiness"], dtype=np.uint8)
+    admitted = (
+        (membership == int(FrvMembershipState.VERIFIED_VEGETATION_CANDIDATE))
+        | (membership == int(FrvMembershipState.MANUAL_INCLUDE))
+    )
+    if not np.all(admitted):
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+            field_name="normal_membership",
+        )
+    if not np.all(readiness == int(FrvSegmentationHagReadiness.READY)):
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+            field_name="normal_readiness",
+        )
+
+
+def _check_review_routes(review: dict[str, np.ndarray]) -> None:
+    routes = np.asarray(review["primary_route"], dtype=np.uint8)
+    if not np.all(routes == int(V4PrimaryRoute.MEASURED_POINT_REVIEW)):
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+            field_name="review_route",
+        )
+
+
+def _recovered_set_from_arrays(
+    source_identity: SourceIdentity,
+    normal: dict[str, np.ndarray],
+    frv_membership_artifact_digest: str,
+) -> V4RecoveredVegetationSet:
+    indexes = np.asarray(normal["original_index"], dtype=np.int64)
+    if indexes.size == 0:
+        indexes = indexes.astype("<i8")
+    set_obj = V4RecoveredVegetationSet.__new__(V4RecoveredVegetationSet)
+    object.__setattr__(set_obj, "source_identity", source_identity)
+    object.__setattr__(set_obj, "original_index", _ro(indexes.astype("<i8")))
+    object.__setattr__(set_obj, "xyz_local_m", _ro(np.asarray(normal["xyz_local_m"]).copy()))
+    object.__setattr__(set_obj, "hag_m", _ro(np.asarray(normal["hag_m"]).copy()))
+    object.__setattr__(
+        set_obj, "membership_state", _ro(np.asarray(normal["membership_state"]).copy())
+    )
+    object.__setattr__(
+        set_obj,
+        "hag_evidence_state",
+        _ro(np.asarray(normal["hag_evidence_state"]).copy()),
+    )
+    object.__setattr__(
+        set_obj,
+        "segmentation_hag_readiness",
+        _ro(np.asarray(normal["segmentation_hag_readiness"]).copy()),
+    )
+    object.__setattr__(
+        set_obj, "candidate_reason_flags", _ro(np.asarray(normal["candidate_reason_flags"]).copy())
+    )
+    object.__setattr__(set_obj, "candidate_confidence", None)
+    object.__setattr__(
+        set_obj, "frv_membership_artifact_digest", frv_membership_artifact_digest
+    )
+    object.__setattr__(
+        set_obj,
+        "recovered_index_digest",
+        frv_v4_recovered_index_digest(
+            source_content_identity_digest=source_identity.source_content_identity_digest,
+            original_index=indexes,
+        ),
+    )
+    return set_obj
+
+
+def _unresolved_set_from_arrays(
+    source_identity: SourceIdentity,
+    review: dict[str, np.ndarray],
+    frv_membership_artifact_digest: str,
+    source_proof_digest: str,
+    hag_proof_digest: str,
+    geometry_proof_digest: str,
+    wire_proof_digest: str,
+    review_set_digest: str,
+) -> V4UnresolvedMeasuredPointSet:
+    set_obj = V4UnresolvedMeasuredPointSet.__new__(V4UnresolvedMeasuredPointSet)
+    object.__setattr__(set_obj, "source_identity", source_identity)
+    object.__setattr__(
+        set_obj, "original_index", _ro(np.asarray(review["original_index"]).copy())
+    )
+    object.__setattr__(set_obj, "xyz_local_m", _ro(np.asarray(review["xyz_local_m"]).copy()))
+    object.__setattr__(
+        set_obj, "membership_state", _ro(np.asarray(review["membership_state"]).copy())
+    )
+    object.__setattr__(
+        set_obj, "hag_evidence_state", _ro(np.asarray(review["hag_evidence_state"]).copy())
+    )
+    object.__setattr__(
+        set_obj,
+        "segmentation_hag_readiness",
+        _ro(np.asarray(review["segmentation_hag_readiness"]).copy()),
+    )
+    object.__setattr__(set_obj, "raw_hag_m", _ro(np.asarray(review["raw_hag_m"]).copy()))
+    object.__setattr__(
+        set_obj, "clamped_hag_m", _ro(np.asarray(review["clamped_hag_m"]).copy())
+    )
+    object.__setattr__(set_obj, "reason_flags", _ro(np.asarray(review["reason_flags"]).copy()))
+    object.__setattr__(set_obj, "quality_flags", _ro(np.asarray(review["quality_flags"]).copy()))
+    object.__setattr__(
+        set_obj, "wire_provider_state", _ro(np.asarray(review["wire_provider_state"]).copy())
+    )
+    object.__setattr__(
+        set_obj, "wire_relation_state", _ro(np.asarray(review["wire_relation_state"]).copy())
+    )
+    object.__setattr__(
+        set_obj, "nearest_wire_id", _ro(np.asarray(review["nearest_wire_id"]).copy())
+    )
+    object.__setattr__(
+        set_obj, "centerline_distance_m", _ro(np.asarray(review["centerline_distance_m"]).copy())
+    )
+    object.__setattr__(
+        set_obj, "primary_route", _ro(np.asarray(review["primary_route"]).copy())
+    )
+    object.__setattr__(
+        set_obj, "frv_membership_artifact_digest", frv_membership_artifact_digest
+    )
+    object.__setattr__(set_obj, "source_proof_digest", source_proof_digest)
+    object.__setattr__(set_obj, "hag_proof_digest", hag_proof_digest)
+    object.__setattr__(set_obj, "geometry_proof_digest", geometry_proof_digest)
+    object.__setattr__(set_obj, "wire_proof_digest", wire_proof_digest)
+    object.__setattr__(set_obj, "set_digest", review_set_digest)
+    return set_obj
+
+
+def load_v4_input_handoff(root_path: Path) -> V4InputHandoffResult:
+    """Load and re-validate a formal digest-bound v2 V4 input handoff root.
+
+    This is the formal segmentation entry point: it accepts only v2 manifests
+    with a persisted block digest inventory, set digests and the final handoff
+    digest.  v1 roots (which lack the persisted inventory) fail closed here and
+    remain available only through the read-only FRV-VIS-A1 loader.
+    """
+
+    if not isinstance(root_path, Path) or not root_path.is_dir():
+        raise V4InputLoadError(
+            code=V4InputErrorCode.FRV_ARTIFACT_INVALID, field_name="root"
+        )
+    from core.contracts.v4_inputs import (
+        V4InputArtifactManifest,
+        validate_v4_input_artifact_manifest,
+    )
+
+    manifest_path = root_path / "handoff_manifest.json"
+    if not manifest_path.is_file():
+        raise V4InputLoadError(
+            code=V4InputErrorCode.OUTPUT_PUBLICATION_FAILED,
+            field_name="handoff_manifest.json",
+        )
+    try:
+        payload = json.loads(manifest_path.read_text("utf-8"))
+        if payload.get("schema_version") != V4_HANDOFF_MANIFEST_SCHEMA_VERSION_V2:
+            raise V4InputLoadError(
+                code=V4InputErrorCode.FRV_ARTIFACT_INVALID, field_name="schema_version"
+            )
+        manifest = V4InputArtifactManifest.from_dict(payload)
+        validate_v4_input_artifact_manifest(manifest)
+    except V4InputLoadError:
+        raise
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.FRV_ARTIFACT_INVALID, field_name="handoff_manifest.json"
+        ) from exc
+
+    view_path = root_path / "validated_view.json"
+    report_path = root_path / "coverage_report.json"
+    if not view_path.is_file() or not report_path.is_file():
+        raise V4InputLoadError(
+            code=V4InputErrorCode.OUTPUT_PUBLICATION_FAILED,
+            field_name="ready_files",
+        )
+    try:
+        view_payload = json.loads(view_path.read_text("utf-8"))
+        view_payload["membership_block_references"] = ()
+        view_payload["decision_evidence_block_references"] = ()
+        view = V4ValidatedFrvMembershipView.from_dict(view_payload)
+        coverage_report = V4RecoveryCoverageReport.from_dict(
+            json.loads(report_path.read_text("utf-8"))
+        )
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.FRV_ARTIFACT_INVALID, field_name="ready_files"
+        ) from exc
+
+    # Run the full contract validators on the reconstructed objects rather than
+    # trusting them merely because their stored digests are self-consistent.
+    try:
+        validate_frv_validated_membership_view(view)
+        validate_frv_recovery_coverage_report(coverage_report)
+    except (ValueError, TypeError) as exc:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.FRV_ARTIFACT_INVALID, field_name="ready_files"
+        ) from exc
+    # The formal segmentation loader requires a fully READY handoff: every
+    # frozen completeness flag must be true.  A false flag here is a hard fail,
+    # not a review or a gap.
+    for name in (
+        "frv_canonical_inventory_complete",
+        "frv_required_inventory_complete",
+        "frv_approved_hard_rejection_complete",
+        "frv_scope_coverage_complete",
+        "frv_routing_complete",
+        "frv_membership_decision_complete",
+        "source_identity_complete",
+        "xyz_recovery_complete",
+        "hag_ready_complete",
+        "segmentation_input_complete",
+        "v4_routing_complete",
+    ):
+        if not bool(getattr(coverage_report, name)):
+            raise V4InputLoadError(
+                code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+                field_name=name,
+            )
+    for name in (
+        "frv_canonical_inventory_complete",
+        "frv_required_inventory_complete",
+        "frv_approved_hard_rejection_complete",
+        "frv_scope_coverage_complete",
+        "frv_routing_complete",
+        "frv_membership_decision_complete",
+    ):
+        if not bool(getattr(view, name)):
+            raise V4InputLoadError(
+                code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+                field_name=name,
+            )
+    if coverage_report.measured_clearance_complete is not False:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+            field_name="measured_clearance_complete",
+        )
+
+    # The view, its embedded FRV artifact, and the V4 coverage report are three
+    # independently digested records.  Bind every shared count/completeness
+    # field here so a rehashed outer bundle cannot substitute a self-consistent
+    # report that disagrees with the upstream semantic artifact.
+    artifact = view.membership_artifact
+    shared_fields = (
+        "frv_canonical_inventory_count",
+        "frv_required_inventory_count",
+        "frv_approved_hard_rejection_count",
+        "frv_scope_created_or_merged_count",
+        "frv_coverage_blocked_count",
+        "frv_unique_in_scope_point_count",
+        "frv_evaluated_point_count",
+        "frv_unasserted_in_scope_count",
+        "frv_verified_vegetation_candidate_count",
+        "frv_excluded_non_candidate_count",
+        "frv_review_required_membership_count",
+        "frv_manual_include_count",
+        "frv_manual_exclude_count",
+        "frv_canonical_inventory_complete",
+        "frv_required_inventory_complete",
+        "frv_approved_hard_rejection_complete",
+        "frv_scope_coverage_complete",
+        "frv_routing_complete",
+        "frv_membership_decision_complete",
+    )
+    for name in shared_fields:
+        if getattr(view, name) != getattr(coverage_report, name):
+            raise V4InputLoadError(
+                code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+                field_name=name,
+            )
+    artifact_field_by_view_field = {
+        "frv_canonical_inventory_count": "canonical_inventory_count",
+        "frv_required_inventory_count": "required_inventory_count",
+        "frv_approved_hard_rejection_count": "approved_hard_rejection_count",
+        "frv_scope_created_or_merged_count": "scope_created_or_merged_count",
+        "frv_coverage_blocked_count": "coverage_blocked_count",
+        "frv_unique_in_scope_point_count": "unique_in_scope_point_count",
+        "frv_evaluated_point_count": "evaluated_point_count",
+        "frv_unasserted_in_scope_count": "unasserted_in_scope_count",
+        "frv_verified_vegetation_candidate_count": (
+            "verified_vegetation_candidate_count"
+        ),
+        "frv_excluded_non_candidate_count": "excluded_non_candidate_count",
+        "frv_review_required_membership_count": "review_required_membership_count",
+        "frv_manual_include_count": "manual_include_count",
+        "frv_manual_exclude_count": "manual_exclude_count",
+        "frv_canonical_inventory_complete": "canonical_inventory_complete",
+        "frv_required_inventory_complete": "required_inventory_complete",
+        "frv_approved_hard_rejection_complete": "approved_hard_rejection_complete",
+        "frv_scope_coverage_complete": "scope_coverage_complete",
+        "frv_routing_complete": "routing_complete",
+        "frv_membership_decision_complete": "membership_decision_complete",
+    }
+    for view_field, artifact_field in artifact_field_by_view_field.items():
+        if getattr(view, view_field) != getattr(artifact, artifact_field):
+            raise V4InputLoadError(
+                code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+                field_name=view_field,
+            )
+    if (
+        view.coverage_manifest.manifest_digest
+        != coverage_report.frv_scope_coverage_manifest_digest
+        or artifact.scope_coverage_manifest_digest
+        != coverage_report.frv_scope_coverage_manifest_digest
+        or artifact.manifest_digest != coverage_report.frv_membership_artifact_digest
+        or view.artifact_binding.membership_artifact_manifest_digest
+        != artifact.manifest_digest
+        or view.coverage_manifest.canonical_inventory_digest
+        != coverage_report.frv_upstream_inventory_digest
+        or artifact.scope_union_id != coverage_report.frv_scope_union_id
+    ):
+        raise V4InputLoadError(
+            code=V4InputErrorCode.FRV_ARTIFACT_INVALID,
+            field_name="frv_artifact_binding",
+        )
+
+    if (
+        manifest.source_content_identity_digest
+        != view.source_identity.source_content_identity_digest
+        or manifest.source_content_identity_digest
+        != coverage_report.source_content_identity_digest
+    ):
+        raise V4InputLoadError(
+            code=V4InputErrorCode.SOURCE_IDENTITY_FAILED,
+            field_name="source_content_identity_digest",
+        )
+    if (
+        manifest.source_identity_record_digest
+        != view.source_identity.source_identity_record_digest
+        or manifest.source_identity_record_digest
+        != coverage_report.source_identity_record_digest
+    ):
+        raise V4InputLoadError(
+            code=V4InputErrorCode.SOURCE_IDENTITY_FAILED,
+            field_name="source_identity_record_digest",
+        )
+    if manifest.origin_context != tuple(view.source_identity.origin_context):
+        raise V4InputLoadError(
+            code=V4InputErrorCode.SOURCE_IDENTITY_FAILED, field_name="origin_context"
+        )
+    if manifest.report_digest != coverage_report.report_digest:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.FRV_ARTIFACT_INVALID, field_name="report_digest"
+        )
+    if (
+        manifest.frv_membership_artifact_digest
+        != coverage_report.frv_membership_artifact_digest
+    ):
+        raise V4InputLoadError(
+            code=V4InputErrorCode.FRV_ARTIFACT_INVALID,
+            field_name="frv_membership_artifact_digest",
+        )
+
+    normal, review = _load_ready_blocks_from_manifest(root_path, manifest)
+    normal_row_count = int(np.asarray(normal["original_index"]).shape[0])
+    review_row_count = int(np.asarray(review["original_index"]).shape[0])
+    if normal_row_count != manifest.normal_row_count:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+            field_name="normal_row_count",
+        )
+    if review_row_count != manifest.review_row_count:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+            field_name="review_row_count",
+        )
+    if normal_row_count != coverage_report.normal_segmentation_count:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+            field_name="normal_segmentation_count",
+        )
+    if review_row_count != coverage_report.measured_point_review_count:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+            field_name="measured_point_review_count",
+        )
+    _check_normal_routes(normal)
+    _check_review_routes(review)
+    _validate_source_row_identity(view.source_identity, normal, review)
+    persisted_membership = np.concatenate(
+        (
+            np.asarray(normal["membership_state"], dtype=np.uint8),
+            np.asarray(review["membership_state"], dtype=np.uint8),
+        )
+    )
+    state_count_fields = (
+        (
+            FrvMembershipState.VERIFIED_VEGETATION_CANDIDATE,
+            "frv_verified_vegetation_candidate_count",
+        ),
+        (
+            FrvMembershipState.REVIEW_REQUIRED_MEMBERSHIP,
+            "frv_review_required_membership_count",
+        ),
+        (FrvMembershipState.MANUAL_INCLUDE, "frv_manual_include_count"),
+    )
+    for state, field_name in state_count_fields:
+        observed_count = int(np.count_nonzero(persisted_membership == int(state)))
+        if observed_count != getattr(coverage_report, field_name):
+            raise V4InputLoadError(
+                code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+                field_name=field_name,
+            )
+    expected_excluded_count = (
+        coverage_report.frv_excluded_non_candidate_count
+        + coverage_report.frv_manual_exclude_count
+    )
+    if coverage_report.excluded_audit_count != expected_excluded_count:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+            field_name="excluded_audit_count",
+        )
+    if normal_row_count + review_row_count + expected_excluded_count != (
+        coverage_report.frv_unique_in_scope_point_count
+    ):
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+            field_name="frv_unique_in_scope_point_count",
+        )
+
+    # The canonical publisher writes every normal block in ascending
+    # original_index order; the persisted block order itself is part of the
+    # handoff identity.  An attacker reordering rows inside a block would
+    # produce a recomputed recovered-index digest that disagrees with the
+    # coverage report authority.
+    normal_indexes = np.asarray(normal["original_index"], dtype=np.int64)
+    if normal_indexes.size > 1 and not (np.diff(normal_indexes) > 0).all():
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+            field_name="normal_index_order",
+        )
+    if int(normal_indexes.shape[0]) != int(np.unique(normal_indexes).shape[0]):
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ORIGINAL_INDEX_DUPLICATE, field_name="normal_index"
+        )
+    if int(review["original_index"].shape[0]) != int(
+        np.unique(np.asarray(review["original_index"], dtype=np.int64)).shape[0]
+    ):
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ORIGINAL_INDEX_DUPLICATE, field_name="review_index"
+        )
+    overlapping = np.intersect1d(
+        normal_indexes, np.asarray(review["original_index"], dtype=np.int64)
+    )
+    if overlapping.size:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ROUTING_CONSERVATION_FAILED,
+            field_name="route_overlap",
+        )
+
+    normal_set_digest = frv_digest(
+        {
+            "digest_domain": "V4NRM1",
+            "block_digests": list(manifest.normal_block_digests),
+        }
+    )
+    review_set_digest = frv_digest(
+        {
+            "digest_domain": "V4REV1",
+            "block_digests": list(manifest.review_block_digests),
+        }
+    )
+    if normal_set_digest != manifest.normal_set_digest:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.FRV_ARTIFACT_INVALID, field_name="normal_set_digest"
+        )
+    if review_set_digest != manifest.review_set_digest:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.FRV_ARTIFACT_INVALID, field_name="review_set_digest"
+        )
+    handoff_digest = frv_v4_handoff_digest(
+        source_content_identity_digest=manifest.source_content_identity_digest,
+        frv_membership_artifact_digest=manifest.frv_membership_artifact_digest,
+        report_digest=manifest.report_digest,
+        normal_set_digest=normal_set_digest,
+        review_set_digest=review_set_digest,
+        unrecovered_regions=(),
+    )
+    if handoff_digest != manifest.handoff_digest:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.FRV_ARTIFACT_INVALID, field_name="handoff_digest"
+        )
+
+    # Independently reconstructed recovered-index authority: recompute the
+    # V4RECIDX1 digest over the actual normal block bytes and bind it to the
+    # coverage report.  A self-consistent manifest forgery (block bytes +
+    # manifest values + recomputed manifest digest) cannot pass unless it also
+    # forges the coverage report and the handoff identity chain.
+    recovered_index_digest = frv_v4_recovered_index_digest(
+        source_content_identity_digest=view.source_identity.source_content_identity_digest,
+        original_index=normal_indexes,
+    )
+    if recovered_index_digest != coverage_report.recovered_index_digest:
+        raise V4InputLoadError(
+            code=V4InputErrorCode.ORIGINAL_INDEX_INVALID,
+            field_name="recovered_index_digest",
+        )
+    # Reconstruct the formal sets through their real constructors so every
+    # full contract invariant (dtype/shape/finite/read-only) runs; do not
+    # build a ``__new__`` object that is then trusted without validation.
+    recovered_set = V4RecoveredVegetationSet(
+        source_identity=view.source_identity,
+        original_index=_ro(np.asarray(normal_indexes, dtype="<i8")),
+        xyz_local_m=_ro(np.asarray(normal["xyz_local_m"]).copy()),
+        hag_m=_ro(np.asarray(normal["hag_m"]).copy()),
+        membership_state=_ro(np.asarray(normal["membership_state"]).copy()),
+        hag_evidence_state=_ro(np.asarray(normal["hag_evidence_state"]).copy()),
+        segmentation_hag_readiness=_ro(
+            np.asarray(normal["segmentation_hag_readiness"]).copy()
+        ),
+        candidate_reason_flags=_ro(np.asarray(normal["candidate_reason_flags"]).copy()),
+        candidate_confidence=None,
+        frv_membership_artifact_digest=manifest.frv_membership_artifact_digest,
+        recovered_index_digest=recovered_index_digest,
+    )
+    unresolved_set = V4UnresolvedMeasuredPointSet(
+        source_identity=view.source_identity,
+        original_index=_ro(np.asarray(review["original_index"]).copy()),
+        xyz_local_m=_ro(np.asarray(review["xyz_local_m"]).copy()),
+        membership_state=_ro(np.asarray(review["membership_state"]).copy()),
+        hag_evidence_state=_ro(np.asarray(review["hag_evidence_state"]).copy()),
+        segmentation_hag_readiness=_ro(
+            np.asarray(review["segmentation_hag_readiness"]).copy()
+        ),
+        raw_hag_m=_ro(np.asarray(review["raw_hag_m"]).copy()),
+        clamped_hag_m=_ro(np.asarray(review["clamped_hag_m"]).copy()),
+        reason_flags=_ro(np.asarray(review["reason_flags"]).copy()),
+        quality_flags=_ro(np.asarray(review["quality_flags"]).copy()),
+        wire_provider_state=_ro(np.asarray(review["wire_provider_state"]).copy()),
+        wire_relation_state=_ro(np.asarray(review["wire_relation_state"]).copy()),
+        nearest_wire_id=_ro(np.asarray(review["nearest_wire_id"]).copy()),
+        centerline_distance_m=_ro(np.asarray(review["centerline_distance_m"]).copy()),
+        primary_route=_ro(np.asarray(review["primary_route"]).copy()),
+        frv_membership_artifact_digest=manifest.frv_membership_artifact_digest,
+        source_proof_digest=manifest.source_proof_digest,
+        hag_proof_digest=manifest.hag_proof_digest,
+        geometry_proof_digest=manifest.geometry_proof_digest,
+        wire_proof_digest=manifest.wire_proof_digest,
+        set_digest=review_set_digest,
+    )
+    reference = V4InputOutputReference(
+        root_path=root_path,
+        validated_view_json_path=view_path,
+        coverage_json_path=report_path,
+        normal_block_paths=tuple(
+            root_path / path for path in manifest.normal_block_paths
+        ),
+        review_block_paths=tuple(
+            root_path / path for path in manifest.review_block_paths
+        ),
+        handoff_manifest_path=manifest_path,
+    )
+    return _make_handoff(
+        validated_membership=view,
+        recovered_vegetation=recovered_set,
+        unresolved_measured_points=unresolved_set,
+        unrecovered_regions=(),
+        coverage_report=coverage_report,
+        output_reference=reference,
+        handoff_digest=manifest.handoff_digest,
+    )
+
+
 __all__ = [
     "build_v4_input_handoff",
+    "load_v4_input_handoff",
     "V4_NORMAL_BLOCK_MAGIC",
     "V4_REVIEW_BLOCK_MAGIC",
 ]

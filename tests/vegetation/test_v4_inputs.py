@@ -10,7 +10,11 @@ from unittest import mock
 import laspy
 import numpy as np
 import pytest
-from algorithms.vegetation import build_frv_membership, build_v4_input_handoff
+from algorithms.vegetation import (
+    build_frv_membership,
+    build_v4_input_handoff,
+    load_v4_input_handoff,
+)
 from algorithms.vegetation import v4_inputs as v4i
 from algorithms.vegetation.frv_artifacts import decode_frv_block
 from core.contracts.frv import FrvConfiguration, frv_digest
@@ -26,10 +30,13 @@ from core.contracts.frv_membership import (
     default_frv_scope_policy_config,
 )
 from core.contracts.v4_inputs import (
+    V4_INPUT_MANIFEST_DIGEST_DOMAIN,
     V4InputErrorCode,
     V4InputHandoffResult,
     V4InputLoadError,
     V4PrimaryRoute,
+    V4RecoveryCoverageReport,
+    frv_v4_handoff_digest,
 )
 
 from tests.contracts.test_frv_membership_contracts import (
@@ -237,6 +244,119 @@ def test_replay_rejects_fabricated_source_fingerprint(ready) -> None:
             expected_source_proof_digest="1" * 64,
         )
     assert excinfo.value.code is V4InputErrorCode.SOURCE_IDENTITY_FAILED
+
+
+def test_v2_handoff_loader_round_trip(ready) -> None:
+    """The public v2 loader re-validates and reconstructs the handoff result."""
+
+    result, _las, _col, _ground, reference, source_result, configuration, _ref, _auth = ready
+    out = result.output_reference.root_path.parent / "v4out_loader"
+    handoff = build_v4_input_handoff(
+        reference,
+        source_result,
+        result,
+        frv_configuration=configuration,
+        output_dir=out,
+        source_chunk_size=40,
+    )
+    assert handoff.output_reference is not None
+    manifest_text = handoff.output_reference.handoff_manifest_path.read_text("utf-8")
+    assert '"schema_version":"v4-input-handoff-v2"' in manifest_text
+    loaded = load_v4_input_handoff(handoff.output_reference.root_path)
+    assert loaded.handoff_digest == handoff.handoff_digest
+    assert loaded.validated_membership is not None
+    assert loaded.recovered_vegetation is not None
+    recovered = loaded.recovered_vegetation
+    assert (recovered.original_index == handoff.recovered_vegetation.original_index).all()
+    assert np.allclose(recovered.xyz_local_m, handoff.recovered_vegetation.xyz_local_m)
+    assert np.allclose(recovered.hag_m, handoff.recovered_vegetation.hag_m)
+    unresolved = loaded.unresolved_measured_points
+    assert unresolved is not None
+    assert (unresolved.original_index == handoff.unresolved_measured_points.original_index).all()
+
+
+def test_v2_handoff_loader_rejects_corrupt_block(ready, tmp_path: Path) -> None:
+    result, _las, _col, _ground, reference, source_result, configuration, _ref, _auth = ready
+    out = result.output_reference.root_path.parent / "v4out_corrupt"
+    handoff = build_v4_input_handoff(
+        reference,
+        source_result,
+        result,
+        frv_configuration=configuration,
+        output_dir=out,
+        source_chunk_size=40,
+    )
+    block = next((handoff.output_reference.root_path / "normal").glob("*.v4blk"))
+    data = bytearray(block.read_bytes())
+    data[-1] ^= 0xFF
+    block.write_bytes(bytes(data))
+    with pytest.raises(V4InputLoadError) as excinfo:
+        load_v4_input_handoff(handoff.output_reference.root_path)
+    assert excinfo.value.code is V4InputErrorCode.FRV_ARTIFACT_INVALID
+
+
+def test_v2_handoff_loader_rejects_tampered_manifest(ready) -> None:
+    result, _las, _col, _ground, reference, source_result, configuration, _ref, _auth = ready
+    out = result.output_reference.root_path.parent / "v4out_tamper"
+    handoff = build_v4_input_handoff(
+        reference,
+        source_result,
+        result,
+        frv_configuration=configuration,
+        output_dir=out,
+        source_chunk_size=40,
+    )
+    manifest_path = handoff.output_reference.handoff_manifest_path
+    payload = json.loads(manifest_path.read_text("utf-8"))
+    payload["report_digest"] = "0" * 64
+    manifest_path.write_text(json.dumps(payload), "utf-8")
+    with pytest.raises(V4InputLoadError) as excinfo:
+        load_v4_input_handoff(handoff.output_reference.root_path)
+    assert excinfo.value.code in (
+        V4InputErrorCode.FRV_ARTIFACT_INVALID,
+        V4InputErrorCode.SOURCE_IDENTITY_FAILED,
+    )
+
+
+def test_v2_handoff_loader_rejects_v1_root(ready) -> None:
+    """A v1 manifest root fails closed in the formal v2-only loader."""
+
+    result, _las, _col, _ground, reference, source_result, configuration, _ref, _auth = ready
+    out = result.output_reference.root_path.parent / "v4out_v1"
+    handoff = build_v4_input_handoff(
+        reference,
+        source_result,
+        result,
+        frv_configuration=configuration,
+        output_dir=out,
+        source_chunk_size=40,
+    )
+    manifest_path = handoff.output_reference.handoff_manifest_path
+    payload = json.loads(manifest_path.read_text("utf-8"))
+    payload["schema_version"] = "v4-input-handoff-v1"
+    for key in (
+        "source_identity_record_digest",
+        "origin_context",
+        "normal_row_count",
+        "review_row_count",
+        "normal_block_paths",
+        "review_block_paths",
+        "normal_block_digests",
+        "review_block_digests",
+        "normal_set_digest",
+        "review_set_digest",
+        "handoff_digest",
+        "manifest_digest",
+        "source_proof_digest",
+        "hag_proof_digest",
+        "geometry_proof_digest",
+        "wire_proof_digest",
+    ):
+        payload.pop(key)
+    manifest_path.write_text(json.dumps(payload), "utf-8")
+    with pytest.raises(V4InputLoadError) as excinfo:
+        load_v4_input_handoff(handoff.output_reference.root_path)
+    assert excinfo.value.code is V4InputErrorCode.FRV_ARTIFACT_INVALID
 
 
 def test_ready_handoff_rejects_altered_source(tmp_path: Path) -> None:
@@ -655,3 +775,281 @@ def test_candidate002_local_xyz_digest_sensitivity_to_origin() -> None:
         digest_a
         == "cdf519483d1b6b54a057aaba83c315974b35025e296ee7274e791b89bf021d48"
     )
+
+
+# ---------------------------------------------------------------------------
+# V4-BUNDLE-A review-fix loader regression tests (V4A-IR-001/002/015 #1-#3)
+# ---------------------------------------------------------------------------
+
+
+def _build_tiny_block_handoff(ready, name: str):
+    result, _las, _col, _ground, reference, source_result, configuration, _ref, _auth = ready
+    out = result.output_reference.root_path.parent / name
+    with mock.patch.object(v4i, "_V4_BLOCK_CAPACITY", 2):
+        handoff = build_v4_input_handoff(
+            reference,
+            source_result,
+            result,
+            frv_configuration=configuration,
+            output_dir=out,
+            source_chunk_size=40,
+        )
+    assert handoff.output_reference is not None
+    return handoff
+
+
+def _manifest_payload(handoff) -> dict:
+    return json.loads(
+        handoff.output_reference.handoff_manifest_path.read_text("utf-8")
+    )
+
+
+def _rehash_manifest_digest(manifest_payload: dict) -> str:
+    fields = dict(manifest_payload)
+    fields.pop("manifest_digest", None)
+    return frv_digest(
+        {"digest_domain": V4_INPUT_MANIFEST_DIGEST_DOMAIN, **fields}
+    )
+
+
+def _write_manifest(handoff, payload: dict) -> None:
+    handoff.output_reference.handoff_manifest_path.write_text(
+        json.dumps(payload), "utf-8"
+    )
+
+
+def test_v2_multi_block_digest_order_arbitrary_and_positional(ready) -> None:
+    """V4A-IR-002/015 #1: arbitrary block SHA order is valid and positionally
+    aligned; reordering path or digest alone fails closed."""
+    handoff = _build_tiny_block_handoff(ready, "v4_multi_digest")
+    payload = _manifest_payload(handoff)
+    assert payload["normal_block_count"] >= 3
+    # The loader accepts a multi-block handoff whose SHA order is arbitrary.
+    loaded = load_v4_input_handoff(handoff.output_reference.root_path)
+    assert loaded.handoff_digest == handoff.handoff_digest
+    # Reordering only the digest tuple breaks positional alignment.
+    reordered_digests = list(reversed(payload["normal_block_digests"]))
+    tampered = dict(payload)
+    tampered["normal_block_digests"] = reordered_digests
+    tampered["manifest_digest"] = _rehash_manifest_digest(tampered)
+    _write_manifest(handoff, tampered)
+    with pytest.raises(V4InputLoadError) as excinfo:
+        load_v4_input_handoff(handoff.output_reference.root_path)
+    assert excinfo.value.code is V4InputErrorCode.FRV_ARTIFACT_INVALID
+    # Reordering the canonical path inventory fails closed.
+    handoff = _build_tiny_block_handoff(ready, "v4_multi_path")
+    payload = _manifest_payload(handoff)
+    tampered = dict(payload)
+    tampered["normal_block_paths"] = list(reversed(payload["normal_block_paths"]))
+    tampered["manifest_digest"] = _rehash_manifest_digest(tampered)
+    _write_manifest(handoff, tampered)
+    with pytest.raises(V4InputLoadError):
+        load_v4_input_handoff(handoff.output_reference.root_path)
+
+
+def _tamper_report(report_obj: V4RecoveryCoverageReport, **changes) -> V4RecoveryCoverageReport:
+    clone = V4RecoveryCoverageReport.__new__(V4RecoveryCoverageReport)
+    for name in V4RecoveryCoverageReport.__dataclass_fields__:
+        if name == "report_digest":
+            continue
+        object.__setattr__(clone, name, changes.get(name, getattr(report_obj, name)))
+    object.__setattr__(clone, "report_digest", clone.computed_digest())
+    return clone
+
+
+def test_v2_loader_rejects_incomplete_completeness_flag(ready) -> None:
+    """V4A-IR-001/015 #2: a false frozen completeness flag fails closed even
+    when every digest is rehashed consistently."""
+    handoff = _build_tiny_block_handoff(ready, "v4_incomplete_flag")
+    report_path = handoff.output_reference.coverage_json_path
+    report_payload = json.loads(report_path.read_text("utf-8"))
+    report_obj = V4RecoveryCoverageReport.from_dict(report_payload)
+    tampered_report = _tamper_report(report_obj, v4_routing_complete=False)
+    report_path.write_text(json.dumps(tampered_report.to_dict()), "utf-8")
+    # Rehash the manifest's report_digest + handoff_digest + manifest_digest.
+    payload = _manifest_payload(handoff)
+    payload["report_digest"] = tampered_report.report_digest
+    payload["handoff_digest"] = frv_v4_handoff_digest(
+        source_content_identity_digest=payload["source_content_identity_digest"],
+        frv_membership_artifact_digest=payload["frv_membership_artifact_digest"],
+        report_digest=tampered_report.report_digest,
+        normal_set_digest=payload["normal_set_digest"],
+        review_set_digest=payload["review_set_digest"],
+        unrecovered_regions=(),
+    )
+    payload["manifest_digest"] = _rehash_manifest_digest(payload)
+    _write_manifest(handoff, payload)
+    with pytest.raises(V4InputLoadError) as excinfo:
+        load_v4_input_handoff(handoff.output_reference.root_path)
+    assert excinfo.value.code is V4InputErrorCode.ROUTING_CONSERVATION_FAILED
+
+
+def test_v2_loader_rejects_segmentation_input_complete_false(ready) -> None:
+    """V4A-IR-001: a false segmentation_input_complete flag fails closed."""
+    handoff = _build_tiny_block_handoff(ready, "v4_seginput_flag")
+    report_path = handoff.output_reference.coverage_json_path
+    report_payload = json.loads(report_path.read_text("utf-8"))
+    report_obj = V4RecoveryCoverageReport.from_dict(report_payload)
+    tampered_report = _tamper_report(report_obj, segmentation_input_complete=False)
+    report_path.write_text(json.dumps(tampered_report.to_dict()), "utf-8")
+    payload = _manifest_payload(handoff)
+    payload["report_digest"] = tampered_report.report_digest
+    payload["handoff_digest"] = frv_v4_handoff_digest(
+        source_content_identity_digest=payload["source_content_identity_digest"],
+        frv_membership_artifact_digest=payload["frv_membership_artifact_digest"],
+        report_digest=tampered_report.report_digest,
+        normal_set_digest=payload["normal_set_digest"],
+        review_set_digest=payload["review_set_digest"],
+        unrecovered_regions=(),
+    )
+    payload["manifest_digest"] = _rehash_manifest_digest(payload)
+    _write_manifest(handoff, payload)
+    with pytest.raises(V4InputLoadError) as excinfo:
+        load_v4_input_handoff(handoff.output_reference.root_path)
+    assert excinfo.value.code is V4InputErrorCode.ROUTING_CONSERVATION_FAILED
+
+
+def test_v2_loader_rejects_invalid_coverage_report(ready) -> None:
+    """V4A-IR-001: an invalid coverage report (measured_clearance_complete true)
+    fails closed even when rehashed consistently."""
+    handoff = _build_tiny_block_handoff(ready, "v4_invalid_report")
+    report_path = handoff.output_reference.coverage_json_path
+    report_payload = json.loads(report_path.read_text("utf-8"))
+    report_obj = V4RecoveryCoverageReport.from_dict(report_payload)
+    tampered_report = _tamper_report(report_obj, measured_clearance_complete=True)
+    report_path.write_text(json.dumps(tampered_report.to_dict()), "utf-8")
+    payload = _manifest_payload(handoff)
+    payload["report_digest"] = tampered_report.report_digest
+    payload["handoff_digest"] = frv_v4_handoff_digest(
+        source_content_identity_digest=payload["source_content_identity_digest"],
+        frv_membership_artifact_digest=payload["frv_membership_artifact_digest"],
+        report_digest=tampered_report.report_digest,
+        normal_set_digest=payload["normal_set_digest"],
+        review_set_digest=payload["review_set_digest"],
+        unrecovered_regions=(),
+    )
+    payload["manifest_digest"] = _rehash_manifest_digest(payload)
+    _write_manifest(handoff, payload)
+    with pytest.raises(V4InputLoadError) as excinfo:
+        load_v4_input_handoff(handoff.output_reference.root_path)
+    assert excinfo.value.code is V4InputErrorCode.FRV_ARTIFACT_INVALID
+
+
+def test_v2_loader_rejects_rebound_recovered_index_authority(ready) -> None:
+    """V4A-IR-001/015 #3: rebinding the coverage recovered-index digest fails
+    closed because the loader independently reconstructs the index authority."""
+    handoff = _build_tiny_block_handoff(ready, "v4_rebound_index")
+    report_path = handoff.output_reference.coverage_json_path
+    report_payload = json.loads(report_path.read_text("utf-8"))
+    report_obj = V4RecoveryCoverageReport.from_dict(report_payload)
+    tampered_report = _tamper_report(
+        report_obj, recovered_index_digest="0" * 64
+    )
+    report_path.write_text(json.dumps(tampered_report.to_dict()), "utf-8")
+    payload = _manifest_payload(handoff)
+    payload["report_digest"] = tampered_report.report_digest
+    payload["handoff_digest"] = frv_v4_handoff_digest(
+        source_content_identity_digest=payload["source_content_identity_digest"],
+        frv_membership_artifact_digest=payload["frv_membership_artifact_digest"],
+        report_digest=tampered_report.report_digest,
+        normal_set_digest=payload["normal_set_digest"],
+        review_set_digest=payload["review_set_digest"],
+        unrecovered_regions=(),
+    )
+    payload["manifest_digest"] = _rehash_manifest_digest(payload)
+    _write_manifest(handoff, payload)
+    with pytest.raises(V4InputLoadError) as excinfo:
+        load_v4_input_handoff(handoff.output_reference.root_path)
+    assert excinfo.value.code is V4InputErrorCode.ORIGINAL_INDEX_INVALID
+
+
+def test_v2_loader_rejects_rehashed_changed_normal_index(ready) -> None:
+    """V4A-IR-001: a changed normal identity is rejected even after every
+    mutable V4 block/set/report/handoff/manifest digest is recomputed."""
+
+    handoff = _build_tiny_block_handoff(ready, "v4_changed_normal_index")
+    reference = handoff.output_reference
+    assert reference is not None
+    normal_blocks = [
+        _decode_v4_block(path, v4i.V4_NORMAL_BLOCK_MAGIC, v4i._NORMAL_FIELDS)
+        for path in reference.normal_block_paths
+    ]
+    normal = {
+        name: np.concatenate([block[name] for block in normal_blocks], axis=0)
+        for name, _dtype in v4i._NORMAL_FIELDS
+    }
+    review_blocks = [
+        _decode_v4_block(path, v4i.V4_REVIEW_BLOCK_MAGIC, v4i._REVIEW_FIELDS)
+        for path in reference.review_block_paths
+    ]
+    review_indexes = set(
+        int(value)
+        for block in review_blocks
+        for value in np.asarray(block["original_index"], dtype=np.int64)
+    )
+    used = set(int(value) for value in normal["original_index"]) | review_indexes
+    source_count = handoff.validated_membership.source_identity.source_point_count
+    replacement = next(index for index in range(source_count) if index not in used)
+    changed_indexes = np.asarray(normal["original_index"], dtype=np.int64).copy()
+    changed_indexes[0] = replacement
+    order = np.argsort(changed_indexes, kind="stable")
+    changed_indexes = changed_indexes[order]
+    changed_xyz = np.asarray(normal["xyz_local_m"])[order]
+    payload_rows = {}
+    normal_xyz = {}
+    for position, index in enumerate(changed_indexes):
+        normal_xyz[int(index)] = changed_xyz[position]
+        payload_rows[int(index)] = {
+            "clamped_hag": normal["hag_m"][order][position],
+            "membership_state": normal["membership_state"][order][position],
+            "hag_evidence_state": normal["hag_evidence_state"][order][position],
+            "segmentation_hag_readiness": normal[
+                "segmentation_hag_readiness"
+            ][order][position],
+            "reason_flags": normal["candidate_reason_flags"][order][position],
+        }
+    with mock.patch.object(v4i, "_V4_BLOCK_CAPACITY", 2):
+        encoded = v4i._encode_normal_blocks(
+            [int(value) for value in changed_indexes], normal_xyz, payload_rows
+        )
+    assert len(encoded) == len(reference.normal_block_paths)
+    for path, data in zip(reference.normal_block_paths, encoded, strict=True):
+        path.write_bytes(data)
+
+    report_path = reference.coverage_json_path
+    report_obj = V4RecoveryCoverageReport.from_dict(
+        json.loads(report_path.read_text("utf-8"))
+    )
+    rebound_index_digest = v4i.frv_v4_recovered_index_digest(
+        source_content_identity_digest=(
+            handoff.validated_membership.source_identity.source_content_identity_digest
+        ),
+        original_index=changed_indexes,
+    )
+    tampered_report = _tamper_report(
+        report_obj, recovered_index_digest=rebound_index_digest
+    )
+    report_path.write_text(json.dumps(tampered_report.to_dict()), "utf-8")
+
+    payload = _manifest_payload(handoff)
+    block_digests = [hashlib.sha256(data).hexdigest() for data in encoded]
+    normal_set_digest = frv_digest(
+        {"digest_domain": "V4NRM1", "block_digests": block_digests}
+    )
+    payload["normal_block_digests"] = block_digests
+    payload["normal_set_digest"] = normal_set_digest
+    payload["report_digest"] = tampered_report.report_digest
+    payload["handoff_digest"] = frv_v4_handoff_digest(
+        source_content_identity_digest=payload["source_content_identity_digest"],
+        frv_membership_artifact_digest=payload["frv_membership_artifact_digest"],
+        report_digest=tampered_report.report_digest,
+        normal_set_digest=normal_set_digest,
+        review_set_digest=payload["review_set_digest"],
+        unrecovered_regions=(),
+    )
+    payload["manifest_digest"] = _rehash_manifest_digest(payload)
+    _write_manifest(handoff, payload)
+
+    with pytest.raises(V4InputLoadError) as excinfo:
+        load_v4_input_handoff(reference.root_path)
+    assert excinfo.value.code is V4InputErrorCode.ORIGINAL_INDEX_INVALID

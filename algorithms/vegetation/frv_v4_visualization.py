@@ -32,6 +32,7 @@ Data-flow contract (frozen plan ``docs/frv-to-v4-visualization-acceptance-plan.m
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from collections.abc import Mapping, Sequence
@@ -1328,24 +1329,48 @@ def _load_validated_view(path: Path) -> V4ValidatedFrvMembershipView:
     return V4ValidatedFrvMembershipView.from_dict(payload)
 
 
+_V1_MANIFEST_FIELDS = {
+    "schema_version",
+    "source_content_identity_digest",
+    "frv_membership_artifact_digest",
+    "report_digest",
+    "normal_block_count",
+    "review_block_count",
+}
+_V2_MANIFEST_FIELDS = _V1_MANIFEST_FIELDS | {
+    "source_identity_record_digest",
+    "origin_context",
+    "normal_row_count",
+    "review_row_count",
+    "normal_block_paths",
+    "review_block_paths",
+    "normal_block_digests",
+    "review_block_digests",
+    "normal_set_digest",
+    "review_set_digest",
+    "handoff_digest",
+    "manifest_digest",
+    "source_proof_digest",
+    "hag_proof_digest",
+    "geometry_proof_digest",
+    "wire_proof_digest",
+}
+
+
 def _read_handoff_manifest(v4_input_root: Path) -> dict[str, Any]:
     path = v4_input_root / "handoff_manifest.json"
     if not path.is_file():
         raise FrvV4ValidationError("V4 handoff manifest is missing")
     payload = json.loads(path.read_text("utf-8"))
-    required = {
-        "schema_version",
-        "source_content_identity_digest",
-        "frv_membership_artifact_digest",
-        "report_digest",
-        "normal_block_count",
-        "review_block_count",
-    }
-    if set(payload) != required:
-        raise FrvV4ValidationError("V4 handoff manifest has an invalid field set")
-    if payload["schema_version"] != "v4-input-handoff-v1":
-        raise FrvV4ValidationError("unsupported V4 handoff manifest schema version")
-    return payload
+    if payload.get("schema_version") == "v4-input-handoff-v1":
+        if set(payload) != _V1_MANIFEST_FIELDS:
+            raise FrvV4ValidationError("V4 handoff manifest has an invalid field set")
+        return payload
+    if payload.get("schema_version") == "v4-input-handoff-v2":
+        if set(payload) != _V2_MANIFEST_FIELDS:
+            raise FrvV4ValidationError("V4 handoff manifest has an invalid field set")
+        return payload
+    raise FrvV4ValidationError("unsupported V4 handoff manifest schema version")
 
 
 def _validate_source_identity_equality(
@@ -1383,6 +1408,14 @@ def _block_paths(v4_input_root: Path, directory: str, prefix: str, count: int) -
         if not path.is_file():
             raise FrvV4ValidationError(f"V4 block file is missing: {path}")
     return paths
+
+
+def _verify_block_hashes(paths: list[Path], expected_digests: Any) -> None:
+    if len(paths) != len(expected_digests):
+        raise FrvV4ValidationError("V4 block digest inventory length mismatch")
+    for path, expected in zip(paths, expected_digests, strict=True):
+        if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            raise FrvV4ValidationError(f"V4 block digest mismatch: {path}")
 
 
 def _load_ready_blocks(
@@ -1423,6 +1456,10 @@ def _load_ready_blocks(
     review_count = int(handoff_manifest["review_block_count"])
     normal_paths = _block_paths(v4_input_root, "normal", "v4nrm-block", normal_count)
     review_paths = _block_paths(v4_input_root, "review", "v4rev-block", review_count)
+    if "normal_block_digests" in handoff_manifest:
+        _verify_block_hashes(normal_paths, handoff_manifest["normal_block_digests"])
+    if "review_block_digests" in handoff_manifest:
+        _verify_block_hashes(review_paths, handoff_manifest["review_block_digests"])
     normal = _decode_block_files(
         normal_paths,
         magic=V4_NORMAL_BLOCK_MAGIC,
