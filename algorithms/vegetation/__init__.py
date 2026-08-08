@@ -57,6 +57,17 @@ from algorithms.vegetation.tree_segmentation import (
     TreeResultConstructionErrorCode,
     build_tree_segmentation_result,
 )
+from algorithms.vegetation.tree_wire_clearance import (
+    SegmentEdgeBvh,
+    TreeWireClearanceError,
+    TreeWireClearanceErrorCode,
+    run_tree_wire_clearance,
+)
+from algorithms.vegetation.tree_wire_clearance_visualization import (
+    TreeWireClearanceVisualizationError,
+    TreeWireClearanceVisualizationOutputError,
+    run_tree_wire_clearance_visualization,
+)
 from algorithms.vegetation.treetop_candidates import (
     TreetopCandidateResult,
     TreetopDetectionConfig,
@@ -73,6 +84,12 @@ from algorithms.vegetation.v4_tree_artifacts import (
     publish_v4_tree_segmentation_artifact,
 )
 from algorithms.vegetation.v4_tree_segmentation import segment_v4_trees
+from algorithms.vegetation.v4_tree_visualization import (
+    V4TreeVisualizationBudgetError,
+    V4TreeVisualizationError,
+    V4TreeVisualizationOutputError,
+    run_v4_tree_visualization,
+)
 from algorithms.vegetation.wire_provider import load_frv_wire
 
 __all__ = [
@@ -126,4 +143,15 @@ __all__ = [
     "build_canopy_height_model",
     "build_tree_segmentation_result",
     "segment_canopy_regions",
+    "SegmentEdgeBvh",
+    "TreeWireClearanceError",
+    "TreeWireClearanceErrorCode",
+    "TreeWireClearanceVisualizationError",
+    "TreeWireClearanceVisualizationOutputError",
+    "V4TreeVisualizationError",
+    "V4TreeVisualizationBudgetError",
+    "V4TreeVisualizationOutputError",
+    "run_tree_wire_clearance",
+    "run_tree_wire_clearance_visualization",
+    "run_v4_tree_visualization",
 ]
