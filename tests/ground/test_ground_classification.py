@@ -18,6 +18,7 @@ from algorithms.ground.classification import (
     _pmf_footprint_half_width,
     build_metric_grid,
     build_vertical_hash,
+    classify_ground,
     competing_support,
     compute_pmf_mask,
     fit_plane,
@@ -500,3 +501,53 @@ def test_route_review_positive_ambiguity_and_below() -> None:
         route_point(vertical=False, plane=_plane(residual=-0.40), competing=False, policy=policy)
         == GroundDecision.REVIEW_GROUND
     )
+
+
+def test_reconstruct_raw_maximum_recovers_exact_integer_under_float_rounding() -> None:
+    # A scan_small-style scale/offset: the decoded float64 maximum carries ULPs
+    # of rounding and does NOT round-trip via exact .17g reconstruction (its
+    # quotient is 46636000000000003/100000000000).  The raw maximum is an
+    # integer LAS coordinate, so the rounding-tolerant recovery returns it
+    # exactly.  The frozen exact rule remains for the minimum.
+    from algorithms.ground.classification import (
+        _parse_decimal_rational,
+        _reconstruct_raw_maximum,
+        _reconstruct_raw_minimum,
+    )
+
+    scale = _parse_decimal_rational(format(0.0001, ".17g"))
+    offset = -25.051700592041016
+    assert _reconstruct_raw_maximum(21.584299407958987, offset, scale) == 466360
+    assert _reconstruct_raw_maximum(18.31899986877442, -20.719900131225586, scale) == 390389
+    # The minimum still reconstructs exactly when it equals the offset.
+    assert _reconstruct_raw_minimum(-25.051700592041016, offset, scale) == 0
+
+
+def test_classify_succeeds_on_non_round_trip_decoded_grid(tmp_path) -> None:
+    # End-to-end guard for the raw-maximum recovery: a scene with the real
+    # scan_small scale/offset where the decoded maximum does not round-trip.
+    from tests.ground._identity import make_hag_config
+    from tests.ground._scene import load_scene, write_synthetic_las
+
+    scales = np.array([0.0001, 0.0001, 0.0001])
+    offsets = np.array([-25.051700592041016, -20.719900131225586, 0.0])
+    gx, gy = np.meshgrid(np.arange(0.0, 12.0, 0.5), np.arange(0.0, 8.0, 0.5))
+    scene = load_scene(
+        write_synthetic_las(
+            tmp_path / "scanlike.las",
+            x=offsets[0] + gx.ravel(),
+            y=offsets[1] + gy.ravel(),
+            z=np.zeros(gx.size),
+            scales=scales,
+            offsets=offsets,
+        )
+    )
+    out = classify_ground(
+        scene.reference,
+        scene.result,
+        scene.configuration,
+        make_hag_config(),
+        tmp_path / "out",
+        _policy(),
+    )
+    assert out["coverage"].passes_occupancy(policy=_policy())

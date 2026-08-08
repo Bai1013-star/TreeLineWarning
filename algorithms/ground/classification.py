@@ -331,6 +331,26 @@ def _reconstruct_raw_minimum(decoded_min: float, offset: float, scale: Fraction)
     return int(raw.numerator)
 
 
+def _reconstruct_raw_maximum(decoded_max: float, offset: float, scale: Fraction) -> int:
+    """Recover the exact raw integer maximum from a decoded proof value.
+
+    The design (section 4) mandates exact ".17g" reconstruction only for the
+    source minima.  The domain maximum is raw-integer authority, but a decoded
+    float64 maximum can carry a few ULPs of rounding relative to the exact
+    ``raw * scale + offset`` product, so exact rational reconstruction is not
+    guaranteed for real scenes.  The raw maximum is an integer LAS coordinate;
+    rounding the float quotient recovers it exactly because the fractional
+    error is far below 0.5.  This never weakens the raw-integer authority.
+    """
+    delta = _parse_decimal_rational(format(float(decoded_max), ".17g")) - _parse_decimal_rational(
+        format(float(offset), ".17g")
+    )
+    quotient = delta / scale
+    if quotient.denominator == 1:
+        return int(quotient.numerator)
+    return int(round(quotient))
+
+
 def decode_z(raw_z: int, grid: MetricGrid) -> float:
     return float(raw_z) * grid.scale_z + grid.offset_z
 
@@ -1242,10 +1262,10 @@ def classify_ground(
     y0 = _reconstruct_raw_minimum(
         float(proof.source_bounds_min_xyz[1]), float(header.offset_xyz[1]), scale_y
     )
-    x_max = _reconstruct_raw_minimum(
+    x_max = _reconstruct_raw_maximum(
         float(proof.source_bounds_max_xyz[0]), float(header.offset_xyz[0]), scale_x
     )
-    y_max = _reconstruct_raw_minimum(
+    y_max = _reconstruct_raw_maximum(
         float(proof.source_bounds_max_xyz[1]), float(header.offset_xyz[1]), scale_y
     )
     grid = build_metric_grid(header, policy_config, x0=x0, y0=y0, x_max=x_max, y_max=y_max)
