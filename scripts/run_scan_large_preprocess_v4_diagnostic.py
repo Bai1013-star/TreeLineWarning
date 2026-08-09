@@ -274,6 +274,7 @@ def run(argv: list[str] | None = None) -> dict[str, Any]:
         input_las, output / "preprocess", voxel_size_m=args.voxel_size, chunk_size=args.chunk_size
     )
     visual = output / "visualizations"
+    visual.mkdir(parents=True, exist_ok=True)
     preprocessing_review = _write_preprocessing_review(
         working, visual / "scan_large_preprocessing_review.html"
     )
