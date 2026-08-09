@@ -129,7 +129,15 @@ def _run_search(output: Path, working: WeightedWorkingSet) -> dict[str, Any]:
         Path(working.representative_las_path), output / "compact_ground"
     )
     arrays = _search_arrays(Path(ground.output_las_path))
-    candidates, evaluated_count = rank_multi_tree_roi_candidates(**arrays)
+    candidates, evaluated_count = rank_multi_tree_roi_candidates(
+        xyz_absolute=arrays["xyz_absolute"],
+        hag_m=arrays["hag_m"],
+        raw_weight=arrays["raw_weight"],
+        classification=arrays["classification"],
+        linearity=arrays["linearity"],
+        planarity=arrays["planarity"],
+        scattering=arrays["scattering"],
+    )
     evidence = crown_evidence_mask(
         hag_m=arrays["hag_m"],
         classification=arrays["classification"],
