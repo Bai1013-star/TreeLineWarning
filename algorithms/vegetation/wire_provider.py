@@ -12,8 +12,10 @@ no inference of full-resolution relation from A4 discrete assignment.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
-from collections.abc import Iterator
+import os
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal
@@ -25,10 +27,13 @@ from core.contracts.frv import (
     FrvQualityFlag,
     FrvReasonFlag,
     FrvWireProviderState,
+    canonical_frv_json_bytes,
     frv_digest,
     validate_configuration,
 )
 from core.contracts.frv_a2 import (
+    FrvA2ArtifactComponentBinding,
+    FrvA2ArtifactComponentKind,
     FrvA2DomainKind,
     FrvA2FailurePhase,
     FrvA2FailureRecord,
@@ -57,6 +62,8 @@ from core.contracts.frv_wire import (
     _FRV_WIRE_FINALIZED_CAPABILITY,
     _FRV_WIRE_SOURCE_PROOF_DIGEST_DOMAIN,
     FRV_WIRE_ALGORITHM_VERSION,
+    FRV_WIRE_AUTHORITY_DIGEST_DOMAIN,
+    FRV_WIRE_AUTHORITY_SCHEMA_VERSION,
     FRV_WIRE_PROOF_SCHEMA_VERSION,
     FRV_WIRE_PROVIDER_INTERFACE_VERSION,
     FRV_WIRE_PROVIDER_KEY,
@@ -77,9 +84,11 @@ from core.contracts.frv_wire import (
     validate_frv_wire_authority_manifest,
     validate_frv_wire_provider_config,
 )
+from core.contracts.wire_models import WireReconstructionResult
+from core.contracts.wires import WireSeparationResult
 
 from algorithms.io.source_provider import load_frv_source
-from algorithms.wires.reconstruct import load_wire_models
+from algorithms.wires.reconstruct import WireReconstructionError, load_wire_models
 
 # Private session-state markers (never exposed).
 _CREATED = "CREATED"
@@ -1136,4 +1145,281 @@ def load_frv_wire(
         frv_configuration,
         provider_config,
         source_chunk_size,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Production P-WIRE authority publisher
+# ---------------------------------------------------------------------------
+
+
+class FrvWireAuthorityError(Exception):
+    """Fail-closed P-WIRE authority publication failure."""
+
+
+def _component_binding(
+    path: Path, key: str, kind: FrvA2ArtifactComponentKind
+) -> FrvA2ArtifactComponentBinding:
+    return FrvA2ArtifactComponentBinding(
+        component_key=key,
+        component_kind=kind,
+        sha256=_sha256_file(path),
+        size_bytes=path.stat().st_size,
+    )
+
+
+def _verify_wire_a4_provenance(
+    w1_result: WireReconstructionResult, project_root: Path | str
+) -> WireSeparationResult:
+    """Resolve and hash-verify the W1 parent A4 artifact under *project_root*.
+
+    Mirrors the exact W1/A4 provenance semantics used by the tree-wire
+    clearance engine: the A4 files must still be the byte-identical parents
+    recorded in the W1 result, resolved through an explicit project root, and
+    the A4 result must self-consistently bind its own NPZ.
+    """
+
+    if project_root is None:
+        raise FrvWireAuthorityError(
+            "project_root is required to resolve the W1 parent A4 artifact"
+        )
+    root = Path(project_root).resolve()
+    if not root.is_dir():
+        raise FrvWireAuthorityError("project_root must be an existing directory")
+    for rel in (w1_result.input_a4_npz_relpath, w1_result.input_a4_json_relpath):
+        if (
+            not rel
+            or ":" in rel
+            or "\\" in rel
+            or rel.startswith("/")
+            or Path(rel).is_absolute()
+        ):
+            raise FrvWireAuthorityError("A4 relpath must be a relative POSIX path")
+    a4_npz = (root / w1_result.input_a4_npz_relpath).resolve()
+    a4_json = (root / w1_result.input_a4_json_relpath).resolve()
+    for path in (a4_npz, a4_json):
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise FrvWireAuthorityError(
+                "A4 parent must resolve inside the project root"
+            ) from exc
+    if not a4_npz.is_file() or not a4_json.is_file():
+        raise FrvWireAuthorityError("W1 parent A4 files are missing under project_root")
+    a4_npz_sha = _sha256_file(a4_npz)
+    a4_json_sha = _sha256_file(a4_json)
+    if a4_npz_sha != w1_result.input_a4_npz_sha256:
+        raise FrvWireAuthorityError("A4 NPZ SHA-256 does not match W1 provenance")
+    if a4_json_sha != w1_result.input_a4_json_sha256:
+        raise FrvWireAuthorityError("A4 JSON SHA-256 does not match W1 provenance")
+    try:
+        payload = json.loads(a4_json.read_text("utf-8"))
+        a4_result = WireSeparationResult.from_dict(payload)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise FrvWireAuthorityError("unable to parse the W1 parent A4 JSON") from exc
+    if a4_result.output_npz_sha256 != a4_npz_sha:
+        raise FrvWireAuthorityError("A4 NPZ SHA-256 does not match the A4 result")
+    return a4_result
+
+
+def _wire_geometry_edges(
+    w1_arrays: Mapping[str, Any], origin: tuple[float, float, float]
+) -> list[tuple[int, int, int, float, float, float, float, float, float]]:
+    """Derive the absolute-coordinate W1 polyline edges for the geometry digest.
+
+    Edges are the closed segments of the sampled polylines in absolute
+    coordinates, ordered by ``(wire_id, segment_index, edge_index)`` exactly as
+    the P-WIRE provider consumes them.
+    """
+
+    wire_ids = np.asarray(w1_arrays["wire_id"], dtype=np.int32)
+    wire_segment_offsets = np.asarray(w1_arrays["wire_segment_offsets"], dtype=np.int64)
+    segment_index = np.asarray(w1_arrays["segment_index"], dtype=np.int32)
+    sampled_curve_xyz = np.asarray(w1_arrays["sampled_curve_xyz"], dtype=np.float32)
+    sampled_curve_offsets = np.asarray(w1_arrays["sampled_curve_offsets"], dtype=np.int64)
+    edges: list[tuple[int, int, int, float, float, float, float, float, float]] = []
+    for position in range(int(wire_ids.shape[0])):
+        segment_start = int(wire_segment_offsets[position])
+        segment_stop = int(wire_segment_offsets[position + 1])
+        for segment_position in range(segment_start, segment_stop):
+            curve_start = int(sampled_curve_offsets[segment_position])
+            curve_stop = int(sampled_curve_offsets[segment_position + 1])
+            segment = int(segment_index[segment_position])
+            for edge_position in range(curve_start, curve_stop - 1):
+                a = sampled_curve_xyz[edge_position]
+                b = sampled_curve_xyz[edge_position + 1]
+                edges.append(
+                    (
+                        int(wire_ids[position]),
+                        segment,
+                        edge_position - curve_start,
+                        float(a[0]) + origin[0],
+                        float(a[1]) + origin[1],
+                        float(a[2]) + origin[2],
+                        float(b[0]) + origin[0],
+                        float(b[1]) + origin[1],
+                        float(b[2]) + origin[2],
+                    )
+                )
+    return edges
+
+
+def publish_frv_wire_authority(
+    *,
+    w1_npz_path: Path | str,
+    w1_json_path: Path | str,
+    project_root: Path | str,
+    source_result: FrvSourceProviderResult,
+    output_dir: Path | str,
+    approver: str,
+    approval_timestamp: str,
+    authority_rule_id: str = "wire-authority-rule",
+    authority_rule_version: str = "rule-v1",
+    overwrite: bool = False,
+) -> FrvWireAuthorityReference:
+    """Publish a formal P-WIRE authority manifest over the authoritative W1 pair.
+
+    The publisher resolves and hash-verifies the W1 parent A4 through
+    ``project_root``, requires the finalized P-SOURCE ``SourceIdentity`` to
+    match the A4/W1 source identity and local origin, derives the exact W1
+    artifact components and geometry content digest, and writes a validated
+    ``FrvWireAuthorityManifest`` atomically.  The returned reference is usable
+    directly by ``load_frv_wire`` / ``build_frv_membership``.
+
+    Approval metadata (``approver``/``approval_timestamp``) must be supplied by
+    the Owner's W1 approval gate; this publisher never auto-approves a real W1
+    inventory.
+    """
+
+    if type(source_result) is not FrvSourceProviderResult:
+        raise TypeError("source_result must be a FrvSourceProviderResult")
+    validate_finalized_frv_source_provider_result(source_result)
+    source_identity = source_result.source_identity
+    try:
+        w1_result, w1_arrays = load_wire_models(Path(w1_npz_path), Path(w1_json_path))
+    except WireReconstructionError as exc:
+        raise FrvWireAuthorityError(f"invalid W1 artifact: {exc}") from exc
+    a4_result = _verify_wire_a4_provenance(w1_result, project_root)
+
+    a4_source_id = a4_result.source_id
+    if w1_result.source_id != a4_source_id:
+        raise FrvWireAuthorityError("W1 and A4 source identifiers differ")
+    if w1_result.manifest_source_id != a4_result.manifest_source_id:
+        raise FrvWireAuthorityError("W1 and A4 manifest source identifiers differ")
+    if source_identity.source_id != a4_source_id:
+        raise FrvWireAuthorityError("P-SOURCE and A4/W1 source identifiers differ")
+    origin = tuple(float(v) for v in source_identity.origin_context)
+    a4_origin = tuple(float(v) for v in a4_result.origin_xyz)
+    if origin != a4_origin:
+        raise FrvWireAuthorityError("P-SOURCE and A4/W1 local origins differ")
+    if source_identity.coordinate_frame != "LOCAL_CARTESIAN_XYZ":
+        raise FrvWireAuthorityError("source coordinate frame must be LOCAL_CARTESIAN_XYZ")
+    if source_identity.units != "m":
+        raise FrvWireAuthorityError("source units must be m")
+
+    edges = _wire_geometry_edges(w1_arrays, origin)
+    geometry_digest = frv_wire_geometry_content_digest(
+        source_content_identity_digest=source_identity.source_content_identity_digest,
+        source_identity_record_digest=source_identity.source_identity_record_digest,
+        origin_xyz=origin,
+        edges=edges,
+    )
+    w1_json = Path(w1_json_path)
+    w1_npz = Path(w1_npz_path)
+    w1_components = (
+        _component_binding(w1_json, "manifest_json", FrvA2ArtifactComponentKind.MANIFEST_JSON),
+        _component_binding(w1_npz, "payload_npz", FrvA2ArtifactComponentKind.PAYLOAD_NPZ),
+    )
+    approved_wire_ids = tuple(int(v) for v in np.asarray(w1_arrays["wire_id"], dtype=np.int32))
+    if not approved_wire_ids:
+        raise FrvWireAuthorityError("W1_MODEL_SET requires a non-empty approved wire inventory")
+
+    fields: dict[str, Any] = {
+        "schema_version": FRV_WIRE_AUTHORITY_SCHEMA_VERSION,
+        "authority_mode": FrvWireAuthorityMode.W1_MODEL_SET,
+        "source_content_identity_digest": source_identity.source_content_identity_digest,
+        "source_identity_record_digest": source_identity.source_identity_record_digest,
+        "source_id": source_identity.source_id,
+        "coordinate_frame": "LOCAL_CARTESIAN_XYZ",
+        "units": "m",
+        "origin_xyz": origin,
+        "transform_declaration": "identity",
+        "inventory_complete": True,
+        "approved_wire_ids": approved_wire_ids,
+        "w1_artifact_components": w1_components,
+        "geometry_content_digest": geometry_digest,
+        "authority_rule_id": authority_rule_id,
+        "authority_rule_version": authority_rule_version,
+        "approver": approver,
+        "approval_timestamp": approval_timestamp,
+    }
+    payload_json = {
+        **fields,
+        "authority_mode": fields["authority_mode"].value,
+        "approved_wire_ids": list(fields["approved_wire_ids"]),
+        "w1_artifact_components": [
+            component.to_dict() for component in fields["w1_artifact_components"]
+        ],
+        "origin_xyz": list(fields["origin_xyz"]),
+    }
+    approval_digest = hashlib.sha256(canonical_frv_json_bytes(payload_json)).hexdigest()
+    manifest_payload = {
+        "digest_domain": FRV_WIRE_AUTHORITY_DIGEST_DOMAIN,
+        **payload_json,
+        "approval_digest": approval_digest,
+    }
+    manifest_digest = hashlib.sha256(canonical_frv_json_bytes(manifest_payload)).hexdigest()
+    manifest = FrvWireAuthorityManifest(
+        schema_version=fields["schema_version"],
+        authority_mode=FrvWireAuthorityMode.W1_MODEL_SET,
+        source_content_identity_digest=fields["source_content_identity_digest"],
+        source_identity_record_digest=fields["source_identity_record_digest"],
+        source_id=fields["source_id"],
+        coordinate_frame=fields["coordinate_frame"],
+        units=fields["units"],
+        origin_xyz=tuple(fields["origin_xyz"]),
+        transform_declaration=fields["transform_declaration"],
+        inventory_complete=True,
+        approved_wire_ids=tuple(fields["approved_wire_ids"]),
+        w1_artifact_components=tuple(fields["w1_artifact_components"]),
+        geometry_content_digest=fields["geometry_content_digest"],
+        authority_rule_id=fields["authority_rule_id"],
+        authority_rule_version=fields["authority_rule_version"],
+        approver=fields["approver"],
+        approval_timestamp=fields["approval_timestamp"],
+        approval_digest=approval_digest,
+        manifest_digest=manifest_digest,
+    )
+
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    manifest_path = output / "authority_manifest.json"
+    if manifest_path.exists() and not overwrite:
+        raise FrvWireAuthorityError("authority manifest exists and overwrite is disabled")
+    temporary = manifest_path.with_name(manifest_path.name + ".tmp")
+    temporary.write_text(
+        json.dumps(manifest.to_dict(), indent=2, sort_keys=True), encoding="utf-8"
+    )
+    os.replace(temporary, manifest_path)
+
+    # Re-read and re-validate the published authority before success.
+    try:
+        reloaded = FrvWireAuthorityManifest.from_dict(
+            json.loads(manifest_path.read_text("utf-8"))
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise FrvWireAuthorityError("published authority manifest is malformed") from exc
+    validate_frv_wire_authority_manifest(reloaded)
+    if reloaded.manifest_digest != manifest.manifest_digest:
+        raise FrvWireAuthorityError("published authority manifest did not round-trip")
+
+    authority_component = _component_binding(
+        manifest_path, "authority_manifest_json", FrvA2ArtifactComponentKind.MANIFEST_JSON
+    )
+    return FrvWireAuthorityReference(
+        manifest=reloaded,
+        authority_manifest_path=manifest_path,
+        authority_manifest_component=authority_component,
+        w1_json_path=w1_json,
+        w1_npz_path=w1_npz,
     )

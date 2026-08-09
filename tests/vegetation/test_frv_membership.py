@@ -26,6 +26,7 @@ from algorithms.vegetation import (
 )
 from algorithms.vegetation.frv_membership import (
     FrvMembershipFailClosedError,
+    _verify_provenance,
     _wire_clear,
 )
 from core.contracts.frv import FrvConfiguration, FrvWireProviderState, frv_digest
@@ -309,8 +310,15 @@ def write_v2_pair(
     v1_npz_sha: str,
     source_id: str = "scene-1",
     offsets: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    blank_manual_log: bool = False,
 ) -> tuple[Path, Path]:
-    """Write a minimal V2 JSON+NPZ pair with zero clusters, all unclustered."""
+    """Write a minimal V2 JSON+NPZ pair with zero clusters, all unclustered.
+
+    ``blank_manual_log`` writes a normal no-action manual log (all provenance
+    fields empty, zero actions) while keeping the authoritative
+    ``input_provenance`` binding valid, as a real no-action V2 publication
+    would.
+    """
 
     npz_path = root / "v2.npz"
     json_path = root / "v2.json"
@@ -351,14 +359,25 @@ def write_v2_pair(
         "output_npz_sha256": _sha(npz_path),
         "output_npz_bytes": npz_path.stat().st_size,
         "config": _v2_config().to_dict(),
-        "manual_log": {
-            "v1_npz_sha256": v1_npz_sha,
-            "a2a_npz_sha256": "0" * 64,
-            "a2b_npz_sha256": "0" * 64,
-            "source_id": source_id,
-            "manifest_source_id": source_id,
-            "actions": [],
-        },
+        "manual_log": (
+            {
+                "v1_npz_sha256": "",
+                "a2a_npz_sha256": "",
+                "a2b_npz_sha256": "",
+                "source_id": "",
+                "manifest_source_id": "",
+                "actions": [],
+            }
+            if blank_manual_log
+            else {
+                "v1_npz_sha256": v1_npz_sha,
+                "a2a_npz_sha256": "0" * 64,
+                "a2b_npz_sha256": "0" * 64,
+                "source_id": source_id,
+                "manifest_source_id": source_id,
+                "actions": [],
+            }
+        ),
         "input_provenance": {
             "v1_npz": {"logical_path": "v1.npz", "sha256": v1_npz_sha},
             "v1_json": {"logical_path": "v1.json", "sha256": "0" * 64},
@@ -430,6 +449,7 @@ def build_evidence_pairs(
     all_candidates: bool = True,
     all_rejected: bool = False,
     offsets: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    blank_manual_log: bool = False,
 ) -> FrvScopeEvidenceReference:
     """Build A1/V1/V2 pairs covering the whole scene and return the reference."""
 
@@ -451,7 +471,13 @@ def build_evidence_pairs(
         a1_json_sha=_sha(a1[1]),
         offsets=offsets,
     )
-    v2 = write_v2_pair(tmp_path, xyz=xyz, v1_npz_sha=_sha(v1[0]), offsets=offsets)
+    v2 = write_v2_pair(
+        tmp_path,
+        xyz=xyz,
+        v1_npz_sha=_sha(v1[0]),
+        offsets=offsets,
+        blank_manual_log=blank_manual_log,
+    )
     return build_scope_evidence_reference(tmp_path, a1=a1, v1=v1, v2=v2)
 
 
@@ -1426,3 +1452,160 @@ def test_reviewed_execution_is_deterministic(tmp_path: Path) -> None:
         assert int(first_payload[index]["membership_state"]) == int(
             second_payload[index]["membership_state"]
         )
+
+
+# ---------------------------------------------------------------------------
+# V2 authoritative provenance (P0-1)
+# ---------------------------------------------------------------------------
+
+
+def _prov_reference(v1_npz_sha: str = "c" * 64) -> Any:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        a1_npz_component=SimpleNamespace(sha256="a" * 64),
+        a1_json_component=SimpleNamespace(sha256="b" * 64),
+        v1_npz_component=SimpleNamespace(sha256=v1_npz_sha),
+    )
+
+
+def _prov_v1_result() -> Any:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(input_provenance={"a1_npz": {"sha256": "a" * 64}})
+
+
+def _prov_v2_result(
+    *,
+    input_provenance: dict[str, Any] | None = None,
+    manual_log: Any = None,
+) -> Any:
+    from types import SimpleNamespace
+
+    if input_provenance is None:
+        input_provenance = {"v1_npz": {"sha256": "c" * 64}}
+    return SimpleNamespace(input_provenance=input_provenance, manual_log=manual_log)
+
+
+def _manual_log_with_actions(v1_npz_sha: str | None) -> Any:
+    from core.contracts.vegetation_instances import (
+        VegetationManualActionRecord,
+        VegetationManualLog,
+    )
+
+    return VegetationManualLog(
+        v1_npz_sha256=v1_npz_sha if v1_npz_sha is not None else "0" * 64,
+        a2a_npz_sha256="0" * 64,
+        a2b_npz_sha256="0" * 64,
+        source_id="scene-1",
+        manifest_source_id="scene-1",
+        actions=(VegetationManualActionRecord(action="confirm_cluster", cluster_ids=(1,)),),
+    )
+
+
+def test_provenance_no_actions_valid_v2_authority_passes() -> None:
+    from core.contracts.vegetation_instances import VegetationManualLog
+
+    _verify_provenance(
+        _prov_reference(), _prov_v1_result(), _prov_v2_result(manual_log=VegetationManualLog())
+    )
+
+
+def test_provenance_no_actions_blank_manual_log_digest_passes() -> None:
+    # A normal no-action workflow must never fail on a blank manual-log digest.
+    from core.contracts.vegetation_instances import VegetationManualLog
+
+    _verify_provenance(
+        _prov_reference(),
+        _prov_v1_result(),
+        _prov_v2_result(manual_log=VegetationManualLog()),
+    )
+
+
+def test_provenance_manual_actions_valid_matching_digest_passes() -> None:
+    _verify_provenance(
+        _prov_reference(),
+        _prov_v1_result(),
+        _prov_v2_result(manual_log=_manual_log_with_actions("c" * 64)),
+    )
+
+
+def test_provenance_manual_actions_missing_digest_fails() -> None:
+    from types import SimpleNamespace
+
+    malformed = SimpleNamespace(actions=(object(),), v1_npz_sha256="")
+    with pytest.raises(ValueError, match="manual log"):
+        _verify_provenance(
+            _prov_reference(), _prov_v1_result(), _prov_v2_result(manual_log=malformed)
+        )
+
+
+def test_provenance_manual_actions_mismatched_digest_fails() -> None:
+    with pytest.raises(ValueError, match="manual log"):
+        _verify_provenance(
+            _prov_reference(),
+            _prov_v1_result(),
+            _prov_v2_result(manual_log=_manual_log_with_actions("d" * 64)),
+        )
+
+
+def test_provenance_invalid_v2_authoritative_input_provenance_fails() -> None:
+    with pytest.raises(ValueError, match="input provenance"):
+        _verify_provenance(
+            _prov_reference(),
+            _prov_v1_result(),
+            _prov_v2_result(input_provenance={"v1_npz": {"sha256": "e" * 64}}),
+        )
+
+
+def test_no_action_blank_manual_log_membership_is_not_blocked(tmp_path: Path) -> None:
+    """The real COVERAGE_BLOCKED bug: a no-action blank manual log must pass."""
+    from core.contracts.frv_membership import FrvMembershipExecutionState
+
+    chain = run_provider_chain(
+        tmp_path,
+        source_chunk_size=40,
+        offsets=(0.0, 0.0, 0.0),
+    )
+    (
+        las_path,
+        _column_indexes,
+        _ground_indexes,
+        reference,
+        _source_config,
+        configuration,
+        source_result,
+        _hag_result,
+        _geometry_result,
+        _wire_result,
+        authority,
+        *_rest,
+    ) = chain
+    scope_ref = build_evidence_pairs(
+        tmp_path,
+        las_path=las_path,
+        column_indexes=_column_indexes,
+        ground_indexes=_ground_indexes,
+        offsets=(0.0, 0.0, 0.0),
+        blank_manual_log=True,
+    )
+    out = tmp_path / "membership_out"
+    scratch = tmp_path / "scratch"
+    scratch.mkdir(exist_ok=True)
+    result = build_frv_membership(
+        reference,
+        source_result,
+        scope_ref,
+        authority,
+        (),
+        frv_configuration=configuration,
+        hag_config=_hag_config(),
+        geometry_config=_geometry_config(),
+        wire_config=_wire_config(),
+        scope_policy=default_frv_scope_policy_config(),
+        membership_policy=default_frv_membership_policy_config(),
+        output_dir=out,
+        scratch_dir=scratch,
+        source_chunk_size=40,
+    )
+    assert result.execution_state is not FrvMembershipExecutionState.COVERAGE_BLOCKED

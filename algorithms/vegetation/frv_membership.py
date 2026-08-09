@@ -989,9 +989,22 @@ def _verify_provenance(
     provenance = getattr(v1_result, "input_provenance", None)
     if provenance is not None and not a1_pair.intersection(_collect_sha(provenance)):
         raise ValueError("V1 provenance must reference the A1 pair SHA")
+    # The authoritative V1 NPZ binding for V2/FRV is the V2 input provenance,
+    # never a caller-authored manual log.  A V2 result whose input provenance
+    # does not reference the actual V1 NPZ used here is invalid authority.
+    v2_provenance = getattr(v2_result, "input_provenance", None)
+    if (
+        v2_provenance is not None
+        and reference.v1_npz_component.sha256 not in _collect_sha(v2_provenance)
+    ):
+        raise ValueError("V2 input provenance must reference the V1 NPZ SHA")
+    # Manual-log provenance is authoritative evidence only when manual actions
+    # actually exist.  A normal no-action workflow must never fail solely on a
+    # blank manual-log digest; when actions exist the manual log must carry the
+    # exact V1 NPZ binding.
     manual_log = getattr(v2_result, "manual_log", None)
-    if manual_log is not None:
-        recorded = getattr(manual_log, "v1_npz_sha256", None)
+    if manual_log is not None and bool(getattr(manual_log, "actions", ())):
+        recorded = getattr(manual_log, "v1_npz_sha256", "")
         if reference.v1_npz_component.sha256 not in _collect_sha(recorded):
             raise ValueError("V2 manual log must reference the V1 NPZ SHA")
 

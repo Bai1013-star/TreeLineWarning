@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -24,6 +25,17 @@ CROP_BOUNDS_COMPARISON_ATOL_M = 1e-9
 ALGORITHM_NAME = "chunked_xyz_scene_sample_crop"
 ALGORITHM_VERSION = "0.1"
 BOUNDARY_NAMES = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
+_CLASSIFIED_LINEAGE_SCHEMA_VERSION = "fgc-classified-parent-lineage-v1"
+
+
+def _file_sha256(path: Path) -> str:
+    """Return the lowercase SHA-256 of the actual file bytes on disk."""
+
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -182,6 +194,16 @@ def validate_scene_sample_artifacts(
     )
     if not manifest_matches:
         raise ValueError("manifest does not match scene_simple sample artifacts")
+    lineage = manifest.get("parent_lineage")
+    if lineage is not None:
+        _recheck_parent_lineage(
+            lineage,
+            sample=sample,
+            sample_point_count=sample_header.point_count,
+            index_map_path=index_map,
+            index_map_length=len(original_index),
+            index_map_source_id=index_source_id,
+        )
 
     return {
         "sample_header": sample_header.to_dict(),
@@ -394,15 +416,17 @@ def create_scene_sample(
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     project_root: Path | str | None = None,
     overwrite: bool = False,
-    parent_lineage: dict[str, Any] | None = None,
+    classified_parent_root: Path | str | None = None,
 ) -> dict[str, Any]:
     """Create the scene_simple LAS, original-index sidecar, and manifest.
 
-    ``parent_lineage`` optionally binds a classified FGC parent: its
-    SourceIdentity, source SHA and identity-record digest, crop bounds,
-    index-map SHA and parent-index mapping digest, sample LAS SHA, and sample
-    point count.  It is recorded in the manifest only and never changes crop
-    selection geometry.
+    ``classified_parent_root`` optionally binds an FGC classified parent
+    publication: the sample source must be the actual classified LAS (digest
+    bound), the sample ``source_id`` must represent the classified parent
+    authority, and the produced sample LAS / index-map digests and point counts
+    are derived from the actual generated files and recorded in a verified
+    ``parent_lineage`` manifest record.  Binding never changes crop selection
+    geometry.
     """
     source = Path(source_path)
     output = Path(output_path)
@@ -413,6 +437,12 @@ def create_scene_sample(
     _ensure_under_samples(output, root)
     _ensure_under_samples(index_map, root)
     _ensure_under_samples(manifest, root)
+
+    publication = None
+    if classified_parent_root is not None:
+        publication = _verify_classified_parent_source(
+            classified_parent_root, source, source_id
+        )
 
     warnings: list[str] = []
     started = time.perf_counter()
@@ -454,6 +484,15 @@ def create_scene_sample(
             expected_point_count=crop_result.output_point_count,
             chunk_size=chunk_size,
         )
+        parent_lineage = None
+        if publication is not None:
+            parent_lineage = _derive_classified_lineage(
+                publication=publication,
+                source_id=source_id,
+                output_path=output,
+                index_map_path=index_map,
+                output_point_count=crop_result.output_point_count,
+            )
         source_after = file_snapshot(source)
         memory_after = _process_memory_bytes()
         manifest_payload = {
@@ -531,6 +570,7 @@ def validate_scene_sample_outputs(
     with np.load(index_map, allow_pickle=False) as data:
         original_index = np.asarray(data["original_index"], dtype=np.int64)
         output_point_count = int(np.asarray(data["output_point_count"]).item())
+        index_source_id = str(np.asarray(data["source_id"]).item())
     if len(original_index) != output_summary.point_count:
         raise ValueError("index_map original_index length does not match output LAS point count")
     if output_point_count != output_summary.point_count:
@@ -558,6 +598,16 @@ def validate_scene_sample_outputs(
         )
         if not manifest_matches:
             raise ValueError("manifest values do not match generated files")
+        lineage = manifest_payload.get("parent_lineage")
+        if lineage is not None:
+            _recheck_parent_lineage(
+                lineage,
+                sample=output,
+                sample_point_count=output_summary.point_count,
+                index_map_path=index_map,
+                index_map_length=len(original_index),
+                index_map_source_id=index_source_id,
+            )
 
     return {
         "output_las_opened": True,
@@ -651,6 +701,115 @@ def _json_safe_lineage(lineage: dict[str, Any] | None) -> dict[str, Any] | None:
     from core.contracts._json import json_safe
 
     return json_safe(lineage, "parent_lineage")  # type: ignore[return-value]
+
+
+def _verify_classified_parent_source(
+    publication_root: Path | str,
+    source_path: Path,
+    source_id: str,
+) -> Any:
+    """Validate the FGC classified parent and bind the sample source to it.
+
+    Uses the existing fully validated FGC publication (completion manifest,
+    decision manifest, publication proof, classified identity) and requires the
+    sample source to be the byte-identical classified LAS and the sample
+    ``source_id`` to represent the classified parent authority.  This rejects
+    metadata relabeling of an unrelated scene.
+    """
+
+    from algorithms.ground.visualization import validate_fgc_publication
+
+    publication = validate_fgc_publication(publication_root)
+    completion = publication.completion_manifest
+    classified = completion.classified_source_identity
+    source_sha = _file_sha256(source_path)
+    if source_sha != completion.classified_las_sha256:
+        raise ValueError("sample source LAS digest does not match the classified parent")
+    if classified.source_id != source_id:
+        raise ValueError("sample source_id must represent the classified parent authority")
+    return publication
+
+
+def _derive_classified_lineage(
+    *,
+    publication: Any,
+    source_id: str,
+    output_path: Path,
+    index_map_path: Path,
+    output_point_count: int,
+) -> dict[str, Any]:
+    """Derive the verified classified-parent lineage from actual generated files.
+
+    All hashes are computed from the produced/read files; no caller-supplied
+    hash string is accepted as authority.
+    """
+
+    completion = publication.completion_manifest
+    proof = publication.publication_proof
+    classified = completion.classified_source_identity
+    with np.load(index_map_path, allow_pickle=False) as data:
+        original_index = np.asarray(data["original_index"], dtype=np.int64)
+    if int(original_index.shape[0]) != output_point_count:
+        raise ValueError("index-map point count does not match the sample output")
+    return {
+        "lineage_schema_version": _CLASSIFIED_LINEAGE_SCHEMA_VERSION,
+        "completion_manifest_digest": completion.completion_digest,
+        "publication_proof_digest": proof.proof_digest,
+        "classified_las_sha256": completion.classified_las_sha256,
+        "classified_las_point_count": completion.classified_las_point_count,
+        "classified_parent_source_id": classified.source_id,
+        "classified_parent_source_file_sha256": classified.source_file_sha256,
+        "classified_parent_identity_record_digest": (
+            classified.source_identity_record_digest
+        ),
+        "sample_source_id": source_id,
+        "sample_las_sha256": _file_sha256(output_path),
+        "sample_point_count": output_point_count,
+        "sample_index_map_sha256": _file_sha256(index_map_path),
+        "index_map_original_index_count": int(original_index.shape[0]),
+    }
+
+
+def _recheck_parent_lineage(
+    lineage: dict[str, Any],
+    *,
+    sample: Path,
+    sample_point_count: int,
+    index_map_path: Path,
+    index_map_length: int,
+    index_map_source_id: str,
+) -> None:
+    """Re-check a recorded parent lineage against the actual sample artifacts."""
+
+    if lineage.get("lineage_schema_version") != _CLASSIFIED_LINEAGE_SCHEMA_VERSION:
+        raise ValueError("unsupported parent lineage schema version")
+    if lineage.get("sample_las_sha256") != _file_sha256(sample):
+        raise ValueError("recorded sample LAS digest does not match the sample file")
+    if lineage.get("sample_point_count") != sample_point_count:
+        raise ValueError("recorded sample point count does not match the sample")
+    if lineage.get("index_map_original_index_count") != index_map_length:
+        raise ValueError("recorded index-map length does not match the index map")
+    if lineage.get("sample_index_map_sha256") != _file_sha256(index_map_path):
+        raise ValueError("recorded index-map digest does not match the index map")
+    if lineage.get("sample_source_id") != index_map_source_id:
+        raise ValueError("recorded sample source id does not match the index map")
+    for name in (
+        "completion_manifest_digest",
+        "publication_proof_digest",
+        "classified_las_sha256",
+        "classified_parent_source_file_sha256",
+        "classified_parent_identity_record_digest",
+    ):
+        value = lineage.get(name)
+        if not (
+            isinstance(value, str)
+            and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value)
+        ):
+            raise ValueError(f"parent lineage {name} must be a valid SHA-256")
+    parent_point_count = lineage.get("classified_las_point_count")
+    if not isinstance(parent_point_count, int) or parent_point_count < 0:
+        raise ValueError("classified_las_point_count must be a non-negative integer")
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:

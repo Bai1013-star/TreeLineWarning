@@ -570,29 +570,51 @@ def test_scene_sample_preview_marks_bounds_and_avoids_full_read(
     assert before.st_mtime == after.st_mtime
 
 
-def test_scene_sample_binds_classified_parent_lineage(tmp_path: Path) -> None:
-    """The lineage adapter binds the classified parent without crop changes."""
+@pytest.fixture(scope="module")
+def classified_publication(tmp_path_factory: pytest.TempPathFactory):
+    """A valid FGC classified publication shared across the lineage tests."""
+    from algorithms.ground.visualization import validate_fgc_publication
+
+    from tests.ground.test_ground_visualization import _classify_root, _flat_scene
+
+    root = tmp_path_factory.mktemp("fgc_lineage")
+    scene = _flat_scene(root)
+    publication_root = _classify_root(scene, root)
+    publication = validate_fgc_publication(publication_root)
+    return publication_root, publication
+
+
+def _sample_bounds() -> CropBounds:
+    return CropBounds(min_xyz=(101.0, 201.0, -0.5), max_xyz=(103.0, 203.0, 0.5))
+
+
+def test_scene_sample_binds_classified_parent_lineage(
+    tmp_path: Path, classified_publication
+) -> None:
+    """The sample binds a real FGC classified parent without crop changes."""
+    import hashlib
+
+    publication_root, publication = classified_publication
+    classified_las = publication.classified_las_path
+    classified_source_id = publication.completion_manifest.classified_source_identity.source_id
+
     project = tmp_path / "project"
-    raw = project / "data" / "raw"
     samples = project / "data" / "samples"
-    raw.mkdir(parents=True)
     samples.mkdir(parents=True)
-    source = raw / "classified_parent.las"
     output = samples / "scene_simple.las"
     index_map = samples / "scene_simple_index_map.npz"
     manifest = samples / "scene_simple_manifest.json"
-    bounds = CropBounds(min_xyz=(102.0, 202.0, 2.0), max_xyz=(104.0, 204.0, 4.0))
-    write_scene_source(source)
+    bounds = _sample_bounds()
 
-    # Without lineage the manifest must not carry the field.
+    # Without a classified parent root the manifest must not carry the field.
     result_plain = create_scene_sample(
-        source_path=source,
+        source_path=classified_las,
         output_path=output,
         index_map_path=index_map,
         manifest_path=manifest,
         bounds=bounds,
-        source_id="source",
-        selection_record=selection_payload(source, bounds),
+        source_id=classified_source_id,
+        selection_record=selection_payload(classified_las, bounds),
         chunk_size=2,
         project_root=project,
     )
@@ -601,28 +623,165 @@ def test_scene_sample_binds_classified_parent_lineage(tmp_path: Path) -> None:
     output2 = samples / "scene_simple_lineaged.las"
     index_map2 = samples / "scene_simple_lineaged_index_map.npz"
     manifest2 = samples / "scene_simple_lineaged_manifest.json"
-    lineage = {
-        "classified_parent_source_id": "scene-1--fgc-v1--0123456789abcdef",
-        "classified_parent_source_file_sha256": "a" * 64,
-        "classified_parent_identity_record_digest": "b" * 64,
-        "parent_original_index_map_digest": "c" * 64,
-        "sample_las_sha256": "d" * 64,
-        "sample_point_count": 3,
-    }
     result = create_scene_sample(
-        source_path=source,
+        source_path=classified_las,
         output_path=output2,
         index_map_path=index_map2,
         manifest_path=manifest2,
         bounds=bounds,
-        source_id="source",
-        selection_record=selection_payload(source, bounds),
+        source_id=classified_source_id,
+        selection_record=selection_payload(classified_las, bounds),
         chunk_size=2,
         project_root=project,
-        parent_lineage=lineage,
+        classified_parent_root=publication_root,
     )
-    assert result["output_point_count"] == 3  # crop selection unchanged
-    assert result["parent_lineage"] == lineage
+    lineage = result["parent_lineage"]
+    assert lineage is not None
+    assert lineage["lineage_schema_version"] == "fgc-classified-parent-lineage-v1"
+    assert lineage["classified_las_sha256"] == publication.completion_manifest.classified_las_sha256
+    assert lineage["classified_las_point_count"] == (
+        publication.completion_manifest.classified_las_point_count
+    )
+    assert lineage["classified_parent_source_id"] == classified_source_id
+    assert lineage["sample_source_id"] == classified_source_id
+    assert lineage["sample_point_count"] == result["output_point_count"]
+    # All hashes derive from actual produced files, never caller-supplied.
+    assert lineage["sample_las_sha256"] == hashlib.sha256(output2.read_bytes()).hexdigest()
+    assert lineage["sample_index_map_sha256"] == hashlib.sha256(index_map2.read_bytes()).hexdigest()
+
     payload = json.loads(manifest2.read_text(encoding="utf-8"))
-    assert payload["parent_lineage"]["classified_parent_source_id"].startswith("scene-1--fgc-v1--")
-    assert payload["parent_lineage"]["parent_original_index_map_digest"] == "c" * 64
+    assert payload["parent_lineage"] == lineage
+    # The sample artifact validator re-checks the recorded lineage.
+    validate_scene_sample_artifacts(
+        sample_path=output2,
+        index_map_path=index_map2,
+        manifest_path=manifest2,
+        bounds=bounds,
+        chunk_size=2,
+    )
+
+
+def test_scene_sample_rejects_wrong_classified_source(
+    tmp_path: Path, classified_publication
+) -> None:
+    """A sample cropped from a non-classified source cannot claim the lineage."""
+    publication_root, publication = classified_publication
+    classified_source_id = publication.completion_manifest.classified_source_identity.source_id
+
+    project = tmp_path / "project"
+    samples = project / "data" / "samples"
+    raw = project / "data" / "raw"
+    raw.mkdir(parents=True)
+    samples.mkdir(parents=True)
+    unrelated = raw / "unrelated.las"
+    write_scene_source(unrelated)
+    with pytest.raises(ValueError, match="classified parent"):
+        create_scene_sample(
+            source_path=unrelated,
+            output_path=samples / "bad.las",
+            index_map_path=samples / "bad_index_map.npz",
+            manifest_path=samples / "bad_manifest.json",
+            bounds=_sample_bounds(),
+            source_id=classified_source_id,
+            selection_record=selection_payload(unrelated, _sample_bounds()),
+            chunk_size=2,
+            project_root=project,
+            classified_parent_root=publication_root,
+        )
+
+
+def test_scene_sample_rejects_wrong_source_id(
+    tmp_path: Path, classified_publication
+) -> None:
+    """The sample source_id must represent the classified parent authority."""
+    publication_root, publication = classified_publication
+    classified_las = publication.classified_las_path
+
+    project = tmp_path / "project"
+    samples = project / "data" / "samples"
+    samples.mkdir(parents=True)
+    with pytest.raises(ValueError, match="source_id"):
+        create_scene_sample(
+            source_path=classified_las,
+            output_path=samples / "bad.las",
+            index_map_path=samples / "bad_index_map.npz",
+            manifest_path=samples / "bad_manifest.json",
+            bounds=_sample_bounds(),
+            source_id="wrong-source",
+            selection_record=selection_payload(classified_las, _sample_bounds()),
+            chunk_size=2,
+            project_root=project,
+            classified_parent_root=publication_root,
+        )
+
+
+def test_scene_sample_rejects_tampered_publication(
+    tmp_path: Path, classified_publication
+) -> None:
+    """A modified classified LAS cannot be relabeled into the lineage."""
+    publication_root, publication = classified_publication
+    classified_source_id = publication.completion_manifest.classified_source_identity.source_id
+
+    # A tampered copy of the classified LAS has a different digest than the
+    # completion manifest binds; the sample source binding must reject it.
+    tampered_las = tmp_path / "tampered_classified.las"
+    tampered_las.write_bytes(b"tampered")
+
+    project = tmp_path / "project"
+    samples = project / "data" / "samples"
+    samples.mkdir(parents=True)
+    with pytest.raises(ValueError, match="classified parent"):
+        create_scene_sample(
+            source_path=tampered_las,
+            output_path=samples / "bad.las",
+            index_map_path=samples / "bad_index_map.npz",
+            manifest_path=samples / "bad_manifest.json",
+            bounds=_sample_bounds(),
+            source_id=classified_source_id,
+            selection_record=selection_payload(tampered_las, _sample_bounds()),
+            chunk_size=2,
+            project_root=project,
+            classified_parent_root=publication_root,
+        )
+
+
+def test_scene_sample_lineage_validation_rejects_tampered_lineage(
+    tmp_path: Path, classified_publication
+) -> None:
+    """The artifact validator re-checks the lineage against the actual sample."""
+    publication_root, publication = classified_publication
+    classified_las = publication.classified_las_path
+    classified_source_id = publication.completion_manifest.classified_source_identity.source_id
+
+    project = tmp_path / "project"
+    samples = project / "data" / "samples"
+    samples.mkdir(parents=True)
+    output = samples / "scene_simple.las"
+    index_map = samples / "scene_simple_index_map.npz"
+    manifest = samples / "scene_simple_manifest.json"
+    bounds = _sample_bounds()
+    create_scene_sample(
+        source_path=classified_las,
+        output_path=output,
+        index_map_path=index_map,
+        manifest_path=manifest,
+        bounds=bounds,
+        source_id=classified_source_id,
+        selection_record=selection_payload(classified_las, bounds),
+        chunk_size=2,
+        project_root=project,
+        classified_parent_root=publication_root,
+    )
+    # Corrupt only the recorded sample digest in the manifest: the artifact
+    # validator's lineage re-check must fail against the actual sample file.
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["parent_lineage"]["sample_las_sha256"] = "0" * 64
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="sample LAS digest"):
+        validate_scene_sample_artifacts(
+            sample_path=output,
+            index_map_path=index_map,
+            manifest_path=manifest,
+            bounds=bounds,
+            chunk_size=2,
+        )
