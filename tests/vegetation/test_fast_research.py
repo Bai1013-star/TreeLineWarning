@@ -21,6 +21,12 @@ from algorithms.vegetation.fast_research import (
     sha256_file,
     validate_fast_v4_arrays,
 )
+from algorithms.vegetation.fast_vegetation_ab import (
+    FastVegetationEvidenceConfig,
+    apply_fast_vegetation_hard_exclusions,
+    classify_plan_b_geometry,
+    fast_vegetation_config_digest,
+)
 from algorithms.vegetation.v4_tree_segmentation import segment_v4_trees
 
 from tests.vegetation.test_v4_tree_segmentation import make_tree_points
@@ -134,6 +140,82 @@ def test_fast_adapter_cache_reuses_only_valid_output(tmp_path: Path) -> None:
 def test_fast_configuration_digest_is_deterministic() -> None:
     assert canonical_digest({"a": [1, 2], "b": 3}) == canonical_digest({"b": 3, "a": [1, 2]})
     assert canonical_digest({"a": [1, 2], "b": 3}) != canonical_digest({"a": [1, 3], "b": 3})
+
+
+def test_plan_b_hard_exclusions_are_exact_and_reach_no_v4_input() -> None:
+    original = np.asarray((10, 11, 12, 13), dtype=np.int64)
+    selection = apply_fast_vegetation_hard_exclusions(
+        classification=np.asarray((2, 1, 1, 1), dtype=np.uint8),
+        original_index=original,
+        known_wire_original_index=np.asarray((12,), dtype=np.int64),
+        vegetation_evidence_mask=np.asarray((True, True, True, False)),
+    )
+    assert np.array_equal(selection.ground_mask, np.asarray((True, False, False, False)))
+    assert np.array_equal(selection.known_wire_mask, np.asarray((False, False, True, False)))
+    assert np.array_equal(selection.retained_mask, np.asarray((False, True, False, False)))
+    assert not np.any(selection.retained_mask & selection.ground_mask)
+    assert not np.any(selection.retained_mask & selection.known_wire_mask)
+
+
+def test_plan_b_wire_membership_uses_original_index_not_coordinate_proximity() -> None:
+    selection = apply_fast_vegetation_hard_exclusions(
+        classification=np.asarray((1, 1), dtype=np.uint8),
+        original_index=np.asarray((40, 41), dtype=np.int64),
+        known_wire_original_index=np.asarray((41,), dtype=np.int64),
+        vegetation_evidence_mask=np.asarray((True, True)),
+    )
+    assert np.array_equal(selection.retained_mask, np.asarray((True, False)))
+
+
+def test_plan_b_classifier_is_deterministic_and_rejects_invalid_configuration() -> None:
+    values = np.asarray((0.059, 0.06, 0.2), dtype=np.float32)
+    config = FastVegetationEvidenceConfig(knn=16, minimum_scattering=0.06)
+    assert np.array_equal(
+        classify_plan_b_geometry(values, config=config), np.asarray((False, True, True))
+    )
+    try:
+        FastVegetationEvidenceConfig(minimum_scattering=1.1)
+    except Exception as exc:
+        assert "SCATTERING" in str(exc)
+    else:  # pragma: no cover - assertion branch
+        raise AssertionError("invalid Plan-B configuration must fail")
+
+
+def test_plan_b_config_digest_invalidates_cache_key_when_geometry_changes(tmp_path: Path) -> None:
+    source = tmp_path / "source.las"
+    output = tmp_path / "output.las"
+    _write_hag_las(source)
+    _write_hag_las(output)
+    candidate_root = tmp_path / "candidate"
+    _status, candidate = build_fast_vegetation_input(
+        _ground_result(source, output),
+        candidate_root,
+        source_id="scene_simple",
+        origin_context=(0.0, 0.0, 0.0),
+    )
+    w1_npz = tmp_path / "w1.npz"
+    w1_json = tmp_path / "w1.json"
+    w1_npz.write_bytes(b"w1-npz")
+    w1_json.write_bytes(b"w1-json")
+    first = fast_vegetation_config_digest(
+        candidate,
+        _ground_result(source, output),
+        w1_npz=w1_npz,
+        w1_json=w1_json,
+        reference_a2a_npz=None,
+        reference_v1_npz=None,
+        config=FastVegetationEvidenceConfig(minimum_scattering=0.06),
+    )
+    second = fast_vegetation_config_digest(
+        candidate,
+        _ground_result(source, output),
+        w1_npz=w1_npz,
+        w1_json=w1_json,
+        reference_a2a_npz=None,
+        reference_v1_npz=None,
+        config=FastVegetationEvidenceConfig(minimum_scattering=0.07),
+    )
+    assert first != second
 
 
 def test_fast_ground_content_digest_ignores_timing(tmp_path: Path) -> None:

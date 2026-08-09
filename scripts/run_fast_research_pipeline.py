@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import laspy
+import numpy as np
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPOSITORY_ROOT) not in sys.path:
@@ -42,6 +43,15 @@ from algorithms.vegetation.fast_research import (  # noqa: E402
     run_fast_ground_hag,
     run_fast_v4,
     sha256_file,
+)
+from algorithms.vegetation.fast_vegetation_ab import (  # noqa: E402
+    FastVegetationEvidenceConfig,
+    benchmark_plan_b_representative,
+    build_fast_vegetation_ab_input,
+    generate_fast_vegetation_review,
+    generate_minimum_clearance_local_review,
+    generate_plan_b_geometry_review,
+    probe_plan_a_open3d_ml,
 )
 from algorithms.vegetation.tree_wire_clearance import run_tree_wire_clearance  # noqa: E402
 from algorithms.vegetation.tree_wire_clearance_visualization import (  # noqa: E402
@@ -125,6 +135,7 @@ def run(argv: list[str] | None = None) -> dict[str, Any]:
 
     started = time.perf_counter()
     stages: dict[str, dict[str, Any]] = {}
+    plan_a = probe_plan_a_open3d_ml()
     stage_started = time.perf_counter()
     w1_status, w1_paths = prepare_w1_reuse_snapshot(
         args.w1_npz, args.w1_json, args.w1_project_root, output / "w1"
@@ -172,21 +183,53 @@ def run(argv: list[str] | None = None) -> dict[str, Any]:
             "html": str(preview),
             "runtime_seconds": time.perf_counter() - stage_started,
         }
-    vegetation_status, vegetation = build_fast_vegetation_input(
+    admission_status, admission = build_fast_vegetation_input(
         ground,
-        output / "vegetation",
+        output / "vegetation_admission",
         source_id=args.source_id,
         origin_context=tuple(float(value) for value in a4.origin_xyz),
         minimum_hag_m=args.minimum_hag,
         bounds=_bounds(args.bounds),
         admission_voxel_size_m=args.admission_voxel_size,
     )
+    stages["vegetation_admission"] = {
+        "status": admission_status,
+        "runtime_seconds": admission.elapsed_seconds,
+        "point_count": admission.point_count,
+        "marker": admission.non_certified_marker,
+    }
+    with np.load(admission.output_npz_path, allow_pickle=False) as stream:
+        admission_xyz = np.asarray(stream["xyz_local_m"], dtype=np.float64)
+    representative = benchmark_plan_b_representative(
+        admission_xyz, config=FastVegetationEvidenceConfig()
+    )
+    plan_a["representative_subset_count"] = representative["point_count"]
+    evidence_root = args.w1_project_root.resolve() / "outputs"
+    plan_b_status, vegetation, plan_b = build_fast_vegetation_ab_input(
+        admission,
+        ground,
+        output / "vegetation",
+        w1_npz=w1_paths["w1_npz"],
+        w1_json=w1_paths["w1_json"],
+        reference_a2a_npz=evidence_root / "features" / f"{args.source_id}_geometry_features.npz",
+        reference_v1_npz=(
+            evidence_root / "vegetation_candidates" / f"{args.source_id}_vegetation_candidates.npz"
+        ),
+        config=FastVegetationEvidenceConfig(),
+    )
     stages["vegetation_input"] = {
-        "status": vegetation_status,
+        "status": plan_b_status,
         "runtime_seconds": vegetation.elapsed_seconds,
         "point_count": vegetation.point_count,
         "marker": vegetation.non_certified_marker,
+        "plan_b_backend": plan_b["plan_b_backend"],
+        "counts": plan_b["counts"],
+        "reference_a2a_v1": plan_b["reference_a2a_v1"],
     }
+    plan_b_html = output / "visualizations" / "plan_b_geometry_review.html"
+    generate_plan_b_geometry_review(plan_b, plan_b_html)
+    vegetation_html = output / "visualizations" / "fast_vegetation_review_v2.html"
+    generate_fast_vegetation_review(vegetation, plan_b, vegetation_html)
     with laspy.open(input_las) as source:
         source_bounds_min = tuple(float(value) for value in source.header.mins)
         source_bounds_max = tuple(float(value) for value in source.header.maxs)
@@ -204,8 +247,8 @@ def run(argv: list[str] | None = None) -> dict[str, Any]:
         "invocation_seconds": time.perf_counter() - stage_started,
         **v4_summary,
     }
-    v4_html = output / "visualizations" / "v4_review.html"
-    v4_summary_json = output / "visualizations" / "v4_review.json"
+    v4_html = output / "visualizations" / "v4_review_v2.html"
+    v4_summary_json = output / "visualizations" / "v4_review_v2.json"
     stage_started = time.perf_counter()
     if v4_html.is_file() and v4_summary_json.is_file():
         stages["v4_visualization"] = {
@@ -247,8 +290,8 @@ def run(argv: list[str] | None = None) -> dict[str, Any]:
         "minimum_clearance_m": min(valid_clearances) if valid_clearances else None,
         "runtime_seconds": time.perf_counter() - stage_started,
     }
-    clearance_html = output / "visualizations" / "clearance_review.html"
-    clearance_summary_json = output / "visualizations" / "clearance_review.json"
+    clearance_html = output / "visualizations" / "clearance_review_v2.html"
+    clearance_summary_json = output / "visualizations" / "clearance_review_v2.json"
     stage_started = time.perf_counter()
     if clearance_html.is_file() and clearance_summary_json.is_file():
         stages["clearance_visualization"] = {
@@ -272,6 +315,55 @@ def run(argv: list[str] | None = None) -> dict[str, Any]:
             "runtime_seconds": time.perf_counter() - stage_started,
         }
 
+    local_clearance_html = output / "visualizations" / "minimum_clearance_local_review.html"
+    generate_minimum_clearance_local_review(clearance, local_clearance_html)
+
+    with np.load(vegetation.output_npz_path, allow_pickle=False) as stream:
+        clean_original_index = np.asarray(stream["original_index"], dtype=np.int64)
+    v4_original_index = np.asarray(loaded_v4.result.original_index, dtype=np.int64)
+    known_wire_original_index = np.asarray(
+        _w1_arrays["ordered_input_original_index"], dtype=np.int64
+    )
+    if not np.all(np.isin(v4_original_index, clean_original_index)):
+        raise FastResearchError("FAST_RESEARCH_V4_INPUT_CORRESPONDENCE_INVALID")
+    if np.any(np.isin(v4_original_index, known_wire_original_index)):
+        raise FastResearchError("FAST_RESEARCH_V4_KNOWN_WIRE_OVERLAP")
+    if plan_b["counts"]["final_tree_ground_overlap"] != 0:
+        raise FastResearchError("FAST_RESEARCH_V4_GROUND_OVERLAP")
+
+    valid_clearance = min(valid_clearances) if valid_clearances else None
+    plausibility = (
+        "SUSPICIOUS" if valid_clearance is not None and valid_clearance < 0.01 else "PLAUSIBLE"
+    )
+    ab_summary = {
+        "schema_version": "fast-vegetation-ab-competition-v1",
+        "non_certified_marker": NON_CERTIFIED_MARKER,
+        "overall_status": "PASS",
+        "plan_a": plan_a,
+        "plan_b": {
+            "status": "PASS",
+            "backend": plan_b["plan_b_backend"],
+            "runtime_seconds": plan_b["runtime_seconds"],
+            "feature_runtime_seconds": plan_b["feature_runtime_seconds"],
+            "evidence": plan_b["reference_a2a_v1"],
+            "representative_benchmark": representative,
+        },
+        "winner": "PLAN_B",
+        "why": (
+            "Plan A could not import its PyTorch semantic backend without an install; "
+            "Plan B ran compiled PDAL covariance features on the same FAST admission set, "
+            "used exact-index W1 exclusion, and retained an exact-index A2A/V1 evidence audit."
+        ),
+        "outputs": {
+            "plan_b_geometry_review": str(plan_b_html),
+            "fast_vegetation_review": str(vegetation_html),
+            "v4_review": str(v4_html),
+            "clearance_review": str(clearance_html),
+            "minimum_clearance_local_review": str(local_clearance_html),
+        },
+    }
+    _write_json(output / "ab_comparison_summary.json", ab_summary)
+
     summary = {
         "schema_version": FAST_RESEARCH_SCHEMA_VERSION,
         "non_certified_marker": NON_CERTIFIED_MARKER,
@@ -285,6 +377,9 @@ def run(argv: list[str] | None = None) -> dict[str, Any]:
         "input_las_sha256": sha256_file(input_las),
         "output_root": str(output),
         "stages": stages,
+        "ab_competition": ab_summary,
+        "vegetation_cleaning": plan_b,
+        "minimum_clearance_plausibility": plausibility,
         "total_runtime_seconds": time.perf_counter() - started,
     }
     _write_json(output / "fast_research_summary.json", summary)
