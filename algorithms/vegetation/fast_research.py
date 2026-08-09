@@ -534,6 +534,11 @@ def run_fast_v4(
         xyz_local_m = np.asarray(stream["xyz_local_m"], dtype="<f8")
         hag_m = np.asarray(stream["hag_m"], dtype="<f4")
         candidate_reason_flags = np.asarray(stream["candidate_reason_flags"], dtype="<u4")
+        raw_weight = (
+            np.asarray(stream["raw_count"], dtype="<u4")
+            if "raw_count" in stream.files
+            else None
+        )
     validate_fast_v4_arrays(original_index, xyz_local_m, hag_m)
     source = _build_fast_source_identity(
         vegetation_result,
@@ -546,6 +551,7 @@ def run_fast_v4(
         xyz_local_m=xyz_local_m,
         hag_m=hag_m,
         candidate_reason_flags=candidate_reason_flags,
+        raw_weight=raw_weight,
         bridge_digest=run_digest,
     )
     output_root.mkdir(parents=True, exist_ok=True)
@@ -561,6 +567,9 @@ def run_fast_v4(
         "schema_version": FAST_RESEARCH_SCHEMA_VERSION,
         "non_certified_marker": NON_CERTIFIED_INPUT_MARKER,
         "adapter": "FAST_RESEARCH_V4_ADAPTER",
+        "density_source": (
+            "RAW_WEIGHTED_COUNT" if raw_weight is not None else "REPRESENTATIVE_COUNT"
+        ),
         "authority": "No FRV authority, proof, or acceptance claim is made.",
         "run_digest": run_digest,
         "vegetation_input": vegetation_result.to_dict(),
@@ -901,6 +910,7 @@ def _build_fast_handoff(
     hag_m: np.ndarray,
     candidate_reason_flags: np.ndarray,
     bridge_digest: str,
+    raw_weight: np.ndarray | None = None,
 ) -> V4InputHandoffResult:
     """Construct the minimum in-memory bridge used solely by V4 Algorithm-V1.
 
@@ -912,6 +922,13 @@ def _build_fast_handoff(
     def readonly(values: np.ndarray) -> np.ndarray:
         values.setflags(write=False)
         return values
+
+    if raw_weight is None:
+        effective_raw_weight = np.ones(len(original_index), dtype="<u4")
+    else:
+        effective_raw_weight = np.asarray(raw_weight, dtype="<u4")
+        if effective_raw_weight.shape != original_index.shape or np.any(effective_raw_weight == 0):
+            raise FastResearchError("FAST_V4_RAW_WEIGHT_INVALID")
 
     recovered = V4RecoveredVegetationSet.__new__(V4RecoveredVegetationSet)
     object.__setattr__(recovered, "source_identity", source)
@@ -950,6 +967,7 @@ def _build_fast_handoff(
             original_index=original_index,
         ),
     )
+    object.__setattr__(recovered, "raw_weight", readonly(effective_raw_weight.copy()))
     view = V4ValidatedFrvMembershipView.__new__(V4ValidatedFrvMembershipView)
     object.__setattr__(view, "source_identity", source)
     object.__setattr__(

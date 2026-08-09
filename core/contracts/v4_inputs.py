@@ -407,6 +407,7 @@ class V4RecoveredVegetationSet:
     candidate_confidence: None
     frv_membership_artifact_digest: str
     recovered_index_digest: str
+    raw_weight: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         if type(self.source_identity) is not SourceIdentity:
@@ -435,6 +436,17 @@ class V4RecoveredVegetationSet:
             self.frv_membership_artifact_digest, "frv_membership_artifact_digest"
         )
         _require_sha(self.recovered_index_digest, "recovered_index_digest")
+        if self.raw_weight is not None:
+            _require_ndarray(
+                self.raw_weight,
+                "raw_weight",
+                dtype=np.dtype("<u4"),
+                shape=(count,),
+                finite=False,
+                zero_normalized=False,
+            )
+            if np.any(np.asarray(self.raw_weight, dtype=np.uint32) == 0):
+                raise ValueError("raw_weight must contain strictly positive source populations")
 
 
 # ---------------------------------------------------------------------------

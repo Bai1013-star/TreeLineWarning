@@ -528,6 +528,7 @@ class _NormalPopulation:
     hag_evidence_state: np.ndarray
     segmentation_hag_readiness: np.ndarray
     candidate_reason_flags: np.ndarray
+    raw_weight: np.ndarray
     handoff_digest: str
     validated_view_digest: str
     coverage_report_digest: str
@@ -558,6 +559,16 @@ def _canonical_population(handoff: V4InputHandoffResult) -> _NormalPopulation:
         recovered.segmentation_hag_readiness, dtype="|u1"
     )[order]
     candidate_reason_flags = np.asarray(recovered.candidate_reason_flags, dtype="<u4")[order]
+    recovered_weight = getattr(recovered, "raw_weight", None)
+    if recovered_weight is None:
+        raw_weight = np.ones(len(original_index), dtype="<u4")
+    else:
+        raw_weight = np.asarray(recovered_weight, dtype="<u4")[order]
+        if raw_weight.shape != original_index.shape or np.any(raw_weight == 0):
+            raise V4TreeSegmentationError(
+                code=V4TreeSegmentationErrorCode.INPUT_ROOT_INVALID,
+                field_name="raw_weight",
+            )
     for array in (
         original_index,
         xyz_local_m,
@@ -566,6 +577,7 @@ def _canonical_population(handoff: V4InputHandoffResult) -> _NormalPopulation:
         hag_evidence_state,
         segmentation_hag_readiness,
         candidate_reason_flags,
+        raw_weight,
     ):
         array.setflags(write=False)
     count = int(original_index.shape[0])
@@ -579,11 +591,27 @@ def _canonical_population(handoff: V4InputHandoffResult) -> _NormalPopulation:
         hag_evidence_state=hag_evidence_state,
         segmentation_hag_readiness=segmentation_hag_readiness,
         candidate_reason_flags=candidate_reason_flags,
+        raw_weight=raw_weight,
         handoff_digest=handoff.handoff_digest,
         validated_view_digest=view.view_digest,
         coverage_report_digest=report.report_digest,
         point_index_by_original_index=index_lookup,
     )
+
+
+def _raw_weight_sum(
+    population: _NormalPopulation,
+    positions: list[int] | tuple[int, ...] | np.ndarray,
+) -> int:
+    """Return the source-point population represented by selected rows.
+
+    ``fragment.positions`` is intentionally a tuple. Coercing every selection
+    container to a one-dimensional integer array prevents NumPy from treating
+    a tuple as a multidimensional index.
+    """
+
+    index = np.asarray(positions, dtype=np.int64)
+    return int(np.sum(population.raw_weight[index], dtype=np.int64))
 
 
 def _build_grid(
@@ -668,7 +696,7 @@ def _build_grid(
             hag_max=max(hag_vals),
             chm_height=chm,
             cell_center=center,
-            density=len(positions) / (scales.lxy * scales.lxy),
+            density=_raw_weight_sum(population, positions) / (scales.lxy * scales.lxy),
             min_original_index=int(population.original_index[positions[0]]),
         )
         col_index.setdefault(ccol, []).append(cid)
@@ -1054,7 +1082,7 @@ def _build_voxels(
             hag_bin_id=key[1],
             positions=tuple(positions),
             centroid_xyz=centroid,
-            density=len(positions) / (scales.lxy * scales.lxy),
+            density=_raw_weight_sum(population, positions) / (scales.lxy * scales.lxy),
             min_original_index=int(population.original_index[positions[0]]),
         )
     return result
@@ -2976,7 +3004,9 @@ def _build_slices_and_fragments(
             ys = [float(population.xyz_local_m[pos, 1]) for pos in member_positions]
             zs = [float(population.xyz_local_m[pos, 2]) for pos in member_positions]
             area = (max(xs) - min(xs)) * (max(ys) - min(ys))
-            density = len(member_positions) / (area if area > 0 else scales.lxy * scales.lxy)
+            density = _raw_weight_sum(population, member_positions) / (
+                area if area > 0 else scales.lxy * scales.lxy
+            )
             slice_id = f"slice-{hypothesis_id}-{slice_index:03d}"
             slices.append(
                 V4TreeSliceSummary(
@@ -3083,7 +3113,9 @@ def _fragment_metrics(
         max(max(xs) - min(xs), scales.lxy),
         max(max(ys) - min(ys), scales.lxy),
     )
-    density = len(positions) / (extent[0] * extent[1])
+    density = _raw_weight_sum(population, positions) / (
+        extent[0] * extent[1]
+    )
     return centroid, extent, density, min(hags), max(hags), max(extent)
 
 
@@ -3888,7 +3920,7 @@ def _assign_points(
         fragment_hag_median[hypothesis_id] = _quantile(sorted(hag_values), 0.5)
         distinct_cells = len(set(grid.point_cell_ids[pos] for pos in ordered))
         area = (scales.lxy * scales.lxy) * max(distinct_cells, 1)
-        fragment_density[hypothesis_id] = len(ordered) / area
+        fragment_density[hypothesis_id] = _raw_weight_sum(population, ordered) / area
         axis = _fragment_xy_axis(population, ordered)
         if axis is not None:
             center_x = (
