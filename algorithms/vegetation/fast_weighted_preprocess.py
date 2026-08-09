@@ -461,6 +461,9 @@ def build_weighted_fast_vegetation(
     clean_xyz = xyz_local[retained]
     clean_hag = hag[retained]
     clean_weight = raw_count[retained]
+    clean_original, clean_xyz, clean_hag, clean_weight = _order_v4_input_arrays(
+        clean_original, clean_xyz, clean_hag, clean_weight
+    )
     validate_fast_v4_arrays(clean_original, clean_xyz, clean_hag)
     if len(clean_original) == 0:
         raise FastResearchError("FAST_WEIGHTED_VEGETATION_EMPTY")
@@ -624,6 +627,23 @@ def backmap_representative_tree_ids(
 
 def _chunk_xyz(chunk: Any) -> np.ndarray:
     return np.column_stack((chunk.x, chunk.y, chunk.z)).astype(np.float64, copy=False)
+
+
+def _order_v4_input_arrays(
+    original_index: np.ndarray,
+    xyz_local_m: np.ndarray,
+    hag_m: np.ndarray,
+    raw_count: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Order compact rows by source position without breaking their alignment."""
+
+    order = np.argsort(original_index, kind="stable")
+    return (
+        original_index[order],
+        xyz_local_m[order],
+        hag_m[order],
+        raw_count[order],
+    )
 
 
 def _voxel_key(

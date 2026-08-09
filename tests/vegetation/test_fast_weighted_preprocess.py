@@ -11,6 +11,7 @@ from algorithms.vegetation.fast_weighted_preprocess import (
     FAST_WEIGHTED_MARKER,
     FAST_WEIGHTED_PREPROCESS_SCHEMA,
     WeightedWorkingSet,
+    _order_v4_input_arrays,
     backmap_representative_tree_ids,
     build_weighted_working_set,
 )
@@ -83,6 +84,19 @@ def test_raw_weights_change_density_without_changing_representative_layout() -> 
     summary = next(iter(grid.cell_id_to_summary.values()))
     assert summary.count == 2
     assert summary.density == 125.0 / (config.xy_cell_size_m**2)
+
+
+def test_v4_input_order_preserves_raw_weight_alignment() -> None:
+    original, xyz, hag, raw_count = _order_v4_input_arrays(
+        np.asarray((30, 10, 20), dtype=np.int64),
+        np.asarray(((3.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0))),
+        np.asarray((3.0, 1.0, 2.0), dtype=np.float32),
+        np.asarray((300, 100, 200), dtype=np.uint32),
+    )
+    assert original.tolist() == [10, 20, 30]
+    assert xyz[:, 0].tolist() == [1.0, 2.0, 3.0]
+    assert hag.tolist() == [1.0, 2.0, 3.0]
+    assert raw_count.tolist() == [100, 200, 300]
 
 
 def test_backmapping_reports_raw_weighted_assignment(tmp_path: Path) -> None:
