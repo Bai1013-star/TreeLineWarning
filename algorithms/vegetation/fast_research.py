@@ -469,7 +469,7 @@ def generate_fast_ground_preview(
     )
     output_html.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_html.with_name(output_html.name + ".tmp")
-    figure.write_html(temporary, include_plotlyjs="cdn", full_html=True)
+    figure.write_html(temporary, include_plotlyjs=True, full_html=True)
     os.replace(temporary, output_html)
     return output_html
 

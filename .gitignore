@@ -3,6 +3,7 @@ data/samples/
 data/processed/
 outputs/
 artifacts/fast_research/
+artifacts/one_click_runs/
 cache/
 projects/
 models/weights/

@@ -101,6 +101,7 @@ def build_weighted_working_set(
     *,
     voxel_size_m: float,
     chunk_size: int = 1_000_000,
+    artifact_stem: str = "scan_large",
 ) -> tuple[str, WeightedWorkingSet]:
     """Build a deterministic representative set and exclusive raw membership map.
 
@@ -115,6 +116,8 @@ def build_weighted_working_set(
         raise FastResearchError("FAST_WEIGHTED_PREPROCESS_INPUT_INVALID")
     if type(chunk_size) is not int or chunk_size <= 0:
         raise FastResearchError("FAST_WEIGHTED_PREPROCESS_CHUNK_INVALID")
+    if not artifact_stem or any(character in artifact_stem for character in "\\/:*?\"<>|"):
+        raise FastResearchError("FAST_WEIGHTED_PREPROCESS_ARTIFACT_STEM_INVALID")
     with laspy.open(input_las) as reader:
         header = reader.header
         source_count = int(header.point_count)
@@ -135,7 +138,7 @@ def build_weighted_working_set(
             "raw_membership": "original_index_position_to_representative_id",
         }
     )
-    summary_path = output_root / "scan_large_preprocessing_summary.json"
+    summary_path = output_root / f"{artifact_stem}_preprocessing_summary.json"
     reps_npz = output_root / "working_set_representatives.npz"
     reps_las = output_root / "working_set_representatives.las"
     raw_mapping = output_root / "raw_to_representative_id.npy"
@@ -382,17 +385,27 @@ def build_weighted_fast_vegetation(
     roi: dict[str, Any],
     ground: FastGroundResult,
     output_root: Path,
+    *,
+    source_id: str = "scan_large_preprocessed",
+    wire_geometry_representative_ids: np.ndarray | None = None,
+    artifact_stem: str = "scan_large",
 ) -> tuple[FastVegetationInputResult, dict[str, Any]]:
     """Build V3-style positive vegetation evidence on compact representatives.
 
-    ``scan_large`` has no native W1 artifact, so this function never invents a
-    wire model.  It records that condition explicitly and applies the existing
-    PDAL covariance evidence plus V3 rigid component exclusions.
+    The FAST route never invents a W1 artifact.  A caller may nevertheless
+    provide fresh, source-native *candidate* representative IDs that should be
+    excluded from vegetation as rigid wire-like geometry.  Those candidates are
+    a pre-V4 safety exclusion only; they are not a W1 substitute and cannot be
+    used for Tree-Wire distance.
     """
     output_root = Path(output_root).resolve()
+    if not source_id:
+        raise FastResearchError("FAST_WEIGHTED_VEGETATION_SOURCE_ID_INVALID")
+    if not artifact_stem or any(character in artifact_stem for character in "\\/:*?\"<>|"):
+        raise FastResearchError("FAST_WEIGHTED_VEGETATION_ARTIFACT_STEM_INVALID")
     output_npz = output_root / "fast_v4_input.npz"
-    diagnostic_npz = output_root / "scan_large_fast_vegetation_diagnostics.npz"
-    manifest_path = output_root / "scan_large_fast_vegetation_diagnostics.json"
+    diagnostic_npz = output_root / f"{artifact_stem}_fast_vegetation_diagnostics.npz"
+    manifest_path = output_root / f"{artifact_stem}_fast_vegetation_diagnostics.json"
     if any(path.exists() for path in (output_npz, diagnostic_npz, manifest_path)):
         raise FastResearchError("FAST_WEIGHTED_VEGETATION_OUTPUT_EXISTS")
     started = time.perf_counter()
@@ -415,7 +428,15 @@ def build_weighted_fast_vegetation(
     xyz_local = xyz_absolute - origin
     ground_mask = classification == 2
     hag_valid = np.isfinite(hag) & (hag >= 0.3)
-    geometry_candidate = ~ground_mask & hag_valid
+    requested_wire_ids = (
+        np.empty(0, dtype=np.uint32)
+        if wire_geometry_representative_ids is None
+        else np.asarray(wire_geometry_representative_ids, dtype=np.uint32)
+    )
+    if requested_wire_ids.ndim != 1:
+        raise FastResearchError("FAST_WEIGHTED_VEGETATION_WIRE_CANDIDATE_INVALID")
+    wire_geometry = np.isin(representative_id, np.unique(requested_wire_ids))
+    geometry_candidate = ~ground_mask & hag_valid & ~wire_geometry
     features = {
         "linearity": np.zeros(count, dtype=np.float32),
         "planarity": np.zeros(count, dtype=np.float32),
@@ -462,6 +483,7 @@ def build_weighted_fast_vegetation(
     state[retained] = int(FastV3DiagnosticState.VEGETATION_RETAINED)
     state[rigid_surface] = int(FastV3DiagnosticState.RIGID_SURFACE_EXCLUDED)
     state[rigid_linear] = int(FastV3DiagnosticState.RIGID_LINEAR_EXCLUDED)
+    state[wire_geometry] = int(FastV3DiagnosticState.WIRE_GEOMETRY_EXCLUDED)
     state[ground_mask] = int(FastV3DiagnosticState.GROUND_EXCLUDED)
     clean_original = original[retained]
     clean_xyz = xyz_local[retained]
@@ -480,7 +502,15 @@ def build_weighted_fast_vegetation(
         "roi_bounds": roi["xy_bounds_min"] + roi["xy_bounds_max"],
         "positive_evidence": FastVegetationEvidenceConfig().to_dict(),
         "rigid_config": asdict(v3_config),
-        "wire_mode": "NO_NATIVE_W1_AVAILABLE",
+        "source_id": source_id,
+        "wire_mode": (
+            "SOURCE_NATIVE_WIRE_CANDIDATE_EXCLUSION"
+            if requested_wire_ids.size
+            else "NO_NATIVE_W1_AVAILABLE"
+        ),
+        "wire_geometry_representative_ids_sha256": _array_digest(
+            np.unique(requested_wire_ids)
+        ),
     }
     config_digest = canonical_digest(config_payload)
     _write_npz_atomic(
@@ -515,7 +545,7 @@ def build_weighted_fast_vegetation(
         output_npz_path=str(output_npz),
         output_npz_sha256=sha256_file(output_npz),
         point_count=len(clean_original),
-        source_id="scan_large_preprocessed",
+        source_id=source_id,
         source_las_path=working_set.source_las_path,
         source_point_count=working_set.source_point_count,
         source_file_sha256=working_set.source_las_sha256,
@@ -541,11 +571,15 @@ def build_weighted_fast_vegetation(
     manifest = {
         "schema_version": FAST_WEIGHTED_PREPROCESS_SCHEMA,
         "non_certified_marker": FAST_WEIGHTED_MARKER,
-        "wire_mode": "NO_NATIVE_W1_AVAILABLE",
+        "wire_mode": (
+            "SOURCE_NATIVE_WIRE_CANDIDATE_EXCLUSION"
+            if requested_wire_ids.size
+            else "NO_NATIVE_W1_AVAILABLE"
+        ),
         "config_digest": config_digest,
         "formula": (
             "NON_GROUND AND HAG_READY AND POSITIVE_PDAL_COVARIANCE_EVIDENCE "
-            "AND NOT_RIGID_COMPONENT"
+            "AND NOT_SOURCE_NATIVE_WIRE_CANDIDATE AND NOT_RIGID_COMPONENT"
         ),
         "counts": {
             "input_representatives": count,
@@ -554,7 +588,7 @@ def build_weighted_fast_vegetation(
                 np.count_nonzero(state == FastV3DiagnosticState.GROUND_EXCLUDED)
             ),
             "exact_wire_excluded": 0,
-            "wire_geometry_excluded": 0,
+            "wire_geometry_excluded": int(np.count_nonzero(wire_geometry)),
             "rigid_linear_excluded": int(np.count_nonzero(rigid_linear)),
             "rigid_surface_excluded": int(np.count_nonzero(rigid_surface)),
             "no_positive_vegetation_evidence_excluded": int(
@@ -567,9 +601,110 @@ def build_weighted_fast_vegetation(
         "linear_components": linear_summaries,
         "surface_components": surface_summaries,
         "vegetation_input": vegetation.to_dict(),
+        "diagnostics_npz_path": str(diagnostic_npz),
+        "diagnostics_npz_sha256": sha256_file(diagnostic_npz),
     }
     _write_json_atomic(manifest_path, manifest)
     return vegetation, manifest
+
+
+def backmap_full_working_set_tree_ids(
+    working_set: WeightedWorkingSet,
+    v4_original_index: np.ndarray,
+    v4_tree_id_by_point: np.ndarray,
+    output_path: Path,
+) -> dict[str, Any]:
+    """Persist a lossless V4 representative and source-row tree membership map.
+
+    ``raw_to_representative_id.npy`` is the exclusive, deterministic source-row
+    mapping written during preprocessing.  This helper applies the compact V4
+    assignment to every raw source row without ever pretending that compact
+    representatives are the original point cloud.
+    """
+
+    output_path = Path(output_path)
+    raw_tree_path = output_path.with_name("full_resolution_tree_id_by_source_row.npy")
+    if output_path.exists() or raw_tree_path.exists():
+        raise FastResearchError("FAST_WEIGHTED_FULL_BACKMAP_OUTPUT_EXISTS")
+    original = np.asarray(v4_original_index, dtype=np.int64)
+    tree_ids = np.asarray(v4_tree_id_by_point, dtype=np.int32)
+    if original.ndim != 1 or tree_ids.shape != original.shape or np.any(original < 0):
+        raise FastResearchError("FAST_WEIGHTED_FULL_BACKMAP_V4_ARRAY_INVALID")
+    if len(np.unique(original)) != len(original):
+        raise FastResearchError("FAST_WEIGHTED_FULL_BACKMAP_V4_INDEX_DUPLICATE")
+    with np.load(working_set.representatives_npz_path, allow_pickle=False) as stream:
+        representative_id = np.asarray(stream["representative_id"], dtype=np.uint32)
+        representative_original = np.asarray(stream["original_index"], dtype=np.int64)
+        raw_count = np.asarray(stream["raw_count"], dtype=np.uint32)
+    if (
+        representative_id.shape != representative_original.shape
+        or raw_count.shape != representative_original.shape
+        or len(representative_id) != working_set.representative_count
+        or not np.array_equal(representative_id, np.arange(len(representative_id), dtype=np.uint32))
+    ):
+        raise FastResearchError("FAST_WEIGHTED_FULL_BACKMAP_REPRESENTATIVE_INVALID")
+    tree_by_representative = np.full(len(representative_id), -1, dtype=np.int32)
+    order = np.argsort(representative_original, kind="stable")
+    positions = np.searchsorted(representative_original[order], original)
+    if np.any(positions >= len(order)) or not np.array_equal(
+        representative_original[order][positions], original
+    ):
+        raise FastResearchError("FAST_WEIGHTED_FULL_BACKMAP_V4_INDEX_MISMATCH")
+    tree_by_representative[order[positions]] = tree_ids
+    assigned = tree_by_representative >= 0
+    if int(np.sum(raw_count, dtype=np.int64)) != working_set.raw_count_sum:
+        raise FastResearchError("FAST_WEIGHTED_FULL_BACKMAP_WEIGHT_CONSERVATION")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_npz_atomic(
+        output_path,
+        representative_id=representative_id,
+        source_original_index=representative_original,
+        raw_count=raw_count,
+        tree_id_by_representative=tree_by_representative,
+    )
+    raw_to_representative = np.load(working_set.raw_to_representative_npy_path, mmap_mode="r")
+    if raw_to_representative.shape != (working_set.source_point_count,):
+        raise FastResearchError("FAST_WEIGHTED_FULL_BACKMAP_RAW_MAPPING_INVALID")
+    temporary = raw_tree_path.with_name(raw_tree_path.stem + ".tmp.npy")
+    raw_tree = np.lib.format.open_memmap(
+        temporary,
+        mode="w+",
+        dtype="<i4",
+        shape=(working_set.source_point_count,),
+    )
+    assigned_raw_count = 0
+    try:
+        for start in range(0, working_set.source_point_count, 1_000_000):
+            stop = min(working_set.source_point_count, start + 1_000_000)
+            representative_rows = np.asarray(raw_to_representative[start:stop], dtype=np.uint32)
+            if np.any(representative_rows >= len(tree_by_representative)):
+                raise FastResearchError("FAST_WEIGHTED_FULL_BACKMAP_RAW_MAPPING_RANGE")
+            rows = tree_by_representative[representative_rows]
+            raw_tree[start:stop] = rows
+            assigned_raw_count += int(np.count_nonzero(rows >= 0))
+        raw_tree.flush()
+        del raw_tree
+        raw_tree = None
+        os.replace(temporary, raw_tree_path)
+    except Exception:
+        if raw_tree is not None:
+            del raw_tree
+        temporary.unlink(missing_ok=True)
+        raise
+    return {
+        "representative_count": int(len(representative_id)),
+        "raw_count_sum": int(np.sum(raw_count, dtype=np.int64)),
+        "assigned_representatives": int(np.count_nonzero(assigned)),
+        "assigned_full_resolution_points": assigned_raw_count,
+        "unassigned_full_resolution_points": working_set.source_point_count - assigned_raw_count,
+        "representative_mapping_path": str(output_path),
+        "full_resolution_tree_id_by_source_row_path": str(raw_tree_path),
+        "mapping_semantics": (
+            "Each source-row position indexes full_resolution_tree_id_by_source_row.npy; "
+            "its value is inherited exclusively from raw_to_representative_id.npy."
+        ),
+    }
 
 
 def backmap_representative_tree_ids(

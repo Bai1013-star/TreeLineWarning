@@ -1,0 +1,19 @@
+新 LAS 一键运行说明（FAST 研究演示，非认证）
+
+1. 将明天新的 .las 或 .laz 点云文件复制到 input_las 文件夹。
+2. 双击 RUN_NEW_LAS_DEMO.bat。
+3. 如果有多个点云文件，按窗口中的编号选择；不要关闭黑色命令窗口。
+4. 等待窗口显示“处理完成”。浏览器会自动打开运行摘要和单木结果。
+5. 如果失败，请把本次结果目录中的 run.log 发给 GPT。
+
+主要结果：
+- preprocessing_review.html：预处理后的计算代表点；颜色表示保留的 raw_count。
+- ground_hag_review.html：SMRF 地面与 HAG 高度审查。
+- wire_review.html：新源导线样候选，仅用于审查/植被排除；不是 W1。
+- vegetation_review.html：进入 V4 前保留植被和各类排除原因。
+- v4_tree_segmentation_clean.html：V4 已分配的单木代表点。
+- tree_wire_clearance_review.html：树线距离状态。没有新源、距离就绪 W1 时会明确显示已阻止，绝不会编造距离。
+- RUN_SUMMARY.html：全部阶段、警告和结果入口。
+
+每次运行都会新建一个独立结果文件夹，不会覆盖以前的结果。
+程序会依据新 LAS 的原始点数自动选择计算代表点分辨率；原始行映射和 raw_count 会始终保留。
