@@ -14,6 +14,7 @@ from algorithms.vegetation.fast_weighted_preprocess import (
     _order_v4_input_arrays,
     backmap_representative_tree_ids,
     build_weighted_working_set,
+    write_weighted_roi_las,
 )
 from algorithms.vegetation.v4_tree_segmentation import (
     _build_grid,
@@ -60,6 +61,10 @@ def test_weighted_working_set_conserves_all_raw_rows(tmp_path: Path) -> None:
         representative_original = np.asarray(stream["original_index"], dtype=np.int64)
     assert np.array_equal(np.bincount(mapping, minlength=len(raw_count)), raw_count)
     assert representative_original.tolist() == [0, 2, 4]
+    roi = {"representative_ids": [0, 1]}
+    first_roi = write_weighted_roi_las(working, roi, tmp_path / "roi")
+    second_roi = write_weighted_roi_las(working, roi, tmp_path / "roi")
+    assert first_roi == second_roi
 
 
 def test_raw_weights_change_density_without_changing_representative_layout() -> None:

@@ -348,9 +348,15 @@ def write_weighted_roi_las(
     output_root = Path(output_root).resolve()
     output_path = output_root / "scan_large_roi_computation_set.las"
     roi_npz = output_root / "scan_large_roi_computation_set.npz"
-    if output_path.exists() or roi_npz.exists():
-        raise FastResearchError("FAST_WEIGHTED_ROI_OUTPUT_EXISTS")
     selected_ids = np.asarray(roi["representative_ids"], dtype=np.uint32)
+    if output_path.exists() and roi_npz.exists():
+        with np.load(roi_npz, allow_pickle=False) as stream:
+            existing_ids = np.asarray(stream["representative_id"], dtype=np.uint32)
+        if np.array_equal(existing_ids, selected_ids):
+            return output_path
+        raise FastResearchError("FAST_WEIGHTED_ROI_OUTPUT_EXISTS")
+    if output_path.exists() or roi_npz.exists():
+        raise FastResearchError("FAST_WEIGHTED_ROI_OUTPUT_PARTIAL")
     with np.load(working_set.representatives_npz_path, allow_pickle=False) as stream:
         ids = np.asarray(stream["representative_id"], dtype=np.uint32)
         selected = np.isin(ids, selected_ids)
