@@ -423,6 +423,237 @@ def test_vertical_structure_excludes_self() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Vertical-structure equivalence: optimized vs reference oracle
+# ---------------------------------------------------------------------------
+
+
+def _vertical_reference(
+    halo_rows,
+    point_index: int,
+    point_x: int,
+    point_y: int,
+    point_z: float,
+    *,
+    grid,
+    policy,
+) -> bool:
+    """Reference oracle: exact old dict-based per-neighbour scan.
+
+    Kept verbatim from the pre-optimization implementation to prove the
+    vectorized vertical_structure is bit-identical for all inputs.
+    """
+    from algorithms.ground.classification import decode_z
+
+    hash_map: dict[tuple[int, int], list[tuple[int, int, int, int, float]]] = {}
+    for row in halo_rows:
+        rx = int(row[1])
+        ry = int(row[2])
+        rz = int(row[3])
+        cell_x = (rx - grid.x0) // grid.fx
+        cell_y = (ry - grid.y0) // grid.fy
+        hash_map.setdefault((cell_y, cell_x), []).append(
+            (int(row[0]), rx, ry, rz, decode_z(rz, grid))
+        )
+    radius_sq = grid.vertical_radius_sq
+    min_other = int(policy.vertical_min_other_rows)
+    span = float(policy.vertical_span_m)
+    pcx = (point_x - grid.x0) // grid.fx
+    pcy = (point_y - grid.y0) // grid.fy
+    other_z: list[float] = []
+    for dy in range(-3, 4):
+        for dx in range(-3, 4):
+            rows = hash_map.get((pcy + dy, pcx + dx))
+            if not rows:
+                continue
+            for other_index, rx, ry, _rz, zz in rows:
+                if other_index == point_index:
+                    continue
+                if grid.squared_distance_g(rx, ry, point_x, point_y) <= radius_sq:
+                    other_z.append(zz)
+    if len(other_z) < min_other:
+        return False
+    zs = np.asarray([point_z, *other_z], dtype=np.float64)
+    if not np.isfinite(zs).all():
+        return False
+    return float(zs.max() - zs.min()) >= span
+
+
+def _equivalence(grid, policy, halo, point_index, point_x, point_y, point_z) -> bool:
+    optimized = vertical_structure(
+        point_index,
+        point_x,
+        point_y,
+        point_z,
+        vertical_hash=build_vertical_hash(halo, grid=grid),
+        grid=grid,
+        policy=policy,
+    )
+    reference = _vertical_reference(
+        halo, point_index, point_x, point_y, point_z, grid=grid, policy=policy
+    )
+    assert optimized is reference, (point_index, point_x, point_y, point_z, optimized, reference)
+    return optimized
+
+
+def test_vertical_equiv_sparse_neighbourhood() -> None:
+    grid, policy = _grid()
+    # One row exactly 1 m away -> count 1 below the 8-row minimum.
+    halo = np.asarray([[0, 0, 0, 0], [1, 100, 0, 0]], dtype=np.int64)
+    assert _equivalence(grid, policy, halo, 0, 0, 0, 0.0) is False
+
+
+def test_vertical_equiv_dense_neighbourhood() -> None:
+    grid, policy = _grid()
+    # 9 rows at one point, z from 0.2 m to 1.6 m; self at 0 m.
+    rows = [[i, 0, 0, int(round(i * 0.2 / 0.01))] for i in range(9)]
+    halo = np.asarray(rows, dtype=np.int64)
+    assert _equivalence(grid, policy, halo, 0, 0, 0, 0.0) is True
+
+
+def test_vertical_equiv_exactly_7_and_8_neighbours() -> None:
+    grid, policy = _grid()
+    for count, expected in ((7, False), (8, True)):
+        rows = [[i, 0, 0, int(round(i * 0.2 / 0.01))] for i in range(count + 1)]
+        halo = np.asarray(rows, dtype=np.int64)
+        assert _equivalence(grid, policy, halo, 0, 0, 0, 0.0) is expected
+
+
+def test_vertical_equiv_span_threshold_boundaries() -> None:
+    grid, policy = _grid()
+    # 8 other rows whose max-min span sits at the 1.5 m threshold.
+    for span_m, expected in ((1.49, False), (1.50, True), (1.51, True)):
+        z_low = 0.0
+        z_high = span_m
+        rows = [[0, 0, 0, int(round(z_low / 0.01))]]
+        rows += [[i, 0, 0, int(round(z_high / 0.01))] for i in range(1, 9)]
+        halo = np.asarray(rows, dtype=np.int64)
+        assert _equivalence(grid, policy, halo, 0, 0, 0, z_low) is expected
+
+
+def test_vertical_equiv_radius_boundaries() -> None:
+    grid, policy = _grid()
+    # 8 rows at increasing distance; span is large, so only count matters.
+    for dist, expected in ((99, True), (100, True), (101, False)):
+        rows = [[0, 0, 0, 0]]
+        rows += [[i, dist, 0, int(round(2.0 / 0.01))] for i in range(1, 9)]
+        halo = np.asarray(rows, dtype=np.int64)
+        assert _equivalence(grid, policy, halo, 0, 0, 0, 0.0) is expected
+
+
+def test_vertical_equiv_duplicate_xy_and_equal_z() -> None:
+    grid, policy = _grid()
+    # Duplicate XY, large span -> True.
+    rows = [[i, 0, 0, int(round((0.2 * i) / 0.01))] for i in range(9)]
+    halo = np.asarray(rows, dtype=np.int64)
+    assert _equivalence(grid, policy, halo, 0, 0, 0, 0.0) is True
+    # Equal Z everywhere -> span 0 -> False.
+    equal = np.asarray([[i, 0, 0, 0] for i in range(9)], dtype=np.int64)
+    assert _equivalence(grid, policy, equal, 0, 0, 0, 0.0) is False
+
+
+def test_vertical_equiv_zero_and_negative_coordinates() -> None:
+    grid, policy = _grid()
+    # Rows and point at raw (0,0) with negative decoded z; 8 rows spanning 2 m.
+    rows = [[i, 0, 0, int(round((-1.0 + 0.25 * i) / 0.01))] for i in range(9)]
+    halo = np.asarray(rows, dtype=np.int64)
+    # Self at raw (0,0) decoded -1.0 m; others span -0.75..1.0 m -> span 2.0.
+    assert _equivalence(grid, policy, halo, 0, 0, 0, -1.0) is True
+
+
+def test_vertical_equiv_tile_halo_boundary_window_clamp() -> None:
+    grid, policy = _grid()
+    # Rows confined to a single cell at raw (0,0); a point at the halo edge
+    # whose window extends beyond the row domain must still match the oracle.
+    rows = [[i, 0, 0, int(round(i * 0.2 / 0.01))] for i in range(9)]
+    halo = np.asarray(rows, dtype=np.int64)
+    # Point far outside the row domain (window disjoint) -> False in both.
+    assert _equivalence(grid, policy, halo, 0, 500, 500, 0.0) is False
+    # Point at the domain edge with part of the window empty -> matches oracle.
+    assert _equivalence(grid, policy, halo, 0, 0, 0, 0.0) is True
+
+
+def test_vertical_equiv_random_deterministic_fixtures() -> None:
+    grid, policy = _grid()
+    rng = np.random.RandomState(20260809)
+    for _ in range(60):
+        n = int(rng.randint(0, 220))
+        xs = rng.randint(-250, 300, size=n)
+        ys = rng.randint(-250, 300, size=n)
+        zs = rng.randint(-250, 400, size=n)
+        idx = np.arange(n)
+        halo = np.column_stack([idx, xs, ys, zs]).astype(np.int64)
+        px = int(rng.randint(-250, 300))
+        py = int(rng.randint(-250, 300))
+        pz = float(rng.randint(-250, 400)) * 0.01
+        pi = int(rng.randint(0, max(1, n)))
+        _equivalence(grid, policy, halo, pi, px, py, pz)
+
+
+def test_vertical_equiv_real_scan_small_bounded_subset() -> None:
+    """Point-by-point vertical equivalence on a bounded real scan_small subset.
+
+    Skipped when the raw scan_small fixture is absent so the suite never
+    depends on committed scene data.
+    """
+    from pathlib import Path
+
+    import laspy
+
+    raw = Path(__file__).resolve().parents[2] / "data/raw/scene_01_small/scan_small.las"
+    if not raw.is_file():
+        pytest.skip("real scan_small fixture is not present")
+    subset_size = 1500
+    with laspy.open(raw, mode="r") as reader:
+        header = reader.header
+        sx, sy, sz = (float(header.scales[i]) for i in range(3))
+        ox, oy, oz = (float(header.offsets[i]) for i in range(3))
+        indices: list[int] = []
+        rxs: list[int] = []
+        rys: list[int] = []
+        rzs: list[int] = []
+        for chunk in reader.chunk_iterator(50_000):
+            xs = np.asarray(chunk.x)
+            ys = np.asarray(chunk.y)
+            zs = np.asarray(chunk.z)
+            for i in range(len(xs)):
+                if len(indices) >= subset_size:
+                    break
+                indices.append(len(indices))
+                rxs.append(int(round((float(xs[i]) - ox) / sx)))
+                rys.append(int(round((float(ys[i]) - oy) / sy)))
+                rzs.append(int(round((float(zs[i]) - oz) / sz)))
+            if len(indices) >= subset_size:
+                break
+    halo = np.column_stack([indices, rxs, rys, rzs]).astype(np.int64)
+    x0 = int(round((float(header.mins[0]) - ox) / sx))
+    y0 = int(round((float(header.mins[1]) - oy) / sy))
+    x_max = int(round((float(header.maxs[0]) - ox) / sx))
+    y_max = int(round((float(header.maxs[1]) - oy) / sy))
+    from types import SimpleNamespace
+
+    proof_header = SimpleNamespace(
+        scale_xyz=(sx, sy, sz),
+        offset_xyz=(ox, oy, oz),
+    )
+    grid = build_metric_grid(proof_header, _policy(), x0=x0, y0=y0, x_max=x_max, y_max=y_max)
+    from algorithms.ground.classification import decode_z
+
+    vh = build_vertical_hash(halo, grid=grid)
+    for row in halo:
+        pi = int(row[0])
+        px = int(row[1])
+        py = int(row[2])
+        pz = decode_z(int(row[3]), grid)
+        optimized = vertical_structure(
+            pi, px, py, pz, vertical_hash=vh, grid=grid, policy=_policy()
+        )
+        reference = _vertical_reference(
+            halo, pi, px, py, pz, grid=grid, policy=_policy()
+        )
+        assert optimized is reference, (pi, px, py, pz, optimized, reference)
+
+
+# ---------------------------------------------------------------------------
 # Routing precedence
 # ---------------------------------------------------------------------------
 

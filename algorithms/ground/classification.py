@@ -1082,33 +1082,128 @@ def competing_support(
 # ---------------------------------------------------------------------------
 
 
+class _VerticalHash:
+    """Tile-local fine-cell vertical hash for vectorized exact checks.
+
+    Halo rows are sorted by linear fine-cell index so every 7 x 7 window maps
+    to one contiguous row slice; ``cell_start`` is a prefix array over the cell
+    domain.  ``radius_raw_x`` / ``radius_raw_y`` are the exact raw-tick
+    bounding-box radii ``floor(radius_g / kx)`` used only to pre-filter rows
+    that cannot be within the 1 m circle, never changing the result.
+    """
+
+    __slots__ = (
+        "idx",
+        "x",
+        "y",
+        "z",
+        "cell_start",
+        "cell_min_x",
+        "cell_min_y",
+        "cell_max_x",
+        "cell_max_y",
+        "width_cells",
+        "height_cells",
+        "radius_raw_x",
+        "radius_raw_y",
+    )
+
+    def __init__(
+        self,
+        *,
+        idx: np.ndarray,
+        x: np.ndarray,
+        y: np.ndarray,
+        z: np.ndarray,
+        cell_start: np.ndarray,
+        cell_min_x: int,
+        cell_min_y: int,
+        cell_max_x: int,
+        cell_max_y: int,
+        width_cells: int,
+        height_cells: int,
+        radius_raw_x: int,
+        radius_raw_y: int,
+    ) -> None:
+        self.idx = idx
+        self.x = x
+        self.y = y
+        self.z = z
+        self.cell_start = cell_start
+        self.cell_min_x = cell_min_x
+        self.cell_min_y = cell_min_y
+        self.cell_max_x = cell_max_x
+        self.cell_max_y = cell_max_y
+        self.width_cells = width_cells
+        self.height_cells = height_cells
+        self.radius_raw_x = radius_raw_x
+        self.radius_raw_y = radius_raw_y
+
+
 def build_vertical_hash(
     halo_rows: np.ndarray,
     *,
     grid: MetricGrid,
-) -> dict[tuple[int, int], list[tuple[int, int, int, int, float]]]:
-    """Tile-local fine-cell hash of halo rows (design section 8).
+) -> _VerticalHash:
+    """Build the vectorized tile-local vertical hash (design section 8).
 
-    Maps fine cell (iy, ix) to ``(original_index, raw_x, raw_y, decoded_z)``
-    rows in that cell.  Created once per loaded halo and discarded after the
-    tile; no KDTree or global neighbour structure is used.
+    The returned object holds the halo rows sorted by linear fine-cell index,
+    a ``cell_start`` prefix array, and the exact raw-tick bounding radii.  It
+    is created once per loaded halo and discarded after the tile; no KDTree or
+    global neighbour structure is used.
     """
-    hash_map: dict[tuple[int, int], list[tuple[int, int, int, int, float]]] = {}
-    for row in halo_rows:
-        rx = int(row[_SPOOL_COL_X])
-        ry = int(row[_SPOOL_COL_Y])
-        cell_x = (rx - grid.x0) // grid.fx
-        cell_y = (ry - grid.y0) // grid.fy
-        hash_map.setdefault((cell_y, cell_x), []).append(
-            (
-                int(row[_SPOOL_COL_INDEX]),
-                rx,
-                ry,
-                int(row[_SPOOL_COL_Z]),
-                decode_z(int(row[_SPOOL_COL_Z]), grid),
-            )
+    radius_g = math.isqrt(grid.vertical_radius_sq)
+    if len(halo_rows) == 0:
+        return _VerticalHash(
+            idx=np.empty(0, dtype=np.int64),
+            x=np.empty(0, dtype=np.int64),
+            y=np.empty(0, dtype=np.int64),
+            z=np.empty(0, dtype=np.float64),
+            cell_start=np.zeros(1, dtype=np.int64),
+            cell_min_x=0,
+            cell_min_y=0,
+            cell_max_x=-1,
+            cell_max_y=-1,
+            width_cells=1,
+            height_cells=1,
+            radius_raw_x=radius_g // grid.kx,
+            radius_raw_y=radius_g // grid.ky,
         )
-    return hash_map
+    rx = halo_rows[:, _SPOOL_COL_X].astype(np.int64)
+    ry = halo_rows[:, _SPOOL_COL_Y].astype(np.int64)
+    cx = (rx - grid.x0) // grid.fx
+    cy = (ry - grid.y0) // grid.fy
+    cell_min_x = int(cx.min())
+    cell_min_y = int(cy.min())
+    cell_max_x = int(cx.max())
+    cell_max_y = int(cy.max())
+    width_cells = cell_max_x - cell_min_x + 1
+    height_cells = cell_max_y - cell_min_y + 1
+    linear = (cy - cell_min_y) * width_cells + (cx - cell_min_x)
+    order = np.argsort(linear, kind="stable")
+    sorted_linear = linear[order]
+    total_cells = width_cells * height_cells
+    counts = np.bincount(sorted_linear, minlength=total_cells)
+    cell_start = np.zeros(total_cells + 1, dtype=np.int64)
+    np.cumsum(counts, out=cell_start[1:])
+    return _VerticalHash(
+        idx=halo_rows[order, _SPOOL_COL_INDEX].astype(np.int64),
+        x=halo_rows[order, _SPOOL_COL_X].astype(np.int64),
+        y=halo_rows[order, _SPOOL_COL_Y].astype(np.int64),
+        z=(
+            halo_rows[order, _SPOOL_COL_Z].astype(np.float64) * float(grid.scale_z)
+            + grid.offset_z
+        ),
+        cell_start=cell_start,
+        cell_min_x=cell_min_x,
+        cell_min_y=cell_min_y,
+        cell_max_x=cell_max_x,
+        cell_max_y=cell_max_y,
+        width_cells=width_cells,
+        height_cells=height_cells,
+        radius_raw_x=radius_g // grid.kx,
+        radius_raw_y=radius_g // grid.ky,
+    )
 
 
 def vertical_structure(
@@ -1117,35 +1212,79 @@ def vertical_structure(
     point_y: int,
     point_z: float,
     *,
-    vertical_hash: dict[tuple[int, int], list[tuple[int, int, int, int, float]]],
+    vertical_hash: _VerticalHash,
     grid: MetricGrid,
     policy: GroundClassificationPolicyConfig,
 ) -> bool:
-    """Tile-local vertical rule: >= 8 other rows within 1 m, span >= 1.5 m."""
-    radius_sq = grid.vertical_radius_sq
+    """Tile-local vertical rule: >= 8 other rows within 1 m, span >= 1.5 m.
+
+    The predicate is monotone in the eligible-neighbour set: adding another row
+    within 1 m can only raise the count and only widen the z span, so once
+    ``count >= min_other`` and ``span >= threshold`` hold the result is final.
+    The vectorized computation evaluates the full 7 x 7 window slice exactly
+    (same candidate population, same self exclusion, same exact integer
+    ``<=`` predicate, same span over {point} union retained rows) as the
+    per-neighbour reference scan.
+
+    The exact circle predicate ``dxg**2 + dyg**2 <= radius_sq`` is evaluated in
+    the overflow-free form ``dyg**2 <= radius_sq - dxg**2`` after a raw-tick
+    bounding-box pre-filter that never drops a within-radius row.
+    """
+    vh = vertical_hash
+    radius_sq = int(grid.vertical_radius_sq)
     min_other = int(policy.vertical_min_other_rows)
     span = float(policy.vertical_span_m)
-    point_cell_x = (point_x - grid.x0) // grid.fx
-    point_cell_y = (point_y - grid.y0) // grid.fy
-    other_z: list[float] = []
-    # Inspect only cells whose raw-tick ranges can intersect the 1 m circle;
-    # the exact integer distance filter below is the authoritative check.
-    for dy in range(-3, 4):
-        for dx in range(-3, 4):
-            rows = vertical_hash.get((point_cell_y + dy, point_cell_x + dx))
-            if not rows:
-                continue
-            for other_index, rx, ry, _raw_z, rz in rows:
-                if other_index == point_index:
-                    continue  # self excluded
-                if grid.squared_distance_g(rx, ry, point_x, point_y) <= radius_sq:
-                    other_z.append(rz)
-    if len(other_z) < min_other:
+    pcx = (int(point_x) - grid.x0) // grid.fx
+    pcy = (int(point_y) - grid.y0) // grid.fy
+    if (
+        pcx + 3 < vh.cell_min_x
+        or pcx - 3 > vh.cell_max_x
+        or pcy + 3 < vh.cell_min_y
+        or pcy - 3 > vh.cell_max_y
+    ):
         return False
-    zs = np.asarray([point_z, *other_z], dtype=np.float64)
-    if not np.isfinite(zs).all():
+    cx_lo = max(vh.cell_min_x, pcx - 3)
+    cx_hi = min(vh.cell_max_x, pcx + 3)
+    cy_lo = max(vh.cell_min_y, pcy - 3)
+    cy_hi = min(vh.cell_max_y, pcy + 3)
+    lo = vh.cell_start[(cy_lo - vh.cell_min_y) * vh.width_cells + (cx_lo - vh.cell_min_x)]
+    hi = vh.cell_start[(cy_hi - vh.cell_min_y) * vh.width_cells + (cx_hi - vh.cell_min_x) + 1]
+    if hi <= lo:
         return False
-    return float(zs.max() - zs.min()) >= span
+    x = vh.x[lo:hi]
+    y = vh.y[lo:hi]
+    z = vh.z[lo:hi]
+    idx = vh.idx[lo:hi]
+    px = int(point_x)
+    py = int(point_y)
+    dx = x - px
+    dy = y - py
+    keep = (np.abs(dx) <= vh.radius_raw_x) & (np.abs(dy) <= vh.radius_raw_y)
+    if not keep.any():
+        return False
+    xk = x[keep]
+    yk = y[keep]
+    zk = z[keep]
+    ik = idx[keep]
+    dxg = (xk - px) * grid.kx
+    dyg = (yk - py) * grid.ky
+    dxs = dxg * dxg
+    dys = dyg * dyg
+    within = dys <= (radius_sq - dxs)
+    mask = within & (ik != int(point_index))
+    count = int(mask.sum())
+    if count < min_other:
+        return False
+    z_elig = zk[mask]
+    if not np.isfinite(z_elig).all() or not math.isfinite(point_z):
+        return False
+    z_hi = float(z_elig.max())
+    z_lo = float(z_elig.min())
+    if point_z > z_hi:
+        z_hi = point_z
+    if point_z < z_lo:
+        z_lo = point_z
+    return (z_hi - z_lo) >= span
 
 
 # ---------------------------------------------------------------------------

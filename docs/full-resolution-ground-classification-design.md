@@ -457,14 +457,16 @@ The 16 GB working-set bound is:
 
 With the reviewed per-tile point caps (8,000,000 core and 8,000,000 halo rows)
 this is about 2.4 GiB for the tile algorithm, before the process baseline. The
-estimated single-tile peak for scan_small (6,905,520 rows, ~47 m x ~39 m, one
-256 m tile) is well below 1.5 GiB, far inside the 16 GB ceiling; the real-scene
-runtime records the observed peak. FGC uses plane batches no larger than
-max_plane_batch and must not allocate a core-points by 32 candidate matrix. The
-result is CONDITIONAL_WITHIN_POLICY_LIMITS: a pathological tile above a cap
-fails closed rather than risking a 16 GB exhaustion. scan_small with 6,905,520
-rows is feasible within these checked limits; runtime is an order-of-magnitude
-expectation, not a benchmark promise.
+measured single-tile peak for scan_small (6,905,520 rows, ~47 m x ~39 m, one
+256 m tile) is ~2.4 GiB, far inside the 16 GB ceiling. FGC uses plane batches
+no larger than max_plane_batch and must not allocate a core-points by 32
+candidate matrix. The result is CONDITIONAL_WITHIN_POLICY_LIMITS: a
+pathological tile above a cap fails closed rather than risking a 16 GB
+exhaustion. scan_small with 6,905,520 rows is feasible within these checked
+limits; the tile-local vertical hash is a vectorized exact-semantics
+implementation (no KDTree or global neighbour structure) so dense single-tile
+runs complete in roughly one to two hours, not days; runtime remains an
+order-of-magnitude expectation, not a benchmark promise.
 
 Same-volume free-space preflight requires at least:
 
