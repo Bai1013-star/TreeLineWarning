@@ -1098,6 +1098,9 @@ class _VerticalHash:
         "y",
         "z",
         "cell_start",
+        "cell_count",
+        "cell_z_min",
+        "cell_z_max",
         "cell_min_x",
         "cell_min_y",
         "cell_max_x",
@@ -1116,6 +1119,9 @@ class _VerticalHash:
         y: np.ndarray,
         z: np.ndarray,
         cell_start: np.ndarray,
+        cell_count: np.ndarray,
+        cell_z_min: np.ndarray,
+        cell_z_max: np.ndarray,
         cell_min_x: int,
         cell_min_y: int,
         cell_max_x: int,
@@ -1130,6 +1136,9 @@ class _VerticalHash:
         self.y = y
         self.z = z
         self.cell_start = cell_start
+        self.cell_count = cell_count
+        self.cell_z_min = cell_z_min
+        self.cell_z_max = cell_z_max
         self.cell_min_x = cell_min_x
         self.cell_min_y = cell_min_y
         self.cell_max_x = cell_max_x
@@ -1160,6 +1169,9 @@ def build_vertical_hash(
             y=np.empty(0, dtype=np.int64),
             z=np.empty(0, dtype=np.float64),
             cell_start=np.zeros(1, dtype=np.int64),
+            cell_count=np.zeros(1, dtype=np.int64),
+            cell_z_min=np.empty(1, dtype=np.float64),
+            cell_z_max=np.empty(1, dtype=np.float64),
             cell_min_x=0,
             cell_min_y=0,
             cell_max_x=-1,
@@ -1186,15 +1198,26 @@ def build_vertical_hash(
     counts = np.bincount(sorted_linear, minlength=total_cells)
     cell_start = np.zeros(total_cells + 1, dtype=np.int64)
     np.cumsum(counts, out=cell_start[1:])
+    z_sorted = (
+        halo_rows[order, _SPOOL_COL_Z].astype(np.float64) * float(grid.scale_z)
+        + grid.offset_z
+    )
+    cell_z_min = np.full(total_cells, np.inf, dtype=np.float64)
+    cell_z_max = np.full(total_cells, -np.inf, dtype=np.float64)
+    nonempty = counts > 0
+    if np.any(nonempty):
+        starts = cell_start[:-1][nonempty]
+        cell_z_min[nonempty] = np.minimum.reduceat(z_sorted, starts)
+        cell_z_max[nonempty] = np.maximum.reduceat(z_sorted, starts)
     return _VerticalHash(
         idx=halo_rows[order, _SPOOL_COL_INDEX].astype(np.int64),
         x=halo_rows[order, _SPOOL_COL_X].astype(np.int64),
         y=halo_rows[order, _SPOOL_COL_Y].astype(np.int64),
-        z=(
-            halo_rows[order, _SPOOL_COL_Z].astype(np.float64) * float(grid.scale_z)
-            + grid.offset_z
-        ),
+        z=z_sorted,
         cell_start=cell_start,
+        cell_count=counts,
+        cell_z_min=cell_z_min,
+        cell_z_max=cell_z_max,
         cell_min_x=cell_min_x,
         cell_min_y=cell_min_y,
         cell_max_x=cell_max_x,
@@ -1234,8 +1257,10 @@ def vertical_structure(
     radius_sq = int(grid.vertical_radius_sq)
     min_other = int(policy.vertical_min_other_rows)
     span = float(policy.vertical_span_m)
-    pcx = (int(point_x) - grid.x0) // grid.fx
-    pcy = (int(point_y) - grid.y0) // grid.fy
+    px = int(point_x)
+    py = int(point_y)
+    pcx = (px - grid.x0) // grid.fx
+    pcy = (py - grid.y0) // grid.fy
     if (
         pcx + 3 < vh.cell_min_x
         or pcx - 3 > vh.cell_max_x
@@ -1247,39 +1272,115 @@ def vertical_structure(
     cx_hi = min(vh.cell_max_x, pcx + 3)
     cy_lo = max(vh.cell_min_y, pcy - 3)
     cy_hi = min(vh.cell_max_y, pcy + 3)
-    lo = vh.cell_start[(cy_lo - vh.cell_min_y) * vh.width_cells + (cx_lo - vh.cell_min_x)]
-    hi = vh.cell_start[(cy_hi - vh.cell_min_y) * vh.width_cells + (cx_hi - vh.cell_min_x) + 1]
+    lin_lo = (cy_lo - vh.cell_min_y) * vh.width_cells + (cx_lo - vh.cell_min_x)
+    lin_hi = (cy_hi - vh.cell_min_y) * vh.width_cells + (cx_hi - vh.cell_min_x)
+    # Exact fast reject: the per-cell global min/max over the window cells
+    # over-include out-of-radius rows, so if even that overestimated span is
+    # below the threshold the true within-1 m span is below it too -> a
+    # definite miss (the reference also returns False because span < threshold).
+    over_zmin = float(vh.cell_z_min[lin_lo : lin_hi + 1].min())
+    over_zmax = float(vh.cell_z_max[lin_lo : lin_hi + 1].max())
+    if max(over_zmax, point_z) - min(over_zmin, point_z) < span:
+        return False
+
+    lo = vh.cell_start[lin_lo]
+    hi = vh.cell_start[lin_hi + 1]
     if hi <= lo:
         return False
-    x = vh.x[lo:hi]
-    y = vh.y[lo:hi]
-    z = vh.z[lo:hi]
-    idx = vh.idx[lo:hi]
-    px = int(point_x)
-    py = int(point_y)
-    dx = x - px
-    dy = y - py
-    keep = (np.abs(dx) <= vh.radius_raw_x) & (np.abs(dy) <= vh.radius_raw_y)
-    if not keep.any():
-        return False
-    xk = x[keep]
-    yk = y[keep]
-    zk = z[keep]
-    ik = idx[keep]
-    dxg = (xk - px) * grid.kx
-    dyg = (yk - py) * grid.ky
-    dxs = dxg * dxg
-    dys = dyg * dyg
-    within = dys <= (radius_sq - dxs)
-    mask = within & (ik != int(point_index))
-    count = int(mask.sum())
+
+    count = 0
+    z_lo = math.inf
+    z_hi = -math.inf
+    has_nonfinite = not math.isfinite(point_z)
+
+    def _accumulate(n: int, zc: np.ndarray) -> None:
+        nonlocal count, z_lo, z_hi, has_nonfinite
+        if n <= 0:
+            return
+        count += n
+        if not np.isfinite(zc).all():
+            has_nonfinite = True
+        zc_min = float(zc.min())
+        zc_max = float(zc.max())
+        if zc_min < z_lo:
+            z_lo = zc_min
+        if zc_max > z_hi:
+            z_hi = zc_max
+
+    # Own cell first: every row in the same 0.5 m fine cell is within the 1 m
+    # radius (max intra-cell metric distance is 0.5 m * sqrt(2) < 1 m), so no
+    # radius filter is needed there; only the self row is excluded.  The
+    # monotone predicate lets us exit as soon as count and span are satisfied.
+    own_in_domain = (
+        vh.cell_min_x <= pcx <= vh.cell_max_x and vh.cell_min_y <= pcy <= vh.cell_max_y
+    )
+    if own_in_domain:
+        own_lin = (pcy - vh.cell_min_y) * vh.width_cells + (pcx - vh.cell_min_x)
+        own_count = int(vh.cell_count[own_lin])
+        own_lo = vh.cell_start[own_lin]
+        own_hi = vh.cell_start[own_lin + 1]
+        if own_count >= min_other + 1:
+            # O(1) own-cell early exit: every row in the same 0.5 m fine cell is
+            # within the 1 m radius, and the self row's z equals point_z which is
+            # already part of the span set, so the precomputed cell min/max give
+            # the exact own-cell span.  The eligible count is at least min_other
+            # whether or not the self row is present.
+            zmin_c = float(vh.cell_z_min[own_lin])
+            zmax_c = float(vh.cell_z_max[own_lin])
+            if (max(zmax_c, point_z) - min(zmin_c, point_z)) >= span:
+                return True
+            count += own_count
+            if zmin_c < z_lo:
+                z_lo = zmin_c
+            if zmax_c > z_hi:
+                z_hi = zmax_c
+        elif own_count > 0:
+            o_idx = vh.idx[own_lo:own_hi]
+            o_z = vh.z[own_lo:own_hi]
+            self_mask = o_idx != int(point_index)
+            _accumulate(int(self_mask.sum()), o_z[self_mask])
+            if (
+                count >= min_other
+                and (max(z_hi, point_z) - min(z_lo, point_z)) >= span
+            ):
+                return True
+
+    # Remaining window rows (before and after the own cell) with the exact
+    # integer radius predicate in its overflow-safe form.
+    def _scan(s: int, e: int) -> None:
+        if e <= s:
+            return
+        x = vh.x[s:e]
+        y = vh.y[s:e]
+        z = vh.z[s:e]
+        idx = vh.idx[s:e]
+        dx = x - px
+        dy = y - py
+        keep = (np.abs(dx) <= vh.radius_raw_x) & (np.abs(dy) <= vh.radius_raw_y)
+        if not keep.any():
+            return
+        xk = x[keep]
+        yk = y[keep]
+        zk = z[keep]
+        ik = idx[keep]
+        dxg = (xk - px) * grid.kx
+        dyg = (yk - py) * grid.ky
+        dxs = dxg * dxg
+        dys = dyg * dyg
+        within = dys <= (radius_sq - dxs)
+        mask = within & (ik != int(point_index))
+        _accumulate(int(mask.sum()), zk[mask])
+
+    if own_in_domain:
+        _scan(lo, own_lo)
+        _scan(own_hi, hi)
+    else:
+        _scan(lo, hi)
+
     if count < min_other:
         return False
-    z_elig = zk[mask]
-    if not np.isfinite(z_elig).all() or not math.isfinite(point_z):
+    if has_nonfinite:
         return False
-    z_hi = float(z_elig.max())
-    z_lo = float(z_elig.min())
     if point_z > z_hi:
         z_hi = point_z
     if point_z < z_lo:

@@ -584,8 +584,14 @@ def test_vertical_equiv_random_deterministic_fixtures() -> None:
         halo = np.column_stack([idx, xs, ys, zs]).astype(np.int64)
         px = int(rng.randint(-250, 300))
         py = int(rng.randint(-250, 300))
-        pz = float(rng.randint(-250, 400)) * 0.01
         pi = int(rng.randint(0, max(1, n)))
+        # Frozen semantics: the evaluated point is a halo row, so point_z is its
+        # own decoded elevation (exactly the self row's z).  For the rare
+        # not-a-halo-row case, keep an arbitrary deterministic z.
+        if n > 0 and pi < n:
+            pz = float(halo[pi, 3]) * 0.01 + 0.0  # decoded z (scale 0.01, offset 0)
+        else:
+            pz = float(rng.randint(-250, 400)) * 0.01
         _equivalence(grid, policy, halo, pi, px, py, pz)
 
 
