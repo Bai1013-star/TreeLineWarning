@@ -2198,17 +2198,22 @@ def validate_v4_tree_segmentation_result(result: V4TreeSegmentationResult) -> No
         # Each offset-delimited tree member block is strictly increasing;
         # across trees the member sets are unique.  The concatenation of all
         # tree blocks is NOT required to be globally increasing.
+        # Group the dense ASSIGNED original indexes by tree once (O(N)) instead
+        # of rescanning the full population once per tree (O(N x T)).
+        grouped_indexes: dict[int, list[int]] = {}
+        for position in range(count):
+            if states[position] == int(V4TreeAssignmentState.ASSIGNED):
+                grouped_indexes.setdefault(int(tree_ids[position]), []).append(
+                    int(indexes[position])
+                )
         for tree_id in range(tree_count):
             block = members[int(offsets[tree_id]) : int(offsets[tree_id + 1])]
             if not (np.diff(block) > 0).all():
                 raise ValueError(
                     "each tree member block must be strictly increasing by original index"
                 )
-            expected_block = indexes[
-                (states == int(V4TreeAssignmentState.ASSIGNED))
-                & (tree_ids == tree_id)
-            ]
-            if not np.array_equal(block, expected_block):
+            expected_block = grouped_indexes.get(tree_id, [])
+            if list(block) != expected_block:
                 raise ValueError(
                     "each ragged tree member block must match its dense tree_id members"
                 )

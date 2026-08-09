@@ -191,8 +191,13 @@ def _tree_assigned_positions(result: V4TreeSegmentationResult) -> dict[int, np.n
     states = np.asarray(result.assignment_state_by_point, dtype=np.uint8)
     tree_ids = np.asarray(result.tree_id_by_point, dtype=np.int32)
     assigned = int(V4TreeAssignmentState.ASSIGNED)
+    positions_by_tree: dict[int, list[int]] = {}
+    for position in range(int(tree_ids.shape[0])):
+        tree_id = int(tree_ids[position])
+        if tree_id >= 0 and int(states[position]) == assigned:
+            positions_by_tree.setdefault(tree_id, []).append(position)
     return {
-        int(tree.tree_id): np.flatnonzero((tree_ids == int(tree.tree_id)) & (states == assigned))
+        int(tree.tree_id): np.asarray(positions_by_tree.get(int(tree.tree_id), []), dtype=np.int64)
         for tree in result.tree_records
     }
 

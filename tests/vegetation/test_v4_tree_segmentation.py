@@ -681,7 +681,17 @@ def test_apex_plateau_density_uses_supporting_point_cell(monkeypatch) -> None:
         ),
         1: v4s._CellSummary(1, 1, 0, 1, (4.0,), 4.0, 4.0, 4.0, (0.75, 0.25), 4.0, 0),
     }
-    grid = v4s._Grid(0.5, (0.0, 0.0), 2, 1, summaries, {0: [0], 1: [1]}, point_cell_ids, (0, 1))
+    grid = v4s._Grid(
+        0.5,
+        (0.0, 0.0),
+        2,
+        1,
+        summaries,
+        {0: [0], 1: [1]},
+        point_cell_ids,
+        (0, 1),
+        {0: [1, 2, 3, 4, 5], 1: [0]},
+    )
     monkeypatch.setattr(v4s, "_smoothed_chm_map", lambda _grid: {0: 4.0, 1: 4.0})
     monkeypatch.setattr(v4s, "_local_max_plateaus", lambda _grid, _height: [(0, 1)])
     monkeypatch.setattr(v4s, "_annulus_median_height", lambda *_args: 2.0)

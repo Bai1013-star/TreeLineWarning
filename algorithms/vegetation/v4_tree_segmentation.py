@@ -496,6 +496,7 @@ class _Grid:
     col_to_cell_ids: dict[int, list[int]]
     point_cell_ids: np.ndarray
     occupied_cell_ids: tuple[int, ...]
+    cell_positions: dict[int, list[int]]
 
     def cell_id(self, col: int, row: int) -> int:
         return row * self.cols + col
@@ -606,6 +607,7 @@ def _build_grid(
             col_to_cell_ids={},
             point_cell_ids=np.empty(0, dtype=np.int64),
             occupied_cell_ids=(),
+            cell_positions={},
         )
     xy = xyz[:, :2]
     if not np.isfinite(xy).all():
@@ -642,8 +644,10 @@ def _build_grid(
         occupancy.setdefault(int(cell_ids[position]), []).append(position)
     summaries: dict[int, _CellSummary] = {}
     col_index: dict[int, list[int]] = {}
+    cell_positions: dict[int, list[int]] = {}
     for cell_id in sorted(occupancy):
         positions = sorted(occupancy[cell_id])
+        cell_positions[cell_id] = positions
         cid = cell_id
         ccol = cid % cols
         c_row = cid // cols
@@ -679,6 +683,7 @@ def _build_grid(
         col_to_cell_ids=col_index,
         point_cell_ids=cell_ids,
         occupied_cell_ids=tuple(sorted(summaries)),
+        cell_positions=cell_positions,
     )
 
 
@@ -1003,12 +1008,9 @@ def _finalize_record(record_type: type, digest_field: str, **fields: Any) -> Any
 
 
 def _positions_in_cell(grid: _Grid, cell_id: int) -> list[int]:
-    # Reconstructed deterministically from the canonical point array.
-    return [
-        position
-        for position in range(int(grid.point_cell_ids.shape[0]))
-        if int(grid.point_cell_ids[position]) == cell_id
-    ]
+    # Direct lookup from the persistent cell -> ordered positions mapping built
+    # during grid construction (ascending point position order).
+    return grid.cell_positions.get(cell_id, [])
 
 
 # ---------------------------------------------------------------------------
@@ -3909,6 +3911,27 @@ def _assign_points(
             record for record in slices if record.hypothesis_id in member_hypotheses
         ]
         tree_continuity[tree_id] = _slice_pair_continuity(tree_slices)
+    # Precompute per-tree hypothesis membership and the apex/hypothesis lookup
+    # tables once, so point assignment never rescans the whole tree list per
+    # point (no O(N x T) membership work).
+    apex_by_id: dict[str, V4ApexCandidateRecord] = {}
+    hypothesis_to_tree: dict[str, int] = {}
+    for tree_id, (_component_id, members, state) in enumerate(trees):
+        for member in members:
+            apex_by_id[member.candidate_id] = member
+        if state is V4TreeHypothesisState.ACTIVE:
+            for member in members:
+                hypothesis_to_tree.setdefault(_hypothesis_key(member), tree_id)
+    # A cell is conflict-affected when any preserved conflict edge is claimed by
+    # both endpoints; this depends only on the cell, never on the point.
+    conflict_affected_cells: set[int] = set()
+    if conflict_edges:
+        for cell_id, cell_claims in claims_by_cell.items():
+            claimed_hypotheses = {claim.hypothesis_id for claim in cell_claims}
+            for key_a, key_b in conflict_edges:
+                if key_a in claimed_hypotheses and key_b in claimed_hypotheses:
+                    conflict_affected_cells.add(cell_id)
+                    break
     for position in range(count):
         cell_id = int(grid.point_cell_ids[position])
         if cell_id in review_cells:
@@ -3918,46 +3941,34 @@ def _assign_points(
             confidence_by_point[position] = 0.0
             reason_by_point[position] = int(V4AssignmentReasonFlag.REVIEW_MANDATORY)
             continue
-        cell_claims = claims_by_cell.get(cell_id, [])
         # Final REVIEW edge/component conflict domain: a point claimed by both
         # endpoints of a preserved conflict edge cannot be ordinarily
         # assignable, even when both hypotheses stay ACTIVE.
-        conflict_affected = False
-        if conflict_edges:
-            claimed_hypotheses = {claim.hypothesis_id for claim in cell_claims}
-            for key_a, key_b in conflict_edges:
-                if key_a in claimed_hypotheses and key_b in claimed_hypotheses:
-                    conflict_affected = True
-                    break
-        if conflict_affected:
+        if cell_id in conflict_affected_cells:
             state_by_point[position] = int(V4TreeAssignmentState.REVIEW_REQUIRED)
             tree_id_by_point[position] = -1
             confidence_by_point[position] = 0.0
             reason_by_point[position] = int(V4AssignmentReasonFlag.REVIEW_MANDATORY)
             continue
+        cell_claims = claims_by_cell.get(cell_id, [])
         candidate_tree_ids: list[int] = []
         candidate_channels: list[tuple[float, ...]] = []
         candidate_hypothesis_keys: list[str] = []
         point_xyz = population.xyz_local_m[position]
         point_hag = float(population.hag_m[position])
-        for tree_id, (_component_id, members, state) in enumerate(trees):
-            if state is not V4TreeHypothesisState.ACTIVE:
-                continue
-            # A tree claims the point if any member hypothesis claims the cell
-            # and the point HAG lies inside the member's slice range.
-            member_hypotheses = [_hypothesis_key(member) for member in members]
-            claim_for_tree = [
-                claim for claim in cell_claims if claim.hypothesis_id in member_hypotheses
-            ]
-            if not claim_for_tree:
-                continue
-            claim = claim_for_tree[0]
+        # Only trees that actually claim this cell are candidates.  For each
+        # tree the first claim in cell_claims order is used, and candidate trees
+        # are visited in enumerate(trees) order, exactly matching the frozen
+        # candidate ordering.
+        first_claim_by_tree: dict[int, _Claim] = {}
+        for claim in cell_claims:
+            tree_id = hypothesis_to_tree.get(claim.hypothesis_id)
+            if tree_id is not None and tree_id not in first_claim_by_tree:
+                first_claim_by_tree[tree_id] = claim
+        for tree_id in sorted(first_claim_by_tree):
+            claim = first_claim_by_tree[tree_id]
             member = claim.apex_candidate_id
-            apex = next(
-                apex_record
-                for apex_record in members
-                if apex_record.candidate_id == member
-            )
+            apex = apex_by_id[member]
             hypothesis_id = claim.hypothesis_id
             # slice measured support: actual fragment membership, never the 2D
             # responsibility domain membership.
@@ -4404,9 +4415,18 @@ def segment_v4_trees(
         population,
         scales,
     )
-    # Trunk relation evidence for each apex pair (total typed lookup).
+    # Trunk relation evidence is consumed only for locally related apex pairs;
+    # computing the global all-pairs matrix would be unnecessary O(A^2 x T^2)
+    # work, so evidence is evaluated exactly for the local pairs below.
+    local_apex_pairs = _local_apex_pairs(
+        accepted_apices, scales.lr, config.maximum_local_edges
+    )
     trunk_relation_by_pair = _trunk_relation_evidence(
-        accepted_apices, associations, accepted_trunks, scales
+        accepted_apices,
+        associations,
+        accepted_trunks,
+        scales,
+        pairs=local_apex_pairs,
     )
     # Per-apex local region evidence for the final relation channels.
     region_axis_by_apex: dict[str, tuple[float, float, float] | None] = {}
@@ -4418,9 +4438,7 @@ def segment_v4_trees(
         region_density_by_apex[apex.candidate_id] = _region_density(apex, grid, scales)
     early_relations: list[V4TreeRelationEvidence] = []
     final_relations: list[V4TreeRelationEvidence] = []
-    for apex_a, apex_b in _local_apex_pairs(
-        accepted_apices, scales.lr, config.maximum_local_edges
-    ):
+    for apex_a, apex_b in local_apex_pairs:
         key_a = _hypothesis_key(apex_a)
         key_b = _hypothesis_key(apex_b)
         shared_trunk, distinct_trunk = trunk_relation_by_pair.get(
@@ -4518,6 +4536,7 @@ def segment_v4_trees(
         confidence_by_point.setflags(write=False)
         reason_by_point.setflags(write=False)
         tree_records: list[V4TreeInstanceRecord] = []
+        positions_by_tree: dict[int, list[int]] = {}
         accepted_trunk_records = [
             record
             for record in trunk_records
@@ -4548,11 +4567,16 @@ def segment_v4_trees(
             for record in trunk_records
             if record.candidate_state is V4TrunkCandidateState.ACCEPTED
         ]
+        # Single O(N) grouped membership representation, built once and reused
+        # by tree ordering, tree-record construction and ragged members.
+        positions_by_tree = _group_assigned_positions(
+            population, tree_id_by_point, state_by_point
+        )
         # Deterministic Tree ID ordering: primary apex original index then the
         # minimum assigned member original index, so ragged members are globally
         # strictly increasing across trees.
         formal_trees, tree_id_remap = _order_final_trees(
-            formal_trees, population, state_by_point, tree_id_by_point
+            formal_trees, population, positions_by_tree
         )
         remapped_ids = np.full(tree_id_by_point.shape, -1, dtype="<i4")
         for position in range(tree_id_by_point.shape[0]):
@@ -4561,6 +4585,10 @@ def segment_v4_trees(
                 remapped_ids[position] = tree_id_remap[value]
         remapped_ids.setflags(write=False)
         tree_id_by_point = remapped_ids
+        positions_by_tree = {
+            tree_id_remap[old_id]: positions
+            for old_id, positions in positions_by_tree.items()
+        }
         tree_records = _build_tree_records(
             population,
             grid,
@@ -4571,13 +4599,12 @@ def segment_v4_trees(
             fragments,
             associations,
             accepted_trunk_records,
-            state_by_point,
-            tree_id_by_point,
+            positions_by_tree,
             confidence_by_point,
             scales,
         )
     ordered_members, offsets = _ragged_members(
-        tree_records, population, state_by_point, tree_id_by_point
+        tree_records, population, positions_by_tree
     )
     audit = _build_audit(
         population,
@@ -4707,8 +4734,16 @@ def _trunk_relation_evidence(
     associations: list[V4TrunkApexAssociationEvidence],
     accepted_trunks: list[V4TrunkCandidateRecord],
     scales: V4AlgorithmScales,
+    *,
+    pairs: list[tuple[V4ApexCandidateRecord, V4ApexCandidateRecord]] | None = None,
 ) -> dict[tuple[str, str], tuple[float, float]]:
     result: dict[tuple[str, str], tuple[float, float]] = {}
+    if pairs is None:
+        pairs = [
+            (apices[index_a], apices[index_b])
+            for index_a in range(len(apices))
+            for index_b in range(index_a + 1, len(apices))
+        ]
     trunk_by_id = {trunk.candidate_id: trunk for trunk in accepted_trunks}
     apex_by_id = {apex.candidate_id: apex for apex in apices}
     trunk_scores: dict[str, dict[str, float]] = {}
@@ -4777,35 +4812,32 @@ def _trunk_relation_evidence(
             return None
         return association_exclusive01(score, state)
 
-    for index_a in range(len(apices)):
-        for index_b in range(index_a + 1, len(apices)):
-            apex_a = apices[index_a]
-            apex_b = apices[index_b]
-            key_pair = tuple(sorted((_hypothesis_key(apex_a), _hypothesis_key(apex_b))))
-            shared = 0.0
-            distinct = 0.0
-            for trunk_id in trunks:
-                strong_a = strong_for(trunk_id, apex_a.candidate_id)
-                strong_b = strong_for(trunk_id, apex_b.candidate_id)
-                if strong_a is not None and strong_b is not None:
-                    shared = max(shared, min(strong_a, strong_b))
-            for trunk_a in trunks:
-                for trunk_b in trunks:
-                    if trunk_a == trunk_b:
-                        continue
-                    values = (
-                        strong_for(trunk_a, apex_a.candidate_id),
-                        strong_for(trunk_b, apex_b.candidate_id),
-                        exclusive_for(trunk_a, apex_b.candidate_id),
-                        exclusive_for(trunk_b, apex_a.candidate_id),
-                    )
-                    if any(value is None for value in values):
-                        continue
-                    distinct = max(
-                        distinct,
-                        min(values[0], values[1], values[2], values[3]),
-                    )
-            result[key_pair] = (shared, distinct)
+    for apex_a, apex_b in pairs:
+        key_pair = tuple(sorted((_hypothesis_key(apex_a), _hypothesis_key(apex_b))))
+        shared = 0.0
+        distinct = 0.0
+        for trunk_id in trunks:
+            strong_a = strong_for(trunk_id, apex_a.candidate_id)
+            strong_b = strong_for(trunk_id, apex_b.candidate_id)
+            if strong_a is not None and strong_b is not None:
+                shared = max(shared, min(strong_a, strong_b))
+        for trunk_a in trunks:
+            for trunk_b in trunks:
+                if trunk_a == trunk_b:
+                    continue
+                values = (
+                    strong_for(trunk_a, apex_a.candidate_id),
+                    strong_for(trunk_b, apex_b.candidate_id),
+                    exclusive_for(trunk_a, apex_b.candidate_id),
+                    exclusive_for(trunk_b, apex_a.candidate_id),
+                )
+                if any(value is None for value in values):
+                    continue
+                distinct = max(
+                    distinct,
+                    min(values[0], values[1], values[2], values[3]),
+                )
+        result[key_pair] = (shared, distinct)
     return result
 
 
@@ -4843,8 +4875,7 @@ def _build_tree_records(
     fragments: list[_Fragment],
     associations: list[V4TrunkApexAssociationEvidence],
     accepted_trunk_records: list[V4TrunkCandidateRecord],
-    state_by_point: np.ndarray,
-    tree_id_by_point: np.ndarray,
+    positions_by_tree: dict[int, list[int]],
     confidence_by_point: np.ndarray,
     scales: V4AlgorithmScales,
 ) -> list[V4TreeInstanceRecord]:
@@ -4853,12 +4884,7 @@ def _build_tree_records(
     }
     records: list[V4TreeInstanceRecord] = []
     for tree_id, (_component_id, members, _state) in enumerate(trees):
-        member_positions = [
-            position
-            for position in range(int(population.original_index.shape[0]))
-            if int(tree_id_by_point[position]) == tree_id
-            and int(state_by_point[position]) == int(V4TreeAssignmentState.ASSIGNED)
-        ]
+        member_positions = positions_by_tree.get(tree_id, [])
         member_original_indexes = [
             int(population.original_index[position]) for position in member_positions
         ]
@@ -5045,11 +5071,31 @@ def _remap_tree_ids(
     return result
 
 
+def _group_assigned_positions(
+    population: _NormalPopulation,
+    tree_id_by_point: np.ndarray,
+    state_by_point: np.ndarray,
+) -> dict[int, list[int]]:
+    """Build ``tree_id -> member positions`` once in O(N).
+
+    Positions are appended in ascending point position order, which preserves
+    the exact deterministic ordering of the previous per-tree full-N scans.
+    """
+
+    count = int(population.original_index.shape[0])
+    positions_by_tree: dict[int, list[int]] = {}
+    assigned = int(V4TreeAssignmentState.ASSIGNED)
+    for position in range(count):
+        tree_id = int(tree_id_by_point[position])
+        if tree_id >= 0 and int(state_by_point[position]) == assigned:
+            positions_by_tree.setdefault(tree_id, []).append(position)
+    return positions_by_tree
+
+
 def _order_final_trees(
     formal_trees: list[tuple[int, list[V4ApexCandidateRecord], V4TreeHypothesisState]],
     population: _NormalPopulation,
-    state_by_point: np.ndarray,
-    tree_id_by_point: np.ndarray,
+    positions_by_tree: dict[int, list[int]],
 ) -> tuple[list[tuple[int, list[V4ApexCandidateRecord], V4TreeHypothesisState]], dict[int, int]]:
     """Order formal trees by the frozen Tree ID key and return the re-key map."""
 
@@ -5066,11 +5112,9 @@ def _order_final_trees(
     keys: dict[int, tuple[int, int]] = {}
     for tree_index, (_component_id, members, _state) in enumerate(formal_trees):
         apex = primary_apex(members)
+        member_positions = positions_by_tree.get(tree_index, [])
         member_indexes = [
-            int(population.original_index[position])
-            for position in range(int(population.original_index.shape[0]))
-            if int(tree_id_by_point[position]) == tree_index
-            and int(state_by_point[position]) == int(V4TreeAssignmentState.ASSIGNED)
+            int(population.original_index[position]) for position in member_positions
         ]
         minimum_member = min(member_indexes) if member_indexes else apex.supporting_original_index
         keys[tree_index] = (apex.supporting_original_index, minimum_member)
@@ -5082,17 +5126,17 @@ def _order_final_trees(
 def _ragged_members(
     tree_records: list[V4TreeInstanceRecord],
     population: _NormalPopulation,
-    state_by_point: np.ndarray,
-    tree_id_by_point: np.ndarray,
+    positions_by_tree: dict[int, list[int]],
 ) -> tuple[list[int], list[int]]:
     ordered: list[int] = []
     offsets: list[int] = [0]
     for tree_id in range(len(tree_records)):
+        member_positions = positions_by_tree.get(tree_id, [])
+        # Ascending positions yield ascending original indexes (the population
+        # is sorted by original_index); the explicit sort is preserved for the
+        # frozen ordering guarantee.
         indexes = [
-            int(population.original_index[position])
-            for position in range(int(population.original_index.shape[0]))
-            if int(tree_id_by_point[position]) == tree_id
-            and int(state_by_point[position]) == int(V4TreeAssignmentState.ASSIGNED)
+            int(population.original_index[position]) for position in member_positions
         ]
         indexes.sort()
         ordered.extend(indexes)
