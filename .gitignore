@@ -2,6 +2,7 @@ data/raw/
 data/samples/
 data/processed/
 outputs/
+artifacts/fast_research/
 cache/
 projects/
 models/weights/
