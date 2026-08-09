@@ -8,6 +8,7 @@ from algorithms.vegetation.fast_vegetation_v3 import (
     FastVegetationV3Config,
     _assert_v3_selection,
     _diagnostic_states,
+    _positive_v1_admission,
     _rigid_linear_exclusion,
     _rigid_surface_exclusion,
     _W1Metrics,
@@ -116,6 +117,46 @@ def test_v3_positive_admission_preserves_index_order_and_excludes_forbidden_stat
         int(FastV3DiagnosticState.WIRE_GEOMETRY_EXCLUDED),
         int(FastV3DiagnosticState.VEGETATION_RETAINED),
     ]
+
+
+def test_v3_positive_v1_admission_and_excluded_states_cannot_reach_v4() -> None:
+    v2_retained = np.ones(8, dtype=bool)
+    positive_v1_support = np.asarray((True, False, True, True, True, True, True, True))
+    ground = np.asarray((False, False, True, False, False, False, False, False))
+    exact_wire = np.asarray((False, False, False, True, False, False, False, False))
+    wire_geometry = np.asarray((False, False, False, False, True, False, False, False))
+    rigid_linear = np.asarray((False, False, False, False, False, True, False, False))
+    rigid_surface = np.asarray((False, False, False, False, False, False, True, False))
+    retained = _positive_v1_admission(
+        v2_retained=v2_retained,
+        positive_v1_support=positive_v1_support,
+        ground_mask=ground,
+        exact_wire=exact_wire,
+        wire_geometry=wire_geometry,
+        rigid_linear=rigid_linear,
+        rigid_surface=rigid_surface,
+    )
+    state = _diagnostic_states(
+        ground_mask=ground,
+        exact_wire=exact_wire,
+        wire_geometry=wire_geometry,
+        rigid_linear=rigid_linear,
+        rigid_surface=rigid_surface,
+        retained=retained,
+    )
+    assert retained.tolist() == [True, False, False, False, False, False, False, True]
+    assert state[1] == int(FastV3DiagnosticState.NO_POSITIVE_VEGETATION_EVIDENCE)
+    forbidden_states = np.asarray(
+        (
+            int(FastV3DiagnosticState.GROUND_EXCLUDED),
+            int(FastV3DiagnosticState.EXACT_WIRE_EXCLUDED),
+            int(FastV3DiagnosticState.WIRE_GEOMETRY_EXCLUDED),
+            int(FastV3DiagnosticState.RIGID_LINEAR_EXCLUDED),
+            int(FastV3DiagnosticState.RIGID_SURFACE_EXCLUDED),
+        ),
+        dtype=np.uint8,
+    )
+    assert not np.any(np.isin(state[retained], forbidden_states))
 
 
 def test_v3_component_rejection_identifies_linear_and_surface_objects() -> None:

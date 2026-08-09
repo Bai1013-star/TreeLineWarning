@@ -223,8 +223,14 @@ def build_fast_vegetation_v3_input(
 
     ground_mask = classification == 2
     positive_base = v2_retained & positive_v1_support
-    retained = (
-        ~ground_mask & ~exact_wire & ~wire_geometry & ~rigid_linear & ~rigid_surface & positive_base
+    retained = _positive_v1_admission(
+        v2_retained=v2_retained,
+        positive_v1_support=positive_v1_support,
+        ground_mask=ground_mask,
+        exact_wire=exact_wire,
+        wire_geometry=wire_geometry,
+        rigid_linear=rigid_linear,
+        rigid_surface=rigid_surface,
     )
     state = _diagnostic_states(
         ground_mask=ground_mask,
@@ -970,6 +976,28 @@ def _diagnostic_states(
     state[exact_wire] = int(FastV3DiagnosticState.EXACT_WIRE_EXCLUDED)
     state[ground_mask] = int(FastV3DiagnosticState.GROUND_EXCLUDED)
     return state
+
+
+def _positive_v1_admission(
+    *,
+    v2_retained: np.ndarray,
+    positive_v1_support: np.ndarray,
+    ground_mask: np.ndarray,
+    exact_wire: np.ndarray,
+    wire_geometry: np.ndarray,
+    rigid_linear: np.ndarray,
+    rigid_surface: np.ndarray,
+) -> np.ndarray:
+    """Keep only positively supported V2 candidates outside every hard exclusion."""
+    return (
+        v2_retained
+        & positive_v1_support
+        & ~ground_mask
+        & ~exact_wire
+        & ~wire_geometry
+        & ~rigid_linear
+        & ~rigid_surface
+    )
 
 
 def _assert_v3_selection(
