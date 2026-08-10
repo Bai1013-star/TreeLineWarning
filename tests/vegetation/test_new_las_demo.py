@@ -20,7 +20,14 @@ from algorithms.vegetation.new_las_demo import (
     new_source_id,
     write_summary_html,
 )
-from scripts.run_new_las_demo import _NO_INPUT_MESSAGE, run_cli, select_input
+from scripts.run_new_las_demo import (
+    _NO_INPUT_MESSAGE,
+    configure_windows_console,
+    open_latest_results,
+    parse_args,
+    run_cli,
+    select_input,
+)
 
 
 def _write_las(path: Path, xyz: np.ndarray) -> None:
@@ -54,11 +61,47 @@ def test_input_discovery_handles_zero_one_and_multiple_without_arbitrary_choice(
         select_input(input_dir, interactive=False)
 
 
+def test_input_discovery_interactively_uses_the_owner_choice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    input_dir = tmp_path / "input_las"
+    input_dir.mkdir()
+    first = input_dir / "first.las"
+    second = input_dir / "second.laz"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    monkeypatch.setattr("builtins.input", lambda _prompt: "2")
+    assert select_input(input_dir) == second
+
+
+def test_launcher_environment_overrides_are_for_controlled_smoke_tests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    input_dir = tmp_path / "input with spaces"
+    runs_root = tmp_path / "runs with spaces"
+    monkeypatch.setenv("TREE_LINE_DEMO_INPUT_DIR", str(input_dir))
+    monkeypatch.setenv("TREE_LINE_DEMO_RUNS_ROOT", str(runs_root))
+    args = parse_args([])
+    assert args.input_dir == input_dir
+    assert args.runs_root == runs_root
+
+
 def test_no_input_cli_prints_owner_message(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert run_cli(["--input-dir", str(tmp_path), "--no-open-results"]) == 2
     assert _NO_INPUT_MESSAGE in capsys.readouterr().out
+
+
+def test_multiple_input_cli_reports_a_clean_actionable_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "first.las").write_bytes(b"first")
+    (tmp_path / "second.laz").write_bytes(b"second")
+    assert run_cli(["--input-dir", str(tmp_path), "--non-interactive", "--no-open-results"]) == 1
+    output = capsys.readouterr().out
+    assert "多个 LAS/LAZ" in output
+    assert "Traceback" not in output
 
 
 def test_failure_reporting_keeps_a_traceback_log(
@@ -151,8 +194,33 @@ def test_blocked_clearance_never_reads_an_old_w1_and_summary_is_written(tmp_path
     assert "BLOCKED_NO_VALID_W1" in output_html.read_text("utf-8")
 
 
-def test_batch_launcher_keeps_windows_paths_quoted() -> None:
+def test_batch_launchers_are_ascii_adapters_with_windows_paths_quoted() -> None:
     root = Path(__file__).resolve().parents[2]
     launcher = (root / "RUN_NEW_LAS_DEMO.bat").read_text("utf-8")
-    assert '"%PYTHON_EXE%" "%REPO_ROOT%\\scripts\\run_new_las_demo.py"' in launcher
-    assert '"%REPO_ROOT%\\input_las"' in launcher
+    latest = (root / "OPEN_LATEST_RESULTS.bat").read_text("utf-8")
+    assert launcher.isascii()
+    assert latest.isascii()
+    assert 'set "REPO_ROOT=%~dp0"' in launcher
+    assert '"%PYTHON_EXE%" "%REPO_ROOT%scripts\\run_new_las_demo.py"' in launcher
+    latest_command = '"%PYTHON_EXE%" "%REPO_ROOT%scripts\\run_new_las_demo.py"'
+    assert f"{latest_command} --open-latest-results" in latest
+    assert "(" not in launcher
+    assert "(" not in latest
+
+
+def test_open_latest_results_uses_only_completed_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    incomplete = tmp_path / "incomplete"
+    incomplete.mkdir()
+    completed = tmp_path / "complete"
+    summary = completed / "07_report" / "RUN_SUMMARY.html"
+    summary.parent.mkdir(parents=True)
+    summary.write_text("complete", encoding="utf-8")
+    monkeypatch.setenv("TREE_LINE_DEMO_NO_OPEN_RESULTS", "1")
+    assert open_latest_results(tmp_path) == 0
+    assert str(summary) in capsys.readouterr().out
+
+
+def test_console_configuration_requests_utf8_when_supported() -> None:
+    configure_windows_console()

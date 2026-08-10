@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import traceback
 import webbrowser
@@ -26,6 +27,28 @@ from algorithms.vegetation.new_las_demo import (  # noqa: E402
 )
 
 _NO_INPUT_MESSAGE = "请先将 LAS/LAZ 点云文件放入 input_las 文件夹，然后重新双击运行。"
+_ENV_INPUT_DIR = "TREE_LINE_DEMO_INPUT_DIR"
+_ENV_RUNS_ROOT = "TREE_LINE_DEMO_RUNS_ROOT"
+_ENV_NO_OPEN_RESULTS = "TREE_LINE_DEMO_NO_OPEN_RESULTS"
+_ENV_NON_INTERACTIVE = "TREE_LINE_DEMO_NON_INTERACTIVE"
+
+
+def _environment_path(name: str, fallback: Path) -> Path:
+    value = os.environ.get(name, "").strip()
+    return Path(value).expanduser() if value else fallback
+
+
+def _environment_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def configure_windows_console() -> None:
+    """Emit UTF-8 from Python after the ASCII launcher selects code page 65001."""
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -34,13 +57,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--input-dir",
         type=Path,
-        default=_REPOSITORY_ROOT / "input_las",
+        default=_environment_path(_ENV_INPUT_DIR, _REPOSITORY_ROOT / "input_las"),
         help="Folder containing one or more LAS/LAZ files.",
     )
     parser.add_argument(
         "--runs-root",
         type=Path,
-        default=_REPOSITORY_ROOT / "artifacts" / "one_click_runs",
+        default=_environment_path(
+            _ENV_RUNS_ROOT,
+            _REPOSITORY_ROOT / "artifacts" / "one_click_runs",
+        ),
         help="Parent directory for isolated outputs.",
     )
     parser.add_argument(
@@ -52,6 +78,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--non-interactive",
         action="store_true",
         help="Fail rather than show a numbered choice for multiple files.",
+    )
+    parser.add_argument(
+        "--open-latest-results",
+        action="store_true",
+        help="Open the newest completed one-click result without starting a run.",
     )
     return parser.parse_args(argv)
 
@@ -94,13 +125,15 @@ def select_input(
 
 def run_cli(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.open_latest_results:
+        return open_latest_results(args.runs_root)
     run_root: Path | None = None
     current_stage = "输入文件发现"
     try:
         source = select_input(
             args.input_dir,
             explicit_input=args.input,
-            interactive=not args.non_interactive,
+            interactive=not (args.non_interactive or _environment_enabled(_ENV_NON_INTERACTIVE)),
         )
         if source is None:
             return 2
@@ -133,11 +166,12 @@ def run_cli(argv: list[str] | None = None) -> int:
         print("最小距离: " + minimum_text, flush=True)
         print(f"结果目录: {result.run_root}", flush=True)
         logging.info("run completed: %s", result.summary_path)
-        if not args.no_open_results:
+        if not (args.no_open_results or _environment_enabled(_ENV_NO_OPEN_RESULTS)):
             _open_results(result)
         return 0
     except Exception as exc:  # pragma: no cover - exercised through focused CLI checks
-        logging.exception("new LAS demo failed")
+        if run_root is not None:
+            logging.exception("new LAS demo failed")
         output = str(run_root) if run_root is not None else "尚未创建"
         print("", flush=True)
         print("处理失败", flush=True)
@@ -173,5 +207,33 @@ def _open_results(result) -> None:
             webbrowser.open(path.resolve().as_uri())
 
 
+def open_latest_results(runs_root: Path) -> int:
+    """Open only a completed report; never infer a result from a partial run directory."""
+
+    if not runs_root.is_dir():
+        print("尚未找到一键运行结果文件夹。", flush=True)
+        return 1
+    completed = sorted(
+        (
+            directory
+            for directory in runs_root.iterdir()
+            if directory.is_dir() and (directory / "07_report" / "RUN_SUMMARY.html").is_file()
+        ),
+        key=lambda directory: (directory.stat().st_mtime_ns, directory.name),
+        reverse=True,
+    )
+    if not completed:
+        print("尚未找到已完成的一键运行结果。", flush=True)
+        return 1
+    summary = completed[0] / "07_report" / "RUN_SUMMARY.html"
+    if _environment_enabled(_ENV_NO_OPEN_RESULTS):
+        print(f"最新结果: {summary}", flush=True)
+    else:
+        webbrowser.open(summary.resolve().as_uri())
+        print(f"已打开最新结果: {summary}", flush=True)
+    return 0
+
+
 if __name__ == "__main__":
+    configure_windows_console()
     raise SystemExit(run_cli())
