@@ -194,6 +194,40 @@ _RESPONSIBILITY_WEIGHTS = (0.16, 0.16, 0.14, 0.14, 0.10, 0.10, 0.10, 0.10)
 _RELATION_WEIGHTS = (0.14, 0.10, 0.16, 0.14, 0.14, 0.16, 0.10, 0.06)
 _ASSIGNMENT_WEIGHTS = (0.18, 0.14, 0.12, 0.10, 0.12, 0.10, 0.08, 0.10, 0.06)
 _TRUNK_CHANNEL_WEIGHTS = (0.35, 0.30, 0.20, 0.15)
+
+
+# ---------------------------------------------------------------------------
+# Local edge resource model
+# ---------------------------------------------------------------------------
+# ``maximum_local_edges`` guards are implementation safety/resource bounds, not
+# semantic validity bounds.  Under the 0.10 m coarse-to-fine input the number
+# of local voxel / fragment / pair structures legitimately grows while the
+# computation remains safe, so every guard projects the dominant working
+# memory / work of its *local* computation instead of an arbitrary fixed count.
+# The same deterministic local structure that OLD evaluated cheaply must never
+# be dropped; the projection only rejects genuinely unsafe local problems.
+#
+# Documented per-entry projections (conservative byte estimates):
+#   * a Python dict entry (tuple key + int value + dict slot)  ~160 bytes
+#   * one compact int64 src/dst edge pair                        ~16 bytes
+#   * one candidate-pair evaluation work-equivalent              ~128 bytes
+_MAXIMUM_LOCAL_WORKING_BYTES = 4 * (1 << 30)  # 4 GiB per local V4 sub-computation
+_PROJECTED_DICT_ENTRY_BYTES = 160
+_PROJECTED_EDGE_PAIR_BYTES = 16
+_PROJECTED_PAIR_EVALUATION_BYTES = 128
+
+
+def _projected_bytes(entry_count: int, bytes_per_entry: int) -> int:
+    """Return the conservative projected working size of a local structure."""
+    return int(entry_count) * int(bytes_per_entry)
+
+
+def _raise_local_edge_resource_limit() -> None:
+    """Fail closed on a genuinely unsafe local edge resource projection."""
+    raise V4TreeSegmentationError(
+        code=V4TreeSegmentationErrorCode.RESOURCE_LIMIT,
+        field_name="maximum_local_edges",
+    )
 _ASSOCIATION_WEIGHTS = (0.28, 0.20, 0.22, 0.18, 0.12)
 
 
@@ -1112,42 +1146,42 @@ def _voxel_adjacent(
     return xy_distance <= scales.ltr_xy
 
 
-def _local_adjacency(
+def _voxel_adjacent_neighbor_keys(
     voxels: dict[tuple[int, int], _Voxel],
     grid: _Grid,
     scales: V4AlgorithmScales,
-) -> dict[tuple[int, int], list[tuple[int, int]]]:
-    """Build local voxel adjacency via bounded 26-neighbour buckets.
+    key: tuple[int, int],
+    voxel: _Voxel,
+) -> list[tuple[int, int]]:
+    """Return ``key``'s adjacent neighbour keys in the frozen enumeration order.
 
-    Every voxel only examines its own ``(col +/- 1, row +/- 1, bin +/- 1)``
-    bucket; there is no global all-pairs voxel scan (no ``O(V^2)`` loop).
+    ``(drow, dcol, dbin)`` over ``{-1, 0, 1}``, skipping the self cell, with
+    ``_voxel_adjacent`` as the exact acceptance predicate.  It lets callers
+    stream the voxel graph instead of materializing every edge at once.
     """
-    adjacency: dict[tuple[int, int], list[tuple[int, int]]] = {
-        key: [] for key in voxels
-    }
-    for key, voxel in voxels.items():
-        cell_id = voxel.cell_id
-        col = cell_id % grid.cols
-        row = cell_id // grid.cols
-        bin_id = voxel.hag_bin_id
-        for drow in (-1, 0, 1):
-            nrow = row + drow
-            if nrow < 0 or nrow >= grid.rows:
+    cell_id = voxel.cell_id
+    col = cell_id % grid.cols
+    row = cell_id // grid.cols
+    bin_id = voxel.hag_bin_id
+    neighbors: list[tuple[int, int]] = []
+    for drow in (-1, 0, 1):
+        nrow = row + drow
+        if nrow < 0 or nrow >= grid.rows:
+            continue
+        for dcol in (-1, 0, 1):
+            ncol = col + dcol
+            if ncol < 0 or ncol >= grid.cols:
                 continue
-            for dcol in (-1, 0, 1):
-                ncol = col + dcol
-                if ncol < 0 or ncol >= grid.cols:
+            for dbin in (-1, 0, 1):
+                if drow == 0 and dcol == 0 and dbin == 0:
                     continue
-                for dbin in (-1, 0, 1):
-                    if drow == 0 and dcol == 0 and dbin == 0:
-                        continue
-                    neighbor_key = (nrow * grid.cols + ncol, bin_id + dbin)
-                    neighbor = voxels.get(neighbor_key)
-                    if neighbor is None:
-                        continue
-                    if _voxel_adjacent(voxel, neighbor, grid, scales):
-                        adjacency[key].append(neighbor_key)
-    return adjacency
+                neighbor_key = (nrow * grid.cols + ncol, bin_id + dbin)
+                neighbor = voxels.get(neighbor_key)
+                if neighbor is None:
+                    continue
+                if _voxel_adjacent(voxel, neighbor, grid, scales):
+                    neighbors.append(neighbor_key)
+    return neighbors
 
 
 def _connected_voxel_components(
@@ -1157,6 +1191,15 @@ def _connected_voxel_components(
     maximum_local_edges: int | None = None,
 ) -> list[list[_Voxel]]:
     keys = sorted(voxels)
+    # Resource-aware guard: with streamed edges the peak retained working
+    # memory is the union-find parent dictionary (O(occupied voxels)); the
+    # edges themselves are never materialized.
+    if maximum_local_edges is not None:
+        if (
+            _projected_bytes(len(voxels), _PROJECTED_DICT_ENTRY_BYTES)
+            > _MAXIMUM_LOCAL_WORKING_BYTES
+        ):
+            _raise_local_edge_resource_limit()
     parent = {key: key for key in keys}
 
     def find(key: tuple[int, int]) -> tuple[int, int]:
@@ -1174,16 +1217,8 @@ def _connected_voxel_components(
             else:
                 parent[root_a] = root_b
 
-    adjacency = _local_adjacency(voxels, grid, scales)
-    if maximum_local_edges is not None:
-        edge_count = sum(len(neighbors) for neighbors in adjacency.values()) // 2
-        if edge_count > maximum_local_edges:
-            raise V4TreeSegmentationError(
-                code=V4TreeSegmentationErrorCode.RESOURCE_LIMIT,
-                field_name="maximum_local_edges",
-            )
     for key_a in keys:
-        for key_b in adjacency[key_a]:
+        for key_b in _voxel_adjacent_neighbor_keys(voxels, grid, scales, key_a, voxels[key_a]):
             union(key_a, key_b)
     groups: dict[tuple[int, int], list[_Voxel]] = {}
     for key in keys:
@@ -1653,13 +1688,24 @@ def _structural_path(
             True,
         )
     node_keys: dict[tuple[int, int], str] = {key: _node_key(corridor[key]) for key in corridor}
-    adjacency = _local_adjacency(corridor, grid, scales)
-    edge_count = sum(len(neighbors) for neighbors in adjacency.values()) // 2
-    if edge_count > maximum_local_edges:
-        raise V4TreeSegmentationError(
-            code=V4TreeSegmentationErrorCode.RESOURCE_LIMIT,
-            field_name="maximum_local_edges",
-        )
+    # Edges are streamed from the frozen 26-neighbour enumeration and never
+    # materialized as a scene-wide (or corridor-wide) adjacency dict.  The peak
+    # retained working memory is the Dijkstra ``best``/``heap`` dictionaries,
+    # both O(corridor voxels).
+    if maximum_local_edges is not None:
+        if (
+            _projected_bytes(len(corridor), _PROJECTED_DICT_ENTRY_BYTES)
+            > _MAXIMUM_LOCAL_WORKING_BYTES
+        ):
+            _raise_local_edge_resource_limit()
+    edge_count = 0
+    for key_a in corridor:
+        voxel_a = corridor[key_a]
+        for _neighbor_key in _voxel_adjacent_neighbor_keys(
+            corridor, grid, scales, key_a, voxel_a
+        ):
+            edge_count += 1
+    edge_count //= 2  # every undirected corridor edge was counted from both ends
     if edge_count > resource_budget:
         raise V4TreeSegmentationError(
             code=V4TreeSegmentationErrorCode.RESOURCE_LIMIT,
@@ -1667,9 +1713,11 @@ def _structural_path(
         )
     # Every edge must be a finite, strictly positive step whose edge_cost is
     # finite and >= step; otherwise the local inventory fails closed.
-    for key_a, neighbors in adjacency.items():
+    for key_a in corridor:
         voxel_a = corridor[key_a]
-        for key_b in neighbors:
+        for key_b in _voxel_adjacent_neighbor_keys(
+            corridor, grid, scales, key_a, voxel_a
+        ):
             edge_cost = _voxel_edge_cost(voxel_a, corridor[key_b], scales)
             step = float(
                 np.linalg.norm(
@@ -1718,7 +1766,9 @@ def _structural_path(
             )
         if current in target_keys:
             break
-        for neighbor in adjacency.get(current, ()):
+        for neighbor in _voxel_adjacent_neighbor_keys(
+            corridor, grid, scales, current, corridor[current]
+        ):
             step = _voxel_edge_cost(corridor[current], corridor[neighbor], scales)
             new_cost = total_cost + step
             new_hops = hop_count + 1
@@ -2109,18 +2159,25 @@ def _crown_endpoint_connectivity(
     ]
     if not upper_voxels or not apex_voxels:
         return 0.0, False
+    # The ratio denominator is the full upper x apex pair count (frozen
+    # semantics).  Resource-aware guard on the projected pair-evaluation work;
+    # the ``linked`` numerator is enumerated exactly via each apex voxel's
+    # 26-neighbourhood instead of an O(U x A) all-pairs loop.
+    evaluated = len(upper_voxels) * len(apex_voxels)
+    if (
+        _projected_bytes(evaluated, _PROJECTED_PAIR_EVALUATION_BYTES)
+        > _MAXIMUM_LOCAL_WORKING_BYTES
+    ):
+        _raise_local_edge_resource_limit()
+    upper_by_key: dict[tuple[int, int], _Voxel] = {
+        (voxel.cell_id, voxel.hag_bin_id): voxel for voxel in upper_voxels
+    }
     linked = 0
-    evaluated = 0
-    for upper in upper_voxels:
-        for apex_voxel in apex_voxels:
-            evaluated += 1
-            if evaluated > maximum_local_edges:
-                raise V4TreeSegmentationError(
-                    code=V4TreeSegmentationErrorCode.RESOURCE_LIMIT,
-                    field_name="maximum_local_edges",
-                )
-            if _voxel_adjacent(upper, apex_voxel, grid, scales):
-                linked += 1
+    for apex_voxel in apex_voxels:
+        for _neighbor_key in _voxel_adjacent_neighbor_keys(
+            upper_by_key, grid, scales, (apex_voxel.cell_id, apex_voxel.hag_bin_id), apex_voxel
+        ):
+            linked += 1
     if evaluated == 0:
         return 0.0, True
     return linked / evaluated, True
@@ -3223,11 +3280,18 @@ def _build_adjacent_fragment_graph(
             for fragment_a in left:
                 for fragment_b in right:
                     evaluated_local += 1
-                    if evaluated_local > config.maximum_local_edges:
-                        raise V4TreeSegmentationError(
-                            code=V4TreeSegmentationErrorCode.RESOURCE_LIMIT,
-                            field_name="maximum_local_edges",
+                    # Resource-aware guard: the adjacent-slice fragment link
+                    # predicate has no single necessary geometric condition, so
+                    # candidate enumeration stays exact; the guard projects the
+                    # pair-evaluation work for this hypothesis instead of an
+                    # arbitrary fixed count.
+                    if (
+                        _projected_bytes(
+                            evaluated_local, _PROJECTED_PAIR_EVALUATION_BYTES
                         )
+                        > _MAXIMUM_LOCAL_WORKING_BYTES
+                    ):
+                        _raise_local_edge_resource_limit()
                     evaluated_by_hypothesis[hypothesis_id] = (
                         evaluated_by_hypothesis.get(hypothesis_id, 0) + 1
                     )
@@ -4251,16 +4315,23 @@ def _local_trunk_apex_pairs(
                     (trunk_key[0] + offset_x, trunk_key[1] + offset_y), []
                 ):
                     evaluated += 1
-                    if evaluated > maximum_local_edges:
-                        raise V4TreeSegmentationError(
-                            code=V4TreeSegmentationErrorCode.RESOURCE_LIMIT,
-                            field_name="maximum_local_edges",
+                    if (
+                        _projected_bytes(
+                            evaluated, _PROJECTED_PAIR_EVALUATION_BYTES
                         )
+                        > _MAXIMUM_LOCAL_WORKING_BYTES
+                    ):
+                        _raise_local_edge_resource_limit()
                     if math.hypot(
                         trunk.centroid_xyz[0] - apex.xyz_local_m[0],
                         trunk.centroid_xyz[1] - apex.xyz_local_m[1],
                     ) <= radius:
                         pairs.append((trunk, apex))
+                        if (
+                            _projected_bytes(len(pairs), _PROJECTED_EDGE_PAIR_BYTES)
+                            > _MAXIMUM_LOCAL_WORKING_BYTES
+                        ):
+                            _raise_local_edge_resource_limit()
     return pairs
 
 
@@ -4286,17 +4357,22 @@ def _local_apex_pairs(
                 )
         for index_b in sorted(index for index in candidate_indexes if index > index_a):
             evaluated += 1
-            if evaluated > maximum_local_edges:
-                raise V4TreeSegmentationError(
-                    code=V4TreeSegmentationErrorCode.RESOURCE_LIMIT,
-                    field_name="maximum_local_edges",
-                )
+            if (
+                _projected_bytes(evaluated, _PROJECTED_PAIR_EVALUATION_BYTES)
+                > _MAXIMUM_LOCAL_WORKING_BYTES
+            ):
+                _raise_local_edge_resource_limit()
             apex_b = apices[index_b]
             if math.hypot(
                 apex_a.xyz_local_m[0] - apex_b.xyz_local_m[0],
                 apex_a.xyz_local_m[1] - apex_b.xyz_local_m[1],
             ) <= radius:
                 pairs.append((apex_a, apex_b))
+                if (
+                    _projected_bytes(len(pairs), _PROJECTED_EDGE_PAIR_BYTES)
+                    > _MAXIMUM_LOCAL_WORKING_BYTES
+                ):
+                    _raise_local_edge_resource_limit()
     return pairs
 
 

@@ -956,16 +956,23 @@ def test_profile_not_available_and_observed_empty() -> None:
 
 
 def test_resource_ceilings_fail_closed() -> None:
-    """V4A-IR-014/015 #22: tiny local fragment/edge/profile ceilings fail closed."""
+    """V4A-IR-014/015 #22: tiny local fragment/profile ceilings fail closed.
+
+    ``maximum_local_edges`` is an implementation safety/resource bound whose
+    guard is now resource-aware (projected working memory), so a tiny legacy
+    count value does not fail a small safe scene; the genuinely unsafe case is
+    covered separately by the projected-resource fail-closed test.
+    """
     from core.contracts.v4_tree_segmentation import V4TreeSegmentationError
 
     scene = two_trees_scene()
     with pytest.raises(V4TreeSegmentationError):
         segment_v4_trees(make_handoff(scene), make_config(maximum_fragments=1))
     with pytest.raises(V4TreeSegmentationError):
-        segment_v4_trees(make_handoff(scene), make_config(maximum_local_edges=1))
-    with pytest.raises(V4TreeSegmentationError):
         segment_v4_trees(make_handoff(scene), make_config(maximum_profile_samples=1))
+    # Resource-aware guard: a small scene with a tiny legacy maximum_local_edges
+    # is safe and must complete (it does not materialize an unsafe structure).
+    segment_v4_trees(make_handoff(scene), make_config(maximum_local_edges=1))
 
 
 def test_fragment_ceiling_is_local_and_preserves_baseline_semantics() -> None:
@@ -1182,7 +1189,11 @@ def test_structural_path_equal_cost_uses_predecessor_key(monkeypatch) -> None:
         frozenset(((21, 2), (22, 3))): 2.0,
     }
     key_by_identity = {id(value): key for key, value in corridor.items()}
-    monkeypatch.setattr(v4s, "_local_adjacency", lambda *_args: adjacency)
+    monkeypatch.setattr(
+        v4s,
+        "_voxel_adjacent_neighbor_keys",
+        lambda voxels, grid, scales, key, voxel: adjacency[key],
+    )
     monkeypatch.setattr(
         v4s,
         "_voxel_edge_cost",
