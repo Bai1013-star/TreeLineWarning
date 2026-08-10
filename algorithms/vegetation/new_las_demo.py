@@ -306,6 +306,10 @@ def run_new_las_demo(
         v4_root,
         root / "05_v4" / "v4_tree_segmentation_review.html",
         root / "05_v4" / "v4_tree_segmentation_review.json",
+        max_points_per_tree=500,
+        max_review_points=30_000,
+        max_unassigned_points=30_000,
+        max_conflict_points=30_000,
         overwrite=False,
     )
     generate_v4_clean_review(loaded_v4.result, root / "05_v4" / "v4_tree_segmentation_clean.html")
@@ -1038,13 +1042,15 @@ def generate_v4_clean_review(result: Any, output_html: Path) -> Path:
     state = np.asarray(result.assignment_state_by_point, dtype=np.uint8)
     tree_ids = np.asarray(result.tree_id_by_point, dtype=np.int32)
     xyz = np.asarray(result.xyz_local_m, dtype=np.float64)
-    for tree_id in sorted(int(value) for value in np.unique(tree_ids) if value >= 0):
+    tree_ids_to_show = sorted(int(value) for value in np.unique(tree_ids) if value >= 0)
+    tree_budget = _bounded_tree_visualization_budget(tree_ids_to_show, 180_000, 2_000)
+    for tree_id in tree_ids_to_show:
         rows = np.flatnonzero(
             (tree_ids == tree_id) & (state == int(V4TreeAssignmentState.ASSIGNED))
         )
         if not len(rows):
             continue
-        shown = rows[_even_rows(len(rows), 80_000)]
+        shown = rows[_even_rows(len(rows), tree_budget)]
         figure.add_trace(
             go.Scatter3d(
                 x=xyz[shown, 0],
@@ -1056,7 +1062,7 @@ def generate_v4_clean_review(result: Any, output_html: Path) -> Path:
             )
         )
     figure.update_layout(
-        title="V4 单木分割：仅显示已分配树点（0.10 m 精细代表点）",
+        title="V4 单木分割：仅显示已分配树点（0.10 m 精细代表点；显示点已抽样；计算使用完整分辨率）",
         scene={
             "xaxis_title": "local X (m)",
             "yaxis_title": "local Y (m)",
@@ -1075,38 +1081,44 @@ def generate_v4_fullres_tree_preview(
     import plotly.graph_objects as go
 
     origin = np.asarray(region.origin_xyz, dtype=np.float64)
-    xyz = region.xyz().astype(np.float64, copy=False) + origin
+    # ``RawRegion.xyz()`` is a memmap backed by tens of millions of rows.  Never
+    # materialize the complete array for a review-only page: computation and
+    # back-mapping remain full resolution, while the browser receives a bounded
+    # deterministic sample.
+    xyz = region.xyz()
     figure = go.Figure()
     assigned = region_tree >= 0
     unassigned_rows = np.flatnonzero(~assigned)
-    shown_unassigned = unassigned_rows[_even_rows(len(unassigned_rows), 40_000)]
+    shown_unassigned = unassigned_rows[_even_rows(len(unassigned_rows), 30_000)]
     if len(shown_unassigned):
         figure.add_trace(
             go.Scatter3d(
-                x=xyz[shown_unassigned, 0],
-                y=xyz[shown_unassigned, 1],
-                z=xyz[shown_unassigned, 2],
+                x=xyz[shown_unassigned, 0].astype(np.float64) + origin[0],
+                y=xyz[shown_unassigned, 1].astype(np.float64) + origin[1],
+                z=xyz[shown_unassigned, 2].astype(np.float64) + origin[2],
                 mode="markers",
                 name="未分配原始点（样本）",
                 marker={"size": 1.2, "color": "#9ca3af", "opacity": 0.20},
                 hoverinfo="skip",
             )
         )
-    for tree_id in sorted(int(value) for value in np.unique(region_tree[assigned]) if value >= 0):
+    tree_ids_to_show = sorted(int(value) for value in np.unique(region_tree[assigned]) if value >= 0)
+    tree_budget = _bounded_tree_visualization_budget(tree_ids_to_show, 180_000, 2_000)
+    for tree_id in tree_ids_to_show:
         rows = np.flatnonzero(region_tree == tree_id)
-        shown = rows[_even_rows(len(rows), 100_000)]
+        shown = rows[_even_rows(len(rows), tree_budget)]
         figure.add_trace(
             go.Scatter3d(
-                x=xyz[shown, 0],
-                y=xyz[shown, 1],
-                z=xyz[shown, 2],
+                x=xyz[shown, 0].astype(np.float64) + origin[0],
+                y=xyz[shown, 1].astype(np.float64) + origin[1],
+                z=xyz[shown, 2].astype(np.float64) + origin[2],
                 mode="markers",
                 name=f"Tree {tree_id} ({len(rows):,})",
                 marker={"size": 1.6, "color": tree_color(tree_id), "opacity": 0.88},
             )
         )
     figure.update_layout(
-        title="V4 单木全分辨率回映射：树分配映射回原始源点",
+        title="V4 单木全分辨率回映射：树分配映射回原始源点（显示点已抽样；计算使用完整分辨率）",
         scene={
             "xaxis_title": "X (m)",
             "yaxis_title": "Y (m)",
@@ -1584,6 +1596,16 @@ def _even_rows(count: int, maximum: int) -> np.ndarray:
     if count <= maximum:
         return np.arange(count, dtype=np.int64)
     return np.linspace(0, count - 1, maximum, dtype=np.int64)
+
+
+def _bounded_tree_visualization_budget(
+    tree_ids: list[int], total_budget: int, per_tree_cap: int
+) -> int:
+    """Return a deterministic per-tree cap that keeps Plotly payload bounded."""
+
+    if not tree_ids:
+        return 0
+    return max(1, min(int(per_tree_cap), int(total_budget) // len(tree_ids)))
 
 
 def _report(
