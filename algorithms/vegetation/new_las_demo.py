@@ -849,7 +849,7 @@ def _build_run_summary(
         ],
         "VEGETATION_RETAINED_RAW_WEIGHT": vegetation_counts["final_vegetation_raw_weight"],
         "APEX_CANDIDATES": len(v4_result.apex_records),
-        "ACCEPTED_APICES": len(tree_records),
+        "ACCEPTED_APICES": int(v4_result.audit.hypothesis_count),
         "TREE_COUNT": len(tree_records),
         "ASSIGNED_REPRESENTATIVES": backmap["assigned_representatives"],
         "ASSIGNED_FULL_RESOLUTION_POINTS": backmap["assigned_full_resolution_points"],
