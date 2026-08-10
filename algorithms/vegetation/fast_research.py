@@ -832,6 +832,8 @@ def _fast_v4_config(*, maximum_points: int) -> V4TreeSegmentationConfig:
         "relation_neighborhood_radius_m": 4.0,
         "maximum_points": maximum_points,
         "maximum_grid_cells": 400_000,
+        # V4 bounds these independently for each responsibility hypothesis,
+        # rather than treating many separate trees as one global workset.
         "maximum_fragments": 5_000,
         "maximum_local_edges": 50_000,
         "maximum_path_evaluations": 500_000,

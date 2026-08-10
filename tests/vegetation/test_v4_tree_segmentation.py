@@ -956,7 +956,7 @@ def test_profile_not_available_and_observed_empty() -> None:
 
 
 def test_resource_ceilings_fail_closed() -> None:
-    """V4A-IR-014/015 #22: tiny fragment/edge/profile ceilings hard-fail."""
+    """V4A-IR-014/015 #22: tiny local fragment/edge/profile ceilings fail closed."""
     from core.contracts.v4_tree_segmentation import V4TreeSegmentationError
 
     scene = two_trees_scene()
@@ -966,6 +966,81 @@ def test_resource_ceilings_fail_closed() -> None:
         segment_v4_trees(make_handoff(scene), make_config(maximum_local_edges=1))
     with pytest.raises(V4TreeSegmentationError):
         segment_v4_trees(make_handoff(scene), make_config(maximum_profile_samples=1))
+
+
+def test_fragment_ceiling_is_local_and_preserves_baseline_semantics() -> None:
+    """Independent crowns may exceed a global count without changing V4 output.
+
+    The recorded digest is the pre-hotfix result for this deterministic scene
+    under the unchanged default configuration.  A lower local fragment ceiling
+    still admits each crown and must produce the same algorithmic evidence.
+    """
+
+    handoff = make_handoff(two_trees_scene())
+    baseline = segment_v4_trees(handoff, make_config())
+    local_budget = segment_v4_trees(
+        make_handoff(two_trees_scene()), make_config(maximum_fragments=11)
+    )
+
+    assert baseline.result_digest == (
+        "7c0744bed5b6539bafa14115a4f16e434431600538d06493b2fc8b5f28d31b36"
+    )
+    for name in (
+        "original_index",
+        "xyz_local_m",
+        "hag_m",
+        "assignment_state_by_point",
+        "tree_id_by_point",
+        "assignment_confidence_by_point",
+        "assignment_reason_flags_by_point",
+        "tree_member_offsets",
+        "ordered_tree_member_original_index",
+    ):
+        assert np.array_equal(getattr(local_budget, name), getattr(baseline, name))
+    for name in (
+        "apex_records",
+        "trunk_records",
+        "trunk_apex_association_records",
+        "structural_path_records",
+        "rotating_profile_records",
+        "hypothesis_records",
+        "slice_records",
+        "relation_records",
+        "tree_records",
+    ):
+        assert getattr(local_budget, name) == getattr(baseline, name)
+    assert local_budget.audit.to_dict() == baseline.audit.to_dict()
+
+
+def test_adjacent_fragment_edge_ceiling_is_per_hypothesis() -> None:
+    """Two one-edge crowns fit a one-edge local graph budget independently."""
+
+    from algorithms.vegetation import v4_tree_segmentation as v4s
+
+    population = v4s._canonical_population(
+        make_handoff(
+            [
+                (0.0, 0.0, 0.5),
+                (0.1, 0.0, 1.0),
+                (5.0, 0.0, 0.5),
+                (5.1, 0.0, 1.0),
+            ]
+        )
+    )
+    fragments = [
+        v4s._Fragment("frag-a-0", 0, "hyp-a", (0,), "0" * 64),
+        v4s._Fragment("frag-a-1", 1, "hyp-a", (1,), "1" * 64),
+        v4s._Fragment("frag-b-0", 0, "hyp-b", (2,), "2" * 64),
+        v4s._Fragment("frag-b-1", 1, "hyp-b", (3,), "3" * 64),
+    ]
+    adjacency, _continuity, available = v4s._build_adjacent_fragment_graph(
+        fragments,
+        population,
+        v4s.derive_algorithm_scales(make_config(maximum_local_edges=1)),
+        make_config(maximum_local_edges=1),
+    )
+    assert set(adjacency) == {fragment.fragment_id for fragment in fragments}
+    assert available == {"hyp-a": True, "hyp-b": True}
 
 
 def test_assignment_channels_affect_final_support() -> None:

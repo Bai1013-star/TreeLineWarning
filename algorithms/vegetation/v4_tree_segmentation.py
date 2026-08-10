@@ -2973,9 +2973,20 @@ def _build_slices_and_fragments(
     scales: V4AlgorithmScales,
     config: V4TreeSegmentationConfig,
 ) -> tuple[list[V4TreeSliceSummary], list[_Fragment]]:
+    """Materialize the 3D evidence inventory with per-hypothesis bounds.
+
+    ``maximum_fragments`` is a local workset ceiling: each responsibility
+    hypothesis is independently bounded, while the full scene retains only the
+    fragment inventory required for later cross-hypothesis relation and
+    assignment evidence.  A global count is not a valid resource proxy for a
+    multi-tree scene: many small, independently bounded crowns would otherwise
+    be rejected before any V4 decision is made.
+    """
+
     slices: list[V4TreeSliceSummary] = []
     fragments: list[_Fragment] = []
     for hypothesis_id in sorted(domains):
+        hypothesis_fragment_count = 0
         domain = domains[hypothesis_id]
         domain_cells = set(domain.cell_ids)
         cell_positions: dict[int, list[int]] = {}
@@ -3036,7 +3047,7 @@ def _build_slices_and_fragments(
                 member_positions, grid, scales
             )
             for fragment_index, component in enumerate(fragment_positions):
-                if len(fragments) >= config.maximum_fragments:
+                if hypothesis_fragment_count >= config.maximum_fragments:
                     raise V4TreeSegmentationError(
                         code=V4TreeSegmentationErrorCode.RESOURCE_LIMIT,
                         field_name="maximum_fragments",
@@ -3052,6 +3063,7 @@ def _build_slices_and_fragments(
                         ),
                     )
                 )
+                hypothesis_fragment_count += 1
     return slices, fragments
 
 
@@ -3172,7 +3184,13 @@ def _build_adjacent_fragment_graph(
     scales: V4AlgorithmScales,
     config: V4TreeSegmentationConfig,
 ) -> tuple[dict[str, tuple[str, ...]], dict[str, float], dict[str, bool]]:
-    """Build the bounded adjacent-slice 3D fragment graph and continuity audit."""
+    """Build the bounded adjacent-slice 3D fragment graph and continuity audit.
+
+    Fragment comparisons are bounded per responsibility hypothesis.  Adjacent
+    fragments from separate crowns never interact, so making their independent
+    local work share one scene-wide counter incorrectly turns tree count into a
+    semantic resource failure.
+    """
 
     by_hypothesis_slice: dict[tuple[str, int], list[_Fragment]] = {}
     for fragment in fragments:
@@ -3182,9 +3200,9 @@ def _build_adjacent_fragment_graph(
     adjacency: dict[str, list[str]] = {fragment.fragment_id: [] for fragment in fragments}
     evaluated_by_hypothesis: dict[str, int] = {}
     linked_by_hypothesis: dict[str, int] = {}
-    evaluated_total = 0
     hypotheses = sorted({fragment.hypothesis_id for fragment in fragments})
     for hypothesis_id in hypotheses:
+        evaluated_local = 0
         slice_indexes = sorted(
             index
             for candidate, index in by_hypothesis_slice
@@ -3204,8 +3222,8 @@ def _build_adjacent_fragment_graph(
             )
             for fragment_a in left:
                 for fragment_b in right:
-                    evaluated_total += 1
-                    if evaluated_total > config.maximum_local_edges:
+                    evaluated_local += 1
+                    if evaluated_local > config.maximum_local_edges:
                         raise V4TreeSegmentationError(
                             code=V4TreeSegmentationErrorCode.RESOURCE_LIMIT,
                             field_name="maximum_local_edges",
@@ -3222,6 +3240,7 @@ def _build_adjacent_fragment_graph(
                         linked_by_hypothesis[hypothesis_id] = (
                             linked_by_hypothesis.get(hypothesis_id, 0) + 1
                         )
+        evaluated_by_hypothesis[hypothesis_id] = evaluated_local
     continuity: dict[str, float] = {}
     available: dict[str, bool] = {}
     for hypothesis_id in hypotheses:
