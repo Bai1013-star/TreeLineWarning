@@ -43,6 +43,8 @@ class PoleCandidateRecord:
     base_xyz_absolute_m: tuple[float, float, float]
     top_xyz_local_m: tuple[float, float, float]
     top_xyz_absolute_m: tuple[float, float, float]
+    top_z_quantile_m: float
+    top_z_max_m: float
     height_m: float
     xy_footprint_m: float
     median_verticality: float
@@ -65,6 +67,8 @@ class PoleCandidateRecord:
             "base_xyz_absolute_m": list(self.base_xyz_absolute_m),
             "top_xyz_local_m": list(self.top_xyz_local_m),
             "top_xyz_absolute_m": list(self.top_xyz_absolute_m),
+            "top_z_quantile_m": self.top_z_quantile_m,
+            "top_z_max_m": self.top_z_max_m,
             "height_m": self.height_m,
             "xy_footprint_m": self.xy_footprint_m,
             "median_verticality": self.median_verticality,
@@ -116,6 +120,12 @@ class PoleCandidateResult:
                 top_xyz_absolute_m=tuple(
                     float(value) for value in item["top_xyz_absolute_m"]
                 ),
+                top_z_quantile_m=float(
+                    item.get("top_z_quantile_m", item["top_xyz_local_m"][2])
+                ),
+                top_z_max_m=float(
+                    item.get("top_z_max_m", item["top_xyz_local_m"][2])
+                ),
                 height_m=float(item["height_m"]),
                 xy_footprint_m=float(item["xy_footprint_m"]),
                 median_verticality=float(item["median_verticality"]),
@@ -153,7 +163,7 @@ def _component_stats(
     verticality: np.ndarray,
     raw_count: np.ndarray,
     rows: np.ndarray,
-) -> dict[str, float]:
+) -> dict[str, Any]:
     points = xyz_local[rows]
     z_min = float(np.min(points[:, 2]))
     z_max = float(np.max(points[:, 2]))
@@ -173,6 +183,8 @@ def _component_stats(
         "z_min": z_min,
         "z_max": z_max,
         "height_m": z_max - z_min,
+        "top_z_quantile_m": float(np.quantile(points[:, 2], 0.90)),
+        "top_z_max_m": z_max,
         "xy_footprint_m": footprint,
         "base_xyz": base_xyz,
         "top_xyz": top_xyz,
@@ -324,6 +336,8 @@ def detect_pole_candidates(
                     base_xyz_absolute_m=tuple(float(value) for value in base_xyz_local + origin),
                     top_xyz_local_m=tuple(float(value) for value in top_xyz_local),
                     top_xyz_absolute_m=tuple(float(value) for value in top_xyz_local + origin),
+                    top_z_quantile_m=float(stats["top_z_quantile_m"] + origin[2]),
+                    top_z_max_m=float(stats["top_z_max_m"] + origin[2]),
                     height_m=stats["height_m"],
                     xy_footprint_m=stats["xy_footprint_m"],
                     median_verticality=stats["median_verticality"],

@@ -206,6 +206,86 @@ def _heading_alignment(direction_xy: np.ndarray, reference: np.ndarray | None) -
     return float(abs(float(np.dot(direction_xy, ref / ref_norm))))
 
 
+def _corridor_metrics(
+    start_xy: np.ndarray,
+    end_xy: np.ndarray,
+    wire_evidence: CoarseWireResult,
+    evidence: GroundEvidence,
+    config: FastBaselineConfig,
+) -> dict[str, float]:
+    """Return transparent occupancy/shape evidence for one candidate pair."""
+
+    axis = _unit_xy(end_xy - start_xy)
+    length = float(np.linalg.norm(end_xy - start_xy))
+    if length <= 1e-9:
+        return {
+            "coarse_wire_occupancy": 0.0,
+            "longitudinal_coverage": 0.0,
+            "transverse_compactness": 0.0,
+            "elevation_smoothness": 0.0,
+        }
+    candidates = np.flatnonzero(wire_evidence.candidate_mask)
+    if not len(candidates):
+        return {
+            "coarse_wire_occupancy": 0.0,
+            "longitudinal_coverage": 0.0,
+            "transverse_compactness": 0.0,
+            "elevation_smoothness": 0.0,
+        }
+    relative = evidence.xyz_local_m[candidates, :2] - start_xy
+    s = relative @ axis
+    transverse_signed = (
+        relative[:, 0] * (-axis[1]) + relative[:, 1] * axis[0]
+    )
+    transverse = np.abs(transverse_signed)
+    band = (s >= -0.5) & (s <= length + 0.5) & (transverse <= config.span_half_width_m)
+    selected = s[band]
+    if not len(selected):
+        return {
+            "coarse_wire_occupancy": 0.0,
+            "longitudinal_coverage": 0.0,
+            "transverse_compactness": 0.0,
+            "elevation_smoothness": 0.0,
+        }
+    selected_u = transverse_signed[band]
+    selected_z = evidence.xyz_local_m[candidates, 2][band]
+    selected = np.sort(selected)
+    gaps = np.diff(selected)
+    gap_threshold = max(
+        config.topology_corridor_gap_max_m,
+        config.topology_corridor_gap_fraction * length,
+    )
+    run_starts = np.concatenate(([selected[0]], selected[1:][gaps > gap_threshold]))
+    run_ends = np.concatenate((selected[:-1][gaps > gap_threshold], [selected[-1]]))
+    max_run = float(np.max(run_ends - run_starts)) if len(run_starts) else 0.0
+    occupancy = float(min(1.0, max_run / length))
+    longitudinal = float(min(1.0, (np.max(selected) - np.min(selected)) / length))
+    lower = (1.0 - config.wire_coarse_robust_z_quantile_fraction) / 2.0
+    upper = 1.0 - lower
+    transverse_width = float(
+        np.quantile(selected_u, upper) - np.quantile(selected_u, lower)
+    )
+    compactness = float(
+        np.clip(1.0 - transverse_width / (2.0 * config.span_half_width_m), 0.0, 1.0)
+    )
+    fit = np.polyfit(selected, selected_z, 1) if len(selected) >= 2 else (0.0, selected_z[0])
+    residual = float(
+        np.quantile(
+            np.abs(selected_z - np.polyval(fit, selected)),
+            config.wire_coarse_residual_quantile_fraction,
+        )
+    )
+    smoothness = float(
+        np.clip(1.0 - residual / config.wire_coarse_max_z_fit_residual_m, 0.0, 1.0)
+    )
+    return {
+        "coarse_wire_occupancy": occupancy,
+        "longitudinal_coverage": longitudinal,
+        "transverse_compactness": compactness,
+        "elevation_smoothness": smoothness,
+    }
+
+
 def _corridor_continuity(
     start_xy: np.ndarray,
     end_xy: np.ndarray,
@@ -213,38 +293,56 @@ def _corridor_continuity(
     evidence: GroundEvidence,
     config: FastBaselineConfig,
 ) -> float:
-    """Fraction of the straight corridor covered by aligned wire candidates."""
+    """Backward-compatible scalar view of the corridor occupancy evidence."""
 
-    axis = _unit_xy(end_xy - start_xy)
-    length = float(np.linalg.norm(end_xy - start_xy))
-    if length <= 1e-9:
-        return 0.0
-    candidates = np.flatnonzero(wire_evidence.candidate_mask)
-    if not len(candidates):
-        return 0.0
-    relative = evidence.xyz_local_m[candidates, :2] - start_xy
-    s = relative @ axis
-    transverse = np.abs(
-        relative[:, 0] * (-axis[1]) + relative[:, 1] * axis[0]
+    return _corridor_metrics(start_xy, end_xy, wire_evidence, evidence, config)[
+        "coarse_wire_occupancy"
+    ]
+
+
+def _attachment_height_evidence(
+    candidate_a: Any,
+    candidate_b: Any,
+    validation_a: Any,
+    validation_b: Any,
+    config: FastBaselineConfig,
+) -> tuple[bool, float, dict[str, float]]:
+    """Compare conductor attachment bands, with a bounded fallback for weak scans."""
+
+    def band(candidate: Any, validation: Any) -> tuple[float, float, float]:
+        center = validation.attachment_elevation_m
+        lower = validation.attachment_band_min_m
+        upper = validation.attachment_band_max_m
+        if center is None or lower is None or upper is None:
+            center = float(candidate.top_xyz_local_m[2])
+            half = config.pole_attachment_fallback_half_band_m
+            lower, upper = center - half, center + half
+        return float(center), float(lower), float(upper)
+
+    center_a, lower_a, upper_a = band(candidate_a, validation_a)
+    center_b, lower_b, upper_b = band(candidate_b, validation_b)
+    gap = max(lower_a - upper_b, lower_b - upper_a, 0.0)
+    center_delta = abs(center_a - center_b)
+    compatible = gap <= config.topology_attachment_height_tolerance_m
+    score = float(
+        np.clip(
+            1.0
+            - max(gap, center_delta - config.topology_attachment_height_tolerance_m)
+            / config.topology_attachment_height_tolerance_m,
+            0.0,
+            1.0,
+        )
     )
-    band = (s >= -0.5) & (s <= length + 0.5) & (transverse <= config.span_half_width_m)
-    selected = s[band]
-    if not len(selected):
-        return 0.0
-    selected = np.sort(selected)
-    gaps = np.diff(selected)
-    gap_threshold = max(4.0, 0.08 * length)
-    run_starts = np.concatenate(([selected[0]], selected[1:][gaps > gap_threshold]))
-    run_ends = np.concatenate((selected[:-1][gaps > gap_threshold], [selected[-1]]))
-    max_run = float(np.max(run_ends - run_starts)) if len(run_starts) else 0.0
-    return float(min(1.0, max_run / length))
-
-
-def _top_height_compatible(
-    candidate_a: Any, candidate_b: Any, config: FastBaselineConfig
-) -> bool:
-    tolerance = max(4.0, 0.25 * max(candidate_a.height_m, candidate_b.height_m))
-    return abs(candidate_a.top_xyz_local_m[2] - candidate_b.top_xyz_local_m[2]) <= tolerance
+    return compatible, score, {
+        "attachment_elevation_a_m": center_a,
+        "attachment_elevation_b_m": center_b,
+        "attachment_band_a_min_m": lower_a,
+        "attachment_band_a_max_m": upper_a,
+        "attachment_band_b_min_m": lower_b,
+        "attachment_band_b_max_m": upper_b,
+        "attachment_band_gap_m": float(gap),
+        "attachment_center_delta_m": float(center_delta),
+    }
 
 
 def build_pole_graph(
@@ -254,7 +352,7 @@ def build_pole_graph(
     evidence: GroundEvidence,
     config: FastBaselineConfig,
 ) -> tuple[list[tuple[int, int]], list[dict[str, Any]], dict[int, Any]]:
-    """Return accepted pole-pair edges with deterministic scoring."""
+    """Return accepted edges plus transparent evidence for every eligible pair."""
 
     by_id = {candidate.pole_candidate_id: candidate for candidate in candidates.records}
     validation_by_id = {
@@ -273,35 +371,157 @@ def build_pole_graph(
             distance = float(np.linalg.norm(end_xy - start_xy))
             if not (config.pole_min_span_m <= distance <= config.pole_max_span_m):
                 continue
-            if not _top_height_compatible(a, b, config):
-                continue
             direction = _unit_xy(end_xy - start_xy)
             record_a = validation_by_id[node_a]
             record_b = validation_by_id[node_b]
             heading_a = _heading_alignment(direction, record_a.primary_wire_direction_xy)
             heading_b = _heading_alignment(direction, record_b.primary_wire_direction_xy)
-            tolerance = np.cos(config.topology_direction_tolerance_rad)
-            if heading_a is not None and heading_a < tolerance:
-                continue
-            if heading_b is not None and heading_b < tolerance:
-                continue
-            continuity = _corridor_continuity(
+            tolerance = min(
+                config.topology_heading_alignment_min,
+                np.cos(config.topology_direction_tolerance_rad),
+            )
+            corridor = _corridor_metrics(
                 start_xy, end_xy, wire_evidence, evidence, config
             )
-            if continuity < 0.50:
+            height_compatible, height_score, height_details = _attachment_height_evidence(
+                a, b, record_a, record_b, config
+            )
+            headings = [
+                value for value in (heading_a, heading_b) if value is not None
+            ]
+            direction_score = float(min(headings)) if headings else 0.5
+            continuation_score = _continuation_support(
+                node_a,
+                node_b,
+                nodes,
+                by_id,
+                validation_by_id,
+                config,
+            )
+            intermediate_count = _intermediate_candidate_count(
+                node_a, node_b, nodes, by_id, config
+            )
+            distance_score = float(
+                min(
+                    1.0,
+                    (distance - config.pole_min_span_m)
+                    / max(1.0, config.pole_max_span_m - config.pole_min_span_m),
+                )
+            )
+            rejection_reasons: list[str] = []
+            if not height_compatible:
+                rejection_reasons.append("incompatible_attachment_elevation")
+            if heading_a is not None and heading_a < tolerance:
+                rejection_reasons.append("candidate_a_direction_mismatch")
+            if heading_b is not None and heading_b < tolerance:
+                rejection_reasons.append("candidate_b_direction_mismatch")
+            if corridor["coarse_wire_occupancy"] < config.topology_min_corridor_continuity:
+                rejection_reasons.append("insufficient_coarse_wire_occupancy")
+            if (
+                corridor["longitudinal_coverage"]
+                < config.wire_coarse_min_longitudinal_coverage_fraction
+            ):
+                rejection_reasons.append("insufficient_longitudinal_coverage")
+            score = {
+                "pole_a": node_a,
+                "pole_b": node_b,
+                "distance_m": distance,
+                "distance_compatibility": distance_score,
+                "heading_alignment_a": heading_a,
+                "heading_alignment_b": heading_b,
+                "corridor_direction_compatibility": direction_score,
+                "coarse_wire_occupancy": corridor["coarse_wire_occupancy"],
+                "corridor_continuity": corridor["coarse_wire_occupancy"],
+                "longitudinal_coverage": corridor["longitudinal_coverage"],
+                "transverse_compactness": corridor["transverse_compactness"],
+                "elevation_smoothness": corridor["elevation_smoothness"],
+                "height_attachment_compatibility": height_score,
+                "intermediate_obstacle_evidence": float(
+                    min(1.0, intermediate_count / 3.0)
+                ),
+                "intermediate_candidate_count": intermediate_count,
+                "continuation_to_adjacent_poles": continuation_score,
+                **height_details,
+                "accepted": not rejection_reasons,
+                "rejection_reasons": rejection_reasons,
+            }
+            scores.append(score)
+            if rejection_reasons:
                 continue
             edges.append((node_a, node_b))
-            scores.append(
-                {
-                    "pole_a": node_a,
-                    "pole_b": node_b,
-                    "distance_m": distance,
-                    "heading_alignment_a": heading_a,
-                    "heading_alignment_b": heading_b,
-                    "corridor_continuity": continuity,
-                }
-            )
     return edges, scores, by_id
+
+
+def _intermediate_candidate_count(
+    node_a: int,
+    node_b: int,
+    nodes: list[int],
+    by_id: dict[int, Any],
+    config: FastBaselineConfig,
+) -> int:
+    """Count other pole-like candidates inside the endpoint corridor band."""
+
+    start = np.asarray(by_id[node_a].base_xyz_local_m[:2], dtype=np.float64)
+    end = np.asarray(by_id[node_b].base_xyz_local_m[:2], dtype=np.float64)
+    axis = _unit_xy(end - start)
+    perp = np.asarray((-axis[1], axis[0]), dtype=np.float64)
+    length = float(np.linalg.norm(end - start))
+    count = 0
+    for node in nodes:
+        if node in {node_a, node_b}:
+            continue
+        point = np.asarray(by_id[node].base_xyz_local_m[:2], dtype=np.float64)
+        relative = point - start
+        longitudinal = float(np.dot(relative, axis))
+        transverse = float(abs(np.dot(relative, perp)))
+        if 0.0 < longitudinal < length and transverse <= config.span_half_width_m:
+            count += 1
+    return count
+
+
+def _continuation_support(
+    node_a: int,
+    node_b: int,
+    nodes: list[int],
+    by_id: dict[int, Any],
+    validation_by_id: dict[int, Any],
+    config: FastBaselineConfig,
+) -> float:
+    """Reward a pair when either endpoint continues in the same local direction."""
+
+    tolerance = min(
+        config.topology_heading_alignment_min,
+        np.cos(config.topology_direction_tolerance_rad),
+    )
+
+    def has_continuation(anchor: int, neighbor: int) -> bool:
+        anchor_xy = np.asarray(by_id[anchor].base_xyz_local_m[:2], dtype=np.float64)
+        neighbor_xy = np.asarray(by_id[neighbor].base_xyz_local_m[:2], dtype=np.float64)
+        direction = _unit_xy(neighbor_xy - anchor_xy)
+        for candidate_id in nodes:
+            if candidate_id in {anchor, neighbor}:
+                continue
+            candidate_xy = np.asarray(
+                by_id[candidate_id].base_xyz_local_m[:2], dtype=np.float64
+            )
+            extension = _unit_xy(candidate_xy - neighbor_xy)
+            if float(np.dot(direction, extension)) < tolerance:
+                continue
+            distance = float(np.linalg.norm(candidate_xy - neighbor_xy))
+            if not (config.pole_min_span_m <= distance <= config.pole_max_span_m):
+                continue
+            if validation_by_id[neighbor].primary_wire_direction_xy is not None:
+                if (
+                    _heading_alignment(
+                        extension, validation_by_id[neighbor].primary_wire_direction_xy
+                    )
+                    or 0.0
+                ) < tolerance:
+                    continue
+            return True
+        return False
+
+    return 1.0 if has_continuation(node_a, node_b) or has_continuation(node_b, node_a) else 0.5
 
 
 def _connected_components(
@@ -537,6 +757,10 @@ def build_span_topology(
             "schema": TOPOLOGY_SCHEMA,
             "usable_pole_count": len(validation.usable_pole_ids),
             "edge_candidate_pairs": len(edges),
+            "pair_evidence_count": len(edge_scores),
+            "rejected_pair_count": sum(
+                1 for score in edge_scores if not score.get("accepted", False)
+            ),
             "line_count": len(lines),
             "span_count": len(spans),
             "runtime_seconds": time.perf_counter() - started,

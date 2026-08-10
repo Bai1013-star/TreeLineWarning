@@ -46,7 +46,9 @@ def _crown_pts(cx: float, cy: float, z0: float, z1: float, count: int) -> np.nda
 def _build_evidence(
     *,
     pole_xys: list[tuple[float, float]] | None = None,
+    pole_top_zs: list[float] | None = None,
     wire_segments: list[np.ndarray] | None = None,
+    roof_segments: list[np.ndarray] | None = None,
     trunks: list[tuple[float, float]] | None = None,
     crowns: list[np.ndarray] | None = None,
     lights: list[tuple[float, float]] | None = None,
@@ -99,8 +101,9 @@ def _build_evidence(
     )
     add(grid, cls=2, lin=0.05, plan=0.9, scat=0.05, vert=0.1, dirz=0.05)
     # Poles.
-    for x, y in pole_xys or []:
-        pts = _pole_pts(x, y, ground_z + 0.1, ground_z + 12.0)
+    for position, (x, y) in enumerate(pole_xys or []):
+        top_z = (pole_top_zs or [12.0] * len(pole_xys or []))[position]
+        pts = _pole_pts(x, y, ground_z + 0.1, ground_z + top_z)
         add(pts, cls=1, lin=0.85, plan=0.05, scat=0.1, vert=0.95, dirz=0.95)
     # Street lights (short poles).
     for x, y in lights or []:
@@ -108,6 +111,10 @@ def _build_evidence(
         add(pts, cls=1, lin=0.85, plan=0.05, scat=0.1, vert=0.95, dirz=0.95)
     # Wires.
     for segment in wire_segments or []:
+        add(segment, cls=1, lin=0.85, plan=0.05, scat=0.02, vert=0.1, dirz=0.1)
+    # Long planar roof-ridge-like structures: line-like in XY but deliberately
+    # irregular in elevation, so coarse corridor recovery must reject them.
+    for segment in roof_segments or []:
         add(segment, cls=1, lin=0.85, plan=0.05, scat=0.02, vert=0.1, dirz=0.1)
     # Tree trunks.
     for x, y in trunks or []:
@@ -194,6 +201,31 @@ def test_two_sequential_poles_form_one_span() -> None:
     assert span.start_pole_candidate_id in validation.usable_pole_ids
     assert span.end_pole_candidate_id in validation.usable_pole_ids
     assert abs(span.length_m - 50.0) < 1.0
+
+
+def test_unequal_total_pole_heights_use_compatible_attachment_band() -> None:
+    wires = [_wire_pts(0.0, 50.0, u, 11.0) for u in (-1.0, 1.0)]
+    evidence = _build_evidence(
+        pole_xys=[(0.0, 0.0), (50.0, 0.0)],
+        pole_top_zs=[15.0, 8.0],
+        wire_segments=wires,
+    )
+    candidates = detect_pole_candidates(evidence, _CFG)
+    wire_evidence = detect_coarse_wire_evidence(evidence, _CFG)
+    validation = validate_poles(candidates, wire_evidence, evidence, _CFG)
+    topology = build_span_topology(candidates, validation, wire_evidence, evidence, _CFG)
+    assert topology.span_count == 1
+    assert abs(validation.records[0].attachment_elevation_m - 11.0) < 0.2
+    assert abs(validation.records[1].attachment_elevation_m - 11.0) < 0.2
+    assert abs(candidates.records[0].top_z_max_m - candidates.records[1].top_z_max_m) > 5.0
+
+
+def test_roof_ridge_like_line_is_rejected_from_coarse_wire_evidence() -> None:
+    xs = np.arange(-40.0, 40.0, 0.4)
+    roof = np.column_stack((xs, np.zeros_like(xs), 8.0 + 0.10 * xs))
+    evidence = _build_evidence(roof_segments=[roof])
+    wire_evidence = detect_coarse_wire_evidence(evidence, _CFG)
+    assert wire_evidence.segment_count == 0
 
 
 def test_three_poles_form_two_spans() -> None:

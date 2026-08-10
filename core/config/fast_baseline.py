@@ -95,12 +95,23 @@ class FastBaselineConfig:
     wire_coarse_group_cell_m: float = 1.0
     wire_coarse_min_segment_span_m: float = 12.0
     wire_coarse_min_segment_points: int = 6
+    wire_coarse_robust_z_quantile_fraction: float = 0.90
+    wire_coarse_residual_quantile_fraction: float = 0.95
+    wire_coarse_max_robust_z_span_m: float = 4.0
+    wire_coarse_max_z_fit_residual_m: float = 2.0
+    wire_coarse_max_transverse_width_m: float = 8.0
+    wire_coarse_min_longitudinal_coverage_fraction: float = 0.70
+    wire_coarse_longitudinal_coverage_bins: int = 8
 
     # --- pole-wire mutual validation ---------------------------------------
     pole_top_wire_support_radius_m: float = 5.0
     pole_wire_approach_hag_tolerance_m: float = 4.0
     pole_min_wire_support_reps: int = 6
     pole_min_wire_support_parallelism: float = 0.35
+    pole_attachment_lower_quantile: float = 0.10
+    pole_attachment_upper_quantile: float = 0.90
+    pole_attachment_fallback_half_band_m: float = 1.5
+    pole_min_wire_support_segment_span_m: float = 30.0
     pole_crown_penalty_radius_m: float = 4.0
     pole_crown_penalty_min_hag_m: float = 6.0
 
@@ -109,6 +120,10 @@ class FastBaselineConfig:
     pole_max_span_m: float = 220.0
     topology_direction_tolerance_rad: float = 0.61  # ~35 deg
     topology_heading_alignment_min: float = 0.80  # cos >= this to continue a line
+    topology_attachment_height_tolerance_m: float = 2.5
+    topology_min_corridor_continuity: float = 0.50
+    topology_corridor_gap_max_m: float = 4.0
+    topology_corridor_gap_fraction: float = 0.08
     span_half_width_m: float = 9.0
     span_halo_m: float = 6.0
     span_z_ground_clearance_m: float = 1.2
@@ -176,6 +191,7 @@ class FastBaselineConfig:
                 "pole_min_support_representatives",
                 "pole_min_wire_support_reps",
                 "wire_coarse_min_segment_points",
+                "wire_coarse_longitudinal_coverage_bins",
                 "wire_pca_neighbor_count",
                 "wire_dbscan_min_samples",
                 "wire_min_strand_points",
@@ -195,6 +211,18 @@ class FastBaselineConfig:
             "tree_top_min_prominence_fraction",
             _fraction(self.tree_top_min_prominence_fraction, "tree_top_min_prominence_fraction"),
         )
+        for name in {
+            "wire_coarse_robust_z_quantile_fraction",
+            "wire_coarse_residual_quantile_fraction",
+            "wire_coarse_min_longitudinal_coverage_fraction",
+            "pole_attachment_lower_quantile",
+            "pole_attachment_upper_quantile",
+            "topology_min_corridor_continuity",
+            "topology_corridor_gap_fraction",
+        }:
+            object.__setattr__(self, name, _fraction(getattr(self, name), name))
+        if self.pole_attachment_lower_quantile >= self.pole_attachment_upper_quantile:
+            raise ValueError("pole attachment quantiles must be strictly ordered")
         if (
             self.topology_direction_tolerance_rad <= 0.0
             or self.topology_direction_tolerance_rad >= math.pi

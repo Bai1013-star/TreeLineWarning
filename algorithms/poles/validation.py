@@ -52,6 +52,9 @@ class PoleValidationRecord:
     wire_support_parallelism: float
     wire_support_segment_ids: tuple[int, ...]
     primary_wire_direction_xy: tuple[float, float, float] | None
+    attachment_elevation_m: float | None
+    attachment_band_min_m: float | None
+    attachment_band_max_m: float | None
     crown_evidence: bool
     crown_volume_proxy: int
     reason: str
@@ -68,6 +71,9 @@ class PoleValidationRecord:
                 if self.primary_wire_direction_xy is None
                 else list(self.primary_wire_direction_xy)
             ),
+            "attachment_elevation_m": self.attachment_elevation_m,
+            "attachment_band_min_m": self.attachment_band_min_m,
+            "attachment_band_max_m": self.attachment_band_max_m,
             "crown_evidence": self.crown_evidence,
             "crown_volume_proxy": self.crown_volume_proxy,
             "reason": self.reason,
@@ -108,6 +114,21 @@ class PoleValidationResult:
                         for value in item["primary_wire_direction_xy"]
                     )
                 ),
+                attachment_elevation_m=(
+                    None
+                    if item.get("attachment_elevation_m") is None
+                    else float(item["attachment_elevation_m"])
+                ),
+                attachment_band_min_m=(
+                    None
+                    if item.get("attachment_band_min_m") is None
+                    else float(item["attachment_band_min_m"])
+                ),
+                attachment_band_max_m=(
+                    None
+                    if item.get("attachment_band_max_m") is None
+                    else float(item["attachment_band_max_m"])
+                ),
                 crown_evidence=bool(item["crown_evidence"]),
                 crown_volume_proxy=int(item["crown_volume_proxy"]),
                 reason=str(item["reason"]),
@@ -135,7 +156,7 @@ def _pole_wire_support(
     evidence: GroundEvidence,
     wire_evidence: CoarseWireResult,
     config: FastBaselineConfig,
-) -> tuple[int, float, np.ndarray | None]:
+) -> tuple[int, float, np.ndarray | None, np.ndarray]:
     """Count wire-candidate reps near the pole top zone and their coherence.
 
     Real conductors are frequently fragmented by vegetation at coarse scale, so
@@ -147,7 +168,14 @@ def _pole_wire_support(
     """
 
     if not wire_evidence.candidate_mask.any():
-        return 0, 0.0, None
+        return 0, 0.0, None, np.empty(0, dtype=np.int64)
+    long_segment_ids = {
+        segment.segment_id
+        for segment in wire_evidence.segments
+        if segment.xy_span_m >= config.pole_min_wire_support_segment_span_m
+    }
+    if not long_segment_ids:
+        return 0, 0.0, None, np.empty(0, dtype=np.int64)
     xy = evidence.xyz_local_m[:, :2]
     z_ok = (
         np.abs(evidence.xyz_local_m[:, 2] - pole_top_z)
@@ -157,19 +185,44 @@ def _pole_wire_support(
         np.linalg.norm(xy - pole_top_xy, axis=1) <= config.pole_top_wire_support_radius_m
     )
     rows = np.flatnonzero(near_strict & z_ok & wire_evidence.candidate_mask)
+    rows = rows[np.isin(wire_evidence.segment_id_by_representative[rows], list(long_segment_ids))]
     support_count = int(len(rows))
     # Coherence window is twice the strict support radius.
     window = config.pole_top_wire_support_radius_m * 2.0
     near_wide = np.linalg.norm(xy - pole_top_xy, axis=1) <= window
     wide_rows = np.flatnonzero(near_wide & z_ok & wire_evidence.candidate_mask)
+    wide_rows = wide_rows[
+        np.isin(
+            wire_evidence.segment_id_by_representative[wide_rows],
+            list(long_segment_ids),
+        )
+    ]
     if len(wide_rows) < 2:
-        return support_count, 0.0, None
+        return support_count, 0.0, None, rows
     centered = xy[wide_rows] - xy[wide_rows].mean(axis=0)
     values, vectors = np.linalg.eigh(centered.T @ centered)
     total = float(np.max(values)) + 1e-12
     linearity = float((values[1] - values[0]) / total)
     direction = np.asarray((vectors[0, 1], vectors[1, 1]), dtype=np.float64)
-    return support_count, linearity, direction
+    return support_count, linearity, direction, rows
+
+
+def _attachment_zone(
+    candidate: Any,
+    support_rows: np.ndarray,
+    evidence: GroundEvidence,
+    config: FastBaselineConfig,
+) -> tuple[float, float, float]:
+    """Estimate conductor elevation from a robust support band, not max Z."""
+
+    if len(support_rows) >= 2:
+        z = np.asarray(evidence.xyz_local_m[support_rows, 2], dtype=np.float64)
+        lower = float(np.quantile(z, config.pole_attachment_lower_quantile))
+        upper = float(np.quantile(z, config.pole_attachment_upper_quantile))
+        return float(np.median(z)), lower, upper
+    top = float(candidate.top_xyz_local_m[2])
+    half_band = config.pole_attachment_fallback_half_band_m
+    return top, top - half_band, top + half_band
 
 
 def _crown_volume_proxy(
@@ -203,7 +256,7 @@ def validate_poles(
     for candidate in candidates.records:
         pole_top_xy = np.asarray(candidate.top_xyz_local_m[:2], dtype=np.float64)
         pole_top_z = float(candidate.top_xyz_local_m[2])
-        support_count, parallelism, primary_2d = _pole_wire_support(
+        support_count, parallelism, primary_2d, support_rows = _pole_wire_support(
             pole_top_xy,
             pole_top_z,
             evidence,
@@ -221,6 +274,18 @@ def validate_poles(
                 primary_direction = tuple(
                     float(value) for value in primary_2d / norm
                 )
+        attachment, attachment_min, attachment_max = _attachment_zone(
+            candidate, support_rows, evidence, config
+        )
+        support_segment_ids = tuple(
+            sorted(
+                {
+                    int(value)
+                    for value in wire_evidence.segment_id_by_representative[support_rows]
+                    if int(value) >= 0
+                }
+            )
+        )
 
         if (
             support_count >= config.pole_min_wire_support_reps
@@ -255,8 +320,11 @@ def validate_poles(
                 state=state,
                 wire_support_count=support_count,
                 wire_support_parallelism=parallelism,
-                wire_support_segment_ids=(),
+                wire_support_segment_ids=support_segment_ids,
                 primary_wire_direction_xy=primary_direction,
+                attachment_elevation_m=attachment,
+                attachment_band_min_m=attachment_min,
+                attachment_band_max_m=attachment_max,
                 crown_evidence=crown_evidence,
                 crown_volume_proxy=crown_proxy,
                 reason=reason,

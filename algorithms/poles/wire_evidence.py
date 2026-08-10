@@ -37,6 +37,10 @@ class CoarseWireSegment:
     start_xyz_local_m: tuple[float, float, float]
     end_xyz_local_m: tuple[float, float, float]
     direction_xyz_local_m: tuple[float, float, float]
+    robust_z_span_m: float = 0.0
+    z_fit_residual_m: float = 0.0
+    transverse_width_m: float = 0.0
+    longitudinal_coverage_fraction: float = 0.0
     usage: str = "COARSE_WIRE_EVIDENCE_ONLY"
 
     def to_dict(self) -> dict[str, Any]:
@@ -49,6 +53,10 @@ class CoarseWireSegment:
             "start_xyz_local_m": list(self.start_xyz_local_m),
             "end_xyz_local_m": list(self.end_xyz_local_m),
             "direction_xyz_local_m": list(self.direction_xyz_local_m),
+            "robust_z_span_m": self.robust_z_span_m,
+            "z_fit_residual_m": self.z_fit_residual_m,
+            "transverse_width_m": self.transverse_width_m,
+            "longitudinal_coverage_fraction": self.longitudinal_coverage_fraction,
             "usage": self.usage,
         }
 
@@ -89,6 +97,12 @@ class CoarseWireResult:
                 end_xyz_local_m=tuple(float(value) for value in item["end_xyz_local_m"]),
                 direction_xyz_local_m=tuple(
                     float(value) for value in item["direction_xyz_local_m"]
+                ),
+                robust_z_span_m=float(item.get("robust_z_span_m", item["z_span_m"])),
+                z_fit_residual_m=float(item.get("z_fit_residual_m", item["z_span_m"])),
+                transverse_width_m=float(item.get("transverse_width_m", 0.0)),
+                longitudinal_coverage_fraction=float(
+                    item.get("longitudinal_coverage_fraction", 1.0)
                 ),
                 usage=str(item.get("usage", "COARSE_WIRE_EVIDENCE_ONLY")),
             )
@@ -139,8 +153,6 @@ def detect_coarse_wire_evidence(
         z_span = float(span[2])
         if xy_span < config.wire_coarse_min_segment_span_m:
             continue
-        if z_span > max(3.0, 0.15 * xy_span):
-            continue
         centered = points - points.mean(axis=0)
         _values, vectors = np.linalg.eigh(centered.T @ centered)
         direction = vectors[:, -1]
@@ -149,6 +161,42 @@ def detect_coarse_wire_evidence(
         projection = centered @ direction
         start = points.mean(axis=0) + direction * float(np.min(projection))
         end = points.mean(axis=0) + direction * float(np.max(projection))
+        axis_xy = np.asarray(direction[:2], dtype=np.float64)
+        axis_xy /= max(float(np.linalg.norm(axis_xy)), 1e-12)
+        perp_xy = np.asarray((-axis_xy[1], axis_xy[0]), dtype=np.float64)
+        relative_xy = points[:, :2] - points.mean(axis=0)[:2]
+        longitudinal = relative_xy @ axis_xy
+        transverse = relative_xy @ perp_xy
+        lower = (1.0 - config.wire_coarse_robust_z_quantile_fraction) / 2.0
+        upper = 1.0 - lower
+        robust_z_span = float(
+            np.quantile(points[:, 2], upper) - np.quantile(points[:, 2], lower)
+        )
+        fit = np.polyfit(longitudinal, points[:, 2], 1)
+        residual = np.abs(points[:, 2] - np.polyval(fit, longitudinal))
+        z_fit_residual = float(
+            np.quantile(residual, config.wire_coarse_residual_quantile_fraction)
+        )
+        transverse_width = float(
+            np.quantile(transverse, upper) - np.quantile(transverse, lower)
+        )
+        bins = np.linspace(
+            float(np.min(longitudinal)),
+            float(np.max(longitudinal)),
+            config.wire_coarse_longitudinal_coverage_bins + 1,
+        )
+        occupied_bins = np.unique(np.clip(np.digitize(longitudinal, bins[1:-1]), 0, None))
+        longitudinal_coverage = float(
+            len(occupied_bins) / config.wire_coarse_longitudinal_coverage_bins
+        )
+        if robust_z_span > config.wire_coarse_max_robust_z_span_m:
+            continue
+        if z_fit_residual > config.wire_coarse_max_z_fit_residual_m:
+            continue
+        if transverse_width > config.wire_coarse_max_transverse_width_m:
+            continue
+        if longitudinal_coverage < config.wire_coarse_min_longitudinal_coverage_fraction:
+            continue
         segment = CoarseWireSegment(
             segment_id=len(segments),
             representative_count=int(len(rows)),
@@ -158,6 +206,10 @@ def detect_coarse_wire_evidence(
             start_xyz_local_m=tuple(float(value) for value in start),
             end_xyz_local_m=tuple(float(value) for value in end),
             direction_xyz_local_m=tuple(float(value) for value in direction),
+            robust_z_span_m=robust_z_span,
+            z_fit_residual_m=z_fit_residual,
+            transverse_width_m=transverse_width,
+            longitudinal_coverage_fraction=longitudinal_coverage,
         )
         segments.append(segment)
         candidate_mask[rows] = True
