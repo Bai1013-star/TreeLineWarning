@@ -4699,6 +4699,17 @@ def segment_v4_trees(
         positions_by_tree = _group_assigned_positions(
             population, tree_id_by_point, state_by_point
         )
+        # A formal tree hypothesis can survive the final union while the point
+        # assignment leaves it with zero ASSIGNED members (every one of its
+        # points assigned to a neighbouring tree or held in REVIEW).  Such a
+        # ghost tree has no tree_id in ``tree_id_by_point`` (review/unassigned
+        # rows carry -1) and must not be published as a ``member_count=0`` tree
+        # record: skip it and compact the tree id space consistently.  For
+        # scenes without ghosts this filter is a no-op and the baseline is
+        # byte-identical.
+        formal_trees, positions_by_tree, tree_id_by_point = _drop_ghost_trees(
+            formal_trees, positions_by_tree, tree_id_by_point
+        )
         # Deterministic Tree ID ordering: primary apex original index then the
         # minimum assigned member original index, so ragged members are globally
         # strictly increasing across trees.
@@ -5196,6 +5207,43 @@ def _remap_tree_ids(
             result[position] = mapping[value]
     result.setflags(write=False)
     return result
+
+
+def _drop_ghost_trees(
+    formal_trees: list[tuple[int, list[V4ApexCandidateRecord], V4TreeHypothesisState]],
+    positions_by_tree: dict[int, list[int]],
+    tree_id_by_point: np.ndarray,
+) -> tuple[
+    list[tuple[int, list[V4ApexCandidateRecord], V4TreeHypothesisState]],
+    dict[int, list[int]],
+    np.ndarray,
+]:
+    """Drop formal trees with zero assigned members and compact the id space.
+
+    An active hypothesis that ends up with no ASSIGNED point must not be
+    published as a ``member_count=0`` tree record (the contract requires a
+    positive built-in int).  Review/unassigned rows already carry ``-1`` in
+    ``tree_id_by_point``, so compacting the ids never orphans a point.  When no
+    ghost exists this is a no-op and the baseline ordering is unchanged.
+    """
+    kept_tree_indices = [
+        index for index in range(len(formal_trees)) if positions_by_tree.get(index)
+    ]
+    if len(kept_tree_indices) == len(formal_trees):
+        return formal_trees, positions_by_tree, tree_id_by_point
+    compact_map = {old: new for new, old in enumerate(kept_tree_indices)}
+    formal_trees = [formal_trees[index] for index in kept_tree_indices]
+    positions_by_tree = {
+        compact_map[old_id]: positions
+        for old_id, positions in positions_by_tree.items()
+    }
+    compacted_ids = np.full(tree_id_by_point.shape, -1, dtype="<i4")
+    for position in range(tree_id_by_point.shape[0]):
+        value = int(tree_id_by_point[position])
+        if value >= 0:
+            compacted_ids[position] = compact_map[value]
+    compacted_ids.setflags(write=False)
+    return formal_trees, positions_by_tree, compacted_ids
 
 
 def _group_assigned_positions(

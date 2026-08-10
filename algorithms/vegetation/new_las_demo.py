@@ -70,6 +70,7 @@ from algorithms.vegetation.fast_weighted_preprocess import (
     build_weighted_fast_vegetation,
     build_weighted_working_set,
 )
+from algorithms.vegetation.full_res_clearance import build_full_resolution_v4_artifact
 from algorithms.vegetation.v4_tree_artifacts import load_v4_tree_segmentation_artifact
 from algorithms.vegetation.v4_tree_visualization import run_v4_tree_visualization, tree_color
 
@@ -333,6 +334,26 @@ def run_new_las_demo(
         root / "05_v4" / "v4_fullres_tree_preview.html",
     )
     _write_json(root / "05_v4" / "full_resolution_tree_summary.json", tree_summaries)
+    # Rebuild a valid V4 artifact whose points are the FULL-RESOLUTION raw tree
+    # members (through the coarse-to-fine back-map).  The existing exact
+    # point-to-segment Tree-Wire engine then consumes raw tree XYZ, never the
+    # 0.10 m representatives that V4 reasoned over.
+    fullres_v4_root = root / "05_v4" / "fullres_artifact"
+    if not loaded_v4.result.tree_records:
+        fullres_manifest = {
+            "tree_geometry_source": "FULL_RESOLUTION_RAW",
+            "full_resolution_tree_point_count": 0,
+            "tree_count": 0,
+        }
+    else:
+        fullres_v4_result, fullres_manifest = build_full_resolution_v4_artifact(
+            loaded_v4.result,
+            region,
+            region_tree,
+            working.source_bounds_min_xyz,
+            ground,
+            fullres_v4_root,
+        )
     timings["v4"] = time.perf_counter() - started
     _report(progress, 6, "单木分割与全分辨率回映射完成", True, timings["v4"])
 
@@ -340,7 +361,7 @@ def run_new_las_demo(
     started = time.perf_counter()
     clearance = run_tree_wire_clearance_route(
         wire,
-        v4_root,
+        fullres_v4_root,
         root / "06_clearance",
     )
     timings["clearance"] = time.perf_counter() - started
@@ -373,6 +394,7 @@ def run_new_las_demo(
         wire=wire,
         veg_route=veg_route,
         v4_result=loaded_v4.result,
+        fullres_manifest=fullres_manifest,
         tree_summaries=tree_summaries,
         clearance=clearance,
         timings={**timings, "total": time.perf_counter() - total_started},
@@ -1212,6 +1234,11 @@ def run_tree_wire_clearance_route(
             "因此禁止计算树线距离。"
         )
         return blocked_clearance_result(output_dir, reason=reason)
+    if not Path(v4_root).is_dir():
+        return blocked_clearance_result(
+            output_dir,
+            reason="场景未识别到任何单木（tree_count=0），无全分辨率树点可用于树线距离。",
+        )
     try:
         clearance = run_tree_wire_clearance(
             v4_root,
@@ -1324,6 +1351,8 @@ def render_summary_text(summary: dict[str, Any]) -> str:
         "V4_INPUT_REPRESENTATIVES": "V4 输入代表点",
         "TREE_COUNT": "识别单木",
         "ASSIGNED_FULLRES_POINTS": "已分配全分辨率点数",
+        "FULLRES_ASSIGNED_TREE_POINTS": "全分辨率已分配树点数",
+        "TREE_WIRE_TREE_POINT_SOURCE": "树线几何来源",
         "W1_POLYLINE_COUNT": "W1 导线数量",
         "W1_DISTANCE_READY_SEGMENTS": "W1 距离就绪线段",
         "TREE_WIRE_STATUS": "树线距离状态",
@@ -1398,6 +1427,7 @@ def _build_run_summary(
     wire: dict[str, Any],
     veg_route: dict[str, Any],
     v4_result: Any,
+    fullres_manifest: dict[str, Any],
     tree_summaries: dict[str, Any],
     clearance: dict[str, Any],
     timings: dict[str, float],
@@ -1439,6 +1469,19 @@ def _build_run_summary(
         "ASSIGNED_FULLRES_POINTS": tree_summaries["assigned_full_resolution_points"],
         "W1_POLYLINE_COUNT": wire.get("w1_polyline_count", 0),
         "W1_DISTANCE_READY_SEGMENTS": wire.get("w1_distance_ready_segments", 0),
+        # Full-resolution tree-wire geometry source: the exact clearance engine
+        # consumes the back-mapped raw tree XYZ, never the 0.10 m representatives.
+        "TREE_WIRE_TREE_POINT_SOURCE": fullres_manifest["tree_geometry_source"],
+        "V4_INPUT_FINE_REPRESENTATIVES": veg_route["fine_vegetation"].point_count,
+        "V4_ASSIGNED_FINE_REPRESENTATIVES": int(
+            np.count_nonzero(
+                np.asarray(v4_result.assignment_state_by_point, dtype=np.uint8)
+                == int(V4TreeAssignmentState.ASSIGNED)
+            )
+        ),
+        "FULLRES_ASSIGNED_TREE_POINTS": int(
+            fullres_manifest["full_resolution_tree_point_count"]
+        ),
         "TREE_WIRE_STATUS": clearance["TREE_WIRE_STATUS"],
         "TREE_WIRE_RESULT_STATUS": clearance.get(
             "TREE_WIRE_RESULT_STATUS", clearance["TREE_WIRE_STATUS"]
