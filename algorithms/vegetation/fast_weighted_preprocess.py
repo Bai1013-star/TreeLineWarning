@@ -458,6 +458,7 @@ def build_weighted_fast_vegetation(
         )
     base = geometry_candidate & positive_evidence
     v3_config = FastVegetationV3Config()
+    linear_component_grid: dict[str, Any] = {}
     rigid_linear, linear_component, linear_summaries = _rigid_linear_exclusion(
         xyz_local,
         base,
@@ -465,7 +466,9 @@ def build_weighted_fast_vegetation(
         linearity=features["linearity"],
         scattering=features["scattering"],
         config=v3_config,
+        component_grid_diagnostics=linear_component_grid,
     )
+    surface_component_grid: dict[str, Any] = {}
     rigid_surface, surface_component, surface_summaries = _rigid_surface_exclusion(
         xyz_local,
         base & ~rigid_linear,
@@ -473,6 +476,7 @@ def build_weighted_fast_vegetation(
         planarity=features["planarity"],
         scattering=features["scattering"],
         config=v3_config,
+        component_grid_diagnostics=surface_component_grid,
     )
     retained = base & ~rigid_linear & ~rigid_surface
     state = np.full(
@@ -598,6 +602,10 @@ def build_weighted_fast_vegetation(
             "final_vegetation_raw_weight": int(np.sum(clean_weight, dtype=np.int64)),
         },
         "feature_runtime_seconds": feature_elapsed,
+        "component_grid_memory": {
+            "rigid_linear": linear_component_grid,
+            "rigid_surface": surface_component_grid,
+        },
         "linear_components": linear_summaries,
         "surface_components": surface_summaries,
         "vegetation_input": vegetation.to_dict(),

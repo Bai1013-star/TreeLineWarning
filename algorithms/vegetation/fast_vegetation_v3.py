@@ -37,6 +37,14 @@ from algorithms.wires.reconstruct import load_wire_models
 
 FAST_V3_SCHEMA_VERSION = "fast-vegetation-v3-v1"
 FAST_V3_MARKER = "NON_CERTIFIED_FAST_VEGETATION_V3"
+_DENSE_COMPONENT_LABEL_MAX_BYTES = 256 * 1024 * 1024
+_NEIGHBOR_OFFSETS_26_HALF = tuple(
+    (dx, dy, dz)
+    for dx in range(-1, 2)
+    for dy in range(-1, 2)
+    for dz in range(-1, 2)
+    if (dx, dy, dz) > (0, 0, 0)
+)
 
 
 class FastV3DiagnosticState(IntEnum):
@@ -818,6 +826,7 @@ def _rigid_linear_exclusion(
     linearity: np.ndarray,
     scattering: np.ndarray,
     config: FastVegetationV3Config,
+    component_grid_diagnostics: dict[str, Any] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, list[dict[str, Any]]]:
     seed = (
         candidate
@@ -825,7 +834,12 @@ def _rigid_linear_exclusion(
         & (linearity >= config.rigid_linear_min_linearity)
         & (scattering <= config.rigid_linear_max_scattering)
     )
-    labels, _cell, _origin = _grid_component_labels(xyz, seed, config.rigid_linear_cell_m)
+    labels, _cell, _origin = _grid_component_labels(
+        xyz,
+        seed,
+        config.rigid_linear_cell_m,
+        diagnostics=component_grid_diagnostics,
+    )
     excluded = np.zeros(len(xyz), dtype=bool)
     component_id = np.full(len(xyz), -1, dtype=np.int32)
     summaries: list[dict[str, Any]] = []
@@ -864,13 +878,19 @@ def _rigid_surface_exclusion(
     planarity: np.ndarray,
     scattering: np.ndarray,
     config: FastVegetationV3Config,
+    component_grid_diagnostics: dict[str, Any] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, list[dict[str, Any]]]:
     seed = (
         candidate
         & (planarity >= config.rigid_surface_min_planarity)
         & (scattering <= config.rigid_surface_max_scattering)
     )
-    labels, _cell, _origin = _grid_component_labels(xyz, seed, config.rigid_surface_cell_m)
+    labels, _cell, _origin = _grid_component_labels(
+        xyz,
+        seed,
+        config.rigid_surface_cell_m,
+        diagnostics=component_grid_diagnostics,
+    )
     excluded = np.zeros(len(xyz), dtype=bool)
     component_id = np.full(len(xyz), -1, dtype=np.int32)
     summaries: list[dict[str, Any]] = []
@@ -937,23 +957,277 @@ def _rigid_component_summary(
 
 
 def _grid_component_labels(
-    xyz: np.ndarray, seed: np.ndarray, cell_size_m: float
+    xyz: np.ndarray,
+    seed: np.ndarray,
+    cell_size_m: float,
+    *,
+    diagnostics: dict[str, Any] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Label occupied voxels with sparse 26-connected components.
+
+    The previous implementation materialized the full scene bounding box as a
+    boolean array and then asked ``scipy.ndimage.label`` for an equally sized
+    integer label array.  This preserves the same ``generate_binary_structure(3,
+    3)`` connectivity while storing only occupied cells and their local sparse
+    graph.  Component IDs are canonicalized by the first C-order voxel, exactly
+    matching the historical dense-label ordering.
+    """
+
+    if len(xyz) == 0:
+        return (
+            np.empty(0, dtype=np.int32),
+            np.empty((0, 3), dtype=np.int32),
+            np.zeros(3, dtype=np.float64),
+        )
+    origin = np.min(xyz, axis=0)
+    if seed.shape != (len(xyz),) or not np.any(seed):
+        _record_component_grid_diagnostics(
+            diagnostics,
+            cell_size_m=cell_size_m,
+            shape=None,
+            seed_point_count=0,
+            occupied_cell_count=0,
+            sparse_edge_count=0,
+            sparse_estimated_working_bytes=0,
+        )
+        return np.zeros(len(xyz), dtype=np.int32), np.empty((0, 3), dtype=np.int32), origin
+
+    cell = np.floor((xyz - origin) / cell_size_m).astype(np.int32)
+    shape = np.max(cell, axis=0) + 1
+    occupied, inverse = np.unique(cell[seed], axis=0, return_inverse=True)
+    occupied_labels, sparse_edge_count = _sparse_26_component_labels(occupied, shape)
+    labels = np.zeros(len(xyz), dtype=np.int32)
+    labels[seed] = occupied_labels[inverse]
+    sparse_estimated_working_bytes = _estimate_sparse_component_working_bytes(
+        point_count=len(xyz),
+        occupied_cells=occupied,
+        inverse=inverse,
+        sparse_edge_count=sparse_edge_count,
+    )
+    _record_component_grid_diagnostics(
+        diagnostics,
+        cell_size_m=cell_size_m,
+        shape=shape,
+        seed_point_count=int(np.count_nonzero(seed)),
+        occupied_cell_count=len(occupied),
+        sparse_edge_count=sparse_edge_count,
+        sparse_estimated_working_bytes=sparse_estimated_working_bytes,
+    )
+    return labels, cell, origin
+
+
+def _dense_grid_component_labels_reference(
+    xyz: np.ndarray,
+    seed: np.ndarray,
+    cell_size_m: float,
+    *,
+    diagnostics: dict[str, Any] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Guarded legacy reference used only by small equivalence tests.
+
+    It must never be used in production: the guard rejects any scene whose
+    dense integer label grid would exceed the conservative memory budget.
+    """
+
+    del diagnostics
     try:
         from scipy.ndimage import generate_binary_structure, label
     except ImportError as exc:  # pragma: no cover - environment-specific dependency
         raise FastResearchError("FAST_V3_SCIPY_UNAVAILABLE") from exc
-    if seed.shape != (len(xyz),) or not np.any(seed):
-        return np.zeros(len(xyz), dtype=np.int32), np.empty((0, 3), dtype=np.int32), xyz.min(axis=0)
+    if len(xyz) == 0:
+        return (
+            np.empty(0, dtype=np.int32),
+            np.empty((0, 3), dtype=np.int32),
+            np.zeros(3, dtype=np.float64),
+        )
     origin = np.min(xyz, axis=0)
+    if seed.shape != (len(xyz),) or not np.any(seed):
+        return np.zeros(len(xyz), dtype=np.int32), np.empty((0, 3), dtype=np.int32), origin
     cell = np.floor((xyz - origin) / cell_size_m).astype(np.int32)
     shape = np.max(cell, axis=0) + 1
+    _require_dense_component_grid_safe(shape)
     occupied = np.zeros(tuple(int(value) for value in shape), dtype=bool)
     occupied[tuple(cell[seed].T)] = True
     labels_grid, _count = label(occupied, structure=generate_binary_structure(3, 3))
     labels = np.zeros(len(xyz), dtype=np.int32)
     labels[seed] = labels_grid[tuple(cell[seed].T)]
     return labels, cell, origin
+
+
+def _sparse_26_component_labels(
+    occupied: np.ndarray, shape: np.ndarray
+) -> tuple[np.ndarray, int]:
+    """Return dense-compatible labels over lexicographically sorted occupied cells."""
+
+    try:
+        from scipy.sparse import coo_matrix
+        from scipy.sparse.csgraph import connected_components
+    except ImportError as exc:  # pragma: no cover - environment-specific dependency
+        raise FastResearchError("FAST_V3_SCIPY_UNAVAILABLE") from exc
+    count = len(occupied)
+    if count == 0:
+        return np.empty(0, dtype=np.int32), 0
+    keys = _pack_sparse_cell_keys(occupied, shape)
+    if keys is None:
+        return _sparse_26_component_labels_dict(occupied)
+
+    edge_rows: list[np.ndarray] = []
+    edge_columns: list[np.ndarray] = []
+    shape64 = np.asarray(shape, dtype=np.int64)
+    occupied64 = np.asarray(occupied, dtype=np.int64)
+    for offset in _NEIGHBOR_OFFSETS_26_HALF:
+        target = occupied64 + np.asarray(offset, dtype=np.int64)
+        valid = np.all((target >= 0) & (target < shape64), axis=1)
+        if not np.any(valid):
+            continue
+        target_keys = _pack_sparse_cell_keys(target[valid], shape)
+        if target_keys is None:  # pragma: no cover - protected by the source-key check
+            return _sparse_26_component_labels_dict(occupied)
+        positions = np.searchsorted(keys, target_keys)
+        found = positions < count
+        found[found] = keys[positions[found]] == target_keys[found]
+        if not np.any(found):
+            continue
+        source_rows = np.flatnonzero(valid)[found].astype(np.int32, copy=False)
+        edge_rows.append(source_rows)
+        edge_columns.append(positions[found].astype(np.int32, copy=False))
+    if edge_rows:
+        row = np.concatenate(edge_rows)
+        column = np.concatenate(edge_columns)
+        graph = coo_matrix(
+            (np.ones(len(row), dtype=np.uint8), (row, column)),
+            shape=(count, count),
+            dtype=np.uint8,
+        ).tocsr()
+        sparse_edge_count = int(len(row))
+    else:
+        graph = coo_matrix((count, count), dtype=np.uint8).tocsr()
+        sparse_edge_count = 0
+    component_count, component = connected_components(graph, directed=False, return_labels=True)
+    first_cell_by_component = np.full(component_count, count, dtype=np.int64)
+    np.minimum.at(first_cell_by_component, component, np.arange(count, dtype=np.int64))
+    component_order = np.argsort(first_cell_by_component, kind="stable")
+    dense_compatible = np.empty(component_count, dtype=np.int32)
+    dense_compatible[component_order] = np.arange(1, component_count + 1, dtype=np.int32)
+    return dense_compatible[component], sparse_edge_count
+
+
+def _sparse_26_component_labels_dict(occupied: np.ndarray) -> tuple[np.ndarray, int]:
+    """Overflow-safe sparse fallback; each lookup is one of 26 voxel neighbours."""
+
+    lookup = {tuple(int(value) for value in cell): index for index, cell in enumerate(occupied)}
+    labels = np.zeros(len(occupied), dtype=np.int32)
+    component_id = 0
+    edge_count = 0
+    all_offsets = tuple(
+        (dx, dy, dz)
+        for dx in range(-1, 2)
+        for dy in range(-1, 2)
+        for dz in range(-1, 2)
+        if (dx, dy, dz) != (0, 0, 0)
+    )
+    for start, _cell in enumerate(occupied):
+        if labels[start]:
+            continue
+        component_id += 1
+        labels[start] = component_id
+        stack = [start]
+        while stack:
+            current = stack.pop()
+            x, y, z = (int(value) for value in occupied[current])
+            for dx, dy, dz in all_offsets:
+                neighbor = lookup.get((x + dx, y + dy, z + dz))
+                if neighbor is None:
+                    continue
+                if current < neighbor:
+                    edge_count += 1
+                if labels[neighbor] == 0:
+                    labels[neighbor] = component_id
+                    stack.append(neighbor)
+    return labels, edge_count
+
+
+def _pack_sparse_cell_keys(cells: np.ndarray, shape: np.ndarray) -> np.ndarray | None:
+    """Pack non-negative relative coordinates without relying on global allocation."""
+
+    sx, sy, sz = (int(value) for value in shape)
+    maximum = np.iinfo(np.int64).max
+    if sy <= 0 or sz <= 0 or sx > maximum // sy // sz:
+        return None
+    values = np.asarray(cells, dtype=np.int64)
+    return (values[:, 0] * sy + values[:, 1]) * sz + values[:, 2]
+
+
+def _projected_dense_component_label_bytes(shape: np.ndarray) -> int:
+    dimensions = tuple(int(value) for value in shape)
+    if not dimensions or any(value <= 0 for value in dimensions):
+        return 0
+    return math.prod(dimensions) * np.dtype(np.intp).itemsize
+
+
+def _require_dense_component_grid_safe(shape: np.ndarray) -> int:
+    projected = _projected_dense_component_label_bytes(shape)
+    if projected > _DENSE_COMPONENT_LABEL_MAX_BYTES:
+        raise FastResearchError(
+            "FAST_V3_DENSE_COMPONENT_GRID_FORBIDDEN: "
+            f"projected_label_bytes={projected} limit={_DENSE_COMPONENT_LABEL_MAX_BYTES}"
+        )
+    return projected
+
+
+def _estimate_sparse_component_working_bytes(
+    *,
+    point_count: int,
+    occupied_cells: np.ndarray,
+    inverse: np.ndarray,
+    sparse_edge_count: int,
+) -> int:
+    """Conservative O(occupied) working-memory estimate for diagnostics only."""
+
+    occupied_count = len(occupied_cells)
+    coordinate_bytes = int(occupied_cells.nbytes) + point_count * 3 * np.dtype(np.int32).itemsize
+    label_bytes = (
+        point_count * np.dtype(np.int32).itemsize
+        + occupied_count * 2 * np.dtype(np.int32).itemsize
+    )
+    key_bytes = occupied_count * np.dtype(np.int64).itemsize
+    inverse_bytes = int(inverse.nbytes)
+    sparse_graph_bytes = sparse_edge_count * 2 * np.dtype(np.int32).itemsize * 3
+    return coordinate_bytes + label_bytes + key_bytes + inverse_bytes + sparse_graph_bytes
+
+
+def _record_component_grid_diagnostics(
+    diagnostics: dict[str, Any] | None,
+    *,
+    cell_size_m: float,
+    shape: np.ndarray | None,
+    seed_point_count: int,
+    occupied_cell_count: int,
+    sparse_edge_count: int,
+    sparse_estimated_working_bytes: int,
+) -> None:
+    if diagnostics is None:
+        return
+    dense_shape = None if shape is None else [int(value) for value in shape]
+    dense_label_bytes = 0 if shape is None else _projected_dense_component_label_bytes(shape)
+    diagnostics.update(
+        {
+            "representation": "SPARSE_OCCUPIED_VOXELS_26_CONNECTED",
+            "connectivity": "26_CONNECTED",
+            "cell_size_m": float(cell_size_m),
+            "dense_shape_reference_only": dense_shape,
+            "dense_cell_count_reference_only": (
+                0 if shape is None else int(math.prod(int(value) for value in shape))
+            ),
+            "dense_label_bytes_reference_only": dense_label_bytes,
+            "dense_label_gib_reference_only": dense_label_bytes / 1024**3,
+            "seed_point_count": int(seed_point_count),
+            "occupied_cell_count": int(occupied_cell_count),
+            "sparse_edge_count": int(sparse_edge_count),
+            "sparse_estimated_working_bytes": int(sparse_estimated_working_bytes),
+            "sparse_estimated_working_mib": sparse_estimated_working_bytes / 1024**2,
+        }
+    )
 
 
 def _diagnostic_states(
