@@ -1,0 +1,262 @@
+"""Per-span tree pipeline driver (vegetation region -> full-resolution trees).
+
+Given one span, a scene-wide recovered vegetation ``RawRegion`` and the coarse
+ground representatives, this driver streams the span halo subset, builds
+0.10 m fine vegetation representatives, estimates HAG, runs the CHM /
+adaptive-tree-top / marker-watershed algorithm, back-maps crown ids to the
+full-resolution raw source rows and persists the per-span artifacts used for
+review, reconciliation and clearance.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from core.config.fast_baseline import FastBaselineConfig
+
+from algorithms.poles.evidence import PoleEvidenceError
+from algorithms.poles.topology import SpanRecord
+from algorithms.spans.region import subset_raw_region
+from algorithms.spans.tree import (
+    assign_span_tree_membership,
+    build_span_chm,
+    build_span_tree_result,
+    detect_span_tree_tops,
+    segment_span_crowns,
+    smooth_span_chm,
+)
+from algorithms.vegetation.coarse_to_fine import (
+    build_fine_representatives,
+    estimate_fine_vegetation_hag,
+)
+
+SPAN_TREE_RUNNER_SCHEMA = "fast-baseline-span-tree-runner-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class SpanTreeOutcome:
+    """Everything reconciliation and clearance need from one span's trees."""
+
+    span: SpanRecord
+    tree_records: tuple[dict[str, Any], ...]
+    raw_original_index: np.ndarray  # int64, per assigned raw row
+    raw_xyz_local_m: np.ndarray  # float64 (N, 3) scene-local
+    raw_tree_id: np.ndarray  # int32, per assigned raw row (per-span ids)
+    in_core: np.ndarray  # bool, per assigned raw row
+    raw_local_maxima: int
+    accepted_tree_tops: int
+    assigned_raw_point_count: int
+    artifact_root: Path
+
+    def to_manifest(self) -> dict[str, Any]:
+        return {
+            "schema": SPAN_TREE_RUNNER_SCHEMA,
+            "span_name": self.span.span_name,
+            "span_id": self.span.span_id,
+            "line_id": self.span.line_id,
+            "trees": [dict(record) for record in self.tree_records],
+            "raw_local_maxima": self.raw_local_maxima,
+            "accepted_tree_tops": self.accepted_tree_tops,
+            "assigned_raw_point_count": self.assigned_raw_point_count,
+        }
+
+
+def _row_in_span_core(
+    xyz_local_m: np.ndarray, span: SpanRecord
+) -> np.ndarray:
+    core_min = np.asarray(span.core_bounds_min_xyz, dtype=np.float64)
+    core_max = np.asarray(span.core_bounds_max_xyz, dtype=np.float64)
+    return np.all(xyz_local_m >= core_min, axis=1) & np.all(
+        xyz_local_m <= core_max, axis=1
+    )
+
+
+def run_span_tree_pipeline(
+    span: SpanRecord,
+    vegetation_region: Any,
+    coarse_ground_xyz_absolute: np.ndarray,
+    config: FastBaselineConfig,
+    *,
+    output_dir: Any,
+    origin_xyz: tuple[float, float, float],
+) -> SpanTreeOutcome:
+    """Run the span-local tree pipeline and persist per-span artifacts.
+
+    *vegetation_region* is the scene-wide recovered vegetation ``RawRegion``
+    (memmap).  *origin_xyz* is the shared scene-local origin.
+    """
+
+    output_root = Path(output_dir)
+    output_root.mkdir(parents=True, exist_ok=True)
+    started = time.perf_counter()
+
+    subset = subset_raw_region(
+        vegetation_region,
+        span.halo_bounds_min_xyz,
+        span.halo_bounds_max_xyz,
+        output_root / "recovered_region",
+    )
+    if subset.count == 0:
+        empty = SpanTreeOutcome(
+            span=span,
+            tree_records=(),
+            raw_original_index=np.empty(0, dtype=np.int64),
+            raw_xyz_local_m=np.empty((0, 3), dtype=np.float64),
+            raw_tree_id=np.empty(0, dtype=np.int32),
+            in_core=np.empty(0, dtype=bool),
+            raw_local_maxima=0,
+            accepted_tree_tops=0,
+            assigned_raw_point_count=0,
+            artifact_root=output_root,
+        )
+        _write_json(
+            output_root / "span_tree_manifest.json",
+            {**empty.to_manifest(), "runtime_seconds": time.perf_counter() - started},
+        )
+        return empty
+    fine_path = output_root / "fine_representatives.npz"
+    fine_arrays = build_fine_representatives(
+        subset, fine_path, voxel_size_m=config.vegetation_fine_voxel_size_m
+    )
+    fine_xyz = fine_arrays["xyz_local_m"].astype(np.float64, copy=False)
+    fine_original = fine_arrays["original_index"].astype(np.int64, copy=False)
+    origin = np.asarray(origin_xyz, dtype=np.float64)
+    # ``estimate_fine_vegetation_hag`` expects scene-LOCAL coordinates and adds
+    # the shared origin internally (same contract as the existing callers).
+    fine_hag = estimate_fine_vegetation_hag(
+        fine_xyz,
+        tuple(float(value) for value in origin),
+        coarse_ground_xyz_absolute,
+    )
+    chm = build_span_chm(fine_xyz, fine_hag, config)
+    smoothed = smooth_span_chm(chm, config)
+    tops = detect_span_tree_tops(chm, smoothed, config)
+    crowns = segment_span_crowns(chm, smoothed, tops, config)
+    tree_id_by_fine = assign_span_tree_membership(
+        fine_xyz, fine_hag, chm, smoothed, crowns, config
+    )
+    result = build_span_tree_result(
+        subset,
+        fine_path,
+        fine_original,
+        tree_id_by_fine,
+        tops,
+        crowns,
+        chm,
+        config,
+    )
+    raw_tree = np.asarray(result["raw_tree_id"], dtype=np.int32)
+    raw_xyz_all = subset.xyz().astype(np.float64, copy=False)
+    assigned_rows = np.flatnonzero(raw_tree >= 0)
+    in_core = _row_in_span_core(raw_xyz_all, span)
+    assigned_original = np.asarray(subset.original_index(), dtype=np.int64)[assigned_rows]
+    assigned_xyz = raw_xyz_all[assigned_rows]
+    assigned_tree = raw_tree[assigned_rows]
+    assigned_in_core = in_core[assigned_rows]
+
+    # Persist full-resolution tree members (scene-local XYZ + source rows).
+    _write_npz(
+        output_root / "tree_members.npz",
+        original_index=assigned_original,
+        xyz_local_m=assigned_xyz,
+        tree_id=assigned_tree,
+        in_core=assigned_in_core,
+    )
+    _write_npz(
+        output_root / "tree_fine.npz",
+        fine_xyz_local_m=fine_arrays["xyz_local_m"],
+        fine_original_index=fine_original,
+        fine_hag_m=fine_hag,
+        fine_tree_id=tree_id_by_fine,
+    )
+    # CHM review arrays.
+    _write_npz(
+        output_root / "chm_review.npz",
+        chm_height_m=chm.height_m,
+        chm_smoothed_m=smoothed,
+        chm_occupied=chm.occupied,
+        chm_origin_xy=np.asarray(chm.origin_xy, dtype=np.float64),
+        chm_cell_size_m=np.asarray(chm.cell_size_m, dtype=np.float64),
+        crown_label= crowns.region_label_by_cell,
+        accepted_tops_xy=np.asarray(
+            [list(top.xy_local_m) for top in tops.accepted], dtype=np.float64
+        )
+        if tops.accepted
+        else np.empty((0, 2), dtype=np.float64),
+    )
+    outcome = SpanTreeOutcome(
+        span=span,
+        tree_records=tuple(result["trees"]),
+        raw_original_index=assigned_original,
+        raw_xyz_local_m=assigned_xyz,
+        raw_tree_id=assigned_tree,
+        in_core=assigned_in_core,
+        raw_local_maxima=tops.raw_local_maxima_count,
+        accepted_tree_tops=tops.accepted_count,
+        assigned_raw_point_count=int(len(assigned_rows)),
+        artifact_root=output_root,
+    )
+    manifest = outcome.to_manifest()
+    manifest["runtime_seconds"] = time.perf_counter() - started
+    _write_json(output_root / "span_tree_manifest.json", manifest)
+    return outcome
+
+
+def load_span_tree_outcome(
+    span: SpanRecord, artifact_root: Any
+) -> SpanTreeOutcome:
+    """Reload a persisted per-span tree outcome from its artifact directory."""
+
+    root = Path(artifact_root)
+    members_path = root / "tree_members.npz"
+    manifest_path = root / "span_tree_manifest.json"
+    if not members_path.is_file() or not manifest_path.is_file():
+        raise PoleEvidenceError("SPAN_TREE_ARTIFACT_MISSING")
+    with np.load(members_path, allow_pickle=False) as stream:
+        original_index = np.asarray(stream["original_index"], dtype=np.int64)
+        xyz_local_m = np.asarray(stream["xyz_local_m"], dtype=np.float64)
+        tree_id = np.asarray(stream["tree_id"], dtype=np.int32)
+        in_core = np.asarray(stream["in_core"], dtype=bool)
+    manifest = json.loads(manifest_path.read_text("utf-8"))
+    return SpanTreeOutcome(
+        span=span,
+        tree_records=tuple(manifest["trees"]),
+        raw_original_index=original_index,
+        raw_xyz_local_m=xyz_local_m,
+        raw_tree_id=tree_id,
+        in_core=in_core,
+        raw_local_maxima=int(manifest.get("raw_local_maxima", 0)),
+        accepted_tree_tops=int(manifest.get("accepted_tree_tops", 0)),
+        assigned_raw_point_count=int(len(original_index)),
+        artifact_root=root,
+    )
+
+
+def _write_npz(path: Any, **arrays: np.ndarray) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp.npz")
+    np.savez(temporary, **arrays)
+    temporary.replace(path)
+
+
+def _write_json(path: Any, payload: dict[str, Any]) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), "utf-8"
+    )
+    temporary.replace(path)
+
+
+__all__ = [
+    "SPAN_TREE_RUNNER_SCHEMA",
+    "SpanTreeOutcome",
+    "run_span_tree_pipeline",
+]
