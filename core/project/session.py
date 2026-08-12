@@ -38,6 +38,9 @@ from core.project.locking import (
 from core.project.persistence import LoadedProject, PersistenceError
 
 
+_WRITABLE_SESSION_TOKEN = object()
+
+
 class ProjectSessionError(RuntimeError):
     """Base error for P2B project-session lifecycle failures."""
 
@@ -194,9 +197,20 @@ class ProjectSession:
         mode: ProjectSessionMode,
         writer_lock: ProjectWriterLock | None,
         application_version: str,
+        _authority_token: object | None = None,
     ) -> None:
         if (mode is ProjectSessionMode.WRITABLE) != (writer_lock is not None):
             raise ValueError("writable sessions must own exactly one writer lock")
+        if writer_lock is not None and type(writer_lock) is not ProjectWriterLock:
+            raise ValueError("writer_lock must be an actual ProjectWriterLock")
+        if mode is ProjectSessionMode.WRITABLE and _authority_token is not _WRITABLE_SESSION_TOKEN:
+            raise ValueError(
+                "writable sessions must be issued by the supported lock/open path"
+            )
+        if mode is ProjectSessionMode.READ_ONLY and _authority_token is not None:
+            raise ValueError("read-only sessions cannot carry writable authority")
+        if writer_lock is not None:
+            writer_lock.assert_live_writer_authority(loaded.project_root)
         self._loaded = loaded
         self._mode = mode
         self._writer_lock = writer_lock
@@ -387,6 +401,79 @@ class ProjectSession:
 class WritableProjectSession(ProjectSession):
     """Project session holding one OS writer lock for its full lifetime."""
 
+    def _begin_registry_mutation(self) -> LoadedProject:
+        """Reload the authoritative generation while retaining this writer lock."""
+
+        self._require_open()
+        if type(self._writer_lock) is not ProjectWriterLock:
+            raise ProjectSessionError("writable writer authority is not active")
+        try:
+            self._writer_lock.assert_live_writer_authority(self._loaded.project_root)
+        except Exception as exc:
+            raise ProjectSessionError("writable writer authority is not active") from exc
+        # A locked mutation always starts from the current pointer.  This also
+        # closes the stale-snapshot race for callers that retained this object
+        # while another internal publisher advanced the project.
+        loaded = persistence.open_project(self._writer_lock.project_root)
+        self._accept_published_generation(loaded)
+        return loaded
+
+    def _accept_published_generation(self, loaded: LoadedProject) -> None:
+        self._require_open()
+        if type(self._writer_lock) is not ProjectWriterLock:
+            raise ProjectSessionError("cannot refresh a session without writer authority")
+        try:
+            self._writer_lock.assert_live_writer_authority(loaded.project_root)
+        except Exception as exc:
+            raise ProjectSessionError("cannot refresh a session without writer authority") from exc
+        if loaded.project_root != self._writer_lock.project_root:
+            raise ProjectSessionError("published generation belongs to another project root")
+        self._loaded = loaded
+        self._strong_cache = None
+        self._source_availability, self._last_source_signature = _fast_source_availability(loaded)
+
+    def _revalidate_authoritative_state(self) -> LoadedProject:
+        """Reopen the active pointer under the still-held writer lock."""
+
+        return self._begin_registry_mutation()
+
+    def reserve_tower_id(self) -> str:
+        from core.project.registry import reserve_tower_id
+
+        return reserve_tower_id(self)
+
+    def create_tower(self, candidate, *, reservation: str | None = None):
+        from core.project.registry import create_tower
+
+        return create_tower(self, candidate, reservation=reservation)
+
+    def revise_tower(self, tower_id: str, candidate):
+        from core.project.registry import revise_tower
+
+        return revise_tower(self, tower_id, candidate)
+
+    def archive_tower(self, tower_id: str, *, cascade_dependent_spans: bool = False):
+        from core.project.registry import archive_tower
+
+        return archive_tower(
+            self, tower_id, cascade_dependent_spans=cascade_dependent_spans
+        )
+
+    def reserve_span_id(self) -> str:
+        from core.project.registry import reserve_span_id
+
+        return reserve_span_id(self)
+
+    def create_span(self, candidate, *, reservation: str | None = None):
+        from core.project.registry import create_span
+
+        return create_span(self, candidate, reservation=reservation)
+
+    def archive_span(self, span_id: str):
+        from core.project.registry import archive_span
+
+        return archive_span(self, span_id)
+
 
 class ReadOnlyProjectSession(ProjectSession):
     """Immutable project snapshot that never acquires writer ownership."""
@@ -404,6 +491,7 @@ def _build_writable_session(
             mode=ProjectSessionMode.WRITABLE,
             writer_lock=writer_lock,
             application_version=application_version,
+            _authority_token=_WRITABLE_SESSION_TOKEN,
         )
     except BaseException:
         try:

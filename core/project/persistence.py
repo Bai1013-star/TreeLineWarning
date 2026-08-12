@@ -72,6 +72,8 @@ from core.contracts.project import (
     ViewerCacheState,
     ViewerReference,
     _safe_relative_posix_path,
+    span_display_id_for_sequence,
+    tower_display_id_for_sequence,
 )
 
 
@@ -85,6 +87,8 @@ SPAN_REGISTRY_SCHEMA_VERSION = "treeline-span-registry-v1"
 RUN_INDEX_SCHEMA_VERSION = "treeline-run-index-v1"
 
 _GENERATION_RE = re.compile(r"g-[0-9]{16}-[a-z0-9]{8}\Z")
+_TOWER_ID_RE = re.compile(r"T([0-9]{3,})\Z")
+_SPAN_ID_RE = re.compile(r"S([0-9]{3,})\Z")
 _STAGING_PREFIX = ".staging-"
 _GENERATION_FILES = (
     "project.json",
@@ -1045,35 +1049,127 @@ class SourceReferenceSidecar:
 
 
 @dataclass(frozen=True, slots=True)
+class TowerRegistryEntry:
+    """One logical tower identity with immutable revision history."""
+
+    tower_id: str
+    current_revision: int
+    revisions: tuple[TowerContract, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.tower_id) is not str:
+            raise PersistenceError("tower registry entry tower_id must be a string")
+        matched = _TOWER_ID_RE.fullmatch(self.tower_id)
+        if matched is None or tower_display_id_for_sequence(int(matched.group(1))) != self.tower_id:
+            raise PersistenceError("tower registry entry tower_id is not canonical")
+        revisions = tuple(self.revisions)
+        if not revisions or any(type(item) is not TowerContract for item in revisions):
+            raise PersistenceError("tower registry entry revisions must contain TowerContract values")
+        if any(item.tower_id != self.tower_id for item in revisions):
+            raise PersistenceError("tower registry entry revision tower_id does not match entry")
+        revision_numbers = tuple(item.revision for item in revisions)
+        if revision_numbers != tuple(sorted(revision_numbers)):
+            raise PersistenceError("tower revisions must be in ascending order")
+        if len(set(revision_numbers)) != len(revision_numbers):
+            raise PersistenceError("tower revisions must be unique")
+        if type(self.current_revision) is not int or self.current_revision <= 0:
+            raise PersistenceError("tower current_revision must be positive")
+        expected_revisions = tuple(range(1, self.current_revision + 1))
+        if revision_numbers != expected_revisions:
+            raise PersistenceError(
+                "tower revisions must be the complete contiguous history 1..current_revision"
+            )
+        object.__setattr__(self, "revisions", revisions)
+
+    @property
+    def current(self) -> TowerContract:
+        return self.revisions[-1]
+
+    def revision(self, revision: int) -> TowerContract:
+        for item in self.revisions:
+            if item.revision == revision:
+                return item
+        raise KeyError(f"unknown tower revision: {self.tower_id} r{revision}")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "tower_id": self.tower_id,
+            "current_revision": self.current_revision,
+            "revisions": [item.to_dict() for item in self.revisions],
+        }
+
+
+def _freeze_registry_reservations(
+    value: Sequence[Any], name: str, *, prefix: str
+) -> tuple[Mapping[str, Any], ...]:
+    reservations: list[Mapping[str, Any]] = []
+    seen: set[int] = set()
+    for item in _sequence(value, name):
+        data = _object(item, f"{name}[]", {"sequence", "display_id"})
+        sequence = data["sequence"]
+        display_id = data["display_id"]
+        if type(sequence) is not int or sequence <= 0:
+            raise PersistenceError(f"{name} sequence must be a positive integer")
+        if type(display_id) is not str or display_id != f"{prefix}{sequence:03d}":
+            raise PersistenceError(f"{name} display_id does not match sequence")
+        if sequence in seen:
+            raise PersistenceError(f"{name} contains duplicate sequences")
+        seen.add(sequence)
+        reservations.append(MappingProxyType({"sequence": sequence, "display_id": display_id}))
+    reservations.sort(key=lambda item: item["sequence"])
+    return tuple(reservations)
+
+
+@dataclass(frozen=True, slots=True)
 class TowerRegistry:
-    """P2A's strictly empty tower registry envelope."""
+    """Immutable Tower registry envelope with identity reservations and history."""
 
     schema_version: str
     generation_id: str
     project_id: str
     reserved_sequences: tuple[Mapping[str, Any], ...] = ()
-    records: tuple[TowerContract, ...] = ()
+    records: tuple[TowerRegistryEntry, ...] = ()
 
     def __post_init__(self) -> None:
         if self.schema_version != TOWER_REGISTRY_SCHEMA_VERSION:
             raise PersistenceError("unsupported tower-registry schema version")
         _validate_generation_id(self.generation_id)
-        if self.reserved_sequences or self.records:
-            raise PersistenceError("P2A tower registry must be empty")
+        object.__setattr__(
+            self,
+            "reserved_sequences",
+            _freeze_registry_reservations(
+                self.reserved_sequences, "tower reserved_sequences", prefix="T"
+            ),
+        )
+        records = tuple(self.records)
+        if any(type(item) is not TowerRegistryEntry for item in records):
+            raise PersistenceError("tower registry records must contain TowerRegistryEntry values")
+        tower_ids = tuple(item.tower_id for item in records)
+        if len(set(tower_ids)) != len(tower_ids):
+            raise PersistenceError("tower registry contains duplicate tower identities")
+        if tower_ids != tuple(sorted(tower_ids, key=lambda value: int(value[1:]))):
+            raise PersistenceError("tower registry records must be in sequence order")
+        object.__setattr__(self, "records", records)
+
+    def get(self, tower_id: str) -> TowerRegistryEntry:
+        for item in self.records:
+            if item.tower_id == tower_id:
+                return item
+        raise KeyError(tower_id)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
             "generation_id": self.generation_id,
             "project_id": self.project_id,
-            "reserved_sequences": [],
-            "records": [],
+            "reserved_sequences": [_thaw_json(item) for item in self.reserved_sequences],
+            "records": [item.to_dict() for item in self.records],
         }
 
 
 @dataclass(frozen=True, slots=True)
 class SpanRegistry:
-    """P2A's strictly empty span registry envelope."""
+    """Immutable one-record-per-span topology registry."""
 
     schema_version: str
     generation_id: str
@@ -1085,22 +1181,40 @@ class SpanRegistry:
         if self.schema_version != SPAN_REGISTRY_SCHEMA_VERSION:
             raise PersistenceError("unsupported span-registry schema version")
         _validate_generation_id(self.generation_id)
-        if self.reserved_sequences or self.records:
-            raise PersistenceError("P2A span registry must be empty")
+        object.__setattr__(
+            self,
+            "reserved_sequences",
+            _freeze_registry_reservations(
+                self.reserved_sequences, "span reserved_sequences", prefix="S"
+            ),
+        )
+        records = tuple(self.records)
+        if any(type(item) is not SpanContract for item in records):
+            raise PersistenceError("span registry records must contain SpanContract values")
+        span_ids = tuple(item.span_id for item in records)
+        for span_id in span_ids:
+            matched = _SPAN_ID_RE.fullmatch(span_id)
+            if matched is None or span_display_id_for_sequence(int(matched.group(1))) != span_id:
+                raise PersistenceError("span registry contains a non-canonical span ID")
+        if len(set(span_ids)) != len(span_ids):
+            raise PersistenceError("span registry contains duplicate span identities")
+        if span_ids != tuple(sorted(span_ids, key=lambda value: int(value[1:]))):
+            raise PersistenceError("span registry records must be in sequence order")
+        object.__setattr__(self, "records", records)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
             "generation_id": self.generation_id,
             "project_id": self.project_id,
-            "reserved_sequences": [],
-            "records": [],
+            "reserved_sequences": [_thaw_json(item) for item in self.reserved_sequences],
+            "records": [item.to_dict() for item in self.records],
         }
 
 
 @dataclass(frozen=True, slots=True)
 class RunIndex:
-    """P2A's strictly empty run-index envelope."""
+    """Immutable run-index envelope preserved byte-for-byte across registry mutations."""
 
     schema_version: str
     generation_id: str
@@ -1111,15 +1225,18 @@ class RunIndex:
         if self.schema_version != RUN_INDEX_SCHEMA_VERSION:
             raise PersistenceError("unsupported run-index schema version")
         _validate_generation_id(self.generation_id)
-        if self.entries:
-            raise PersistenceError("P2A run index must be empty")
+        entries = tuple(
+            _freeze_json(_json_mapping(item, "run-index entry"))
+            for item in self.entries
+        )
+        object.__setattr__(self, "entries", entries)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
             "generation_id": self.generation_id,
             "project_id": self.project_id,
-            "entries": [],
+            "entries": [_thaw_json(item) for item in self.entries],
         }
 
 
@@ -1447,6 +1564,23 @@ def _build_source_sidecar(
     return sidecar
 
 
+def _rebind_source_sidecar(
+    sidecar: SourceReferenceSidecar, *, generation_id: str, project: ProjectContract
+) -> SourceReferenceSidecar:
+    if sidecar.project_id != project.project_id:
+        raise PersistenceError("source sidecar project identity does not match candidate project")
+    if sidecar.project_source_reference != project.source_reference:
+        raise PersistenceError("source sidecar source reference does not match candidate project")
+    return SourceReferenceSidecar(
+        schema_version=SOURCE_REFERENCE_PERSISTENCE_SCHEMA_VERSION,
+        generation_id=generation_id,
+        project_id=project.project_id,
+        project_source_reference=project.source_reference,
+        access_metadata=sidecar.access_metadata,
+        source_identity_history=sidecar.source_identity_history,
+    )
+
+
 def _decode_registry(
     value: Any,
     project: ProjectContract,
@@ -1457,32 +1591,67 @@ def _decode_registry(
         "registry",
         {"schema_version", "generation_id", "project_id", "reserved_sequences", "records"},
     )
-    for field in ("reserved_sequences", "records"):
-        if _sequence(data[field], field):
-            raise ProjectIntegrityError(f"P2A registry {field} must be empty")
+    _sequence(data["reserved_sequences"], "reserved_sequences")
+    _sequence(data["records"], "records")
     if data["project_id"] != project.project_id:
         raise ProjectIntegrityError("registry project_id does not match project")
     if data["generation_id"] != generation_id:
         raise ProjectIntegrityError("registry generation_id does not match generation")
     if data["schema_version"] == TOWER_REGISTRY_SCHEMA_VERSION:
+        reservations = _freeze_registry_reservations(
+            data["reserved_sequences"], "tower reserved_sequences", prefix="T"
+        )
+        entries: list[TowerRegistryEntry] = []
+        for item in _sequence(data["records"], "tower records"):
+            entry = _object(
+                item,
+                "TowerRegistryEntry",
+                {"tower_id", "current_revision", "revisions"},
+            )
+            revisions = tuple(
+                _decode_tower(revision)
+                for revision in _sequence(entry["revisions"], "tower revisions")
+            )
+            try:
+                entries.append(
+                    TowerRegistryEntry(
+                        tower_id=entry["tower_id"],
+                        current_revision=entry["current_revision"],
+                        revisions=revisions,
+                    )
+                )
+            except (TypeError, ValueError, PersistenceError) as exc:
+                raise ProjectIntegrityError(f"invalid TowerRegistryEntry: {exc}") from exc
         return TowerRegistry(
             schema_version=data["schema_version"],
             generation_id=data["generation_id"],
             project_id=data["project_id"],
+            reserved_sequences=reservations,
+            records=tuple(entries),
         )
     if data["schema_version"] == SPAN_REGISTRY_SCHEMA_VERSION:
+        reservations = _freeze_registry_reservations(
+            data["reserved_sequences"], "span reserved_sequences", prefix="S"
+        )
+        records = tuple(
+            _decode_span(item) for item in _sequence(data["records"], "span records")
+        )
         return SpanRegistry(
             schema_version=data["schema_version"],
             generation_id=data["generation_id"],
             project_id=data["project_id"],
+            reserved_sequences=reservations,
+            records=records,
         )
     raise ProjectIntegrityError("unsupported registry schema version")
 
 
 def _decode_run_index(value: Any, project: ProjectContract, generation_id: str) -> RunIndex:
     data = _object(value, "RunIndex", {"schema_version", "generation_id", "project_id", "entries"})
-    if _sequence(data["entries"], "entries"):
-        raise ProjectIntegrityError("P2A run index entries must be empty")
+    entries = tuple(
+        _freeze_json(_json_mapping(item, "run-index entry"))
+        for item in _sequence(data["entries"], "entries")
+    )
     if data["schema_version"] != RUN_INDEX_SCHEMA_VERSION:
         raise ProjectIntegrityError("unsupported run-index schema version")
     if data["project_id"] != project.project_id:
@@ -1493,6 +1662,7 @@ def _decode_run_index(value: Any, project: ProjectContract, generation_id: str) 
         schema_version=data["schema_version"],
         generation_id=data["generation_id"],
         project_id=data["project_id"],
+        entries=entries,
     )
 
 
@@ -1566,6 +1736,106 @@ def _validate_generation_files(
             raise FileIntegrityError(f"wrong SHA-256 for {record.relative_path}")
 
 
+def _id_sequence(value: str, pattern: re.Pattern[str], name: str) -> int:
+    match = pattern.fullmatch(value)
+    if match is None:
+        raise ProjectIntegrityError(f"{name} is not a canonical project display ID")
+    sequence = int(match.group(1))
+    if sequence <= 0:
+        raise ProjectIntegrityError(f"{name} sequence must be positive")
+    expected = (
+        tower_display_id_for_sequence(sequence)
+        if pattern is _TOWER_ID_RE
+        else span_display_id_for_sequence(sequence)
+    )
+    if value != expected:
+        raise ProjectIntegrityError(f"{name} is not the approved display ID for its sequence")
+    return sequence
+
+
+def _validate_registry_state(
+    project: ProjectContract,
+    source_sidecar: SourceReferenceSidecar,
+    tower_registry: TowerRegistry,
+    span_registry: SpanRegistry,
+) -> None:
+    """Validate counters, provenance, history, and all Tower/Span references."""
+
+    current_binding = project.source_reference.binding
+    allowed_record_digests = {
+        current_binding.source_identity_record_digest,
+        *(item.source_identity_record_digest for item in source_sidecar.source_identity_history),
+    }
+
+    tower_sequences: set[int] = set()
+    tower_by_id: dict[str, TowerRegistryEntry] = {}
+    for entry in tower_registry.records:
+        sequence = _id_sequence(entry.tower_id, _TOWER_ID_RE, "tower_id")
+        tower_sequences.add(sequence)
+        tower_by_id[entry.tower_id] = entry
+        archived_seen = False
+        for revision in entry.revisions:
+            if revision.source_binding.source_content_identity_digest != current_binding.source_content_identity_digest:
+                raise ProjectIntegrityError("tower source content identity does not match project source")
+            if revision.source_binding.source_identity_record_digest not in allowed_record_digests:
+                raise ProjectIntegrityError("tower source identity record is not in project source history")
+            if revision.coordinate_context != current_binding.coordinate_context:
+                raise ProjectIntegrityError("tower coordinate context does not match project source")
+            if revision.state is TowerLifecycleState.ARCHIVED:
+                archived_seen = True
+            elif archived_seen:
+                raise ProjectIntegrityError("an archived tower cannot receive a later confirmed revision")
+
+    tower_reserved = {
+        _id_sequence(item["display_id"], _TOWER_ID_RE, "tower reservation display_id")
+        for item in tower_registry.reserved_sequences
+    }
+    tower_sequences.update(tower_reserved)
+    if project.next_tower_sequence <= max(tower_sequences, default=0):
+        raise ProjectIntegrityError("next_tower_sequence is not above every represented/reserved tower")
+
+    span_sequences: set[int] = set()
+    seen_active_physical_pairs: set[frozenset[str]] = set()
+    span_ids: set[str] = set()
+    for span in span_registry.records:
+        span_sequence = _id_sequence(span.span_id, _SPAN_ID_RE, "span_id")
+        span_sequences.add(span_sequence)
+        if span.span_id in span_ids:
+            raise ProjectIntegrityError("span registry contains duplicate span_id")
+        span_ids.add(span.span_id)
+        if span.source_binding.source_content_identity_digest != current_binding.source_content_identity_digest:
+            raise ProjectIntegrityError("span source content identity does not match project source")
+        if span.source_binding.source_identity_record_digest not in allowed_record_digests:
+            raise ProjectIntegrityError("span source identity record is not in project source history")
+        from_entry = tower_by_id.get(span.from_tower_id)
+        to_entry = tower_by_id.get(span.to_tower_id)
+        if from_entry is None or to_entry is None:
+            raise ProjectIntegrityError("span endpoint tower does not exist")
+        try:
+            from_entry.revision(span.from_tower_revision)
+            to_entry.revision(span.to_tower_revision)
+        except KeyError as exc:
+            raise ProjectIntegrityError("span endpoint revision does not exist") from exc
+        if span.topology_state is SpanTopologyState.CONFIRMED:
+            if (
+                from_entry.current.state is TowerLifecycleState.ARCHIVED
+                or to_entry.current.state is TowerLifecycleState.ARCHIVED
+            ):
+                raise ProjectIntegrityError("active span cannot reference an archived tower")
+            pair = frozenset((span.from_tower_id, span.to_tower_id))
+            if pair in seen_active_physical_pairs:
+                raise ProjectIntegrityError("duplicate active physical span topology")
+            seen_active_physical_pairs.add(pair)
+
+    span_reserved = {
+        _id_sequence(item["display_id"], _SPAN_ID_RE, "span reservation display_id")
+        for item in span_registry.reserved_sequences
+    }
+    span_sequences.update(span_reserved)
+    if project.next_span_sequence <= max(span_sequences, default=0):
+        raise ProjectIntegrityError("next_span_sequence is not above every represented/reserved span")
+
+
 def _validate_generation_content(
     root: Path,
     generation_path: Path,
@@ -1591,6 +1861,7 @@ def _validate_generation_content(
         raise ProjectIntegrityError("registry project identity does not match project")
     if run_index.project_id != project.project_id:
         raise ProjectIntegrityError("run index project identity does not match project")
+    _validate_registry_state(project, source_sidecar, tower_registry, span_registry)
 
 
 def _read_generation_content(
@@ -1719,14 +1990,34 @@ def _write_generation_files(
     generation_id: str,
     project: ProjectContract,
     source_sidecar: SourceReferenceSidecar,
+    tower_registry: TowerRegistry | None = None,
+    span_registry: SpanRegistry | None = None,
+    run_index: RunIndex | None = None,
 ) -> tuple[dict[str, Any], SourceReferenceSidecar, TowerRegistry, SpanRegistry, RunIndex]:
     (staging_path / "source").mkdir()
     (staging_path / "towers").mkdir()
     (staging_path / "spans").mkdir()
     (staging_path / "runs").mkdir()
-    tower_registry = TowerRegistry(TOWER_REGISTRY_SCHEMA_VERSION, generation_id, project.project_id)
-    span_registry = SpanRegistry(SPAN_REGISTRY_SCHEMA_VERSION, generation_id, project.project_id)
-    run_index = RunIndex(RUN_INDEX_SCHEMA_VERSION, generation_id, project.project_id)
+    tower_registry = TowerRegistry(
+        TOWER_REGISTRY_SCHEMA_VERSION,
+        generation_id,
+        project.project_id,
+        reserved_sequences=(tower_registry.reserved_sequences if tower_registry is not None else ()),
+        records=(tower_registry.records if tower_registry is not None else ()),
+    )
+    span_registry = SpanRegistry(
+        SPAN_REGISTRY_SCHEMA_VERSION,
+        generation_id,
+        project.project_id,
+        reserved_sequences=(span_registry.reserved_sequences if span_registry is not None else ()),
+        records=(span_registry.records if span_registry is not None else ()),
+    )
+    run_index = RunIndex(
+        RUN_INDEX_SCHEMA_VERSION,
+        generation_id,
+        project.project_id,
+        entries=(run_index.entries if run_index is not None else ()),
+    )
     project_payload = project.to_dict()
     _write_json(staging_path / "source" / "source-reference.json", source_sidecar.to_dict())
     _write_json(staging_path / "towers" / "towers.json", tower_registry.to_dict())
@@ -1754,8 +2045,12 @@ def _publish_generation(
     project: ProjectContract,
     *,
     source_access_metadata: Mapping[str, Any] | None = None,
+    source_sidecar: SourceReferenceSidecar | None = None,
+    tower_registry: TowerRegistry | None = None,
+    span_registry: SpanRegistry | None = None,
+    run_index: RunIndex | None = None,
 ) -> LoadedProject:
-    """Private copy-on-write generation publisher used by one-shot creation/tests."""
+    """Copy-on-write publisher used by locked session mutation and P2A creation/tests."""
 
     if type(project) is not ProjectContract:
         raise PersistenceError("project must be an exact ProjectContract")
@@ -1770,7 +2065,14 @@ def _publish_generation(
     generation_id = _next_generation_id(generations)
     staging_path = generations / f"{_STAGING_PREFIX}{uuid.uuid4().hex}"
     staging_path.mkdir()
-    source_sidecar = _build_source_sidecar(project, generation_id, source_access_metadata)
+    if source_sidecar is not None and source_access_metadata is not None:
+        raise PersistenceError("source_sidecar and source_access_metadata are mutually exclusive")
+    if source_sidecar is None:
+        source_sidecar = _build_source_sidecar(project, generation_id, source_access_metadata)
+    else:
+        source_sidecar = _rebind_source_sidecar(
+            source_sidecar, generation_id=generation_id, project=project
+        )
     try:
         project_payload, _, _, _, _ = _write_generation_files(
             root,
@@ -1778,6 +2080,9 @@ def _publish_generation(
             generation_id,
             project,
             source_sidecar,
+            tower_registry,
+            span_registry,
+            run_index,
         )
         created_at = _utc_timestamp()
         manifest = GenerationManifest(
@@ -1926,10 +2231,12 @@ __all__ = [
     "LoadedProject",
     "PersistenceError",
     "ProjectIntegrityError",
+    "PostPointerDurabilityError",
     "RunIndex",
     "SourceReferenceSidecar",
     "SpanRegistry",
     "TowerRegistry",
+    "TowerRegistryEntry",
     "canonical_json_bytes",
     "deserialize_project",
     "file_sha256",

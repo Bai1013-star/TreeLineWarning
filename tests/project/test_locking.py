@@ -100,6 +100,9 @@ def test_second_writer_in_a_separate_process_is_rejected(
         assert attempted.stdout.strip() == "BUSY"
     finally:
         writer.close()
+    reacquired = _child_writable_attempt(root)
+    assert reacquired.returncode == 0, reacquired.stderr
+    assert reacquired.stdout.strip() == "ACQUIRED"
 
 
 def test_close_and_context_manager_release_writer_lock(

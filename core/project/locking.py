@@ -40,6 +40,8 @@ _MAX_METADATA_BYTES = _LOCK_SLOT_SIZE - _METADATA_OFFSET
 _WINDOWS_LOCK_CONFLICT_WINERRORS = frozenset({33})
 _PROCESS_LOCKS: set[str] = set()
 _PROCESS_LOCKS_GUARD = threading.Lock()
+_WRITER_CAPABILITY_TOKEN = object()
+_LIVE_WRITER_CAPABILITIES: dict[str, object] = {}
 
 
 class ProjectLockError(RuntimeError):
@@ -354,12 +356,18 @@ class ProjectWriterLock:
         handle: BinaryIO,
         metadata: LockMetadata,
         process_key: str,
+        _capability: object | None = None,
     ) -> None:
+        if _capability is not _WRITER_CAPABILITY_TOKEN:
+            raise ProjectLockAcquisitionError(
+                "ProjectWriterLock instances must be issued by acquire_project_writer_lock"
+            )
         self.project_root = project_root
         self.lock_path = lock_path
         self.metadata = metadata
         self._handle: BinaryIO | None = handle
         self._process_key = process_key
+        self._authority_issued = True
 
     @property
     def session_id(self) -> str:
@@ -367,7 +375,21 @@ class ProjectWriterLock:
 
     @property
     def closed(self) -> bool:
-        return self._handle is None
+        return not self._authority_issued or self._handle is None
+
+    def assert_live_writer_authority(self, expected_project_root: Path) -> None:
+        """Prove this capability was issued after acquisition and is still live."""
+
+        if not self._authority_issued or self._handle is None:
+            raise ProjectLockAcquisitionError("writer capability is closed or was never live")
+        if self.project_root != expected_project_root:
+            raise ProjectLockAcquisitionError("writer capability belongs to another project root")
+        with _PROCESS_LOCKS_GUARD:
+            if (
+                self._process_key not in _PROCESS_LOCKS
+                or _LIVE_WRITER_CAPABILITIES.get(self._process_key) is not self
+            ):
+                raise ProjectLockAcquisitionError("writer capability is not registered as live")
 
     def close(self) -> None:
         """Release OS ownership; repeated close calls are safe."""
@@ -375,6 +397,7 @@ class ProjectWriterLock:
         handle = self._handle
         if handle is None:
             return
+        self._authority_issued = False
         self._handle = None
         error: BaseException | None = None
         try:
@@ -389,6 +412,8 @@ class ProjectWriterLock:
         finally:
             with _PROCESS_LOCKS_GUARD:
                 _PROCESS_LOCKS.discard(self._process_key)
+                if _LIVE_WRITER_CAPABILITIES.get(self._process_key) is self:
+                    _LIVE_WRITER_CAPABILITIES.pop(self._process_key, None)
         if error is not None:
             raise ProjectLockAcquisitionError("failed to close project writer lock") from error
 
@@ -425,14 +450,17 @@ def acquire_project_writer_lock(
                 raise ProjectLockBusy(root, diagnostic) from None
             metadata = _new_metadata(application_version)
             _write_metadata(handle, metadata)
-            _PROCESS_LOCKS.add(process_key)
-            return ProjectWriterLock(
+            lock = ProjectWriterLock(
                 project_root=root,
                 lock_path=lock_path,
                 handle=handle,
                 metadata=metadata,
                 process_key=process_key,
+                _capability=_WRITER_CAPABILITY_TOKEN,
             )
+            _PROCESS_LOCKS.add(process_key)
+            _LIVE_WRITER_CAPABILITIES[process_key] = lock
+            return lock
         except BaseException:
             try:
                 handle.close()
