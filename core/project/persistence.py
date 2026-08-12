@@ -1889,16 +1889,18 @@ def _atomic_replace_root_pointer(root: Path, pointer: Mapping[str, Any]) -> None
             pass
 
 
-def create_project(
+def _create_project_unlocked_for_tests(
     project_root: str | os.PathLike[str],
     project: ProjectContract,
     *,
     source_access_metadata: Mapping[str, Any] | None = None,
 ) -> LoadedProject:
-    """Create and publish one initial immutable P2A project generation.
+    """Create an initial immutable P2A generation for internal P2A tests.
 
-    This is intentionally a one-shot operation.  P2A provides no mutable
-    session or public authoritative save API; later phases own that boundary.
+    P2B owns the normal creation boundary through ``create_project_writable``.
+    This helper remains private so P2A persistence tests can exercise its
+    immutable-generation mechanics without becoming an unlocked application
+    publication API.
     """
 
     root = Path(project_root)
@@ -1929,7 +1931,6 @@ __all__ = [
     "SpanRegistry",
     "TowerRegistry",
     "canonical_json_bytes",
-    "create_project",
     "deserialize_project",
     "file_sha256",
     "logical_json_digest",

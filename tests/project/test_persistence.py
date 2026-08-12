@@ -14,7 +14,6 @@ from core.project.persistence import (
     FileIntegrityError,
     PersistenceError,
     canonical_json_bytes,
-    create_project,
     logical_json_digest,
     open_project,
     project_from_dict,
@@ -23,7 +22,9 @@ from core.project.persistence import (
 
 
 def _create(root: Path, project, metadata):
-    return create_project(root, project, source_access_metadata=metadata)
+    return persistence._create_project_unlocked_for_tests(
+        root, project, source_access_metadata=metadata
+    )
 
 
 def _root_pointer(root: Path) -> dict:
