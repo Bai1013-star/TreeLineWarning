@@ -1,0 +1,1940 @@
+"""Strict, copy-on-write P2A project snapshot persistence.
+
+P2A deliberately exposes only one-shot creation and immutable reopening.  The
+generation publication primitive is private so a later locking/session phase
+can become the sole authoritative writer boundary.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import errno
+import json
+import os
+import re
+import secrets
+import uuid
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any
+
+from core.contracts._json import json_safe
+from core.contracts.frv import SourceIdentity, canonical_frv_json_bytes, frv_digest
+from core.contracts.project import (
+    AnalysisStage,
+    AnalysisStatus,
+    AnalysisTreeObservationIdentity,
+    ArtifactReference,
+    COORDINATE_CONTEXT_SCHEMA_VERSION,
+    CoordinateContext,
+    CoordinateFrame,
+    CoordinateUnit,
+    PREDICTION_ARTIFACT_REFERENCE_SCHEMA_VERSION,
+    PREDICTION_CAPABILITY_SCHEMA_VERSION,
+    PREDICTION_PROVIDER_SCHEMA_VERSION,
+    PREDICTION_REQUEST_SCHEMA_VERSION,
+    PREDICTION_RESULT_SCHEMA_VERSION,
+    PROJECT_SCHEMA_VERSION,
+    PROJECT_SOURCE_REFERENCE_SCHEMA_VERSION,
+    PredictionArtifactReference,
+    PredictionCapability,
+    PredictionCapabilityState,
+    PredictionExecutionMode,
+    PredictionProviderDescriptor,
+    PredictionRequest,
+    PredictionResult,
+    PredictionResultEntry,
+    ProjectContract,
+    ProjectSourceReference,
+    ProviderPayload,
+    SPAN_ANALYSIS_SCHEMA_VERSION,
+    SPAN_GEOMETRY_SCHEMA_VERSION,
+    SPAN_SCHEMA_VERSION,
+    SpanAnalysis,
+    SpanContract,
+    SpanDependencySnapshot,
+    SpanGeometry,
+    SpanTopologyState,
+    SourceIdentityBinding,
+    TOWER_REFINEMENT_SCHEMA_VERSION,
+    TOWER_SCHEMA_VERSION,
+    TowerContract,
+    TowerGeometry,
+    TowerLifecycleState,
+    TowerRefinement,
+    TowerRefinementQuality,
+    TowerRefinementStatus,
+    TowerRevisionReference,
+    VIEWER_REFERENCE_SCHEMA_VERSION,
+    ViewerCacheState,
+    ViewerReference,
+    _safe_relative_posix_path,
+)
+
+
+ACTIVE_POINTER_SCHEMA_VERSION = "treeline-project-active-pointer-v1"
+GENERATION_SCHEMA_VERSION = "treeline-project-generation-v1"
+SOURCE_REFERENCE_PERSISTENCE_SCHEMA_VERSION = (
+    "treeline-project-source-reference-persistence-v1"
+)
+TOWER_REGISTRY_SCHEMA_VERSION = "treeline-tower-registry-v1"
+SPAN_REGISTRY_SCHEMA_VERSION = "treeline-span-registry-v1"
+RUN_INDEX_SCHEMA_VERSION = "treeline-run-index-v1"
+
+_GENERATION_RE = re.compile(r"g-[0-9]{16}-[a-z0-9]{8}\Z")
+_STAGING_PREFIX = ".staging-"
+_GENERATION_FILES = (
+    "project.json",
+    "source/source-reference.json",
+    "towers/towers.json",
+    "spans/spans.json",
+    "runs/run-index.json",
+)
+_PROJECT_REGISTRY_REFERENCES = {
+    "tower_registry_reference": "towers/towers.json",
+    "span_registry_reference": "spans/spans.json",
+    "run_index_reference": "runs/run-index.json",
+}
+_SOURCE_POLICY = "REFERENCE_ORIGINAL_SOURCE_READ_ONLY"
+
+
+class PersistenceError(ValueError):
+    """Base error for strict P2A persistence failures."""
+
+
+class ProjectIntegrityError(PersistenceError):
+    """Raised when an authoritative project snapshot is malformed or mixed."""
+
+
+class FileIntegrityError(ProjectIntegrityError):
+    """Raised when a published file does not match its sealed record."""
+
+
+class DurabilityError(PersistenceError):
+    """Raised when a supported file/directory durability primitive fails."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        operation: str,
+        path: Path,
+        pointer_replaced: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.operation = operation
+        self.path = path
+        self.pointer_replaced = pointer_replaced
+
+
+class FileDurabilityError(DurabilityError):
+    """Raised when an authoritative file cannot be durably written."""
+
+
+class DirectoryDurabilityError(DurabilityError):
+    """Raised for a real directory open/fsync/close failure."""
+
+
+class GenerationPublicationError(DurabilityError):
+    """Raised when staging-to-final generation publication fails."""
+
+
+class RootPointerReplaceError(DurabilityError):
+    """Raised when root-pointer replacement fails before it can be known active."""
+
+
+class PostPointerDurabilityError(DurabilityError):
+    """Raised when root-directory durability fails after pointer replacement."""
+
+
+@dataclass(frozen=True, slots=True)
+class DirectoryFsyncResult:
+    """Explicit result for a directory fsync capability/operation."""
+
+    path: Path
+    supported: bool
+    detail: str
+
+
+_UNSUPPORTED_DIRECTORY_ERRNOS = frozenset(
+    errno_value
+    for errno_value in (
+        getattr(errno, "EINVAL", None),
+        getattr(errno, "ENOSYS", None),
+        getattr(errno, "ENOTSUP", None),
+        getattr(errno, "EOPNOTSUPP", None),
+    )
+    if errno_value is not None
+)
+
+
+def _directory_fsync_supported() -> bool:
+    """Return whether CPython exposes directory fsync on this platform.
+
+    The Windows CRT-backed ``os.open`` API does not provide a directory handle
+    suitable for ``os.fsync``.  Windows therefore reports an explicit
+    unsupported capability; it is not treated as a successful flush.  POSIX
+    platforms attempt the actual operation and classify only documented
+    unsupported errno values as a limitation.
+    """
+
+    return os.name != "nt"
+
+
+def _directory_fsync_unsupported(error: OSError) -> bool:
+    return error.errno in _UNSUPPORTED_DIRECTORY_ERRNOS
+
+
+def _fsync_directory(path: Path) -> DirectoryFsyncResult:
+    """Durably flush a directory or explicitly report platform limitation.
+
+    Permission, path, descriptor, and other real I/O failures propagate as a
+    ``DirectoryDurabilityError``.  Only an explicitly unsupported platform or
+    the narrow errno set returned by a directory-fsync operation is reported
+    as unsupported.
+    """
+
+    if not _directory_fsync_supported():
+        return DirectoryFsyncResult(
+            path=path,
+            supported=False,
+            detail="directory fsync is unsupported by this Python platform",
+        )
+
+    descriptor: int | None = None
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        try:
+            descriptor = os.open(path, flags)
+        except OSError as exc:
+            if _directory_fsync_unsupported(exc):
+                return DirectoryFsyncResult(
+                    path=path,
+                    supported=False,
+                    detail=f"directory fsync is unsupported: errno {exc.errno}",
+                )
+            raise DirectoryDurabilityError(
+                f"failed to open directory for durability: {path}",
+                operation="directory-open",
+                path=path,
+            ) from exc
+        try:
+            os.fsync(descriptor)
+        except OSError as exc:
+            if _directory_fsync_unsupported(exc):
+                return DirectoryFsyncResult(
+                    path=path,
+                    supported=False,
+                    detail=f"directory fsync is unsupported: errno {exc.errno}",
+                )
+            raise DirectoryDurabilityError(
+                f"failed to fsync directory: {path}",
+                operation="directory-fsync",
+                path=path,
+            ) from exc
+        except NotImplementedError:
+            return DirectoryFsyncResult(
+                path=path,
+                supported=False,
+                detail="directory fsync is unsupported by this Python platform",
+            )
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError as exc:
+                raise DirectoryDurabilityError(
+                    f"failed to close directory durability handle: {path}",
+                    operation="directory-close",
+                    path=path,
+                ) from exc
+    return DirectoryFsyncResult(path=path, supported=True, detail="directory fsync completed")
+
+
+def canonical_json_bytes(value: Any) -> bytes:
+    """Return the repository-approved canonical JSON bytes without a final LF."""
+
+    return canonical_frv_json_bytes(value)
+
+
+def published_json_bytes(value: Any) -> bytes:
+    """Return canonical JSON bytes with exactly one final LF."""
+
+    return canonical_json_bytes(value) + b"\n"
+
+
+def logical_json_digest(value: Any) -> str:
+    """Hash canonical JSON bytes without its publication-only final LF."""
+
+    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def file_sha256(data: bytes) -> str:
+    """Hash exact published file bytes."""
+
+    return hashlib.sha256(data).hexdigest()
+
+
+def published_json_digest(value: Any) -> str:
+    """Hash the exact canonical JSON bytes that would be published."""
+
+    return file_sha256(published_json_bytes(value))
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _object(value: Any, name: str, fields: set[str]) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise PersistenceError(f"{name} must be a JSON object")
+    if any(type(key) is not str for key in value):
+        raise PersistenceError(f"{name} keys must be strings")
+    actual = set(value)
+    unknown = sorted(actual - fields)
+    if unknown:
+        raise PersistenceError(f"{name} has unknown field(s): {', '.join(unknown)}")
+    missing = sorted(fields - actual)
+    if missing:
+        raise PersistenceError(f"{name} is missing required field(s): {', '.join(missing)}")
+    return dict(value)
+
+
+def _sequence(value: Any, name: str) -> list[Any]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise PersistenceError(f"{name} must be a JSON array")
+    return list(value)
+
+
+def _enum(value: Any, enum_type: type, name: str) -> Any:
+    if not isinstance(value, str):
+        raise PersistenceError(f"{name} must be a serialized enum value")
+    try:
+        return enum_type(value)
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"{name} has an invalid enum value") from exc
+
+
+def _timestamp(value: Any, name: str) -> str:
+    if not isinstance(value, str):
+        raise PersistenceError(f"{name} must be a timestamp string")
+    try:
+        datetime.fromisoformat(value[:-1] + "+00:00") if value.endswith("Z") else None
+    except ValueError as exc:
+        raise PersistenceError(f"{name} must be a valid ISO-8601 UTC timestamp") from exc
+    if not value.endswith("Z") or "T" not in value:
+        raise PersistenceError(f"{name} must be a valid ISO-8601 UTC timestamp")
+    return value
+
+
+def _bool(value: Any, name: str) -> bool:
+    if type(value) is not bool:
+        raise PersistenceError(f"{name} must be a boolean")
+    return value
+
+
+def _json_mapping(value: Any, name: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise PersistenceError(f"{name} must be a JSON object")
+    try:
+        safe = json_safe(value, name)
+    except ValueError as exc:
+        raise PersistenceError(str(exc)) from exc
+    if not isinstance(safe, dict):
+        raise PersistenceError(f"{name} must be a JSON object")
+    return safe
+
+
+def _freeze_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_json(item) for item in value)
+    return value
+
+
+def _thaw_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json(item) for item in value]
+    return value
+
+
+def _decode_coordinate_context(value: Any) -> CoordinateContext:
+    data = _object(
+        value,
+        "CoordinateContext",
+        {
+            "schema_version",
+            "frame",
+            "units",
+            "origin_xyz",
+            "source_content_identity_digest",
+            "source_identity_record_digest",
+        },
+    )
+    try:
+        return CoordinateContext(
+            schema_version=data["schema_version"],
+            frame=_enum(data["frame"], CoordinateFrame, "frame"),
+            units=_enum(data["units"], CoordinateUnit, "units"),
+            origin_xyz=data["origin_xyz"],
+            source_content_identity_digest=data["source_content_identity_digest"],
+            source_identity_record_digest=data["source_identity_record_digest"],
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid CoordinateContext: {exc}") from exc
+
+
+def _decode_source_binding(value: Any) -> SourceIdentityBinding:
+    data = _object(
+        value,
+        "SourceIdentityBinding",
+        {
+            "source_content_identity_digest",
+            "source_identity_record_digest",
+            "coordinate_context",
+        },
+    )
+    try:
+        return SourceIdentityBinding(
+            source_content_identity_digest=data["source_content_identity_digest"],
+            source_identity_record_digest=data["source_identity_record_digest"],
+            coordinate_context=_decode_coordinate_context(data["coordinate_context"]),
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid SourceIdentityBinding: {exc}") from exc
+
+
+def _decode_source_reference(value: Any) -> ProjectSourceReference:
+    data = _object(
+        value,
+        "ProjectSourceReference",
+        {"schema_version", "source_identity", "coordinate_context"},
+    )
+    try:
+        source_identity = SourceIdentity.from_dict(
+            _object(
+                data["source_identity"],
+                "SourceIdentity",
+                set(SourceIdentity.__dataclass_fields__),
+            )
+        )
+        return ProjectSourceReference(
+            schema_version=data["schema_version"],
+            source_identity=source_identity,
+            coordinate_context=_decode_coordinate_context(data["coordinate_context"]),
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid ProjectSourceReference: {exc}") from exc
+
+
+def _decode_viewer(value: Any) -> ViewerReference:
+    data = _object(value, "ViewerReference", {"schema_version", "state", "active_cache_id"})
+    try:
+        return ViewerReference(
+            schema_version=data["schema_version"],
+            state=_enum(data["state"], ViewerCacheState, "state"),
+            active_cache_id=data["active_cache_id"],
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid ViewerReference: {exc}") from exc
+
+
+def _decode_prediction_capability(value: Any) -> PredictionCapability:
+    data = _object(
+        value,
+        "PredictionCapability",
+        {
+            "schema_version",
+            "status",
+            "provider_id",
+            "provider_version",
+            "supported_input_schema_versions",
+            "supported_result_schema_versions",
+            "supported_execution_modes",
+            "diagnostic",
+        },
+    )
+    modes = [
+        _enum(item, PredictionExecutionMode, "supported_execution_modes[]")
+        for item in _sequence(data["supported_execution_modes"], "supported_execution_modes")
+    ]
+    try:
+        return PredictionCapability(
+            schema_version=data["schema_version"],
+            status=_enum(data["status"], PredictionCapabilityState, "status"),
+            provider_id=data["provider_id"],
+            provider_version=data["provider_version"],
+            supported_input_schema_versions=tuple(
+                _require_strings(
+                    data["supported_input_schema_versions"],
+                    "supported_input_schema_versions",
+                )
+            ),
+            supported_result_schema_versions=tuple(
+                _require_strings(
+                    data["supported_result_schema_versions"],
+                    "supported_result_schema_versions",
+                )
+            ),
+            supported_execution_modes=tuple(modes),
+            diagnostic=data["diagnostic"],
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid PredictionCapability: {exc}") from exc
+
+
+def _require_strings(value: Any, name: str) -> list[str]:
+    values = _sequence(value, name)
+    if any(type(item) is not str for item in values):
+        raise PersistenceError(f"{name} must contain only strings")
+    return values
+
+
+def _decode_artifact_reference(value: Any) -> ArtifactReference:
+    data = _object(
+        value,
+        "ArtifactReference",
+        {"relative_path", "role", "sha256", "byte_size", "schema_version"},
+    )
+    try:
+        return ArtifactReference(**data)
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid ArtifactReference: {exc}") from exc
+
+
+def _decode_prediction_artifact_reference(value: Any) -> PredictionArtifactReference:
+    data = _object(
+        value,
+        "PredictionArtifactReference",
+        {
+            "schema_version",
+            "relative_path",
+            "role",
+            "sha256",
+            "byte_size",
+            "artifact_schema_version",
+        },
+    )
+    try:
+        return PredictionArtifactReference(**data)
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid PredictionArtifactReference: {exc}") from exc
+
+
+def _decode_project(data: Any) -> ProjectContract:
+    values = _object(
+        data,
+        "ProjectContract",
+        {
+            "schema_version",
+            "project_id",
+            "project_name",
+            "created_at",
+            "updated_at",
+            "source_reference",
+            "viewer",
+            "tower_registry_reference",
+            "span_registry_reference",
+            "run_index_reference",
+            "prediction_capability",
+            "next_tower_sequence",
+            "next_span_sequence",
+        },
+    )
+    try:
+        return ProjectContract(
+            schema_version=values["schema_version"],
+            project_id=values["project_id"],
+            project_name=values["project_name"],
+            created_at=values["created_at"],
+            updated_at=values["updated_at"],
+            source_reference=_decode_source_reference(values["source_reference"]),
+            viewer=_decode_viewer(values["viewer"]),
+            tower_registry_reference=values["tower_registry_reference"],
+            span_registry_reference=values["span_registry_reference"],
+            run_index_reference=values["run_index_reference"],
+            next_tower_sequence=values["next_tower_sequence"],
+            next_span_sequence=values["next_span_sequence"],
+            prediction_capability=_decode_prediction_capability(
+                values["prediction_capability"]
+            ),
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid ProjectContract: {exc}") from exc
+
+
+def project_from_dict(data: Mapping[str, Any]) -> ProjectContract:
+    """Strictly reconstruct one exact frozen P1 ``ProjectContract``."""
+
+    return _decode_project(data)
+
+
+deserialize_project = project_from_dict
+
+
+def _decode_tower_revision_reference(value: Any) -> TowerRevisionReference:
+    data = _object(value, "TowerRevisionReference", {"tower_id", "revision"})
+    try:
+        return TowerRevisionReference(**data)
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid TowerRevisionReference: {exc}") from exc
+
+
+def _decode_tower_geometry(value: Any) -> TowerGeometry:
+    data = _object(
+        value,
+        "TowerGeometry",
+        {"base_xyz_absolute_m", "top_xyz_absolute_m", "height_m"},
+    )
+    try:
+        return TowerGeometry(**data)
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid TowerGeometry: {exc}") from exc
+
+
+def _decode_tower_refinement(value: Any) -> TowerRefinement:
+    data = _object(
+        value,
+        "TowerRefinement",
+        {
+            "schema_version",
+            "status",
+            "quality",
+            "evidence",
+            "algorithm_version",
+            "confirmed_at",
+            "local_region_reference",
+        },
+    )
+    try:
+        return TowerRefinement(
+            schema_version=data["schema_version"],
+            status=_enum(data["status"], TowerRefinementStatus, "status"),
+            quality=_enum(data["quality"], TowerRefinementQuality, "quality"),
+            evidence=_json_mapping(data["evidence"], "evidence"),
+            algorithm_version=data["algorithm_version"],
+            confirmed_at=data["confirmed_at"],
+            local_region_reference=(
+                _decode_artifact_reference(data["local_region_reference"])
+                if data["local_region_reference"] is not None
+                else None
+            ),
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid TowerRefinement: {exc}") from exc
+
+
+def _decode_tower(value: Any) -> TowerContract:
+    data = _object(
+        value,
+        "TowerContract",
+        {
+            "schema_version",
+            "tower_id",
+            "display_name",
+            "state",
+            "source_binding",
+            "coordinate_context",
+            "approximate_click_xyz_absolute_m",
+            "refined_geometry",
+            "refinement",
+            "revision",
+            "notes",
+            "created_at",
+            "updated_at",
+        },
+    )
+    try:
+        return TowerContract(
+            schema_version=data["schema_version"],
+            tower_id=data["tower_id"],
+            display_name=data["display_name"],
+            state=_enum(data["state"], TowerLifecycleState, "state"),
+            source_binding=_decode_source_binding(data["source_binding"]),
+            coordinate_context=_decode_coordinate_context(data["coordinate_context"]),
+            approximate_click_xyz_absolute_m=data["approximate_click_xyz_absolute_m"],
+            refined_geometry=_decode_tower_geometry(data["refined_geometry"]),
+            refinement=_decode_tower_refinement(data["refinement"]),
+            revision=data["revision"],
+            notes=data["notes"],
+            created_at=data["created_at"],
+            updated_at=data["updated_at"],
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid TowerContract: {exc}") from exc
+
+
+def _decode_span_geometry(value: Any) -> SpanGeometry:
+    data = _object(
+        value,
+        "SpanGeometry",
+        {
+            "schema_version",
+            "definition_revision",
+            "coordinate_context",
+            "length_m",
+            "direction_xy",
+            "core_bounds_min_xyz",
+            "core_bounds_max_xyz",
+            "halo_bounds_min_xyz",
+            "halo_bounds_max_xyz",
+            "configuration_digest",
+            "geometry_digest",
+        },
+    )
+    try:
+        return SpanGeometry(
+            schema_version=data["schema_version"],
+            definition_revision=data["definition_revision"],
+            coordinate_context=_decode_coordinate_context(data["coordinate_context"]),
+            length_m=data["length_m"],
+            direction_xy=data["direction_xy"],
+            core_bounds_min_xyz=data["core_bounds_min_xyz"],
+            core_bounds_max_xyz=data["core_bounds_max_xyz"],
+            halo_bounds_min_xyz=data["halo_bounds_min_xyz"],
+            halo_bounds_max_xyz=data["halo_bounds_max_xyz"],
+            configuration_digest=data["configuration_digest"],
+            geometry_digest=data["geometry_digest"],
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid SpanGeometry: {exc}") from exc
+
+
+def _decode_span_dependencies(value: Any) -> SpanDependencySnapshot:
+    data = _object(
+        value,
+        "SpanDependencySnapshot",
+        {
+            "source_binding",
+            "from_tower",
+            "to_tower",
+            "geometry_digest",
+            "configuration_digest",
+        },
+    )
+    try:
+        return SpanDependencySnapshot(
+            source_binding=_decode_source_binding(data["source_binding"]),
+            from_tower=_decode_tower_revision_reference(data["from_tower"]),
+            to_tower=_decode_tower_revision_reference(data["to_tower"]),
+            geometry_digest=data["geometry_digest"],
+            configuration_digest=data["configuration_digest"],
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid SpanDependencySnapshot: {exc}") from exc
+
+
+def _decode_span_analysis(value: Any) -> SpanAnalysis:
+    data = _object(
+        value,
+        "SpanAnalysis",
+        {
+            "schema_version",
+            "state",
+            "active_run_id",
+            "stage_statuses",
+            "run_dependencies",
+            "historical_run_ids",
+        },
+    )
+    statuses = _object(
+        data["stage_statuses"],
+        "stage_statuses",
+        {stage.value for stage in AnalysisStage},
+    )
+    stage_statuses: dict[AnalysisStage, AnalysisStatus] = {
+        stage: _enum(statuses[stage.value], AnalysisStatus, f"stage_statuses.{stage.value}")
+        for stage in AnalysisStage
+    }
+    try:
+        return SpanAnalysis(
+            schema_version=data["schema_version"],
+            state=_enum(data["state"], AnalysisStatus, "state"),
+            active_run_id=data["active_run_id"],
+            stage_statuses=stage_statuses,
+            run_dependencies=(
+                _decode_span_dependencies(data["run_dependencies"])
+                if data["run_dependencies"] is not None
+                else None
+            ),
+            historical_run_ids=tuple(
+                _require_strings(data["historical_run_ids"], "historical_run_ids")
+            ),
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid SpanAnalysis: {exc}") from exc
+
+
+def _decode_span(value: Any) -> SpanContract:
+    data = _object(
+        value,
+        "SpanContract",
+        {
+            "schema_version",
+            "span_id",
+            "display_name",
+            "from_tower_id",
+            "to_tower_id",
+            "from_tower_revision",
+            "to_tower_revision",
+            "source_binding",
+            "topology_state",
+            "geometry",
+            "analysis",
+            "artifact_index_reference",
+            "prediction",
+        },
+    )
+    try:
+        return SpanContract(
+            schema_version=data["schema_version"],
+            span_id=data["span_id"],
+            display_name=data["display_name"],
+            from_tower_id=data["from_tower_id"],
+            to_tower_id=data["to_tower_id"],
+            from_tower_revision=data["from_tower_revision"],
+            to_tower_revision=data["to_tower_revision"],
+            source_binding=_decode_source_binding(data["source_binding"]),
+            topology_state=_enum(data["topology_state"], SpanTopologyState, "topology_state"),
+            geometry=_decode_span_geometry(data["geometry"]),
+            analysis=_decode_span_analysis(data["analysis"]),
+            artifact_index_reference=(
+                _decode_artifact_reference(data["artifact_index_reference"])
+                if data["artifact_index_reference"] is not None
+                else None
+            ),
+            prediction=_decode_prediction_capability(data["prediction"]),
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid SpanContract: {exc}") from exc
+
+
+def _decode_provider_payload(value: Any) -> ProviderPayload:
+    data = _object(value, "ProviderPayload", {"namespace", "schema_version", "data"})
+    try:
+        return ProviderPayload(
+            namespace=data["namespace"],
+            schema_version=data["schema_version"],
+            data=_json_mapping(data["data"], "data"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid ProviderPayload: {exc}") from exc
+
+
+def _decode_observation(value: Any) -> AnalysisTreeObservationIdentity:
+    data = _object(
+        value,
+        "AnalysisTreeObservationIdentity",
+        {"analysis_run_id", "local_tree_id", "observation_id"},
+    )
+    try:
+        return AnalysisTreeObservationIdentity(**data)
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid AnalysisTreeObservationIdentity: {exc}") from exc
+
+
+def _decode_provider(value: Any) -> PredictionProviderDescriptor:
+    data = _object(
+        value,
+        "PredictionProviderDescriptor",
+        {
+            "schema_version",
+            "provider_id",
+            "provider_version",
+            "supported_input_schema_versions",
+            "supported_result_schema_versions",
+            "supported_execution_modes",
+        },
+    )
+    try:
+        return PredictionProviderDescriptor(
+            schema_version=data["schema_version"],
+            provider_id=data["provider_id"],
+            provider_version=data["provider_version"],
+            supported_input_schema_versions=tuple(
+                _require_strings(
+                    data["supported_input_schema_versions"],
+                    "supported_input_schema_versions",
+                )
+            ),
+            supported_result_schema_versions=tuple(
+                _require_strings(
+                    data["supported_result_schema_versions"],
+                    "supported_result_schema_versions",
+                )
+            ),
+            supported_execution_modes=tuple(
+                _enum(item, PredictionExecutionMode, "supported_execution_modes[]")
+                for item in _sequence(
+                    data["supported_execution_modes"], "supported_execution_modes"
+                )
+            ),
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid PredictionProviderDescriptor: {exc}") from exc
+
+
+def _decode_prediction_request(value: Any) -> PredictionRequest:
+    data = _object(
+        value,
+        "PredictionRequest",
+        {
+            "schema_version",
+            "request_id",
+            "project_id",
+            "source_binding",
+            "span_id",
+            "span_dependencies",
+            "analysis_run_id",
+            "static_result_schema_version",
+            "coordinate_context",
+            "provider",
+            "tree_observations",
+            "static_artifacts",
+            "provider_payload",
+            "requested_at",
+        },
+    )
+    try:
+        return PredictionRequest(
+            schema_version=data["schema_version"],
+            request_id=data["request_id"],
+            project_id=data["project_id"],
+            source_binding=_decode_source_binding(data["source_binding"]),
+            span_id=data["span_id"],
+            span_dependencies=_decode_span_dependencies(data["span_dependencies"]),
+            analysis_run_id=data["analysis_run_id"],
+            static_result_schema_version=data["static_result_schema_version"],
+            coordinate_context=_decode_coordinate_context(data["coordinate_context"]),
+            provider=_decode_provider(data["provider"]),
+            tree_observations=tuple(
+                _decode_observation(item)
+                for item in _sequence(data["tree_observations"], "tree_observations")
+            ),
+            static_artifacts=tuple(
+                _decode_prediction_artifact_reference(item)
+                for item in _sequence(data["static_artifacts"], "static_artifacts")
+            ),
+            provider_payload=_decode_provider_payload(data["provider_payload"]),
+            requested_at=data["requested_at"],
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid PredictionRequest: {exc}") from exc
+
+
+def _decode_prediction_result_entry(value: Any) -> PredictionResultEntry:
+    data = _object(
+        value,
+        "PredictionResultEntry",
+        {"observation", "provider_payload", "artifacts"},
+    )
+    try:
+        return PredictionResultEntry(
+            observation=_decode_observation(data["observation"]),
+            provider_payload=_decode_provider_payload(data["provider_payload"]),
+            artifacts=tuple(
+                _decode_prediction_artifact_reference(item)
+                for item in _sequence(data["artifacts"], "artifacts")
+            ),
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid PredictionResultEntry: {exc}") from exc
+
+
+def _decode_prediction_result(value: Any) -> PredictionResult:
+    data = _object(
+        value,
+        "PredictionResult",
+        {
+            "schema_version",
+            "result_id",
+            "request_id",
+            "request_schema_version",
+            "project_id",
+            "source_binding",
+            "span_id",
+            "span_dependencies",
+            "analysis_run_id",
+            "static_result_schema_version",
+            "coordinate_context",
+            "provider_id",
+            "provider_version",
+            "model_version",
+            "entries",
+            "artifacts",
+            "provider_payload",
+            "completed_at",
+        },
+    )
+    entries_data = _object(data["entries"], "entries", set(data["entries"]))
+    try:
+        return PredictionResult(
+            schema_version=data["schema_version"],
+            result_id=data["result_id"],
+            request_id=data["request_id"],
+            request_schema_version=data["request_schema_version"],
+            project_id=data["project_id"],
+            source_binding=_decode_source_binding(data["source_binding"]),
+            span_id=data["span_id"],
+            span_dependencies=_decode_span_dependencies(data["span_dependencies"]),
+            analysis_run_id=data["analysis_run_id"],
+            static_result_schema_version=data["static_result_schema_version"],
+            coordinate_context=_decode_coordinate_context(data["coordinate_context"]),
+            provider_id=data["provider_id"],
+            provider_version=data["provider_version"],
+            model_version=data["model_version"],
+            entries={
+                key: _decode_prediction_result_entry(item)
+                for key, item in entries_data.items()
+            },
+            artifacts=tuple(
+                _decode_prediction_artifact_reference(item)
+                for item in _sequence(data["artifacts"], "artifacts")
+            ),
+            provider_payload=_decode_provider_payload(data["provider_payload"]),
+            completed_at=data["completed_at"],
+        )
+    except (TypeError, ValueError) as exc:
+        raise PersistenceError(f"invalid PredictionResult: {exc}") from exc
+
+
+@dataclass(frozen=True, slots=True)
+class SourceReferenceSidecar:
+    """Immutable source access envelope paired with one P1 source reference."""
+
+    schema_version: str
+    generation_id: str
+    project_id: str
+    project_source_reference: ProjectSourceReference
+    access_metadata: Mapping[str, Any]
+    source_identity_history: tuple[SourceIdentity, ...]
+
+    def __post_init__(self) -> None:
+        if self.schema_version != SOURCE_REFERENCE_PERSISTENCE_SCHEMA_VERSION:
+            raise PersistenceError("unsupported source-reference persistence schema version")
+        _validate_generation_id(self.generation_id)
+        if self.project_source_reference.__class__ is not ProjectSourceReference:
+            raise PersistenceError("project_source_reference must be a ProjectSourceReference")
+        if not isinstance(self.access_metadata, Mapping):
+            raise PersistenceError("access_metadata must be a mapping")
+        object.__setattr__(
+            self,
+            "access_metadata",
+            _freeze_json(_json_mapping(self.access_metadata, "access_metadata")),
+        )
+        history = tuple(self.source_identity_history)
+        if any(type(item) is not SourceIdentity for item in history):
+            raise PersistenceError("source_identity_history must contain SourceIdentity values")
+        object.__setattr__(self, "source_identity_history", history)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "generation_id": self.generation_id,
+            "project_id": self.project_id,
+            "project_source_reference": self.project_source_reference.to_dict(),
+            "access_metadata": _thaw_json(self.access_metadata),
+            "source_identity_history": [item.to_dict() for item in self.source_identity_history],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class TowerRegistry:
+    """P2A's strictly empty tower registry envelope."""
+
+    schema_version: str
+    generation_id: str
+    project_id: str
+    reserved_sequences: tuple[Mapping[str, Any], ...] = ()
+    records: tuple[TowerContract, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.schema_version != TOWER_REGISTRY_SCHEMA_VERSION:
+            raise PersistenceError("unsupported tower-registry schema version")
+        _validate_generation_id(self.generation_id)
+        if self.reserved_sequences or self.records:
+            raise PersistenceError("P2A tower registry must be empty")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "generation_id": self.generation_id,
+            "project_id": self.project_id,
+            "reserved_sequences": [],
+            "records": [],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SpanRegistry:
+    """P2A's strictly empty span registry envelope."""
+
+    schema_version: str
+    generation_id: str
+    project_id: str
+    reserved_sequences: tuple[Mapping[str, Any], ...] = ()
+    records: tuple[SpanContract, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.schema_version != SPAN_REGISTRY_SCHEMA_VERSION:
+            raise PersistenceError("unsupported span-registry schema version")
+        _validate_generation_id(self.generation_id)
+        if self.reserved_sequences or self.records:
+            raise PersistenceError("P2A span registry must be empty")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "generation_id": self.generation_id,
+            "project_id": self.project_id,
+            "reserved_sequences": [],
+            "records": [],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RunIndex:
+    """P2A's strictly empty run-index envelope."""
+
+    schema_version: str
+    generation_id: str
+    project_id: str
+    entries: tuple[Mapping[str, Any], ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.schema_version != RUN_INDEX_SCHEMA_VERSION:
+            raise PersistenceError("unsupported run-index schema version")
+        _validate_generation_id(self.generation_id)
+        if self.entries:
+            raise PersistenceError("P2A run index must be empty")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "generation_id": self.generation_id,
+            "project_id": self.project_id,
+            "entries": [],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class FileRecord:
+    relative_path: str
+    byte_size: int
+    sha256: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "relative_path": self.relative_path,
+            "byte_size": self.byte_size,
+            "sha256": self.sha256,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationManifest:
+    schema_version: str
+    project_id: str
+    generation_id: str
+    sealed: bool
+    files: tuple[FileRecord, ...]
+    project_manifest_logical_digest: str
+    created_at: str
+    published_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "project_id": self.project_id,
+            "generation_id": self.generation_id,
+            "sealed": self.sealed,
+            "files": [item.to_dict() for item in self.files],
+            "project_manifest_logical_digest": self.project_manifest_logical_digest,
+            "created_at": self.created_at,
+            "published_at": self.published_at,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedProject:
+    """One coherent immutable active generation and its decoded envelopes."""
+
+    project: ProjectContract
+    source_sidecar: SourceReferenceSidecar
+    tower_registry: TowerRegistry
+    span_registry: SpanRegistry
+    run_index: RunIndex
+    generation_id: str
+    generation_manifest: GenerationManifest
+    project_root: Path
+    generation_path: Path
+
+
+def _validate_generation_id(value: Any) -> str:
+    if type(value) is not str or _GENERATION_RE.fullmatch(value) is None:
+        raise PersistenceError("generation_id must be a final lower-case generation identifier")
+    return value
+
+
+def _validate_digest(value: Any, name: str) -> str:
+    if type(value) is not str or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise PersistenceError(f"{name} must be a lowercase SHA-256 digest")
+    return value
+
+
+def _parse_json_bytes(data: bytes, name: str) -> Any:
+    if not data.endswith(b"\n") or data.endswith(b"\n\n"):
+        raise ProjectIntegrityError(f"{name} must end with exactly one LF")
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ProjectIntegrityError(f"{name} must not contain a UTF-8 BOM")
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"non-finite JSON constant {value} is forbidden")
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON object key {key}")
+            result[key] = value
+        return result
+
+    try:
+        parsed = json.loads(
+            data[:-1].decode("utf-8"),
+            parse_constant=reject_constant,
+            object_pairs_hook=reject_duplicate_keys,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ProjectIntegrityError(f"{name} is not valid canonical JSON: {exc}") from exc
+    try:
+        if published_json_bytes(parsed) != data:
+            raise ProjectIntegrityError(f"{name} is not canonical JSON")
+    except (TypeError, ValueError) as exc:
+        raise ProjectIntegrityError(f"{name} is not canonical JSON: {exc}") from exc
+    return parsed
+
+
+def _read_json(path: Path, name: str) -> Any:
+    try:
+        data = path.read_bytes()
+    except (FileNotFoundError, OSError) as exc:
+        raise ProjectIntegrityError(f"missing or unreadable {name}") from exc
+    return _parse_json_bytes(data, name)
+
+
+def _write_json(path: Path, value: Any) -> bytes:
+    data = published_json_bytes(value)
+    try:
+        with path.open("xb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError as exc:
+        raise FileDurabilityError(
+            f"failed to durably write file: {path}",
+            operation="file-write-fsync",
+            path=path,
+        ) from exc
+    return data
+
+
+def _confined_path(base: Path, relative: str, name: str) -> Path:
+    try:
+        _safe_relative_posix_path(relative, name)
+    except (TypeError, ValueError) as exc:
+        raise ProjectIntegrityError(str(exc)) from exc
+    base_resolved = base.resolve(strict=False)
+    candidate = base.joinpath(*relative.split("/"))
+    candidate_resolved = candidate.resolve(strict=False)
+    try:
+        candidate_resolved.relative_to(base_resolved)
+    except ValueError as exc:
+        raise ProjectIntegrityError(f"{name} escapes its allowed root") from exc
+    return candidate
+
+
+def _generation_parent(root: Path) -> Path:
+    generations = _confined_path(root, "state/generations", "generation directory")
+    generations.mkdir(parents=True, exist_ok=True)
+    return generations
+
+
+def _next_generation_id(parent: Path) -> str:
+    maximum = 0
+    for child in parent.iterdir():
+        if not child.is_dir() or _GENERATION_RE.fullmatch(child.name) is None:
+            continue
+        maximum = max(maximum, int(child.name.split("-")[1]))
+    while True:
+        candidate = f"g-{maximum + 1:016d}-{secrets.token_hex(4)}"
+        if not (parent / candidate).exists():
+            return candidate
+
+
+def _generation_path(root: Path, generation_id: str) -> Path:
+    _validate_generation_id(generation_id)
+    return _confined_path(
+        root,
+        f"state/generations/{generation_id}",
+        "active generation",
+    )
+
+
+def _project_reference_path(
+    project: ProjectContract,
+    field_name: str,
+    root: Path,
+    generation_path: Path,
+    generation_id: str,
+) -> Path:
+    reference = getattr(project, field_name)
+    expected_local = _PROJECT_REGISTRY_REFERENCES[field_name]
+    expected_full = f"state/generations/{generation_id}/{expected_local}"
+    if reference == expected_local:
+        return _confined_path(generation_path, expected_local, field_name)
+    if reference == expected_full:
+        return _confined_path(root, reference, field_name)
+    raise ProjectIntegrityError(
+        f"{field_name} must reference {expected_local} within the selected generation"
+    )
+
+
+def _decode_source_sidecar(value: Any) -> SourceReferenceSidecar:
+    data = _object(
+        value,
+        "SourceReferenceSidecar",
+        {
+            "schema_version",
+            "generation_id",
+            "project_id",
+            "project_source_reference",
+            "access_metadata",
+            "source_identity_history",
+        },
+    )
+    access = _object(
+        data["access_metadata"],
+        "access_metadata",
+        {
+            "policy",
+            "current_resolved_source_path",
+            "file_size_bytes",
+            "source_file_sha256",
+            "point_count",
+            "bounds_min_xyz",
+            "bounds_max_xyz",
+            "header",
+            "source_available_at_save",
+            "recorded_at",
+        },
+    )
+    history: list[SourceIdentity] = []
+    for item in _sequence(data["source_identity_history"], "source_identity_history"):
+        history.append(
+            SourceIdentity.from_dict(
+                _object(item, "SourceIdentity", set(SourceIdentity.__dataclass_fields__))
+            )
+        )
+    try:
+        sidecar = SourceReferenceSidecar(
+            schema_version=data["schema_version"],
+            generation_id=data["generation_id"],
+            project_id=data["project_id"],
+            project_source_reference=_decode_source_reference(data["project_source_reference"]),
+            access_metadata=access,
+            source_identity_history=tuple(history),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ProjectIntegrityError(f"invalid source sidecar: {exc}") from exc
+    _validate_access_metadata(sidecar)
+    return sidecar
+
+
+def _validate_access_metadata(sidecar: SourceReferenceSidecar) -> None:
+    metadata = sidecar.access_metadata
+    if metadata.get("policy") != _SOURCE_POLICY:
+        raise ProjectIntegrityError("source sidecar has an unsupported access policy")
+    path = metadata.get("current_resolved_source_path")
+    if (
+        type(path) is not str
+        or not path
+        or path != sidecar.project_source_reference.source_identity.resolved_access_path
+    ):
+        raise ProjectIntegrityError("source sidecar access path does not match SourceIdentity")
+    if type(metadata.get("source_available_at_save")) is not bool:
+        raise ProjectIntegrityError("source_available_at_save must be a boolean")
+    if type(metadata.get("file_size_bytes")) is not int or metadata["file_size_bytes"] < 0:
+        raise ProjectIntegrityError("file_size_bytes must be a non-negative integer")
+    if type(metadata.get("point_count")) is not int or metadata["point_count"] < 0:
+        raise ProjectIntegrityError("point_count must be a non-negative integer")
+    if (
+        metadata.get("source_file_sha256")
+        != sidecar.project_source_reference.source_identity.source_file_sha256
+    ):
+        raise ProjectIntegrityError(
+            "source sidecar source_file_sha256 does not match SourceIdentity"
+        )
+    if list(metadata.get("bounds_min_xyz", ())) != list(
+        sidecar.project_source_reference.source_identity.source_bounds_min_xyz
+    ):
+        raise ProjectIntegrityError("source sidecar bounds_min_xyz does not match SourceIdentity")
+    if list(metadata.get("bounds_max_xyz", ())) != list(
+        sidecar.project_source_reference.source_identity.source_bounds_max_xyz
+    ):
+        raise ProjectIntegrityError("source sidecar bounds_max_xyz does not match SourceIdentity")
+    _timestamp(metadata.get("recorded_at"), "access_metadata.recorded_at")
+    if not isinstance(metadata.get("header"), Mapping):
+        raise ProjectIntegrityError("access_metadata.header must be a JSON object")
+
+
+def _default_access_metadata(project: ProjectContract) -> dict[str, Any]:
+    identity = project.source_reference.source_identity
+    path = Path(identity.resolved_access_path)
+    available = False
+    file_size = 0
+    try:
+        stat = path.stat()
+    except OSError:
+        pass
+    else:
+        available = path.is_file()
+        file_size = stat.st_size if available else 0
+    return {
+        "policy": _SOURCE_POLICY,
+        "current_resolved_source_path": identity.resolved_access_path,
+        "file_size_bytes": file_size,
+        "source_file_sha256": identity.source_file_sha256,
+        "point_count": identity.source_point_count,
+        "bounds_min_xyz": list(identity.source_bounds_min_xyz),
+        "bounds_max_xyz": list(identity.source_bounds_max_xyz),
+        "header": {},
+        "source_available_at_save": available,
+        "recorded_at": _utc_timestamp(),
+    }
+
+
+def _build_source_sidecar(
+    project: ProjectContract,
+    generation_id: str,
+    source_access_metadata: Mapping[str, Any] | None,
+) -> SourceReferenceSidecar:
+    metadata = _default_access_metadata(project)
+    if source_access_metadata is not None:
+        if not isinstance(source_access_metadata, Mapping):
+            raise PersistenceError("source_access_metadata must be a mapping")
+        unknown = sorted(set(source_access_metadata) - set(metadata))
+        if unknown:
+            raise PersistenceError(
+                f"source_access_metadata has unknown field(s): {', '.join(unknown)}"
+            )
+        metadata.update(source_access_metadata)
+    sidecar = SourceReferenceSidecar(
+        schema_version=SOURCE_REFERENCE_PERSISTENCE_SCHEMA_VERSION,
+        generation_id=generation_id,
+        project_id=project.project_id,
+        project_source_reference=project.source_reference,
+        access_metadata=metadata,
+        source_identity_history=(),
+    )
+    _validate_access_metadata(sidecar)
+    return sidecar
+
+
+def _decode_registry(
+    value: Any,
+    project: ProjectContract,
+    generation_id: str,
+) -> TowerRegistry | SpanRegistry:
+    data = _object(
+        value,
+        "registry",
+        {"schema_version", "generation_id", "project_id", "reserved_sequences", "records"},
+    )
+    for field in ("reserved_sequences", "records"):
+        if _sequence(data[field], field):
+            raise ProjectIntegrityError(f"P2A registry {field} must be empty")
+    if data["project_id"] != project.project_id:
+        raise ProjectIntegrityError("registry project_id does not match project")
+    if data["generation_id"] != generation_id:
+        raise ProjectIntegrityError("registry generation_id does not match generation")
+    if data["schema_version"] == TOWER_REGISTRY_SCHEMA_VERSION:
+        return TowerRegistry(
+            schema_version=data["schema_version"],
+            generation_id=data["generation_id"],
+            project_id=data["project_id"],
+        )
+    if data["schema_version"] == SPAN_REGISTRY_SCHEMA_VERSION:
+        return SpanRegistry(
+            schema_version=data["schema_version"],
+            generation_id=data["generation_id"],
+            project_id=data["project_id"],
+        )
+    raise ProjectIntegrityError("unsupported registry schema version")
+
+
+def _decode_run_index(value: Any, project: ProjectContract, generation_id: str) -> RunIndex:
+    data = _object(value, "RunIndex", {"schema_version", "generation_id", "project_id", "entries"})
+    if _sequence(data["entries"], "entries"):
+        raise ProjectIntegrityError("P2A run index entries must be empty")
+    if data["schema_version"] != RUN_INDEX_SCHEMA_VERSION:
+        raise ProjectIntegrityError("unsupported run-index schema version")
+    if data["project_id"] != project.project_id:
+        raise ProjectIntegrityError("run index project_id does not match project")
+    if data["generation_id"] != generation_id:
+        raise ProjectIntegrityError("run index generation_id does not match generation")
+    return RunIndex(
+        schema_version=data["schema_version"],
+        generation_id=data["generation_id"],
+        project_id=data["project_id"],
+    )
+
+
+def _decode_manifest(value: Any, project_id: str, generation_id: str) -> GenerationManifest:
+    data = _object(
+        value,
+        "GenerationManifest",
+        {
+            "schema_version",
+            "project_id",
+            "generation_id",
+            "sealed",
+            "files",
+            "project_manifest_logical_digest",
+            "created_at",
+            "published_at",
+        },
+    )
+    if data["schema_version"] != GENERATION_SCHEMA_VERSION:
+        raise ProjectIntegrityError("unsupported generation schema version")
+    if data["project_id"] != project_id:
+        raise ProjectIntegrityError("generation manifest project_id does not match project")
+    if data["generation_id"] != generation_id:
+        raise ProjectIntegrityError("generation manifest generation_id does not match directory")
+    if _bool(data["sealed"], "sealed") is not True:
+        raise ProjectIntegrityError("generation manifest must be sealed")
+    records: list[FileRecord] = []
+    for item in _sequence(data["files"], "files"):
+        record = _object(item, "FileRecord", {"relative_path", "byte_size", "sha256"})
+        if type(record["relative_path"]) is not str:
+            raise ProjectIntegrityError("file record relative_path must be a string")
+        if type(record["byte_size"]) is not int or record["byte_size"] < 0:
+            raise ProjectIntegrityError("file record byte_size must be a non-negative integer")
+        records.append(
+            FileRecord(
+                relative_path=record["relative_path"],
+                byte_size=record["byte_size"],
+                sha256=_validate_digest(record["sha256"], "file record sha256"),
+            )
+        )
+    if tuple(item.relative_path for item in records) != _GENERATION_FILES:
+        raise ProjectIntegrityError("generation manifest file records are not exact and ordered")
+    _validate_digest(data["project_manifest_logical_digest"], "project_manifest_logical_digest")
+    _timestamp(data["created_at"], "created_at")
+    _timestamp(data["published_at"], "published_at")
+    return GenerationManifest(
+        schema_version=data["schema_version"],
+        project_id=data["project_id"],
+        generation_id=data["generation_id"],
+        sealed=True,
+        files=tuple(records),
+        project_manifest_logical_digest=data["project_manifest_logical_digest"],
+        created_at=data["created_at"],
+        published_at=data["published_at"],
+    )
+
+
+def _validate_generation_files(
+    generation_path: Path,
+    manifest: GenerationManifest,
+) -> None:
+    for record in manifest.files:
+        path = _confined_path(generation_path, record.relative_path, "generation file reference")
+        try:
+            data = path.read_bytes()
+        except (FileNotFoundError, OSError) as exc:
+            raise FileIntegrityError(f"missing generation file {record.relative_path}") from exc
+        if len(data) != record.byte_size:
+            raise FileIntegrityError(f"wrong byte size for {record.relative_path}")
+        if file_sha256(data) != record.sha256:
+            raise FileIntegrityError(f"wrong SHA-256 for {record.relative_path}")
+
+
+def _validate_generation_content(
+    root: Path,
+    generation_path: Path,
+    generation_id: str,
+    project: ProjectContract,
+    source_sidecar: SourceReferenceSidecar,
+    tower_registry: TowerRegistry,
+    span_registry: SpanRegistry,
+    run_index: RunIndex,
+) -> None:
+    if source_sidecar.project_id != project.project_id:
+        raise ProjectIntegrityError("source sidecar project_id does not match project")
+    if source_sidecar.generation_id != generation_id:
+        raise ProjectIntegrityError("source sidecar generation_id does not match generation")
+    if source_sidecar.project_source_reference != project.source_reference:
+        raise ProjectIntegrityError("source sidecar source reference does not match project")
+    for field_name in _PROJECT_REGISTRY_REFERENCES:
+        _project_reference_path(project, field_name, root, generation_path, generation_id)
+    if (
+        tower_registry.project_id != project.project_id
+        or span_registry.project_id != project.project_id
+    ):
+        raise ProjectIntegrityError("registry project identity does not match project")
+    if run_index.project_id != project.project_id:
+        raise ProjectIntegrityError("run index project identity does not match project")
+
+
+def _read_generation_content(
+    root: Path,
+    generation_path: Path,
+    generation_id: str,
+) -> tuple[ProjectContract, SourceReferenceSidecar, TowerRegistry, SpanRegistry, RunIndex]:
+    project_data = _read_json(generation_path / "project.json", "generation project.json")
+    project = _decode_project(project_data)
+    source_data = _read_json(
+        generation_path / "source" / "source-reference.json",
+        "source/source-reference.json",
+    )
+    source_sidecar = _decode_source_sidecar(source_data)
+    tower_data = _read_json(generation_path / "towers" / "towers.json", "towers/towers.json")
+    tower_registry = _decode_registry(tower_data, project, generation_id)
+    if not isinstance(tower_registry, TowerRegistry):
+        raise ProjectIntegrityError("towers/towers.json has the wrong registry schema")
+    span_data = _read_json(generation_path / "spans" / "spans.json", "spans/spans.json")
+    span_registry = _decode_registry(span_data, project, generation_id)
+    if not isinstance(span_registry, SpanRegistry):
+        raise ProjectIntegrityError("spans/spans.json has the wrong registry schema")
+    run_data = _read_json(generation_path / "runs" / "run-index.json", "runs/run-index.json")
+    run_index = _decode_run_index(run_data, project, generation_id)
+    _validate_generation_content(
+        root,
+        generation_path,
+        generation_id,
+        project,
+        source_sidecar,
+        tower_registry,
+        span_registry,
+        run_index,
+    )
+    return project, source_sidecar, tower_registry, span_registry, run_index
+
+
+def _read_root_pointer(root: Path) -> tuple[dict[str, Any], ProjectContract]:
+    pointer_data = _read_json(root / "project.json", "root project.json")
+    pointer = _object(
+        pointer_data,
+        "ActivePointer",
+        {
+            "schema_version",
+            "project_id",
+            "active_generation_id",
+            "generation_manifest_reference",
+            "generation_manifest_sha256",
+            "project_manifest_reference",
+            "project_manifest_sha256",
+            "project",
+        },
+    )
+    if pointer["schema_version"] != ACTIVE_POINTER_SCHEMA_VERSION:
+        raise ProjectIntegrityError("unsupported active-pointer schema version")
+    generation_id = _validate_generation_id(pointer["active_generation_id"])
+    _validate_digest(pointer["generation_manifest_sha256"], "generation_manifest_sha256")
+    _validate_digest(pointer["project_manifest_sha256"], "project_manifest_sha256")
+    project = _decode_project(pointer["project"])
+    if pointer["project_id"] != project.project_id:
+        raise ProjectIntegrityError("active pointer project_id does not match nested project")
+    expected_generation_reference = f"state/generations/{generation_id}/generation.json"
+    expected_project_reference = f"state/generations/{generation_id}/project.json"
+    if pointer["generation_manifest_reference"] != expected_generation_reference:
+        raise ProjectIntegrityError("active pointer generation reference is unsafe or mismatched")
+    if pointer["project_manifest_reference"] != expected_project_reference:
+        raise ProjectIntegrityError("active pointer project reference is unsafe or mismatched")
+    _confined_path(root, pointer["generation_manifest_reference"], "generation reference")
+    _confined_path(root, pointer["project_manifest_reference"], "project reference")
+    return pointer, project
+
+
+def open_project(project_root: str | os.PathLike[str]) -> LoadedProject:
+    """Strictly reopen exactly the generation selected by the root pointer."""
+
+    root = Path(project_root)
+    if not root.is_dir():
+        raise ProjectIntegrityError("project root must be an existing directory")
+    pointer, pointer_project = _read_root_pointer(root)
+    generation_id = pointer["active_generation_id"]
+    generation_path = _generation_path(root, generation_id)
+    if not generation_path.is_dir() or generation_path.name.startswith(_STAGING_PREFIX):
+        raise ProjectIntegrityError("active generation is missing or is a staging directory")
+
+    manifest_path = generation_path / "generation.json"
+    manifest_data = _read_json(manifest_path, "generation.json")
+    manifest_bytes = manifest_path.read_bytes()
+    if file_sha256(manifest_bytes) != pointer["generation_manifest_sha256"]:
+        raise FileIntegrityError("root pointer generation manifest digest mismatch")
+    manifest = _decode_manifest(manifest_data, pointer_project.project_id, generation_id)
+    _validate_generation_files(generation_path, manifest)
+    project_path = generation_path / "project.json"
+    project_bytes = project_path.read_bytes()
+    if file_sha256(project_bytes) != pointer["project_manifest_sha256"]:
+        raise FileIntegrityError("root pointer project manifest digest mismatch")
+    project, source_sidecar, tower_registry, span_registry, run_index = _read_generation_content(
+        root,
+        generation_path,
+        generation_id,
+    )
+    if project != pointer_project:
+        raise ProjectIntegrityError("root pointer nested project does not match generation project")
+    if project.project_id != manifest.project_id or project.project_id != pointer["project_id"]:
+        raise ProjectIntegrityError("project identity is inconsistent across the active generation")
+    project_payload = project.to_dict()
+    if manifest.project_manifest_logical_digest != logical_json_digest(project_payload):
+        raise FileIntegrityError("wrong logical project manifest digest")
+    if canonical_json_bytes(project_payload) + b"\n" != project_bytes:
+        raise FileIntegrityError("generation project manifest changed after validation")
+    return LoadedProject(
+        project=project,
+        source_sidecar=source_sidecar,
+        tower_registry=tower_registry,
+        span_registry=span_registry,
+        run_index=run_index,
+        generation_id=generation_id,
+        generation_manifest=manifest,
+        project_root=root,
+        generation_path=generation_path,
+    )
+
+
+def _write_generation_files(
+    root: Path,
+    staging_path: Path,
+    generation_id: str,
+    project: ProjectContract,
+    source_sidecar: SourceReferenceSidecar,
+) -> tuple[dict[str, Any], SourceReferenceSidecar, TowerRegistry, SpanRegistry, RunIndex]:
+    (staging_path / "source").mkdir()
+    (staging_path / "towers").mkdir()
+    (staging_path / "spans").mkdir()
+    (staging_path / "runs").mkdir()
+    tower_registry = TowerRegistry(TOWER_REGISTRY_SCHEMA_VERSION, generation_id, project.project_id)
+    span_registry = SpanRegistry(SPAN_REGISTRY_SCHEMA_VERSION, generation_id, project.project_id)
+    run_index = RunIndex(RUN_INDEX_SCHEMA_VERSION, generation_id, project.project_id)
+    project_payload = project.to_dict()
+    _write_json(staging_path / "source" / "source-reference.json", source_sidecar.to_dict())
+    _write_json(staging_path / "towers" / "towers.json", tower_registry.to_dict())
+    _write_json(staging_path / "spans" / "spans.json", span_registry.to_dict())
+    _write_json(staging_path / "runs" / "run-index.json", run_index.to_dict())
+    _write_json(staging_path / "project.json", project_payload)
+    for child_name in ("source", "towers", "spans", "runs"):
+        _fsync_directory(staging_path / child_name)
+    _fsync_directory(staging_path)
+    _read_generation_content(root, staging_path, generation_id)
+    return project_payload, source_sidecar, tower_registry, span_registry, run_index
+
+
+def _file_records(staging_path: Path) -> tuple[FileRecord, ...]:
+    records: list[FileRecord] = []
+    for relative in _GENERATION_FILES:
+        path = _confined_path(staging_path, relative, "generation file")
+        data = path.read_bytes()
+        records.append(FileRecord(relative, len(data), file_sha256(data)))
+    return tuple(records)
+
+
+def _publish_generation(
+    root: Path,
+    project: ProjectContract,
+    *,
+    source_access_metadata: Mapping[str, Any] | None = None,
+) -> LoadedProject:
+    """Private copy-on-write generation publisher used by one-shot creation/tests."""
+
+    if type(project) is not ProjectContract:
+        raise PersistenceError("project must be an exact ProjectContract")
+    # Exercise the strict boundary before any staging side effect.
+    decoded_project = _decode_project(project.to_dict())
+    if decoded_project != project:
+        raise PersistenceError("project did not survive strict serialization round trip")
+    root.mkdir(parents=True, exist_ok=True)
+    if not root.is_dir():
+        raise PersistenceError("project root must be a directory")
+    generations = _generation_parent(root)
+    generation_id = _next_generation_id(generations)
+    staging_path = generations / f"{_STAGING_PREFIX}{uuid.uuid4().hex}"
+    staging_path.mkdir()
+    source_sidecar = _build_source_sidecar(project, generation_id, source_access_metadata)
+    try:
+        project_payload, _, _, _, _ = _write_generation_files(
+            root,
+            staging_path,
+            generation_id,
+            project,
+            source_sidecar,
+        )
+        created_at = _utc_timestamp()
+        manifest = GenerationManifest(
+            schema_version=GENERATION_SCHEMA_VERSION,
+            project_id=project.project_id,
+            generation_id=generation_id,
+            sealed=True,
+            files=_file_records(staging_path),
+            project_manifest_logical_digest=logical_json_digest(project_payload),
+            created_at=created_at,
+            published_at=_utc_timestamp(),
+        )
+        _write_json(staging_path / "generation.json", manifest.to_dict())
+        _fsync_directory(staging_path)
+        # Re-read and validate the sealed staging generation before rename.
+        staged_manifest = _decode_manifest(
+            _read_json(staging_path / "generation.json", "staged generation.json"),
+            project.project_id,
+            generation_id,
+        )
+        _validate_generation_files(staging_path, staged_manifest)
+        _read_generation_content(root, staging_path, generation_id)
+        final_path = generations / generation_id
+        try:
+            os.replace(staging_path, final_path)
+        except OSError as exc:
+            raise GenerationPublicationError(
+                f"failed to publish generation directory: {generation_id}",
+                operation="generation-directory-replace",
+                path=final_path,
+            ) from exc
+        _fsync_directory(generations)
+        # Validate the published immutable directory before changing the root pointer.
+        _validate_published_generation(root, final_path, generation_id)
+        pointer = {
+            "schema_version": ACTIVE_POINTER_SCHEMA_VERSION,
+            "project_id": project.project_id,
+            "active_generation_id": generation_id,
+            "generation_manifest_reference": f"state/generations/{generation_id}/generation.json",
+            "generation_manifest_sha256": file_sha256(
+                (final_path / "generation.json").read_bytes()
+            ),
+            "project_manifest_reference": f"state/generations/{generation_id}/project.json",
+            "project_manifest_sha256": file_sha256((final_path / "project.json").read_bytes()),
+            "project": project_payload,
+        }
+        _atomic_replace_root_pointer(root, pointer)
+        return open_project(root)
+    except Exception:
+        # A failed stage is intentionally retained as an unreferenced staging
+        # directory.  The old root pointer is never repaired or replaced here.
+        raise
+
+
+def _validate_published_generation(
+    root: Path,
+    generation_path: Path,
+    generation_id: str,
+) -> None:
+    manifest_path = generation_path / "generation.json"
+    project = _decode_project(
+        _read_json(generation_path / "project.json", "generation project.json")
+    )
+    manifest = _decode_manifest(
+        _read_json(manifest_path, "generation.json"),
+        project.project_id,
+        generation_id,
+    )
+    _validate_generation_files(generation_path, manifest)
+    _read_generation_content(root, generation_path, generation_id)
+
+
+def _atomic_replace_root_pointer(root: Path, pointer: Mapping[str, Any]) -> None:
+    target = root / "project.json"
+    temporary = root / f".{target.name}.tmp-{uuid.uuid4().hex}"
+    try:
+        try:
+            _write_json(temporary, dict(pointer))
+        except (DurabilityError, OSError) as exc:
+            raise RootPointerReplaceError(
+                "failed to durably write root active-pointer temporary file",
+                operation="root-pointer-temp-write-fsync",
+                path=temporary,
+            ) from exc
+        _read_json(temporary, "temporary root project.json")
+        try:
+            os.replace(temporary, target)
+        except OSError as exc:
+            raise RootPointerReplaceError(
+                "failed to replace root active pointer; prior pointer remains authoritative",
+                operation="root-pointer-replace",
+                path=target,
+            ) from exc
+        try:
+            _fsync_directory(root)
+        except DirectoryDurabilityError as exc:
+            raise PostPointerDurabilityError(
+                "root pointer was replaced before project-root durability failed; "
+                "reopen and revalidate before retrying",
+                operation="root-directory-fsync-after-pointer-replace",
+                path=root,
+                pointer_replaced=True,
+            ) from exc
+        _read_json(target, "published root project.json")
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def create_project(
+    project_root: str | os.PathLike[str],
+    project: ProjectContract,
+    *,
+    source_access_metadata: Mapping[str, Any] | None = None,
+) -> LoadedProject:
+    """Create and publish one initial immutable P2A project generation.
+
+    This is intentionally a one-shot operation.  P2A provides no mutable
+    session or public authoritative save API; later phases own that boundary.
+    """
+
+    root = Path(project_root)
+    root.mkdir(parents=True, exist_ok=True)
+    if (root / "project.json").exists():
+        raise PersistenceError("project root already has an active project pointer")
+    return _publish_generation(
+        root,
+        project,
+        source_access_metadata=source_access_metadata,
+    )
+
+
+__all__ = [
+    "ACTIVE_POINTER_SCHEMA_VERSION",
+    "GENERATION_SCHEMA_VERSION",
+    "RUN_INDEX_SCHEMA_VERSION",
+    "SOURCE_REFERENCE_PERSISTENCE_SCHEMA_VERSION",
+    "SPAN_REGISTRY_SCHEMA_VERSION",
+    "TOWER_REGISTRY_SCHEMA_VERSION",
+    "FileIntegrityError",
+    "GenerationManifest",
+    "LoadedProject",
+    "PersistenceError",
+    "ProjectIntegrityError",
+    "RunIndex",
+    "SourceReferenceSidecar",
+    "SpanRegistry",
+    "TowerRegistry",
+    "canonical_json_bytes",
+    "create_project",
+    "deserialize_project",
+    "file_sha256",
+    "logical_json_digest",
+    "open_project",
+    "published_json_bytes",
+    "published_json_digest",
+    "project_from_dict",
+]
