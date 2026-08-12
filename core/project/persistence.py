@@ -22,7 +22,13 @@ from types import MappingProxyType
 from typing import Any
 
 from core.contracts._json import json_safe
-from core.contracts.frv import SourceIdentity, canonical_frv_json_bytes, frv_digest
+from core.contracts.frv import (
+    SourceIdentity,
+    canonical_frv_json_bytes,
+    frv_digest,
+    validate_source_content_identity_digest,
+    validate_source_identity_record_digest,
+)
 from core.contracts.project import (
     AnalysisStage,
     AnalysisStatus,
@@ -1008,6 +1014,43 @@ def _decode_prediction_result(value: Any) -> PredictionResult:
         raise PersistenceError(f"invalid PredictionResult: {exc}") from exc
 
 
+def _validate_source_history(
+    current: SourceIdentity,
+    history: Sequence[SourceIdentity],
+    *,
+    history_name: str,
+) -> None:
+    """Freeze the current + history source access-record invariants.
+
+    Every accepted access record for one project must describe the same frozen
+    scientific content identity, must be internally digest-consistent per the
+    reviewed FRV contract, and must carry a unique ``source_identity_record_digest``.
+    The current record digest appears exactly once as CURRENT and never in history,
+    so no record digest can resolve ambiguously to more than one access record.
+    """
+    validate_source_content_identity_digest(current)
+    validate_source_identity_record_digest(current)
+    expected_content_digest = current.source_content_identity_digest
+    current_record_digest = current.source_identity_record_digest
+    seen_record_digests: set[str] = set()
+    for identity in history:
+        if type(identity) is not SourceIdentity:
+            raise PersistenceError(f"{history_name} must contain SourceIdentity values")
+        validate_source_content_identity_digest(identity)
+        validate_source_identity_record_digest(identity)
+        if identity.source_content_identity_digest != expected_content_digest:
+            raise PersistenceError(
+                f"{history_name} record does not match the project source content identity"
+            )
+        if identity.source_identity_record_digest in seen_record_digests:
+            raise PersistenceError(f"{history_name} contains duplicate record digests")
+        if identity.source_identity_record_digest == current_record_digest:
+            raise PersistenceError(
+                f"the current source record digest must not appear in {history_name}"
+            )
+        seen_record_digests.add(identity.source_identity_record_digest)
+
+
 @dataclass(frozen=True, slots=True)
 class SourceReferenceSidecar:
     """Immutable source access envelope paired with one P1 source reference."""
@@ -1035,6 +1078,11 @@ class SourceReferenceSidecar:
         history = tuple(self.source_identity_history)
         if any(type(item) is not SourceIdentity for item in history):
             raise PersistenceError("source_identity_history must contain SourceIdentity values")
+        _validate_source_history(
+            self.project_source_reference.source_identity,
+            history,
+            history_name="source_identity_history",
+        )
         object.__setattr__(self, "source_identity_history", history)
 
     def to_dict(self) -> dict[str, Any]:
@@ -1766,6 +1814,18 @@ def _validate_registry_state(
         current_binding.source_identity_record_digest,
         *(item.source_identity_record_digest for item in source_sidecar.source_identity_history),
     }
+    # A historical Tower/Span binding legitimately references an earlier audited
+    # source access record after an exact-content relocation.  Each binding's
+    # coordinate context must match the source identity it actually references
+    # (the current record or a validated record in source_identity_history),
+    # never a different access record.
+    expected_coordinate_contexts = {
+        current_binding.source_identity_record_digest: current_binding.coordinate_context
+    }
+    for history_identity in source_sidecar.source_identity_history:
+        expected_coordinate_contexts[history_identity.source_identity_record_digest] = (
+            SourceIdentityBinding.from_source_identity(history_identity).coordinate_context
+        )
 
     tower_sequences: set[int] = set()
     tower_by_id: dict[str, TowerRegistryEntry] = {}
@@ -1779,8 +1839,13 @@ def _validate_registry_state(
                 raise ProjectIntegrityError("tower source content identity does not match project source")
             if revision.source_binding.source_identity_record_digest not in allowed_record_digests:
                 raise ProjectIntegrityError("tower source identity record is not in project source history")
-            if revision.coordinate_context != current_binding.coordinate_context:
-                raise ProjectIntegrityError("tower coordinate context does not match project source")
+            if (
+                revision.coordinate_context
+                != expected_coordinate_contexts[revision.source_binding.source_identity_record_digest]
+            ):
+                raise ProjectIntegrityError(
+                    "tower coordinate context does not match its referenced source identity"
+                )
             if revision.state is TowerLifecycleState.ARCHIVED:
                 archived_seen = True
             elif archived_seen:
@@ -1807,6 +1872,13 @@ def _validate_registry_state(
             raise ProjectIntegrityError("span source content identity does not match project source")
         if span.source_binding.source_identity_record_digest not in allowed_record_digests:
             raise ProjectIntegrityError("span source identity record is not in project source history")
+        if (
+            span.source_binding.coordinate_context
+            != expected_coordinate_contexts[span.source_binding.source_identity_record_digest]
+        ):
+            raise ProjectIntegrityError(
+                "span coordinate context does not match its referenced source identity"
+            )
         from_entry = tower_by_id.get(span.from_tower_id)
         to_entry = tower_by_id.get(span.to_tower_id)
         if from_entry is None or to_entry is None:

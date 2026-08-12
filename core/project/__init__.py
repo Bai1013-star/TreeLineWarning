@@ -73,6 +73,14 @@ from core.project.session import (
     reopen_project_read_only,
     reopen_project_writable,
 )
+from core.project.source_relocation import (
+    SourceCandidateError,
+    SourceCandidateIdentityError,
+    SourceRelocationError,
+    SourceRelocationPublicationUncertainError,
+    SourceRelocationResult,
+    relocate_source,
+)
 
 __all__ = [
     "ACTIVE_POINTER_SCHEMA_VERSION",
@@ -140,4 +148,10 @@ __all__ = [
     "reserve_span_id",
     "reserve_tower_id",
     "revise_tower",
+    "SourceCandidateError",
+    "SourceCandidateIdentityError",
+    "SourceRelocationError",
+    "SourceRelocationPublicationUncertainError",
+    "SourceRelocationResult",
+    "relocate_source",
 ]

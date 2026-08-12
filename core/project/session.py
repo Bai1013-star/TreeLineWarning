@@ -474,6 +474,12 @@ class WritableProjectSession(ProjectSession):
 
         return archive_span(self, span_id)
 
+    def relocate_source(self, candidate_path):
+        """Exact-content source relocation; see ``source_relocation``."""
+        from core.project.source_relocation import relocate_source
+
+        return relocate_source(self, candidate_path)
+
 
 class ReadOnlyProjectSession(ProjectSession):
     """Immutable project snapshot that never acquires writer ownership."""
