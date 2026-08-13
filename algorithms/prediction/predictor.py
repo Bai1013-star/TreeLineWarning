@@ -11,6 +11,7 @@ from algorithms.prediction.standards import (
     PredictionStandards,
     analyze_distances,
     analyze_wire,
+    classify_clearance_defect,
 )
 from algorithms.prediction.tree_factor import calculate_tree_factor
 
@@ -72,16 +73,10 @@ class TreeRiskPredictor:
 
         # 树线关系；旧 distance_to_wire 自动映射为净空距离。
         clearance = (
-            tree.clearance_distance
-            if tree.clearance_distance < 999
-            else tree.distance_to_wire
+            tree.clearance_distance if tree.clearance_distance < 999 else tree.distance_to_wire
         )
-        vertical = (
-            tree.vertical_distance if tree.vertical_distance < 999 else clearance
-        )
-        horizontal = (
-            tree.horizontal_distance if tree.horizontal_distance < 999 else clearance
-        )
+        vertical = tree.vertical_distance if tree.vertical_distance < 999 else clearance
+        horizontal = tree.horizontal_distance if tree.horizontal_distance < 999 else clearance
         wire_analysis = analyze_wire(
             voltage_level_kv=tree.voltage_level_kv,
             maximum_sag_winter=tree.maximum_sag_winter,
@@ -89,9 +84,7 @@ class TreeRiskPredictor:
             observation_month=tree.observation_month,
             standards=standard,
         )
-        sag_adjustment = max(
-            0.0, wire_analysis["maximum_sag"] - wire_analysis["current_sag"]
-        )
+        sag_adjustment = max(0.0, wire_analysis["maximum_sag"] - wire_analysis["current_sag"])
         adjusted_vertical = max(0.0, vertical - sag_adjustment)
         adjusted_clearance = max(0.0, clearance - sag_adjustment)
         geometric_clearance = max(
@@ -113,6 +106,13 @@ class TreeRiskPredictor:
             horizontal_distance=horizontal,
             clearance_distance=adjusted_clearance,
             wind_offset_distance=tree.wind_offset_distance,
+            standards=standard,
+            voltage_level_kv=tree.voltage_level_kv,
+        )
+        clearance_defect = classify_clearance_defect(
+            horizontal_distance=horizontal,
+            vertical_distance=adjusted_vertical,
+            clearance_distance=effective_clearance,
             standards=standard,
             voltage_level_kv=tree.voltage_level_kv,
         )
@@ -145,6 +145,7 @@ class TreeRiskPredictor:
                 "clearance_distance": clearance,
                 "wind_offset_distance": tree.wind_offset_distance,
             },
+            "clearance_defect": clearance_defect,
             "weather_checks": {
                 "wind_speed": {
                     "actual": tree.wind_speed,

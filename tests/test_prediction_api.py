@@ -1,3 +1,4 @@
+import io
 import json
 import threading
 from pathlib import Path
@@ -14,6 +15,7 @@ from algorithms.prediction.temporal_attention import (
 from api.prediction_api import normalize_prediction
 from core.database import Database
 from fastapi.testclient import TestClient
+from openpyxl import Workbook
 
 
 def _write_growth_model(path: Path) -> Path:
@@ -26,16 +28,12 @@ def _write_growth_model(path: Path) -> Path:
         }
         for name in species
     }
-    path.write_text(
-        json.dumps({"sample_count": 12, "species_models": models}), encoding="utf-8"
-    )
+    path.write_text(json.dumps({"sample_count": 12, "species_models": models}), encoding="utf-8")
     return path
 
 
 def _write_temporal_model(path: Path) -> Path:
-    model = NumpyAttentionLSTM(
-        TemporalModelConfig(hidden_size=8, species_count=1, seed=9)
-    )
+    model = NumpyAttentionLSTM(TemporalModelConfig(hidden_size=8, species_count=1, seed=9))
     model.save(
         path,
         {
@@ -110,28 +108,199 @@ def test_homepage_disables_cache_and_links_observation_month():
     assert response.status_code == 200
     assert "no-store" in response.headers["cache-control"]
     html = response.text
-    assert "id=\"observation_year\"" not in html  # Fields are rendered by JavaScript.
+    assert 'id="observation_year"' not in html  # Fields are rendered by JavaScript.
     assert "observation_month" in html
     assert "field-standard" in html
     assert "s_risk_weight_history" in html
-    assert "逐项标准对照" in html
-    assert "公式、系数与逐步代入" in html
-    assert "risk_escalation_indicator" in html
+    assert "未来 12 个月树木变化" in html
+    assert "预测树高" in html
+    assert "预测胸径" in html
+    assert "预测冠幅" in html
+    assert "预测水平距离" in html
+    assert "预测垂直距离" in html
+    assert "预测风偏距离" in html
+    assert "预测导线弧垂" in html
+    assert "预测树线距离与净空缺陷" in html
+    assert "参考缺陷等级" not in html
+    assert "预测树线距离与缺陷等级" not in html
+    assert "缺陷内容" in html
+    assert "predictionDefectContent" in html
+    assert "风险等级预测" in html
+    assert "配电线路树线隐患智能预警工单" in html
+    assert "【四级综合风险总览】" in html
+    assert "【本次数据采用情况】" in html
+    assert "【预测数据】" in html
+    assert "短时预警" in html
+    assert "长时预警 · 树木生长预测（未来12个月）" in html
+    assert "长时预警 · 树线距离预测（未来12个月）" in html
+    assert "长时预警 · 风险等级预测（未来12个月）" in html
+    assert "【风险增大月份与修剪时点】" in html
+    assert "【处置建议】" in html
+    assert "打印 / 保存为 PDF" in html
+    assert "公式、系数与逐步代入" not in html
+    assert "【附件】" not in html
+    assert "【研判说明】" not in html
+    assert "公式、参数与模型注释请在帮助中心查看" not in html
     assert "risk_escalation_probability" not in html
     assert "专利点云预测技术对照" not in html
-    assert (
-        "$('observation_month').addEventListener('change'"
-        in html
-    )
+    assert "$('observation_month').addEventListener('change'" in html
     assert "renderTargetMonths()" in html
-    assert "历史数据与 LSTM 增量训练" in html
-    assert "accept=\".xlsx,.xlsm,.csv,.tsv,.txt,.json\"" in html
-    assert "id=\"historyPaste\"" in html
-    assert "id=\"trainHistory\"" in html
-    assert "id=\"selectAllOptional\"" in html
-    assert "id=\"selectCoreOnly\"" in html
+    assert "模型训练" in html
+    assert 'accept=".xlsx,.xlsm,.csv,.tsv,.txt,.json"' in html
+    assert 'id="historyPaste"' in html
+    assert 'id="trainHistory"' in html
+    assert 'id="deleteSelectedTrainingDatasets"' in html
+    assert 'id="trainingDatasetList"' in html
+    assert "历史增量数据管理" in html
+    assert "/training/datasets/" in html
+    assert "已经发布的模型不会自动回滚" in html
+    assert 'id="selectAllOptional"' in html
+    assert 'id="selectCoreOnly"' in html
     assert "data-use-field" in html
-    assert "未提供项不会作为实测值保存" in html
+    assert "本次数据采用情况" in html
+    assert "historyFeatureFields" in html
+    assert "growth_direction" in html
+    assert "historical_patrol_distance" in html
+    assert "span_length" in html
+    assert "conductor_height" in html
+    assert "wind_direction" in html
+    assert "critical_clearance_distance" in html
+    assert "feature_attention_weights" in html
+    assert "特征注意力权重与贡献" not in html
+    assert "预测模型完整输入特征清单" not in html
+    assert 'accept=".xlsx,.xlsm,.csv,.tsv,.txt,.json' in html
+    assert "/batch/import/file" in html
+    assert 'id="formulaMethod"' in html
+    assert 'id="aiMethod"' in html
+    assert 'id="generateReport"' in html
+    assert "公式预测树木" in html
+    assert "模型预测树木" in html
+    assert "runForecast(selectedPredictionMode)" in html
+    assert "prediction_mode:predictionMode" in html
+    assert 'id="inputPageTab"' in html
+    assert 'id="resultPageTab"' in html
+    assert 'id="historyPageTab"' in html
+    assert 'id="trainingPageTab"' in html
+    assert 'class="matlab-menu-bar"' not in html
+    assert "220 V（0.22 kV）" in html
+    assert "最小风偏距离" in html
+    assert "Array.from({length:12}" in html
+    assert "归一化四级综合风险（0–1）" in html
+    assert "一、树木生长预测" in html
+    assert "二、树线距离预测" in html
+    assert "三、风险等级预测" in html
+    assert "风险指数 R" in html
+    assert "工单状态：待执行 / 待复测" in html
+    assert "四级风险/缺陷" not in html
+    assert "四级风险等级" in html
+    assert "【六类输入特征与本次取值】" not in html
+    assert 'id="inputPage"' in html
+    assert 'id="resultPage"' in html
+    assert 'id="trainingPage"' in html
+    assert 'class="module-rail"' not in html
+    assert 'data-page-nav=' not in html
+    assert 'id="importCurrentTrainingRecord"' in html
+    assert "/training/pool" in html
+    assert "/training/train-pool" in html
+    assert "先查看树高、胸径、冠幅和净空变化" not in html
+    assert "短时生长量通常较小" not in html
+    assert "所有月份从观测日期连续推演" not in html
+    assert 'id="resultSheetTabs"' in html
+    assert "predictionResultsByMode" in html
+    assert "showPredictionResult(predictionMode)" in html
+    assert "公式树木预测" in html
+    assert "模型树木预测" in html
+    assert "返回修改数据" in html
+    assert 'id="historyDetailDialog"' in html
+    assert "data-history-id" in html
+    assert "loadHistoryRecordIntoForm" in html
+    assert "点击查看完整数据" in html
+    assert 'href="/help"' in html
+    assert "field-help-button" in html
+    assert 'id="fieldHelpDialog"' in html
+    assert "const fieldHelp=" in html
+    for field_name in (
+        "observation_year",
+        "species",
+        "height",
+        "maximum_sag_summer",
+        "clearance_distance",
+        "temperature",
+        "sunlight_hours",
+    ):
+        assert f"{field_name}:{{purpose:" in html
+
+
+def test_help_page_explains_formulas_fields_and_dataset_requirements():
+    response = TestClient(prediction_api.app).get("/help")
+    assert response.status_code == 200
+    assert "no-store" in response.headers["cache-control"]
+    html = response.text
+    assert "TreeLineWarning 帮助中心" in html
+    assert "d有效 = min" in html
+    assert "R = 0.40D + 0.25G + 0.20M + 0.15H" in html
+    assert "S融合 = 0.50×S_LSTM + 0.35×S规则 + 0.15×S注意力先验" in html
+    assert "批量预测数据集" in html
+    assert "LSTM 增量训练数据集" in html
+    assert "Excel、CSV、TSV、TXT 和 JSON" in html
+    assert "同一 tree_id 至少 2 个不同日期" in html
+    assert "不是通用聊天大模型" in html
+    assert "第 2 页·预测结果" in html
+    assert "类似 Excel 工作表的小标签" in html
+    assert "模型注释、输入清单与计算口径" in html
+    assert "project_default_unverified" in html
+    assert "风险升级情景指标" in html
+    assert "不是经过事故样本校准的真实概率" in html
+    assert "95%情景区间" in html
+    assert "vertical_distance" in html
+    assert "三维点云截图" in html
+    assert "结果报告不再重复这些说明" in html
+    assert "220 V（0.22 kV）" in html
+    assert "S_01—S_12" in html
+    assert "最小风偏距离" in html
+
+
+def test_batch_excel_upload_returns_rows_for_preview(tmp_path: Path):
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "单树观测"
+    worksheet.append(
+        [
+            "树木编号",
+            "树种",
+            "树高",
+            "电压等级",
+            "净空距离",
+            "观测日期",
+        ]
+    )
+    worksheet.append([101, "杨树", 18.5, 10, 2.8, "2026-08-07"])
+    worksheet.append([102, "松树", 16.2, 35, 3.6, "2026-08-07"])
+    stream = io.BytesIO()
+    workbook.save(stream)
+    workbook.close()
+
+    db = Database(tmp_path / "batch-excel.db")
+    response = TestClient(prediction_api.create_app(database=db)).post(
+        "/batch/import/file",
+        files={
+            "file": (
+                "observations.xlsx",
+                stream.getvalue(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source_format"] == "xlsx"
+    assert body["sheet_name"] == "单树观测"
+    assert body["row_count"] == 2
+    assert body["records"][0]["树木编号"] == 101
+    assert body["records"][1]["净空距离"] == 3.6
+    assert db.get_predictions() == []
+    db.close()
 
 
 def test_create_app_defers_database_creation(tmp_path: Path):
@@ -245,6 +414,38 @@ def test_database_stores_only_result_strings(tmp_path: Path):
     db.close()
 
 
+def test_database_round_trips_extended_input_features(tmp_path: Path):
+    db = Database(tmp_path / "extended-inputs.db")
+    db.save_prediction(
+        {
+            "tree_id": 8,
+            "risk_level": "中风险",
+            "suggestion": "建议加强监测",
+            "growth_direction": "向导线",
+            "historical_patrol_distance": 2.8,
+            "crown_expansion_speed": 0.06,
+            "pruning_record": "超过1年未修剪",
+            "span_length": 38,
+            "conductor_height": 16,
+            "line_direction": "东西向",
+            "wind_direction": "东风",
+        }
+    )
+
+    row = db.get_predictions()[0]
+    assert row["growth_direction"] == "向导线"
+    assert row["historical_patrol_distance"] == 2.8
+    assert row["crown_expansion_speed"] == 0.06
+    assert row["pruning_record"] == "超过1年未修剪"
+    assert row["span_length"] == 38
+    assert row["conductor_height"] == 16
+    assert row["line_direction"] == "东西向"
+    assert row["wind_direction"] == "东风"
+    assert row["risk_level"] == "中风险"
+    assert row["prediction"] == "建议加强监测"
+    db.close()
+
+
 def test_database_reads_legacy_dict_without_exposing_dict(tmp_path: Path):
     db = Database(tmp_path / "legacy.db")
     db.conn.execute(
@@ -300,6 +501,41 @@ def test_training_dataset_and_run_are_persisted(tmp_path: Path):
     db.close()
 
 
+def test_training_dataset_delete_removes_records_and_linked_runs(tmp_path: Path):
+    db = Database(tmp_path / "training-delete.db")
+    parsed = {
+        "source_name": "biased.csv",
+        "source_format": "csv",
+        "sheet_name": None,
+        "row_count": 1,
+        "valid_row_count": 1,
+        "invalid_row_count": 0,
+        "tree_count": 1,
+        "eligible_tree_count": 0,
+        "trainable_sequence_count": 0,
+        "records": [{"tree_id": "bad-1", "observation_date": "2026-01-15"}],
+        "preview": [],
+        "errors": [],
+        "trainable": False,
+        "requirements": [],
+    }
+    dataset_id = db.save_training_dataset(parsed)
+    db.save_training_run(
+        dataset_id,
+        {"status": "not_deployed", "deployed": False},
+    )
+
+    deleted = db.delete_training_dataset(dataset_id)
+
+    assert deleted is not None
+    assert deleted["source_name"] == "biased.csv"
+    assert db.get_training_dataset(dataset_id) is None
+    assert db.list_training_records() == []
+    assert db.list_training_runs() == []
+    assert db.delete_training_dataset(dataset_id) is None
+    db.close()
+
+
 def test_history_upload_and_training_api(tmp_path: Path, monkeypatch):
     db = Database(tmp_path / "training-api.db")
     source_model = _write_temporal_model(tmp_path / "source.npz")
@@ -329,9 +565,7 @@ def test_history_upload_and_training_api(tmp_path: Path, monkeypatch):
     assert imported.json()["trainable"] is True
     assert "records" not in imported.json()
 
-    def fake_fine_tune(
-        records, *, model_path, output_path, epochs, learning_rate, allow_replace
-    ):
+    def fake_fine_tune(records, *, model_path, output_path, epochs, learning_rate, allow_replace):
         assert len(records) == 3
         assert model_path == source_model
         assert output_path.parent == output_dir
@@ -360,6 +594,109 @@ def test_history_upload_and_training_api(tmp_path: Path, monkeypatch):
     history = client.get("/training/history").json()
     assert history["datasets"][0]["id"] == dataset_id
     assert history["runs"][0]["metrics"]["after_validation_mae"] == 3.1
+
+    deleted = client.delete(f"/training/datasets/{dataset_id}")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted_dataset"]["source_name"] == "history.csv"
+    assert deleted.json()["training_pool"]["valid_row_count"] == 0
+    after_delete = client.get("/training/history").json()
+    assert all(item["id"] != dataset_id for item in after_delete["datasets"])
+    assert after_delete["runs"] == []
+    assert client.delete(f"/training/datasets/{dataset_id}").status_code == 404
+    db.close()
+
+
+def _single_training_record(day: int, *, height: float, risk_score: float) -> dict:
+    return {
+        "tree_id": "single-1",
+        "species": "杨树",
+        "observation_date": f"2026-0{day}-15",
+        "height": height,
+        "diameter": 33.0 + day * 0.1,
+        "vertical_distance": 6.5 - day * 0.05,
+        "horizontal_distance": 6.3 - day * 0.05,
+        "clearance_distance": 5.5 - day * 0.05,
+        "wind_offset_distance": 0.8,
+        "voltage_level_kv": 110,
+        "maximum_sag_winter": 3.5,
+        "maximum_sag_summer": 5.0,
+        "wind_speed": 5 + day,
+        "rainfall": 20 + day,
+        "humidity": 60 + day,
+        "temperature": 5 + day,
+        "sunlight_hours": 5 + day,
+        "risk_score": risk_score,
+    }
+
+
+def test_single_imports_are_merged_and_deduplicated_in_training_pool(tmp_path: Path):
+    db = Database(tmp_path / "training-pool.db")
+    client = TestClient(prediction_api.create_app(database=db))
+    for record in (
+        _single_training_record(1, height=17.2, risk_score=30),
+        _single_training_record(2, height=17.3, risk_score=35),
+        _single_training_record(3, height=17.4, risk_score=40),
+        _single_training_record(2, height=17.35, risk_score=36),
+    ):
+        response = client.post(
+            "/training/import/text",
+            json={"text": json.dumps([record], ensure_ascii=False), "format": "json"},
+        )
+        assert response.status_code == 200
+
+    pool = client.get("/training/pool")
+    assert pool.status_code == 200
+    assert pool.json()["valid_row_count"] == 3
+    assert pool.json()["tree_count"] == 1
+    assert pool.json()["trainable_sequence_count"] == 2
+    assert pool.json()["trainable"] is True
+    assert len(db.list_training_records()) == 4
+    db.close()
+
+
+def test_training_pool_trains_merged_single_imports(tmp_path: Path, monkeypatch):
+    db = Database(tmp_path / "training-pool-run.db")
+    source_model = _write_temporal_model(tmp_path / "pool-source.npz")
+    output_dir = tmp_path / "pool-candidates"
+    client = TestClient(
+        prediction_api.create_app(
+            database=db,
+            temporal_model_path=source_model,
+            training_output_dir=output_dir,
+        )
+    )
+    for day in (1, 2, 3):
+        response = client.post(
+            "/training/import/text",
+            json={
+                "text": json.dumps(
+                    [_single_training_record(day, height=17 + day / 10, risk_score=30 + day)],
+                    ensure_ascii=False,
+                ),
+                "format": "json",
+            },
+        )
+        assert response.status_code == 200
+
+    def fake_fine_tune(records, **kwargs):
+        assert len(records) == 3
+        return {
+            "status": "not_deployed",
+            "deployed": False,
+            "sequence_samples": 2,
+            "before_validation_mae": 3.2,
+            "after_validation_mae": 3.3,
+            "improvement": -0.1,
+        }
+
+    monkeypatch.setattr(prediction_api, "fine_tune_with_history", fake_fine_tune)
+    trained = client.post(
+        "/training/train-pool", json={"epochs": 5, "learning_rate": 0.001}
+    )
+    assert trained.status_code == 200
+    assert trained.json()["metrics"]["sequence_samples"] == 2
+    assert db.list_training_datasets()[0]["source_format"] == "pool_snapshot"
+    assert len(db.list_training_records()) == 3
     db.close()
 
 
@@ -383,13 +720,12 @@ def test_predict_and_history_contract(tmp_path: Path):
             },
         }
     ]
+
     class FakePipeline:
         def predict(self, _):
             return raw
 
-    client = TestClient(
-        prediction_api.create_app(database=db, prediction_pipeline=FakePipeline())
-    )
+    client = TestClient(prediction_api.create_app(database=db, prediction_pipeline=FakePipeline()))
 
     response = client.post("/predict", json={"tree_id": 1, "species": "松树"})
     assert response.status_code == 200
@@ -458,9 +794,7 @@ def test_standard_settings_round_trip_and_pipeline_injection(tmp_path: Path):
         def predict(self, payload):
             return fake_predict(payload)
 
-    client = TestClient(
-        prediction_api.create_app(database=db, prediction_pipeline=FakePipeline())
-    )
+    client = TestClient(prediction_api.create_app(database=db, prediction_pipeline=FakePipeline()))
     settings = client.get("/settings/standards").json()
     settings.update(
         {
@@ -533,6 +867,36 @@ def test_database_persists_distance_and_standard_analysis(tmp_path: Path):
     db.close()
 
 
+def test_history_detail_returns_one_decoded_record_and_missing_is_404(tmp_path: Path):
+    db = Database(tmp_path / "history-detail.db")
+    prediction_id = db.save_prediction(
+        {
+            "tree_id": 42,
+            "species": "松树",
+            "height": 12.5,
+            "line_name": "10kV 测试线",
+            "clearance_distance": 3.2,
+            "risk_level": "中风险",
+            "suggestion": "建议加强监测",
+            "standard_profile": {"profile_name": "测试标准"},
+        }
+    )
+    client = TestClient(prediction_api.create_app(database=db))
+
+    response = client.get(f"/history/{prediction_id}")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == prediction_id
+    assert response.json()["tree_id"] == 42
+    assert response.json()["risk_level"] == "中风险"
+    assert response.json()["prediction"] == "建议加强监测"
+    assert response.json()["line_name"] == "10kV 测试线"
+    assert response.json()["standard_profile"]["profile_name"] == "测试标准"
+    assert db.get_prediction(prediction_id)["species"] == "松树"
+    assert client.get("/history/999999").status_code == 404
+    db.close()
+
+
 def test_forecast_endpoint_returns_selectable_horizons(tmp_path: Path):
     db = Database(tmp_path / "forecast-api.db")
 
@@ -583,7 +947,7 @@ def test_forecast_endpoint_returns_selectable_horizons(tmp_path: Path):
         "2个月",
     ]
     assert body["growth_trend"]["height_change"] > 0
-    assert body["report_type"] == "配电线路树线隐患智能预警工单"
+    assert body["report_type"] == "树木生长与树线安全预测报告"
     assert body["calendar_context"]["selected_horizon_months"] == 2
     assert body["selected_target_prediction"]["period"] == "2个月"
     assert body["work_order"]["work_order_id"].startswith("TLW-")
@@ -593,6 +957,48 @@ def test_forecast_endpoint_returns_selectable_horizons(tmp_path: Path):
     snapshot = db.get_predictions()[0]["risk_snapshot"]
     assert snapshot["model_status"] == "experimental"
     assert snapshot["parameter_source"] == "project_default_unverified"
+    db.close()
+
+
+def test_formula_forecast_does_not_require_temporal_model(tmp_path: Path):
+    db = Database(tmp_path / "formula-forecast-api.db")
+    client = TestClient(
+        prediction_api.create_app(
+            database=db,
+            species_growth_model=_growth_model(tmp_path),
+        )
+    )
+
+    response = client.post(
+        "/predict/forecast",
+        json={
+            "prediction_mode": "formula",
+            "tree_data": {
+                "tree_id": 32,
+                "species": "杨树",
+                "height": 16,
+                "observation_date": "2026-08-07",
+                "voltage_level_kv": 110,
+                "clearance_distance": 4.5,
+            },
+            "short_horizons_days": [1],
+            "long_horizons_months": [1, 2],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["prediction_mode"] == "formula"
+    assert body["prediction_mode_label"] == "公式树木生长预测"
+    assert body["report_type"] == "树木生长与树线安全预测报告"
+    assert body["long_term_forecast"][0]["predicted_crown_width"] >= 0
+    assert body["risk_timeline_analysis"]["planning_risk"]["risk_level"] in {
+        "低风险",
+        "中风险",
+        "高风险",
+    }
+    assert body["long_term_forecast"][0]["lstm_risk_score"] is None
+    assert db.get_predictions()[0]["risk_snapshot"]["prediction_mode"] == "formula"
     db.close()
 
 
@@ -779,17 +1185,13 @@ def _training_dataset(db: Database) -> int:
     )
 
 
-def test_app_model_configuration_is_isolated_and_injected_models_win(
-    tmp_path: Path, monkeypatch
-):
+def test_app_model_configuration_is_isolated_and_injected_models_win(tmp_path: Path, monkeypatch):
     explicit_temporal = _write_temporal_model(tmp_path / "explicit-temporal.npz")
     environment_temporal = _write_temporal_model(tmp_path / "environment-temporal.npz")
     explicit_growth = _write_growth_model(tmp_path / "explicit-growth.json")
     environment_growth = _write_growth_model(tmp_path / "environment-growth.json")
     monkeypatch.setenv("TREELINE_WARNING_TEMPORAL_MODEL_PATH", str(environment_temporal))
-    monkeypatch.setenv(
-        "TREELINE_WARNING_SPECIES_GROWTH_MODEL_PATH", str(environment_growth)
-    )
+    monkeypatch.setenv("TREELINE_WARNING_SPECIES_GROWTH_MODEL_PATH", str(environment_growth))
     injected_temporal = TemporalPredictor(explicit_temporal)
     injected_growth = SpeciesGrowthModel(explicit_growth)
     first = prediction_api.create_app(
@@ -818,9 +1220,7 @@ def test_unconfigured_models_and_invalid_temporal_requests_have_safe_errors(tmp_
     client = TestClient(app)
     assert client.post("/predict/temporal", json={"records": []}).status_code == 422
     assert client.post("/predict/temporal", json={"records": [{}]}).status_code == 422
-    temporal_response = client.post(
-        "/predict/temporal", json={"records": _temporal_records()}
-    )
+    temporal_response = client.post("/predict/temporal", json={"records": _temporal_records()})
     assert temporal_response.status_code == 503
     assert client.post("/predict/forecast", json={"tree_data": {}}).status_code == 503
     app.state.database.close()
@@ -843,13 +1243,8 @@ def test_training_requires_output_directory_and_prevents_second_task(tmp_path: P
     db = Database(tmp_path / "training-lock.db")
     dataset_id = _training_dataset(db)
     source_model = _write_temporal_model(tmp_path / "training-source.npz")
-    missing_output_app = prediction_api.create_app(
-        database=db, temporal_model_path=source_model
-    )
-    assert (
-        TestClient(missing_output_app).post(f"/training/train/{dataset_id}").status_code
-        == 503
-    )
+    missing_output_app = prediction_api.create_app(database=db, temporal_model_path=source_model)
+    assert TestClient(missing_output_app).post(f"/training/train/{dataset_id}").status_code == 503
 
     started = threading.Event()
     release = threading.Event()
@@ -868,9 +1263,7 @@ def test_training_requires_output_directory_and_prevents_second_task(tmp_path: P
     first_result: dict[str, object] = {}
 
     def submit_first() -> None:
-        first_result["response"] = TestClient(app).post(
-            f"/training/train/{dataset_id}"
-        )
+        first_result["response"] = TestClient(app).post(f"/training/train/{dataset_id}")
 
     thread = threading.Thread(target=submit_first)
     thread.start()

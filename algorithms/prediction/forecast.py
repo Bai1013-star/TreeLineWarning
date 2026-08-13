@@ -7,6 +7,10 @@ from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from algorithms.prediction.feature_attention import (
+    FEATURE_CATALOG,
+    feature_attention_prior,
+)
 from algorithms.prediction.predictor import TreeInput, TreeRiskPredictor
 from algorithms.prediction.risk_evaluation import (
     calculate_historical_risk,
@@ -15,7 +19,11 @@ from algorithms.prediction.risk_evaluation import (
     comprehensive_risk,
 )
 from algorithms.prediction.species_growth import SpeciesGrowthModel
-from algorithms.prediction.standards import PredictionStandards, analyze_wire
+from algorithms.prediction.standards import (
+    PredictionStandards,
+    analyze_wire,
+    classify_clearance_defect,
+)
 from algorithms.prediction.temporal_attention import (
     TemporalPredictor,
     risk_from_score,
@@ -51,13 +59,21 @@ OPTIONAL_INPUT_FIELDS = (
     "age",
     "diameter",
     "crown_width",
+    "growth_direction",
     "slope",
+    "historical_patrol_distance",
+    "crown_expansion_speed",
+    "pruning_record",
     "maximum_sag_winter",
     "maximum_sag_summer",
+    "span_length",
+    "conductor_height",
+    "line_direction",
     "vertical_distance",
     "horizontal_distance",
     "wind_offset_distance",
     "wind_speed",
+    "wind_direction",
     "rainfall",
     "humidity",
     "temperature",
@@ -65,6 +81,7 @@ OPTIONAL_INPUT_FIELDS = (
 )
 
 ALL_INPUT_FIELDS = (*REQUIRED_INPUT_FIELDS, *OPTIONAL_INPUT_FIELDS)
+PREDICTION_MODES = {"formula", "ai"}
 
 INPUT_FIELD_LABELS = {
     "observation_year": "观测年份",
@@ -81,15 +98,23 @@ INPUT_FIELD_LABELS = {
     "age": "树龄",
     "diameter": "胸径",
     "crown_width": "冠幅",
+    "growth_direction": "生长方向",
     "slope": "立地坡度",
+    "historical_patrol_distance": "历史巡检距离",
+    "crown_expansion_speed": "树冠扩展速度",
+    "pruning_record": "修剪记录",
     "voltage_level_kv": "电压等级",
     "maximum_sag_winter": "冬季最大弧垂",
     "maximum_sag_summer": "夏季最大弧垂",
+    "span_length": "档距",
+    "conductor_height": "导线高度",
+    "line_direction": "线路走向",
     "vertical_distance": "垂直距离",
     "horizontal_distance": "水平距离",
     "clearance_distance": "净空距离",
     "wind_offset_distance": "风偏距离",
     "wind_speed": "风速",
+    "wind_direction": "风向",
     "rainfall": "降雨量",
     "humidity": "湿度",
     "temperature": "温度",
@@ -105,6 +130,16 @@ def season_for_month(month: int) -> str:
     if month in (9, 10, 11):
         return "秋季"
     return "冬季"
+
+
+def season_stage_for_month(month: int) -> str:
+    if month in (3, 4, 5):
+        return "春季萌发期"
+    if month in (6, 7, 8):
+        return "夏季旺长期"
+    if month in (9, 10, 11):
+        return "秋季缓生/休眠过渡期"
+    return "冬季休眠期"
 
 
 def add_months(value: date, months: int) -> date:
@@ -179,7 +214,11 @@ class ForecastService:
         long_horizons_months: list[int] | None = None,
         historical_records: list[dict[str, Any]] | None = None,
         selected_horizon_months: int | None = None,
+        prediction_mode: str = "ai",
     ) -> dict[str, Any]:
+        prediction_mode = str(prediction_mode).strip().lower()
+        if prediction_mode not in PREDICTION_MODES:
+            raise ValueError("prediction_mode 必须是 formula 或 ai")
         standard = PredictionStandards.from_mapping(standards)
         short_days = sorted(set(short_horizons_days or [1, 7, 14, 30]))
         long_months = sorted(set(long_horizons_months or [1, 2, 3, 6, 12]))
@@ -202,18 +241,31 @@ class ForecastService:
             standard,
             tree_id=current["tree_id"],
         )
+        current_attention = feature_attention_prior(current, usable_history, standard)
+        current_rule["attention_prior"] = current_attention
+        current_rule["clearance_defect"] = current_rule.get("standard_analysis", {}).get(
+            "clearance_defect"
+        )
         short_term = [self._short_projection(current, days, standard) for days in short_days]
 
         monthly_records = [*usable_history[-17:], current]
         long_term = []
         for month_index in range(1, max(long_months) + 1):
-            monthly_records.append(self._next_month(monthly_records[-1], current, month_index))
+            next_state = self._next_month(monthly_records[-1], current, month_index)
+            if prediction_mode == "ai":
+                temporal = self._temporal_predictor_for_prediction().predict(
+                    [*monthly_records[-17:], next_state], current["species"]
+                )
+                self._apply_temporal_tree_adjustment(monthly_records, next_state, temporal)
+                next_state["_temporal_prediction"] = temporal
+            monthly_records.append(next_state)
             if month_index in long_months:
                 long_term.append(
                     self._long_projection(
                         monthly_records,
                         month_index,
                         standard,
+                        prediction_mode=prediction_mode,
                     )
                 )
 
@@ -251,11 +303,11 @@ class ForecastService:
 
         target = next(item for item in long_term if item["horizon_months"] == selected_month)
         height_delta = target["predicted_height"] - current["height"]
+        crown_width_delta = target["predicted_crown_width"] - current["crown_width"]
         clearance_delta = target["predicted_clearance_distance"] - current["clearance_distance"]
         risk_delta = target["risk_score"] - current_rule["risk_score"]
         comprehensive_risk_delta = (
-            target["comprehensive_risk_score"]
-            - current_rule["comprehensive_risk_score"]
+            target["comprehensive_risk_score"] - current_rule["comprehensive_risk_score"]
         )
         risk_timeline = self._risk_timeline_analysis(
             current,
@@ -269,8 +321,8 @@ class ForecastService:
         comprehensive_maximum_score = max(
             float(item["comprehensive_risk_score"]) for item in all_assessments
         )
-        comprehensive_urgency, comprehensive_urgency_icon = (
-            self._comprehensive_urgency(comprehensive_maximum_score, standard)
+        comprehensive_urgency, comprehensive_urgency_icon = self._comprehensive_urgency(
+            comprehensive_maximum_score, standard
         )
         now = datetime.now()
         quality_warnings = self._data_quality_warnings(current)
@@ -285,7 +337,26 @@ class ForecastService:
             standard,
         )
         return {
-            "report_type": "配电线路树线隐患智能预警工单",
+            "prediction_mode": prediction_mode,
+            "prediction_mode_label": (
+                "公式树木生长预测" if prediction_mode == "formula" else "时序模型树木生长预测"
+            ),
+            "prediction_method": {
+                "code": prediction_mode,
+                "label": (
+                    "分树种生长公式与季节工况引擎"
+                    if prediction_mode == "formula"
+                    else "LSTM时序注意力树木生长引擎"
+                ),
+                "description": (
+                    "先按树种、月份和气象条件预测树高、胸径与冠幅，再对照线路净空标准。"
+                    if prediction_mode == "formula"
+                    else "用LSTM近期、季节和树种注意力修正树木生长，再对照线路净空标准。"
+                ),
+                "uses_temporal_model": prediction_mode == "ai",
+                "auditable_formula": "R = wD×D + wG×G + wM×M + wH×H",
+            },
+            "report_type": "树木生长与树线安全预测报告",
             "work_order": {
                 "work_order_id": work_order_id,
                 "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
@@ -329,6 +400,10 @@ class ForecastService:
             "observed_input_snapshot": observed_snapshot,
             "input_availability": availability,
             "applied_standard": standard.to_dict(),
+            "standard_reference": standard.standard_reference,
+            "feature_catalog": FEATURE_CATALOG,
+            "feature_attention_analysis": current_attention,
+            "clearance_defect_classification": current_rule.get("clearance_defect"),
             "current_assessment": current_rule,
             "short_term_forecast": short_term,
             "long_term_forecast": long_term,
@@ -348,9 +423,19 @@ class ForecastService:
             },
             "model_context": {
                 "risk_model": (
-                    "LSTM 三重注意力（近期、季节、树种特征）+ D/G/M/H 可解释综合风险"
-                    if self.temporal_predictor is not None
-                    else "季节生长 + 可配置规则"
+                    "LSTM 三重学习注意力（近期、季节、树种特征）+ 可配置特征注意力先验"
+                    " + D/G/M/H 可解释综合风险"
+                    if prediction_mode == "ai"
+                    else "D/G/M/H标准公式 + 行业阈值 + 历史风险系数"
+                ),
+                "long_term_auxiliary_formula": (
+                    "辅助风险分 = 0.50×LSTM分 + 0.35×规则分 + 0.15×可配置特征注意力先验分"
+                    if prediction_mode == "ai"
+                    else "公式风险分 = 标准规则分；四级预警继续以D/G/M/H综合风险R为准"
+                ),
+                "input_engineering": (
+                    "生长方向决定树线侵入比例，树冠扩展速度影响水平净距，近期修剪记录降低短期生长情景；"
+                    "档距、导线高度、线路走向与风向作为线路档案和联合研判项保留。"
                 ),
                 "growth_model": (
                     "分树种月度气象生长模型（模拟数据训练）"
@@ -366,15 +451,14 @@ class ForecastService:
                 "forecast_months": selected_month,
                 "height_change": round(height_delta, 3),
                 "diameter_change": round(target["predicted_diameter"] - current["diameter"], 3),
+                "crown_width_change": round(crown_width_delta, 3),
                 "clearance_change": round(clearance_delta, 3),
                 "risk_score_change": round(risk_delta, 2),
                 "comprehensive_risk_score_change": round(comprehensive_risk_delta, 2),
                 "direction": (
-                    "风险上升"
-                    if risk_delta > 3
-                    else "风险下降"
-                    if risk_delta < -3
-                    else "风险基本稳定"
+                    "树木持续生长"
+                    if height_delta > 0.01 or crown_width_delta > 0.01
+                    else "树木变化较小"
                 ),
             },
             "calculation_ledger": ledger,
@@ -401,6 +485,10 @@ class ForecastService:
                 ),
                 "所有短时日期和未来月份均从观测日期起算，而不是从工单生成日期起算。",
                 "重点月份用于展示选定月份结果；风险上升月与修剪时点按完整风险扫描月份自动计算。",
+                "图片中的12项特征注意力系数已作为默认先验，用户可在设置中修改，且权重和必须为1。",
+                "净空缺陷按危急、严重、一般、安全四档展示；任一距离达到危急阈值时优先覆盖。",
+                "生长方向、树冠扩展速度和修剪记录已进入净空推演；未校准的线路几何与方向字段不单独硬加分。",
+                standard.standard_reference,
                 "未提供未来逐日天气预报时，短时预测沿用观测时气象作为情景假设。",
                 "当前树种生长模型使用现实规律约束的模拟数据；收到真实历史数据后应重训校准。",
                 "预测值用于预警和巡检排序，真实工程处置仍需现场复测。",
@@ -416,9 +504,7 @@ class ForecastService:
         selection_active = isinstance(value.get("selected_fields"), list)
         if selection_active:
             provided = {
-                str(field)
-                for field in value["selected_fields"]
-                if str(field) in ALL_INPUT_FIELDS
+                str(field) for field in value["selected_fields"] if str(field) in ALL_INPUT_FIELDS
             }
             missing = [
                 INPUT_FIELD_LABELS[field]
@@ -445,13 +531,21 @@ class ForecastService:
             "age": 20.0,
             "diameter": max(10.0, float(value.get("height", 0) or 0) * 2.0),
             "crown_width": 0.0,
+            "growth_direction": "不确定",
             "slope": 0.0,
+            "historical_patrol_distance": clearance,
+            "crown_expansion_speed": 0.0,
+            "pruning_record": "无记录",
             "maximum_sag_winter": round(float(rules["max_sag"]) * 0.7, 3),
             "maximum_sag_summer": float(rules["max_sag"]),
+            "span_length": 0.0,
+            "conductor_height": 0.0,
+            "line_direction": "不确定",
             "vertical_distance": clearance,
             "horizontal_distance": clearance,
             "wind_offset_distance": 0.0,
             "wind_speed": 0.0,
+            "wind_direction": "不确定",
             "rainfall": 0.0,
             "humidity": 60.0,
             "temperature": neutral_temperature,
@@ -473,9 +567,13 @@ class ForecastService:
             "species": str(value.get("species", "其他")),
             "height": float(value.get("height", 0)),
             "crown_width": float(selected_value("crown_width")),
+            "growth_direction": str(selected_value("growth_direction")),
             "age": float(selected_value("age")),
             "diameter": float(selected_value("diameter")),
             "slope": float(selected_value("slope")),
+            "historical_patrol_distance": float(selected_value("historical_patrol_distance")),
+            "crown_expansion_speed": float(selected_value("crown_expansion_speed")),
+            "pruning_record": str(selected_value("pruning_record")),
             "vertical_distance": float(selected_value("vertical_distance")),
             "horizontal_distance": float(selected_value("horizontal_distance")),
             "clearance_distance": clearance,
@@ -483,11 +581,15 @@ class ForecastService:
             "voltage_level_kv": float(value.get("voltage_level_kv", 110)),
             "maximum_sag_winter": float(selected_value("maximum_sag_winter")),
             "maximum_sag_summer": float(selected_value("maximum_sag_summer")),
+            "span_length": float(selected_value("span_length")),
+            "conductor_height": float(selected_value("conductor_height")),
+            "line_direction": str(selected_value("line_direction")),
             "observation_date": observed_on.isoformat(),
             "observation_year": observed_on.year,
             "observation_month": observed_on.month,
             "observation_day": observed_on.day,
             "wind_speed": float(selected_value("wind_speed")),
+            "wind_direction": str(selected_value("wind_direction")),
             "rainfall": float(selected_value("rainfall")),
             "humidity": float(selected_value("humidity")),
             "temperature": float(selected_value("temperature")),
@@ -499,6 +601,7 @@ class ForecastService:
         }
         result["distance_to_wire"] = result["clearance_distance"]
         result["month"] = result["observation_month"]
+        result["season_stage"] = season_stage_for_month(result["observation_month"])
         result["_selection_active"] = selection_active
         result["_provided_fields"] = sorted({*provided, "observation_date"})
         result["_omitted_fields"] = sorted(set(OPTIONAL_INPUT_FIELDS) - provided)
@@ -525,16 +628,18 @@ class ForecastService:
             return "未提供生长气象数据，模型采用不触发生长加分的中性情景值"
         if field == "crown_width":
             return "未提供冠幅；当前模型不让该缺失值直接加分"
+        if field in {"historical_patrol_distance", "crown_expansion_speed", "pruning_record"}:
+            return "未提供历史变化特征；以当前净空或无变化、无记录的中性情景计算"
+        if field in {"growth_direction", "wind_direction", "line_direction"}:
+            return "未提供方向信息；方向暂记为不确定，不额外加分"
+        if field in {"span_length", "conductor_height"}:
+            return "未提供线路几何档案；报告标记缺失，不额外加分"
         return "未提供档案数据，仅在报告中标记为缺失"
 
     @staticmethod
     def _observed_snapshot(value: dict[str, Any]) -> dict[str, Any]:
         omitted = set(value.get("_omitted_fields", []))
-        result = {
-            key: field_value
-            for key, field_value in value.items()
-            if not key.startswith("_")
-        }
+        result = {key: field_value for key, field_value in value.items() if not key.startswith("_")}
         for field in omitted:
             result[field] = None
         result["distance_to_wire"] = result.get("clearance_distance")
@@ -580,6 +685,10 @@ class ForecastService:
             ("wind_speed", "风速"),
             ("rainfall", "降雨量"),
             ("sunlight_hours", "日照时长"),
+            ("historical_patrol_distance", "历史巡检距离"),
+            ("crown_expansion_speed", "树冠扩展速度"),
+            ("span_length", "档距"),
+            ("conductor_height", "导线高度"),
         ):
             if value[field] < 0:
                 raise ValueError(f"{label}不能小于 0")
@@ -611,7 +720,7 @@ class ForecastService:
         return warnings
 
     def _growth_for_month(self, state: dict[str, Any], month: int) -> tuple[float, float]:
-        return self._growth_model_for_prediction().predict(
+        height_growth, diameter_growth = self._growth_model_for_prediction().predict(
             state["species"],
             month=month,
             temperature=state["temperature"],
@@ -621,6 +730,29 @@ class ForecastService:
             age=state["age"],
             height=state["height"],
         )
+        pruning_factor = {
+            "近3个月已修剪": 0.65,
+            "近6个月已修剪": 0.80,
+            "近1年已修剪": 0.90,
+        }.get(str(state.get("pruning_record", "无记录")), 1.0)
+        return height_growth * pruning_factor, diameter_growth * pruning_factor
+
+    @staticmethod
+    def _encroachment_factors(state: dict[str, Any]) -> tuple[float, float]:
+        direction = str(state.get("growth_direction", "不确定"))
+        vertical_factor = {
+            "向导线": 0.75,
+            "背离导线": 0.10,
+            "平行线路": 0.30,
+            "竖直向上": 0.50,
+        }.get(direction, 0.45)
+        crown_factor = {
+            "向导线": 1.00,
+            "背离导线": 0.00,
+            "平行线路": 0.50,
+            "竖直向上": 0.20,
+        }.get(direction, 0.35)
+        return vertical_factor, crown_factor
 
     def _normalize_history(
         self,
@@ -689,9 +821,20 @@ class ForecastService:
             total_diameter_growth += monthly_diameter / days_in_month
         state["height"] += total_height_growth
         state["diameter"] += total_diameter_growth
-        encroachment = total_height_growth * 0.45
-        state["vertical_distance"] = max(0, state["vertical_distance"] - encroachment)
-        state["clearance_distance"] = max(0, state["clearance_distance"] - encroachment)
+        vertical_factor, crown_factor = self._encroachment_factors(state)
+        vertical_encroachment = total_height_growth * vertical_factor
+        crown_radial_growth = max(
+            total_height_growth * 0.16,
+            max(0.0, float(state.get("crown_expansion_speed", 0))) * days / 30.4375,
+        )
+        crown_expansion = crown_radial_growth * crown_factor
+        state["crown_width"] += 2 * crown_radial_growth
+        state["vertical_distance"] = max(0, state["vertical_distance"] - vertical_encroachment)
+        state["horizontal_distance"] = max(0, state["horizontal_distance"] - crown_expansion)
+        state["clearance_distance"] = max(
+            0,
+            state["clearance_distance"] - max(vertical_encroachment, crown_expansion),
+        )
         state["distance_to_wire"] = state["clearance_distance"]
         state["observation_date"] = target_on.isoformat()
         state["observation_year"] = target_on.year
@@ -711,7 +854,9 @@ class ForecastService:
             "predicted_height": round(state["height"], 3),
             "predicted_age": round(state["age"], 3),
             "predicted_diameter": round(state["diameter"], 3),
+            "predicted_crown_width": round(state["crown_width"], 3),
             "predicted_vertical_distance": round(state["vertical_distance"], 3),
+            "predicted_horizontal_distance": round(state["horizontal_distance"], 3),
             "predicted_clearance_distance": round(state["clearance_distance"], 3),
             "predicted_effective_clearance": round(
                 float(
@@ -722,15 +867,20 @@ class ForecastService:
                 ),
                 3,
             ),
+            "predicted_wind_offset_distance": round(state["wind_offset_distance"], 3),
             "predicted_sag": wire["current_sag"],
             "height_growth": round(total_height_growth, 4),
+            "diameter_growth": round(total_diameter_growth, 4),
+            "crown_width_growth": round(2 * crown_radial_growth, 4),
             "predicted_temperature": round(state["temperature"], 2),
             "predicted_sunlight_hours": round(state["sunlight_hours"], 2),
             "predicted_rainfall": round(state["rainfall"], 2),
             "predicted_humidity": round(state["humidity"], 2),
             "predicted_wind_speed": round(state["wind_speed"], 2),
             "season": season_for_month(state["observation_month"]),
+            "season_stage": season_stage_for_month(state["observation_month"]),
             "wire_condition": wire["season"],
+            "clearance_defect": result.get("standard_analysis", {}).get("clearance_defect"),
             "suggestion": result["suggestion"],
         }
 
@@ -771,35 +921,163 @@ class ForecastService:
         state["observation_day"] = target_on.day
         state["observation_date"] = target_on.isoformat()
         state["month"] = month
+        state["season_stage"] = season_stage_for_month(month)
         state["age"] = baseline["age"] + month_index / 12
         height_growth, diameter_growth = self._growth_for_month(state, month)
         state["height"] += height_growth
         state["diameter"] += diameter_growth
-        encroachment = height_growth * 0.45
-        state["vertical_distance"] = max(0, state["vertical_distance"] - encroachment)
-        state["horizontal_distance"] = max(0, state["horizontal_distance"] - height_growth * 0.16)
-        state["clearance_distance"] = max(0, state["clearance_distance"] - encroachment)
+        vertical_factor, crown_factor = self._encroachment_factors(state)
+        vertical_encroachment = height_growth * vertical_factor
+        crown_radial_growth = max(
+            height_growth * 0.16,
+            max(0.0, float(state.get("crown_expansion_speed", 0))),
+        )
+        crown_expansion = crown_radial_growth * crown_factor
+        state["crown_width"] += 2 * crown_radial_growth
+        state["vertical_distance"] = max(0, state["vertical_distance"] - vertical_encroachment)
+        state["horizontal_distance"] = max(0, state["horizontal_distance"] - crown_expansion)
+        state["clearance_distance"] = max(
+            0,
+            state["clearance_distance"] - max(vertical_encroachment, crown_expansion),
+        )
         state["distance_to_wire"] = state["clearance_distance"]
         state["_height_growth"] = height_growth
         state["_diameter_growth"] = diameter_growth
+        state["_crown_width_growth"] = 2 * crown_radial_growth
         state["_target_date"] = target_on.isoformat()
         return state
+
+    def _apply_temporal_tree_adjustment(
+        self,
+        previous_records: list[dict[str, Any]],
+        state: dict[str, Any],
+        temporal: dict[str, Any],
+    ) -> None:
+        """Use learned recency, season and species attention to adjust tree growth.
+
+        The species growth model remains the physical baseline.  AI mode then
+        blends recent observed growth and the trained attention gates so its
+        tree-height, diameter and crown forecasts are not merely risk-score
+        aliases.
+        """
+
+        attention = temporal.get("attention") or {}
+        species_attention = attention.get("species_features") or {}
+        season_attention = attention.get("season_features") or {}
+
+        def focus(field: str) -> float:
+            values = [
+                float(mapping[field])
+                for mapping in (species_attention, season_attention)
+                if field in mapping
+            ]
+            return sum(values) / len(values) if values else 0.5
+
+        time_attention = [float(value) for value in attention.get("time") or []]
+        recency_ratio = (
+            time_attention[-1] * len(time_attention) if time_attention else 1.0
+        )
+        recency_factor = max(0.92, min(1.08, 1 + 0.04 * (recency_ratio - 1)))
+        height_factor = max(
+            0.85,
+            min(1.2, (1 + 0.18 * (focus("height") - 0.5)) * recency_factor),
+        )
+        diameter_factor = max(
+            0.85,
+            min(1.2, (1 + 0.18 * (focus("diameter") - 0.5)) * recency_factor),
+        )
+        crown_focus = (focus("height") + focus("horizontal_distance")) / 2
+        crown_factor = max(
+            0.85,
+            min(1.2, (1 + 0.16 * (crown_focus - 0.5)) * recency_factor),
+        )
+
+        base_height_growth = float(state.get("_height_growth", 0))
+        base_diameter_growth = float(state.get("_diameter_growth", 0))
+        base_crown_growth = float(state.get("_crown_width_growth", 0))
+        recent_height_growth: float | None = None
+        recent_diameter_growth: float | None = None
+        if len(previous_records) >= 2:
+            recent_height_growth = max(
+                0.0,
+                float(previous_records[-1]["height"])
+                - float(previous_records[-2]["height"]),
+            )
+            recent_diameter_growth = max(
+                0.0,
+                float(previous_records[-1]["diameter"])
+                - float(previous_records[-2]["diameter"]),
+            )
+
+        adjusted_height_growth = base_height_growth
+        adjusted_diameter_growth = base_diameter_growth
+        if recent_height_growth is not None:
+            adjusted_height_growth = 0.75 * base_height_growth + 0.25 * recent_height_growth
+        if recent_diameter_growth is not None:
+            adjusted_diameter_growth = (
+                0.75 * base_diameter_growth + 0.25 * recent_diameter_growth
+            )
+        adjusted_height_growth *= height_factor
+        adjusted_diameter_growth *= diameter_factor
+        adjusted_crown_growth = base_crown_growth * crown_factor
+
+        state["height"] += adjusted_height_growth - base_height_growth
+        state["diameter"] += adjusted_diameter_growth - base_diameter_growth
+        state["crown_width"] += adjusted_crown_growth - base_crown_growth
+        vertical_factor, toward_wire_factor = self._encroachment_factors(state)
+        vertical_encroachment = adjusted_height_growth * vertical_factor
+        crown_encroachment = adjusted_crown_growth / 2 * toward_wire_factor
+        previous = previous_records[-1]
+        state["vertical_distance"] = max(
+            0, float(previous["vertical_distance"]) - vertical_encroachment
+        )
+        state["horizontal_distance"] = max(
+            0, float(previous["horizontal_distance"]) - crown_encroachment
+        )
+        state["clearance_distance"] = max(
+            0,
+            float(previous["clearance_distance"])
+            - max(vertical_encroachment, crown_encroachment),
+        )
+        state["distance_to_wire"] = state["clearance_distance"]
+        state["_height_growth"] = adjusted_height_growth
+        state["_diameter_growth"] = adjusted_diameter_growth
+        state["_crown_width_growth"] = adjusted_crown_growth
+        state["_tree_growth_attention"] = {
+            "height_factor": round(height_factor, 4),
+            "diameter_factor": round(diameter_factor, 4),
+            "crown_factor": round(crown_factor, 4),
+            "recent_growth_blended": recent_height_growth is not None,
+        }
 
     def _long_projection(
         self,
         records: list[dict[str, Any]],
         months: int,
         standard: PredictionStandards,
+        *,
+        prediction_mode: str = "ai",
     ) -> dict[str, Any]:
         state = records[-1]
         rule = self._rule_result(state, standard)
-        lstm = self._temporal_predictor_for_prediction().predict(records, state["species"])
-        lstm_score = float(lstm["risk_score"])
-        combined_score = (
-            float(rule["risk_score"])
-            if lstm_score is None
-            else 0.55 * lstm_score + 0.45 * float(rule["risk_score"])
-        )
+        attention_prior = feature_attention_prior(state, records[:-1], standard)
+        if prediction_mode == "ai":
+            lstm = state.get("_temporal_prediction") or self._temporal_predictor_for_prediction().predict(
+                records, state["species"]
+            )
+            lstm_score: float | None = float(lstm["risk_score"])
+            combined_score = (
+                0.50 * lstm_score
+                + 0.35 * float(rule["risk_score"])
+                + 0.15 * float(attention_prior["score"])
+            )
+            method = "LSTM时序注意力修正 + 分树种季节生长"
+            score_formula = "0.50×LSTM + 0.35×规则 + 0.15×可配置特征注意力先验"
+        else:
+            lstm_score = None
+            combined_score = float(rule["risk_score"])
+            method = "分树种生长公式 + 季节与气象修正"
+            score_formula = "公式风险分 = 标准规则分；四级预警以D/G/M/H综合风险R为准"
         level, suggestion = risk_from_score(
             combined_score,
             standard.medium_risk_score,
@@ -819,18 +1097,18 @@ class ForecastService:
             "horizon_months": months,
             "target_date": target_on.isoformat(),
             "target_year_month": target_on.strftime("%Y年%m月"),
-            "prediction_method": (
-                "LSTM时序 + 季节生长 + 标准规则"
-                if lstm_score is not None
-                else "季节生长 + 标准规则"
-            ),
+            "prediction_method": method,
             "risk_level": level,
             "risk_score": round(combined_score, 2),
             "rule_risk_score": rule["risk_score"],
             "lstm_risk_score": round(lstm_score, 2) if lstm_score is not None else None,
+            "feature_attention_prior_score": attention_prior["score"],
+            "attention_prior": attention_prior,
+            "auxiliary_score_formula": score_formula,
             "predicted_height": round(state["height"], 3),
             "predicted_age": round(state["age"], 3),
             "predicted_diameter": round(state["diameter"], 3),
+            "predicted_crown_width": round(state["crown_width"], 3),
             "predicted_vertical_distance": round(state["vertical_distance"], 3),
             "predicted_horizontal_distance": round(state["horizontal_distance"], 3),
             "predicted_clearance_distance": round(state["clearance_distance"], 3),
@@ -847,13 +1125,19 @@ class ForecastService:
             "predicted_sag": wire["current_sag"],
             "monthly_height_growth": round(float(state.get("_height_growth", 0)), 4),
             "monthly_diameter_growth": round(float(state.get("_diameter_growth", 0)), 4),
+            "monthly_crown_width_growth": round(
+                float(state.get("_crown_width_growth", 0)), 4
+            ),
+            "tree_growth_attention": state.get("_tree_growth_attention"),
             "predicted_temperature": round(state["temperature"], 2),
             "predicted_sunlight_hours": round(state["sunlight_hours"], 2),
             "predicted_rainfall": round(state["rainfall"], 2),
             "predicted_humidity": round(state["humidity"], 2),
             "predicted_wind_speed": round(state["wind_speed"], 2),
             "season": season_for_month(target_on.month),
+            "season_stage": season_stage_for_month(target_on.month),
             "wire_condition": wire["season"],
+            "clearance_defect": rule.get("standard_analysis", {}).get("clearance_defect"),
             "suggestion": suggestion,
         }
 
@@ -915,6 +1199,26 @@ class ForecastService:
         assessment["warning_color"] = result["warning_color"]
         assessment["risk_escalation_indicator"] = result["risk_escalation_indicator"]
         assessment["hazard_suggestion"] = result["action"]
+        if horizon_months == 0:
+            distance_checks = assessment.get("standard_analysis", {}).get("checks", {})
+            horizontal = distance_checks.get("horizontal_distance", {}).get(
+                "actual", baseline["horizontal_distance"]
+            )
+            vertical = distance_checks.get("vertical_distance", {}).get(
+                "actual", baseline["vertical_distance"]
+            )
+        else:
+            horizontal = assessment.get(
+                "predicted_horizontal_distance", baseline["horizontal_distance"]
+            )
+            vertical = assessment.get("predicted_vertical_distance", baseline["vertical_distance"])
+        assessment["clearance_defect"] = classify_clearance_defect(
+            horizontal_distance=float(horizontal),
+            vertical_distance=float(vertical),
+            clearance_distance=effective,
+            standards=standard,
+            voltage_level_kv=float(baseline["voltage_level_kv"]),
+        )
         if horizon_months > 0:
             assessment["clearance_interval"] = clearance_interval(
                 forecast_clearance,
@@ -978,9 +1282,7 @@ class ForecastService:
                     "risk_level": level,
                     "risk_score": round(score, 2),
                     "hazard_level": item.get("hazard_level"),
-                    "comprehensive_risk_score": item.get(
-                        "comprehensive_risk_score"
-                    ),
+                    "comprehensive_risk_score": item.get("comprehensive_risk_score"),
                     "change_from_previous": round(change_previous, 2),
                     "change_from_current": round(change_current, 2),
                     "trend": (
@@ -1010,11 +1312,7 @@ class ForecastService:
             None,
         )
         first_high = next(
-            (
-                item
-                for item in timeline
-                if item["risk_score"] >= standard.high_risk_score
-            ),
+            (item for item in timeline if item["risk_score"] >= standard.high_risk_score),
             None,
         )
         minimum_clearance = standard.rules_for_voltage(current_snapshot["voltage_level_kv"])[
@@ -1134,6 +1432,24 @@ class ForecastService:
                 f"峰值出现在 {peak['target_year_month']}，为 {peak['risk_score']:.2f} 分"
             )
         )
+        planning_level = (
+            "高风险"
+            if maintenance["status"] == "立即处置"
+            else "中风险"
+            if maintenance["requires_trimming"]
+            else "低风险"
+        )
+        planning_risk = {
+            "risk_level": planning_level,
+            "decision": maintenance["status"],
+            "decision_month": maintenance["recommended_trim_month"],
+            "trigger_month": maintenance["trigger_month"],
+            "peak_month": peak["target_year_month"],
+            "conclusion": (
+                f"{planning_level}：{maintenance['status']}；"
+                f"{maintenance['recommended_deadline']}"
+            ),
+        }
         return {
             "risk_increase_detected": first_increase is not None,
             "risk_increase_conclusion": risk_conclusion,
@@ -1144,6 +1460,7 @@ class ForecastService:
             "first_clearance_violation": first_clearance_violation,
             "minimum_clearance_standard": minimum_clearance,
             "maintenance_decision": maintenance,
+            "planning_risk": planning_risk,
             "timeline": timeline,
         }
 

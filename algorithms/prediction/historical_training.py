@@ -68,9 +68,7 @@ FIELD_ALIASES = {
     "risk_level": ("risk_level", "level", "风险等级"),
 }
 ALIAS_LOOKUP = {
-    _key(alias): canonical
-    for canonical, aliases in FIELD_ALIASES.items()
-    for alias in aliases
+    _key(alias): canonical for canonical, aliases in FIELD_ALIASES.items() for alias in aliases
 }
 
 REQUIRED_FIELDS = (
@@ -118,12 +116,50 @@ RISK_LEVEL_SCORES = {
 }
 
 
+def parse_tabular_file(
+    filename: str,
+    content: bytes,
+    *,
+    max_upload_bytes: int,
+    max_rows: int,
+) -> dict[str, Any]:
+    """Parse an uploaded Excel/text table without applying training requirements."""
+
+    if len(content) > max_upload_bytes:
+        raise ValueError(f"文件不能超过 {max_upload_bytes // (1024 * 1024)} MB")
+    suffix = Path(filename).suffix.lower()
+    if suffix in {".xlsx", ".xlsm"}:
+        rows, sheet_name = _rows_from_xlsx(content, max_rows=max_rows)
+        source_format = suffix.lstrip(".")
+    elif suffix in {".csv", ".tsv", ".txt"}:
+        rows = _rows_from_delimited(_decode_text(content), "\t" if suffix == ".tsv" else None)
+        sheet_name = None
+        source_format = suffix.lstrip(".")
+    elif suffix == ".json":
+        rows = _rows_from_json(_decode_text(content))
+        sheet_name = None
+        source_format = "json"
+    else:
+        raise ValueError("支持 .xlsx、.xlsm、.csv、.tsv、.txt 和 .json 文件")
+    if not rows:
+        raise ValueError("文件中没有数据")
+    if len(rows) > max_rows:
+        raise ValueError(f"单次最多导入 {max_rows} 行")
+    return {
+        "source_name": Path(filename).name,
+        "source_format": source_format,
+        "sheet_name": sheet_name,
+        "row_count": len(rows),
+        "records": rows,
+    }
+
+
 def parse_history_file(filename: str, content: bytes) -> dict[str, Any]:
     if len(content) > MAX_UPLOAD_BYTES:
         raise ValueError("文件不能超过 10 MB")
     suffix = Path(filename).suffix.lower()
     if suffix in {".xlsx", ".xlsm"}:
-        rows, sheet_name = _rows_from_xlsx(content)
+        rows, sheet_name = _rows_from_xlsx(content, max_rows=MAX_ROWS)
         source_format = suffix.lstrip(".")
     elif suffix in {".csv", ".tsv", ".txt"}:
         text = _decode_text(content)
@@ -150,15 +186,11 @@ def parse_history_text(text: str, source_format: str = "auto") -> dict[str, Any]
     if len(text.encode("utf-8")) > MAX_UPLOAD_BYTES:
         raise ValueError("粘贴内容不能超过 10 MB")
     stripped = text.lstrip()
-    if source_format == "json" or (
-        source_format == "auto" and stripped.startswith(("[", "{"))
-    ):
+    if source_format == "json" or (source_format == "auto" and stripped.startswith(("[", "{"))):
         rows = _rows_from_json(text)
         resolved = "json"
     else:
-        rows = _rows_from_delimited(
-            text, "\t" if source_format == "tsv" else None
-        )
+        rows = _rows_from_delimited(text, "\t" if source_format == "tsv" else None)
         resolved = "tsv" if "\t" in text.splitlines()[0] else "csv"
     return normalize_history_rows(
         rows,
@@ -177,37 +209,32 @@ def _decode_text(content: bytes) -> str:
     raise ValueError("文本文件编码无法识别，请使用 UTF-8 或 GB18030")
 
 
-def _rows_from_xlsx(content: bytes) -> tuple[list[dict[str, Any]], str]:
+def _rows_from_xlsx(content: bytes, *, max_rows: int) -> tuple[list[dict[str, Any]], str]:
     try:
-        workbook = load_workbook(
-            io.BytesIO(content), read_only=True, data_only=True
-        )
+        workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     except Exception as exc:
         raise ValueError("Excel 文件无法读取或文件已损坏") from exc
     try:
         worksheet = next(
-            (
-                sheet
-                for sheet in workbook.worksheets
-                if sheet.max_row > 0 and sheet.max_column > 0
-            ),
+            (sheet for sheet in workbook.worksheets if sheet.max_row > 0 and sheet.max_column > 0),
             workbook.active,
         )
-        values = list(worksheet.iter_rows(values_only=True))
+        values = []
+        for row in worksheet.iter_rows(values_only=True):
+            if any(value is not None and str(value).strip() for value in row):
+                values.append(tuple(row))
+                if len(values) > max_rows + 1:
+                    break
         return _matrix_to_rows(values), worksheet.title
     finally:
         workbook.close()
 
 
-def _rows_from_delimited(
-    text: str, delimiter: str | None = None
-) -> list[dict[str, Any]]:
+def _rows_from_delimited(text: str, delimiter: str | None = None) -> list[dict[str, Any]]:
     sample = text[:4096]
     if delimiter is None:
         try:
-            delimiter = csv.Sniffer().sniff(
-                sample, delimiters=",\t;|"
-            ).delimiter
+            delimiter = csv.Sniffer().sniff(sample, delimiters=",\t;|").delimiter
         except csv.Error:
             delimiter = "\t" if "\t" in text.splitlines()[0] else ","
     reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
@@ -223,9 +250,7 @@ def _rows_from_json(text: str) -> list[dict[str, Any]]:
         raise ValueError(f"JSON 格式错误：第 {exc.lineno} 行") from exc
     if isinstance(payload, dict):
         payload = payload.get("records", payload.get("history"))
-    if not isinstance(payload, list) or not all(
-        isinstance(row, dict) for row in payload
-    ):
+    if not isinstance(payload, list) or not all(isinstance(row, dict) for row in payload):
         raise ValueError("JSON 必须是对象数组，或包含 records/history 数组")
     return payload
 
@@ -283,9 +308,7 @@ def normalize_history_rows(
         records.sort(key=lambda item: item["observation_date"])
     trainable_sequences = sum(max(0, len(records) - 1) for records in groups.values())
     eligible_trees = sum(len(records) >= 2 for records in groups.values())
-    preview = sorted(
-        valid, key=lambda item: (str(item["tree_id"]), item["observation_date"])
-    )[:10]
+    preview = sorted(valid, key=lambda item: (str(item["tree_id"]), item["observation_date"]))[:10]
     return {
         "source_name": source_name,
         "source_format": source_format,
@@ -435,8 +458,11 @@ def fine_tune_with_history(
         months = np.asarray([sample[2] for sample in samples], dtype=np.float32)
         targets = np.asarray([sample[3] for sample in samples], dtype=np.float32)
         before_mae = _mae(
-            model, features[validation_idx], species_ids[validation_idx],
-            months[validation_idx], targets[validation_idx]
+            model,
+            features[validation_idx],
+            species_ids[validation_idx],
+            months[validation_idx],
+            targets[validation_idx],
         )
         best_mae = before_mae
         best_params = deepcopy(model.params)
@@ -456,8 +482,11 @@ def fine_tune_with_history(
                     )
                 )
             validation_mae = _mae(
-                model, features[validation_idx], species_ids[validation_idx],
-                months[validation_idx], targets[validation_idx]
+                model,
+                features[validation_idx],
+                species_ids[validation_idx],
+                months[validation_idx],
+                targets[validation_idx],
             )
             epoch_history.append(
                 {
@@ -532,22 +561,15 @@ def _build_training_samples(
         for end in range(1, len(tree_records)):
             sequence = tree_records[max(0, end - sequence_length + 1) : end + 1]
             values = np.asarray(
-                [
-                    [_temporal_value(record, name) for name in FEATURE_NAMES]
-                    for record in sequence
-                ],
+                [[_temporal_value(record, name) for name in FEATURE_NAMES] for record in sequence],
                 dtype=np.float32,
             )
             if len(values) < sequence_length:
-                pad = np.repeat(
-                    values[:1], sequence_length - len(values), axis=0
-                )
+                pad = np.repeat(values[:1], sequence_length - len(values), axis=0)
                 values = np.concatenate((pad, values), axis=0)
             normalized = (values - mean) / np.where(std < 1e-6, 1, std)
             latest = sequence[-1]
-            species_id = species_map.get(
-                latest["species"], species_map.get("其他", 0)
-            )
+            species_id = species_map.get(latest["species"], species_map.get("其他", 0))
             samples.append(
                 (
                     normalized,
@@ -595,16 +617,70 @@ def training_template_csv() -> str:
     ]
     examples = [
         [
-            1, "杨树", "2026-01-15", 17.2, 20, 33.2, 6.4, 6.2, 5.4, 0.8,
-            110, 3.5, 5, 6, 20, 60, 5, 5, 32, "低风险",
+            1,
+            "杨树",
+            "2026-01-15",
+            17.2,
+            20,
+            33.2,
+            6.4,
+            6.2,
+            5.4,
+            0.8,
+            110,
+            3.5,
+            5,
+            6,
+            20,
+            60,
+            5,
+            5,
+            32,
+            "低风险",
         ],
         [
-            1, "杨树", "2026-02-15", 17.22, 20.1, 33.24, 6.39, 6.19, 5.39,
-            0.8, 110, 3.5, 5, 7, 28, 62, 8, 6, 35, "低风险",
+            1,
+            "杨树",
+            "2026-02-15",
+            17.22,
+            20.1,
+            33.24,
+            6.39,
+            6.19,
+            5.39,
+            0.8,
+            110,
+            3.5,
+            5,
+            7,
+            28,
+            62,
+            8,
+            6,
+            35,
+            "低风险",
         ],
         [
-            1, "杨树", "2026-03-15", 17.26, 20.2, 33.31, 6.37, 6.18, 5.37,
-            0.9, 110, 3.5, 5, 9, 42, 66, 14, 7, 43, "中风险",
+            1,
+            "杨树",
+            "2026-03-15",
+            17.26,
+            20.2,
+            33.31,
+            6.37,
+            6.18,
+            5.37,
+            0.9,
+            110,
+            3.5,
+            5,
+            9,
+            42,
+            66,
+            14,
+            7,
+            43,
+            "中风险",
         ],
     ]
     stream = io.StringIO()

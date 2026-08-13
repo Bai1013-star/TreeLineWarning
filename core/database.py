@@ -15,6 +15,24 @@ from algorithms.prediction.standards import PredictionStandards
 
 DATABASE_PATH_ENV = "TREELINE_WARNING_DATABASE_PATH"
 
+EXTENDED_INPUT_FIELDS = (
+    "line_name",
+    "tower_section",
+    "gps_longitude",
+    "gps_latitude",
+    "tree_code",
+    "crown_width",
+    "growth_direction",
+    "historical_patrol_distance",
+    "crown_expansion_speed",
+    "pruning_record",
+    "span_length",
+    "conductor_height",
+    "line_direction",
+    "wind_direction",
+    "season_stage",
+)
+
 
 def _scalar_text(value: Any, default: str) -> str:
     """Return a database-safe scalar string, never a serialized dict/list."""
@@ -51,6 +69,8 @@ def _serialize_risk_snapshot(value: Any) -> str | None:
     if not isinstance(value, dict):
         raise ValueError("risk_snapshot 必须是对象")
     allowed = {
+        "prediction_mode",
+        "prediction_mode_label",
         "comprehensive_risk",
         "comprehensive_risk_score",
         "hazard_level",
@@ -58,6 +78,8 @@ def _serialize_risk_snapshot(value: Any) -> str | None:
         "calculation_ledger",
         "model_status",
         "parameter_source",
+        "clearance_defect",
+        "attention_prior",
     }
     snapshot = {key: value[key] for key in allowed if key in value}
     try:
@@ -80,12 +102,8 @@ def _decode_risk_snapshot(value: Any) -> dict[str, Any]:
 
 def _decoded_prediction_row(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
-    item["risk_level"] = _read_legacy_text(
-        item.get("risk_level"), "risk_level", "未知"
-    )
-    item["prediction"] = _read_legacy_text(
-        item.get("prediction"), "prediction", "暂无建议"
-    )
+    item["risk_level"] = _read_legacy_text(item.get("risk_level"), "risk_level", "未知")
+    item["prediction"] = _read_legacy_text(item.get("prediction"), "prediction", "暂无建议")
     for field in ("standard_profile", "standard_analysis"):
         value = item.get(field)
         if isinstance(value, str) and value:
@@ -96,6 +114,17 @@ def _decoded_prediction_row(row: sqlite3.Row) -> dict[str, Any]:
         elif not isinstance(value, dict):
             item[field] = {}
     item["risk_snapshot"] = _decode_risk_snapshot(item.get("risk_snapshot_json"))
+    raw_features = item.get("input_features_json")
+    try:
+        features = json.loads(raw_features) if isinstance(raw_features, str) else {}
+    except json.JSONDecodeError:
+        features = {}
+    if not isinstance(features, dict):
+        features = {}
+    item["input_features"] = features
+    for field, value in features.items():
+        if field in EXTENDED_INPUT_FIELDS:
+            item[field] = value
     return item
 
 
@@ -144,6 +173,7 @@ class Database:
                     observation_month INTEGER,
                     standard_profile TEXT,
                     standard_analysis TEXT,
+                    input_features_json TEXT,
                     risk_snapshot_json TEXT,
                     risk_level TEXT,
                     prediction TEXT,
@@ -152,8 +182,7 @@ class Database:
                 """
             )
             columns = {
-                row["name"]
-                for row in self.conn.execute("PRAGMA table_info(prediction_history)")
+                row["name"] for row in self.conn.execute("PRAGMA table_info(prediction_history)")
             }
             migrations = {
                 "temperature": "REAL DEFAULT 0",
@@ -170,6 +199,7 @@ class Database:
                 "observation_month": "INTEGER DEFAULT 0",
                 "standard_profile": "TEXT DEFAULT ''",
                 "standard_analysis": "TEXT DEFAULT ''",
+                "input_features_json": "TEXT DEFAULT ''",
                 "risk_snapshot_json": "TEXT DEFAULT ''",
             }
             for name, definition in migrations.items():
@@ -177,6 +207,12 @@ class Database:
                     self.conn.execute(
                         f"ALTER TABLE prediction_history ADD COLUMN {name} {definition}"
                     )
+            self.conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_prediction_history_tree_id_id
+                ON prediction_history(tree_id, id)
+                """
+            )
             self.conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS prediction_standards (
@@ -227,12 +263,11 @@ class Database:
                     VALUES (1, ?, ?)
                     """,
                     (
-                        json.dumps(
-                            PredictionStandards().to_dict(), ensure_ascii=False
-                        ),
+                        json.dumps(PredictionStandards().to_dict(), ensure_ascii=False),
                         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     ),
                 )
+            self.conn.execute("PRAGMA optimize")
             self.conn.commit()
 
     def save_prediction(self, prediction: dict[str, Any]) -> int:
@@ -256,6 +291,11 @@ class Database:
         if not isinstance(standard_analysis, dict):
             standard_analysis = {}
         risk_snapshot = _serialize_risk_snapshot(prediction.get("risk_snapshot"))
+        input_features = {
+            field: prediction[field]
+            for field in EXTENDED_INPUT_FIELDS
+            if field in prediction and prediction[field] not in (None, "")
+        }
 
         values = (
             prediction.get("tree_id", 0),
@@ -272,9 +312,7 @@ class Database:
             prediction.get("distance_to_wire", 0),
             prediction.get("vertical_distance", 0),
             prediction.get("horizontal_distance", 0),
-            prediction.get(
-                "clearance_distance", prediction.get("distance_to_wire", 0)
-            ),
+            prediction.get("clearance_distance", prediction.get("distance_to_wire", 0)),
             prediction.get("wind_offset_distance", 0),
             prediction.get("voltage_level_kv", 0),
             prediction.get("maximum_sag_winter", 0),
@@ -284,6 +322,7 @@ class Database:
             prediction.get("observation_month", 0),
             json.dumps(standard_profile, ensure_ascii=False),
             json.dumps(standard_analysis, ensure_ascii=False),
+            json.dumps(input_features, ensure_ascii=False, allow_nan=False),
             risk_snapshot,
             risk_level,
             suggestion,
@@ -300,11 +339,12 @@ class Database:
                     wind_offset_distance, voltage_level_kv,
                     maximum_sag_winter, maximum_sag_summer,
                     observation_date, observation_year, observation_month,
-                    standard_profile, standard_analysis, risk_snapshot_json,
+                    standard_profile, standard_analysis, input_features_json,
+                    risk_snapshot_json,
                     risk_level, prediction, created_at
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 values,
@@ -323,9 +363,17 @@ class Database:
             rows = self.conn.execute(sql, params).fetchall()
         return [_decoded_prediction_row(row) for row in rows]
 
-    def get_predictions_by_tree(
-        self, tree_id: int, limit: int = 36
-    ) -> list[dict[str, Any]]:
+    def get_prediction(self, prediction_id: int) -> dict[str, Any] | None:
+        """Return one decoded history row for the interactive detail view."""
+        self._ensure_open()
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM prediction_history WHERE id = ?",
+                (int(prediction_id),),
+            ).fetchone()
+        return _decoded_prediction_row(row) if row is not None else None
+
+    def get_predictions_by_tree(self, tree_id: int, limit: int = 36) -> list[dict[str, Any]]:
         """Return one tree's observations in chronological order for LSTM input."""
         self._ensure_open()
         requested = max(0, int(limit))
@@ -350,9 +398,7 @@ class Database:
         if row is None:
             return PredictionStandards().to_dict()
         try:
-            return PredictionStandards.from_mapping(
-                json.loads(row["settings_json"])
-            ).to_dict()
+            return PredictionStandards.from_mapping(json.loads(row["settings_json"])).to_dict()
         except (json.JSONDecodeError, TypeError, ValueError):
             return PredictionStandards().to_dict()
 
@@ -378,11 +424,7 @@ class Database:
 
     def save_training_dataset(self, parsed: dict[str, Any]) -> int:
         self._ensure_open()
-        summary = {
-            key: value
-            for key, value in parsed.items()
-            if key not in {"records"}
-        }
+        summary = {key: value for key, value in parsed.items() if key not in {"records"}}
         with self._lock:
             cursor = self.conn.execute(
                 """
@@ -439,9 +481,65 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def save_training_run(
-        self, dataset_id: int, metrics: dict[str, Any]
-    ) -> int:
+    def list_training_records(self) -> list[dict[str, Any]]:
+        """Return records imported by users, excluding generated pool snapshots."""
+
+        self._ensure_open()
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT records_json
+                FROM training_datasets
+                WHERE source_format <> 'pool_snapshot'
+                ORDER BY id ASC
+                """
+            ).fetchall()
+        records: list[dict[str, Any]] = []
+        for row in rows:
+            parsed = json.loads(row["records_json"])
+            if isinstance(parsed, list):
+                records.extend(item for item in parsed if isinstance(item, dict))
+        return records
+
+    def delete_training_dataset(self, dataset_id: int) -> dict[str, Any] | None:
+        """Delete one imported dataset and its linked training-run audit rows.
+
+        The caller is responsible for deciding whether generated pool snapshots
+        are eligible for deletion.  Removing an imported dataset immediately
+        removes its observations from subsequent calls to ``list_training_records``.
+        """
+
+        self._ensure_open()
+        normalized_id = int(dataset_id)
+        with self._lock:
+            row = self.conn.execute(
+                """
+                SELECT id, source_name, source_format, sheet_name, row_count,
+                       valid_row_count, invalid_row_count, tree_count,
+                       trainable_sequence_count, created_at
+                FROM training_datasets
+                WHERE id = ?
+                """,
+                (normalized_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            try:
+                self.conn.execute(
+                    "DELETE FROM training_runs WHERE dataset_id = ?",
+                    (normalized_id,),
+                )
+                self.conn.execute(
+                    "DELETE FROM training_datasets WHERE id = ?",
+                    (normalized_id,),
+                )
+                self.conn.commit()
+            except sqlite3.Error:
+                self.conn.rollback()
+                raise
+        return dict(row)
+
+    def save_training_run(self, dataset_id: int, metrics: dict[str, Any]) -> int:
         self._ensure_open()
         with self._lock:
             cursor = self.conn.execute(

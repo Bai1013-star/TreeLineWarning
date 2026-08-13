@@ -11,6 +11,11 @@ class FakeTemporalPredictor:
         return {"risk_score": 52.0}
 
 
+class FailingTemporalPredictor:
+    def predict(self, records, species):
+        raise AssertionError("formula mode must not call the temporal model")
+
+
 @pytest.fixture
 def growth_model_path(tmp_path):
     model_path = tmp_path / "species-growth.json"
@@ -112,13 +117,33 @@ def test_short_and_long_forecast_contains_growth_and_wire_metrics(growth_model):
     ]
     assert result["long_term_forecast"][-1]["predicted_height"] > snapshot["height"]
     assert (
+        result["long_term_forecast"][-1]["predicted_crown_width"]
+        > result["input_snapshot"]["crown_width"]
+    )
+    assert (
+        result["short_term_forecast"][-1]["predicted_crown_width"]
+        > result["input_snapshot"]["crown_width"]
+    )
+    short_item = result["short_term_forecast"][0]
+    assert "predicted_horizontal_distance" in short_item
+    assert "predicted_vertical_distance" in short_item
+    assert "predicted_clearance_distance" in short_item
+    assert "predicted_effective_clearance" in short_item
+    assert "predicted_wind_offset_distance" in short_item
+    assert (
         result["long_term_forecast"][-1]["predicted_clearance_distance"]
         < snapshot["clearance_distance"]
     )
     assert result["long_term_forecast"][0]["lstm_risk_score"] == 52
+    assert result["long_term_forecast"][0]["tree_growth_attention"] is not None
     assert "growth_trend" in result
     assert "risk_timeline_analysis" in result
     assert "maintenance_decision" in result["risk_timeline_analysis"]
+    assert result["risk_timeline_analysis"]["planning_risk"]["risk_level"] in {
+        "低风险",
+        "中风险",
+        "高风险",
+    }
     assert result["current_assessment"]["hazard_level"] in {
         "安全",
         "一般隐患",
@@ -139,9 +164,10 @@ def test_short_and_long_forecast_contains_growth_and_wire_metrics(growth_model):
         *[item["risk_score"] for item in result["short_term_forecast"]],
         *[item["risk_score"] for item in result["long_term_forecast"]],
     ]
-    assert result["work_order"]["urgency"] == ForecastService._urgency(
-        max(old_scores), PredictionStandards()
-    )[0]
+    assert (
+        result["work_order"]["urgency"]
+        == ForecastService._urgency(max(old_scores), PredictionStandards())[0]
+    )
     assert "comprehensive_urgency" in result["work_order"]
     assert result["growth_trend"]["risk_score_change"] == round(
         result["selected_target_prediction"]["risk_score"]
@@ -157,10 +183,89 @@ def test_short_and_long_forecast_contains_growth_and_wire_metrics(growth_model):
     forecast_item = result["long_term_forecast"][0]
     assert timeline_item["risk_score"] == round(forecast_item["risk_score"], 2)
     assert timeline_item["risk_level"] == forecast_item["risk_level"]
-    assert timeline_item["comprehensive_risk_score"] == forecast_item[
-        "comprehensive_risk_score"
-    ]
+    assert timeline_item["comprehensive_risk_score"] == forecast_item["comprehensive_risk_score"]
     assert timeline_item["hazard_level"] == forecast_item["hazard_level"]
+    assert forecast_item["risk_score"] == round(
+        0.50 * forecast_item["lstm_risk_score"]
+        + 0.35 * forecast_item["rule_risk_score"]
+        + 0.15 * forecast_item["feature_attention_prior_score"],
+        2,
+    )
+    assert forecast_item["clearance_defect"]["level"] in {
+        "危急缺陷",
+        "严重缺陷",
+        "一般缺陷",
+        "安全",
+    }
+    attention = result["feature_attention_analysis"]
+    assert attention["weight_sum"] == 1
+    # Seven continuous features plus one-hot priors for all twelve months.
+    assert len(attention["rows"]) == 19
+    assert {row["field"] for row in attention["rows"]} >= {
+        "historical_clearance_distance",
+        "monthly_temperature",
+        "month_s07",
+    }
+    categories = {group["category"] for group in result["feature_catalog"]}
+    assert categories == {
+        "当前树线空间特征",
+        "树木属性特征",
+        "历史变化特征",
+        "季节特征",
+        "气象特征",
+        "线路环境特征",
+    }
+
+
+def test_formula_mode_is_auditable_and_does_not_call_temporal_model(growth_model):
+    result = ForecastService(FailingTemporalPredictor(), growth_model).forecast(
+        {
+            "tree_id": 31,
+            "species": "杨树",
+            "height": 15,
+            "age": 18,
+            "diameter": 30,
+            "observation_date": "2026-08-07",
+            "voltage_level_kv": 110,
+            "vertical_distance": 5,
+            "horizontal_distance": 5,
+            "clearance_distance": 4,
+            "wind_speed": 7,
+            "rainfall": 20,
+            "humidity": 60,
+            "temperature": 25,
+            "sunlight_hours": 8,
+        },
+        PredictionStandards().to_dict(),
+        short_horizons_days=[1],
+        long_horizons_months=[1, 2],
+        prediction_mode="formula",
+    )
+
+    assert result["prediction_mode"] == "formula"
+    assert result["prediction_method"]["uses_temporal_model"] is False
+    assert result["prediction_method"]["auditable_formula"].startswith("R =")
+    for item in result["long_term_forecast"]:
+        assert item["lstm_risk_score"] is None
+        assert item["tree_growth_attention"] is None
+        assert item["risk_score"] == item["rule_risk_score"]
+        assert item["prediction_method"].startswith("分树种生长公式")
+
+
+def test_forecast_rejects_unknown_prediction_mode(growth_model):
+    with pytest.raises(ValueError, match="prediction_mode"):
+        ForecastService(FakeTemporalPredictor(), growth_model).forecast(
+            {
+                "species": "其他",
+                "height": 10,
+                "observation_date": "2026-08-07",
+                "voltage_level_kv": 110,
+                "clearance_distance": 5,
+            },
+            PredictionStandards().to_dict(),
+            long_horizons_months=[1],
+            prediction_mode="unknown",
+        )
 
 
 def test_forecast_accepts_only_core_fields_and_marks_imputations(growth_model):

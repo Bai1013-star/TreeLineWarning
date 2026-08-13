@@ -185,13 +185,9 @@ def calculate_historical_risk(
             continue
         if record.get("tree_id") in (None, ""):
             continue
-        record_tree_number = _finite_number(
-            "record.tree_id", record["tree_id"], minimum=0
-        )
+        record_tree_number = _finite_number("record.tree_id", record["tree_id"], minimum=0)
         if not record_tree_number.is_integer():
-            raise ValueError(
-                f"record.tree_id must be an integer, got {record['tree_id']!r}"
-            )
+            raise ValueError(f"record.tree_id must be an integer, got {record['tree_id']!r}")
         if int(record_tree_number) != requested_tree_id:
             continue
         usable.append(record)
@@ -293,8 +289,7 @@ def calculate_historical_risk(
         + weights["treatment_recurrence"] * treatment_rate
     )
     changes = [
-        current - previous
-        for previous, current in zip(clearances, clearances[1:], strict=False)
+        current - previous for previous, current in zip(clearances, clearances[1:], strict=False)
     ]
     clearance_change_std = statistics.stdev(changes) if len(changes) >= 2 else None
     completeness = []
@@ -345,15 +340,12 @@ def weather_risk(snapshot: dict[str, Any], standard: PredictionStandards) -> dic
     wind_speed = _finite_number("wind_speed", snapshot.get("wind_speed"), minimum=0)
     rainfall = _finite_number("rainfall", snapshot.get("rainfall"), minimum=0)
     temperature = _finite_number("temperature", snapshot.get("temperature"))
-    sunlight_hours = _finite_number(
-        "sunlight_hours", snapshot.get("sunlight_hours"), minimum=0
-    )
+    sunlight_hours = _finite_number("sunlight_hours", snapshot.get("sunlight_hours"), minimum=0)
     components = {
         "wind": _clamp(wind_speed / max(standard.wind_high_speed, 1e-9)),
         "rainfall": _clamp(rainfall / max(standard.rainfall_warning, 1e-9)),
         "temperature": _clamp(
-            max(0.0, temperature)
-            / max(standard.temperature_growth_threshold, 1e-9)
+            max(0.0, temperature) / max(standard.temperature_growth_threshold, 1e-9)
         ),
         "sunlight": _clamp(sunlight_hours / max(standard.sunlight_growth_threshold, 1e-9)),
     }
@@ -392,26 +384,14 @@ def comprehensive_risk(
 ) -> dict[str, Any]:
     """Return D/G/M/H, weighted R, four-level warning and full substitution."""
     _validated_standard(standard)
-    effective_clearance = _finite_number(
-        "effective_clearance", effective_clearance, minimum=0
-    )
-    safety_clearance = _finite_number(
-        "safety_clearance", safety_clearance, minimum=0
-    )
-    baseline_clearance = _finite_number(
-        "baseline_clearance", baseline_clearance, minimum=0
-    )
-    forecast_clearance = _finite_number(
-        "forecast_clearance", forecast_clearance, minimum=0
-    )
+    effective_clearance = _finite_number("effective_clearance", effective_clearance, minimum=0)
+    safety_clearance = _finite_number("safety_clearance", safety_clearance, minimum=0)
+    baseline_clearance = _finite_number("baseline_clearance", baseline_clearance, minimum=0)
+    forecast_clearance = _finite_number("forecast_clearance", forecast_clearance, minimum=0)
     if not isinstance(historical, dict):
         raise ValueError("historical must be a mapping")
-    distance = _clamp(
-        (safety_clearance - effective_clearance) / max(safety_clearance, 1e-9)
-    )
-    growth = _clamp(
-        (baseline_clearance - forecast_clearance) / max(baseline_clearance, 1e-9)
-    )
+    distance = _clamp((safety_clearance - effective_clearance) / max(safety_clearance, 1e-9))
+    growth = _clamp((baseline_clearance - forecast_clearance) / max(baseline_clearance, 1e-9))
     weather = weather_risk(weather_snapshot, standard)
     history_index = _finite_number("historical.index", historical.get("index"), minimum=0)
     if history_index > 1:
@@ -441,9 +421,7 @@ def comprehensive_risk(
         escalation_indicator = 1.0
     else:
         next_threshold = next(value for value in thresholds if value > index)
-        escalation_indicator = 1 / (
-            1 + math.exp(-(index - next_threshold) / 0.08)
-        )
+        escalation_indicator = 1 / (1 + math.exp(-(index - next_threshold) / 0.08))
     return {
         "index": round(index, 4),
         "score": round(index * 100, 2),
@@ -489,9 +467,7 @@ def clearance_interval(
     """Create a transparent 95% scenario interval around a distance forecast."""
     if not isinstance(historical, dict):
         raise ValueError("historical must be a mapping")
-    predicted_clearance = max(
-        0.0, _finite_number("predicted_clearance", predicted_clearance)
-    )
+    predicted_clearance = max(0.0, _finite_number("predicted_clearance", predicted_clearance))
     months = _finite_number("months", months, minimum=0)
     history_std = historical.get("clearance_change_std")
     if history_std is None:
@@ -547,7 +523,15 @@ def standard_comparisons(
         standard_text: str,
         exceeded: bool = False,
     ) -> None:
-        if selection_active and field not in provided_fields and field != "effective_clearance":
+        if (
+            selection_active
+            and field not in provided_fields
+            and field
+            not in {
+                "effective_clearance",
+                "season_stage",
+            }
+        ):
             imputation = imputations.get(field, {})
             used_value = imputation.get("used_value", snapshot.get(field))
             rows.append(
@@ -590,6 +574,7 @@ def standard_comparisons(
         ("age", "树龄", "年"),
         ("diameter", "胸径", "cm"),
         ("crown_width", "冠幅", "m"),
+        ("growth_direction", "生长方向", ""),
     ):
         actual = snapshot.get(field)
         add(
@@ -607,6 +592,41 @@ def standard_comparisons(
         f"{slope:g}°",
         f"关注值 ≤ {standard.slope_warning_angle:g}°",
         slope > standard.slope_warning_angle,
+    )
+    historical_distance = _snapshot_number(
+        snapshot,
+        "historical_patrol_distance",
+        default=float(snapshot.get("clearance_distance", 0) or 0),
+        minimum=0,
+    )
+    add(
+        "历史变化特征",
+        "historical_patrol_distance",
+        "历史巡检距离",
+        f"{historical_distance:g}m",
+        f"参考安全净空 ≥ {rules['min_clearance_distance']:g}m",
+        historical_distance < rules["min_clearance_distance"],
+    )
+    add(
+        "历史变化特征",
+        "crown_expansion_speed",
+        "树冠扩展速度",
+        f"{float(snapshot.get('crown_expansion_speed', 0) or 0):g}m/月",
+        "历史变化项，需用连续巡检校准",
+    )
+    add(
+        "历史变化特征",
+        "pruning_record",
+        "修剪记录",
+        snapshot.get("pruning_record", "无记录"),
+        "历史处置档案项，无统一数值阈值",
+    )
+    add(
+        "季节特征",
+        "season_stage",
+        "生长季节阶段",
+        snapshot.get("season_stage", "未派生"),
+        "由观测月份派生：春季萌发、夏季旺长、秋冬休眠",
     )
     voltage = _snapshot_number(snapshot, "voltage_level_kv", default=110, minimum=0)
     add(
@@ -629,10 +649,23 @@ def standard_comparisons(
             f"≤ {rules['max_sag']:g}m",
             actual > rules["max_sag"],
         )
+    for field, label, unit in (
+        ("span_length", "档距", "m"),
+        ("conductor_height", "导线高度", "m"),
+        ("line_direction", "线路走向", ""),
+    ):
+        actual = snapshot.get(field, 0)
+        add(
+            "电线本身",
+            field,
+            label,
+            f"{actual}{unit}" if unit else actual,
+            "线路档案/实测项，按地区和设计资料复核",
+        )
     distance_rules = {
         "vertical_distance": ("垂直距离", rules["min_vertical_distance"], ">="),
         "horizontal_distance": ("水平距离", rules["min_horizontal_distance"], ">="),
-        "clearance_distance": ("净空距离", rules["min_clearance_distance"], ">="),
+        "clearance_distance": ("三维最短净距/净空距离", rules["min_clearance_distance"], ">="),
         "wind_offset_distance": ("风偏距离", standard.max_wind_offset_distance, "<="),
     }
     for field, (label, threshold, operator) in distance_rules.items():
@@ -643,7 +676,16 @@ def standard_comparisons(
             minimum=None if field == "temperature" else 0,
         )
         exceeded = actual < threshold if operator == ">=" else actual > threshold
-        add("树线之间", field, label, f"{actual:g}m", f"{operator} {threshold:g}m", exceeded)
+        threshold_text = f"{operator} {threshold:g}m"
+        if field in {"vertical_distance", "horizontal_distance"}:
+            threshold_text += f"；≤ {rules['critical_clearance_distance']:g}m 触发危急"
+        elif field == "clearance_distance":
+            threshold_text = (
+                f"安全≥{rules['min_clearance_distance']:g}m；"
+                f"严重≤{rules['severe_clearance_distance']:g}m；"
+                f"危急≤{rules['critical_clearance_distance']:g}m"
+            )
+        add("树线之间", field, label, f"{actual:g}m", threshold_text, exceeded)
     weather_rules = (
         ("wind_speed", "风速", "m/s", standard.wind_warning_speed, ">="),
         ("rainfall", "降雨量", "mm", standard.rainfall_warning, ">="),
@@ -663,6 +705,13 @@ def standard_comparisons(
             f"{meaning} {operator} {threshold:g}{unit}",
             exceeded,
         )
+    add(
+        "气象条件",
+        "wind_direction",
+        "风向",
+        snapshot.get("wind_direction", "不确定"),
+        "与线路走向、生长方向联合分析，无单独数值阈值",
+    )
     if assessment:
         effective = assessment.get("standard_analysis", {}).get("effective_clearance")
         if effective is not None:
@@ -719,16 +768,12 @@ def calculation_ledger(
         measured.get("wind_offset_distance", snapshot.get("wind_offset_distance")),
         minimum=0,
     )
-    sag_adjustment = _finite_number(
-        "sag_adjustment", analysis.get("sag_adjustment", 0), minimum=0
-    )
+    sag_adjustment = _finite_number("sag_adjustment", analysis.get("sag_adjustment", 0), minimum=0)
     adjusted_vertical = max(0.0, vertical - sag_adjustment)
     adjusted_clearance = max(0.0, clearance - sag_adjustment)
     geometry = max(0.0, math.hypot(adjusted_vertical, horizontal) - wind_offset)
     effective = min(adjusted_clearance, geometry)
-    rules = standard.rules_for_voltage(
-        _snapshot_number(snapshot, "voltage_level_kv", minimum=0)
-    )
+    rules = standard.rules_for_voltage(_snapshot_number(snapshot, "voltage_level_kv", minimum=0))
     return {
         "point_cloud_distance_formulas": [
             {
@@ -779,11 +824,12 @@ def calculation_ledger(
             },
             {"name": "综合风险 R", "formula": risk["formula"], "data": risk["substitution"]},
             {
-                "name": "LSTM与规则融合分",
-                "formula": "S融合 = 0.55×S_LSTM + 0.45×S规则",
+                "name": "LSTM、规则与特征注意力先验融合分",
+                "formula": "S融合 = 0.50×S_LSTM + 0.35×S规则 + 0.15×S先验",
                 "data": (
-                    f"S融合 = 0.55×{float(target.get('lstm_risk_score') or 0):.2f} + "
-                    f"0.45×{float(target.get('rule_risk_score') or 0):.2f} = "
+                    f"S融合 = 0.50×{float(target.get('lstm_risk_score') or 0):.2f} + "
+                    f"0.35×{float(target.get('rule_risk_score') or 0):.2f} + "
+                    f"0.15×{float(target.get('feature_attention_prior_score') or 0):.2f} = "
                     f"{float(target.get('risk_score') or 0):.2f}（辅助模型分；四级预警以 R 为准）"
                 ),
             },
@@ -803,8 +849,7 @@ def calculation_ledger(
             {
                 "level": "重大隐患",
                 "range": (
-                    f"{standard.major_hazard_index:g} ≤ R < "
-                    f"{standard.emergency_hazard_index:g}"
+                    f"{standard.major_hazard_index:g} ≤ R < {standard.emergency_hazard_index:g}"
                 ),
                 "color": "黄色",
             },

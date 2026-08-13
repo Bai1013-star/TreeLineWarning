@@ -12,6 +12,7 @@ from algorithms.prediction.standards import (
     PredictionStandards,
     analyze_distances,
     analyze_wire,
+    classify_clearance_defect,
 )
 
 
@@ -30,6 +31,62 @@ def test_distance_analysis_checks_all_four_distances():
         "clearance_distance",
         "wind_offset_distance",
     }
+
+
+def test_defaults_cover_220v_all_months_and_voltage_wind_clearance():
+    standard = PredictionStandards()
+    month_keys = {f"month_s{month:02d}" for month in range(1, 13)}
+
+    assert month_keys <= standard.feature_attention_weights.keys()
+    assert math.isclose(sum(standard.feature_attention_weights.values()), 1.0)
+    assert standard.rules_for_voltage(0.22)["matched_voltage_level_kv"] == 0.22
+    assert standard.rules_for_voltage(0.22)["min_wind_offset_distance"] == 1.0
+    assert "min_wind_offset_distance" in standard.rules_for_voltage(220)
+
+
+def test_voltage_wind_clearance_is_checked_after_offset():
+    analysis = analyze_distances(
+        vertical_distance=2,
+        horizontal_distance=2,
+        clearance_distance=3,
+        wind_offset_distance=2,
+        standards=PredictionStandards(),
+        voltage_level_kv=10,
+    )
+
+    check = analysis["checks"]["wind_offset_clearance"]
+    assert check["actual"] == pytest.approx(math.hypot(2, 2) - 2)
+    assert check["standard"] == 1.5
+    assert check["compliant"] is False
+
+
+def test_old_partial_month_attention_is_migrated_to_all_twelve_months():
+    old = PredictionStandards().to_dict()
+    old["feature_attention_weights"] = {
+        key: value
+        for key, value in old["feature_attention_weights"].items()
+        if key in {
+            "historical_clearance_distance",
+            "historical_horizontal_distance",
+            "historical_vertical_distance",
+            "monthly_temperature",
+            "monthly_rainfall",
+            "monthly_sunlight_hours",
+            "monthly_wind_speed",
+            "month_s01",
+            "month_s02",
+            "month_s05",
+            "month_s06",
+            "month_s07",
+        }
+    }
+
+    migrated = PredictionStandards.from_mapping(old)
+    assert all(
+        f"month_s{month:02d}" in migrated.feature_attention_weights
+        for month in range(1, 13)
+    )
+    assert math.isclose(sum(migrated.feature_attention_weights.values()), 1.0)
 
 
 def test_custom_standard_changes_prediction():
@@ -185,6 +242,39 @@ def test_standard_validation_rejects_weight_sum_not_equal_to_one():
 
     with pytest.raises(ValueError, match="finite"):
         PredictionStandards(risk_weight_distance=math.nan).validate()
+
+    with pytest.raises(ValueError, match="图片示例特征注意力"):
+        PredictionStandards.from_mapping(
+            {"feature_attention_weights": {"historical_clearance_distance": 0.24}}
+        )
+
+
+@pytest.mark.parametrize(
+    ("horizontal", "vertical", "clearance", "expected"),
+    [
+        (1.52, 0.93, 1.71, "危急缺陷"),
+        (2.85, 1.67, 3.30, "安全"),
+        (1.98, 1.12, 2.28, "严重缺陷"),
+        (2.43, 1.38, 2.80, "一般缺陷"),
+        (3.12, 2.05, 3.73, "安全"),
+    ],
+)
+def test_10kv_clearance_defect_examples(horizontal, vertical, clearance, expected):
+    result = classify_clearance_defect(
+        horizontal_distance=horizontal,
+        vertical_distance=vertical,
+        clearance_distance=clearance,
+        standards=PredictionStandards(),
+        voltage_level_kv=10,
+    )
+
+    assert result["level"] == expected
+    assert result["thresholds"] == {
+        "critical_max": 1.0,
+        "severe_max": 2.5,
+        "safe_min": 3.0,
+        "matched_voltage_level_kv": 10.0,
+    }
 
 
 def test_historical_risk_never_mixes_tree_records_or_missing_tree_id():
