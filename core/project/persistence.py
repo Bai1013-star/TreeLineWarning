@@ -95,6 +95,7 @@ RUN_INDEX_SCHEMA_VERSION = "treeline-run-index-v1"
 _GENERATION_RE = re.compile(r"g-[0-9]{16}-[a-z0-9]{8}\Z")
 _TOWER_ID_RE = re.compile(r"T([0-9]{3,})\Z")
 _SPAN_ID_RE = re.compile(r"S([0-9]{3,})\Z")
+_RUN_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
 _STAGING_PREFIX = ".staging-"
 _GENERATION_FILES = (
     "project.json",
@@ -1261,22 +1262,95 @@ class SpanRegistry:
 
 
 @dataclass(frozen=True, slots=True)
+class RunIndexEntry:
+    """One validated historical analysis-run projection in the P2 run index."""
+
+    run_id: str
+    span_id: str
+    status: AnalysisStatus
+    artifact_root_reference: str | None
+    source_content_identity_digest: str
+    source_identity_record_digest: str
+    span_dependencies: SpanDependencySnapshot
+    created_at: str
+    completed_at: str | None
+
+    def __post_init__(self) -> None:
+        if type(self.run_id) is not str or _RUN_ID_RE.fullmatch(self.run_id) is None:
+            raise PersistenceError("run_id must be a lower-case opaque run identifier")
+        _id_sequence(self.span_id, _SPAN_ID_RE, "span_id")
+        if type(self.status) is not AnalysisStatus or self.status not in {
+            AnalysisStatus.READY,
+            AnalysisStatus.RUNNING,
+            AnalysisStatus.COMPLETE,
+            AnalysisStatus.FAILED,
+            AnalysisStatus.INTERRUPTED,
+            AnalysisStatus.STALE,
+        }:
+            raise PersistenceError("run status is not permitted by the frozen run-index contract")
+        if self.artifact_root_reference is not None:
+            if type(self.artifact_root_reference) is not str:
+                raise PersistenceError("artifact_root_reference must be a project-relative path or null")
+            try:
+                _safe_relative_posix_path(self.artifact_root_reference, "artifact_root_reference")
+            except ValueError as exc:
+                raise PersistenceError(f"invalid artifact_root_reference: {exc}") from exc
+        _validate_digest(self.source_content_identity_digest, "source_content_identity_digest")
+        _validate_digest(self.source_identity_record_digest, "source_identity_record_digest")
+        if type(self.span_dependencies) is not SpanDependencySnapshot:
+            raise PersistenceError("span_dependencies must be a SpanDependencySnapshot")
+        created_at = _timestamp(self.created_at, "created_at")
+        created = datetime.fromisoformat(created_at[:-1] + "+00:00")
+        if self.completed_at is None:
+            if self.status in {
+                AnalysisStatus.COMPLETE,
+                AnalysisStatus.FAILED,
+                AnalysisStatus.INTERRUPTED,
+            }:
+                raise PersistenceError("terminal run status requires completed_at")
+        else:
+            completed_at = _timestamp(self.completed_at, "completed_at")
+            completed = datetime.fromisoformat(completed_at[:-1] + "+00:00")
+            if completed < created:
+                raise PersistenceError("completed_at must not precede created_at")
+            if self.status in {AnalysisStatus.READY, AnalysisStatus.RUNNING}:
+                raise PersistenceError("nonterminal run status must not have completed_at")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "span_id": self.span_id,
+            "status": self.status.value,
+            "artifact_root_reference": self.artifact_root_reference,
+            "source_content_identity_digest": self.source_content_identity_digest,
+            "source_identity_record_digest": self.source_identity_record_digest,
+            "span_dependencies": self.span_dependencies.to_dict(),
+            "created_at": self.created_at,
+            "completed_at": self.completed_at,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class RunIndex:
-    """Immutable run-index envelope preserved byte-for-byte across registry mutations."""
+    """Immutable, identity-keyed P2 run-index envelope."""
 
     schema_version: str
     generation_id: str
     project_id: str
-    entries: tuple[Mapping[str, Any], ...] = ()
+    entries: tuple[RunIndexEntry, ...] = ()
 
     def __post_init__(self) -> None:
         if self.schema_version != RUN_INDEX_SCHEMA_VERSION:
             raise PersistenceError("unsupported run-index schema version")
         _validate_generation_id(self.generation_id)
-        entries = tuple(
-            _freeze_json(_json_mapping(item, "run-index entry"))
-            for item in self.entries
-        )
+        entries = tuple(self.entries)
+        if any(type(item) is not RunIndexEntry for item in entries):
+            raise PersistenceError("run-index entries must contain RunIndexEntry values")
+        run_ids = tuple(item.run_id for item in entries)
+        if len(run_ids) != len(set(run_ids)):
+            raise PersistenceError("run index contains duplicate run identities")
+        if run_ids != tuple(sorted(run_ids)):
+            raise PersistenceError("run-index entries must be sorted by run_id")
         object.__setattr__(self, "entries", entries)
 
     def to_dict(self) -> dict[str, Any]:
@@ -1284,8 +1358,40 @@ class RunIndex:
             "schema_version": self.schema_version,
             "generation_id": self.generation_id,
             "project_id": self.project_id,
-            "entries": [_thaw_json(item) for item in self.entries],
+            "entries": [item.to_dict() for item in self.entries],
         }
+
+
+def _span_analysis_projection_for_run(
+    entry: RunIndexEntry,
+    *,
+    historical_run_ids: tuple[str, ...],
+) -> SpanAnalysis:
+    """Build the one current Span-analysis projection for a run-index entry.
+
+    A Span stores the current/latest run projection even after a terminal
+    transition. Prior runs remain historical; terminal current runs are also
+    retained in that history. P1 independently requires this for STALE.
+    """
+
+    if type(entry) is not RunIndexEntry:
+        raise PersistenceError("entry must be a RunIndexEntry")
+    history = tuple(historical_run_ids)
+    if entry.status in {
+        AnalysisStatus.COMPLETE,
+        AnalysisStatus.FAILED,
+        AnalysisStatus.INTERRUPTED,
+        AnalysisStatus.STALE,
+    } and entry.run_id not in history:
+        history = (*history, entry.run_id)
+    return SpanAnalysis(
+        schema_version=SPAN_ANALYSIS_SCHEMA_VERSION,
+        state=entry.status,
+        active_run_id=entry.run_id,
+        stage_statuses={stage: entry.status for stage in AnalysisStage},
+        run_dependencies=entry.span_dependencies,
+        historical_run_ids=history,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1694,10 +1800,42 @@ def _decode_registry(
     raise ProjectIntegrityError("unsupported registry schema version")
 
 
+def _decode_run_index_entry(value: Any) -> RunIndexEntry:
+    data = _object(
+        value,
+        "RunIndexEntry",
+        {
+            "run_id",
+            "span_id",
+            "status",
+            "artifact_root_reference",
+            "source_content_identity_digest",
+            "source_identity_record_digest",
+            "span_dependencies",
+            "created_at",
+            "completed_at",
+        },
+    )
+    try:
+        return RunIndexEntry(
+            run_id=data["run_id"],
+            span_id=data["span_id"],
+            status=_enum(data["status"], AnalysisStatus, "run status"),
+            artifact_root_reference=data["artifact_root_reference"],
+            source_content_identity_digest=data["source_content_identity_digest"],
+            source_identity_record_digest=data["source_identity_record_digest"],
+            span_dependencies=_decode_span_dependencies(data["span_dependencies"]),
+            created_at=data["created_at"],
+            completed_at=data["completed_at"],
+        )
+    except (TypeError, ValueError, PersistenceError) as exc:
+        raise ProjectIntegrityError(f"invalid RunIndexEntry: {exc}") from exc
+
+
 def _decode_run_index(value: Any, project: ProjectContract, generation_id: str) -> RunIndex:
     data = _object(value, "RunIndex", {"schema_version", "generation_id", "project_id", "entries"})
     entries = tuple(
-        _freeze_json(_json_mapping(item, "run-index entry"))
+        _decode_run_index_entry(item)
         for item in _sequence(data["entries"], "entries")
     )
     if data["schema_version"] != RUN_INDEX_SCHEMA_VERSION:
@@ -1706,12 +1844,15 @@ def _decode_run_index(value: Any, project: ProjectContract, generation_id: str) 
         raise ProjectIntegrityError("run index project_id does not match project")
     if data["generation_id"] != generation_id:
         raise ProjectIntegrityError("run index generation_id does not match generation")
-    return RunIndex(
-        schema_version=data["schema_version"],
-        generation_id=data["generation_id"],
-        project_id=data["project_id"],
-        entries=entries,
-    )
+    try:
+        return RunIndex(
+            schema_version=data["schema_version"],
+            generation_id=data["generation_id"],
+            project_id=data["project_id"],
+            entries=entries,
+        )
+    except PersistenceError as exc:
+        raise ProjectIntegrityError(f"invalid RunIndex: {exc}") from exc
 
 
 def _decode_manifest(value: Any, project_id: str, generation_id: str) -> GenerationManifest:
@@ -1908,6 +2049,138 @@ def _validate_registry_state(
         raise ProjectIntegrityError("next_span_sequence is not above every represented/reserved span")
 
 
+def _validate_run_index_state(
+    project: ProjectContract,
+    source_sidecar: SourceReferenceSidecar,
+    tower_registry: TowerRegistry,
+    span_registry: SpanRegistry,
+    run_index: RunIndex,
+) -> None:
+    """Validate historical run provenance without rewriting historical snapshots."""
+
+    current_binding = project.source_reference.binding
+    allowed_record_digests = {
+        current_binding.source_identity_record_digest,
+        *(item.source_identity_record_digest for item in source_sidecar.source_identity_history),
+    }
+    expected_coordinate_contexts = {
+        current_binding.source_identity_record_digest: current_binding.coordinate_context
+    }
+    for history_identity in source_sidecar.source_identity_history:
+        expected_coordinate_contexts[history_identity.source_identity_record_digest] = (
+            SourceIdentityBinding.from_source_identity(history_identity).coordinate_context
+        )
+    span_by_id = {span.span_id: span for span in span_registry.records}
+    tower_by_id = {entry.tower_id: entry for entry in tower_registry.records}
+
+    for entry in run_index.entries:
+        span = span_by_id.get(entry.span_id)
+        if span is None:
+            raise ProjectIntegrityError("run index entry references an unknown span")
+        dependencies = entry.span_dependencies
+        binding = dependencies.source_binding
+        if entry.source_content_identity_digest != binding.source_content_identity_digest:
+            raise ProjectIntegrityError(
+                "run source_content_identity_digest does not match dependency snapshot"
+            )
+        if entry.source_identity_record_digest != binding.source_identity_record_digest:
+            raise ProjectIntegrityError(
+                "run source_identity_record_digest does not match dependency snapshot"
+            )
+        if binding.source_content_identity_digest != current_binding.source_content_identity_digest:
+            raise ProjectIntegrityError("run source content identity does not match project source")
+        if binding.source_identity_record_digest not in allowed_record_digests:
+            raise ProjectIntegrityError("run source identity record is not in project source history")
+        if (
+            binding.coordinate_context
+            != expected_coordinate_contexts[binding.source_identity_record_digest]
+        ):
+            raise ProjectIntegrityError(
+                "run coordinate context does not match its referenced source identity"
+            )
+        try:
+            tower_by_id[dependencies.from_tower.tower_id].revision(
+                dependencies.from_tower.revision
+            )
+            tower_by_id[dependencies.to_tower.tower_id].revision(
+                dependencies.to_tower.revision
+            )
+        except KeyError as exc:
+            raise ProjectIntegrityError(
+                "run dependency references an unknown tower or tower revision"
+            ) from exc
+        if (
+            entry.status is AnalysisStatus.STALE
+            and dependencies == span.current_dependencies
+        ):
+            raise ProjectIntegrityError(
+                "STALE run dependencies must differ from the current associated span"
+            )
+
+
+def _validate_run_index_span_analysis_coherence(
+    span_registry: SpanRegistry,
+    run_index: RunIndex,
+) -> None:
+    """Fail closed unless every Span is the exact projection of its current run.
+
+    Run-index records are historical evidence.  ``SpanAnalysis`` is instead the
+    current/latest per-Span projection: it names one active run, mirrors that
+    run's status and immutable dependencies, and lists prior runs in
+    ``historical_run_ids``. Terminal active runs are additionally retained in
+    that history; P1 independently requires this for STALE.
+    """
+
+    entries_by_id = {entry.run_id: entry for entry in run_index.entries}
+    run_ids_by_span: dict[str, set[str]] = {}
+    for entry in run_index.entries:
+        run_ids_by_span.setdefault(entry.span_id, set()).add(entry.run_id)
+
+    for span in span_registry.records:
+        analysis = span.analysis
+        run_ids = run_ids_by_span.get(span.span_id, set())
+        historical_ids = set(analysis.historical_run_ids)
+        active_run_id = analysis.active_run_id
+        if active_run_id is None:
+            if run_ids:
+                raise ProjectIntegrityError(
+                    "Span with run-index entries must retain its current active_run_id"
+                )
+            if historical_ids:
+                raise ProjectIntegrityError(
+                    "Span without run-index entries must not retain historical_run_ids"
+                )
+            # P1 permits a no-run READY preparation state as well as the normal
+            # NOT_STARTED state.  Both have no run provenance and are coherent.
+            continue
+
+        active_entry = entries_by_id.get(active_run_id)
+        if active_entry is None:
+            raise ProjectIntegrityError("Span active_run_id does not resolve in the run index")
+        if active_entry.span_id != span.span_id:
+            raise ProjectIntegrityError("Span active_run_id belongs to a different Span")
+        if analysis.state is not active_entry.status:
+            raise ProjectIntegrityError("Span analysis status does not match its active run")
+        if analysis.run_dependencies != active_entry.span_dependencies:
+            raise ProjectIntegrityError(
+                "Span analysis dependencies do not match its active run snapshot"
+            )
+
+        expected_history = set(run_ids)
+        expected_history.discard(active_run_id)
+        if active_entry.status in {
+            AnalysisStatus.COMPLETE,
+            AnalysisStatus.FAILED,
+            AnalysisStatus.INTERRUPTED,
+            AnalysisStatus.STALE,
+        }:
+            expected_history.add(active_run_id)
+        if historical_ids != expected_history:
+            raise ProjectIntegrityError(
+                "Span historical_run_ids do not match its run-index history"
+            )
+
+
 def _validate_generation_content(
     root: Path,
     generation_path: Path,
@@ -1934,6 +2207,10 @@ def _validate_generation_content(
     if run_index.project_id != project.project_id:
         raise ProjectIntegrityError("run index project identity does not match project")
     _validate_registry_state(project, source_sidecar, tower_registry, span_registry)
+    _validate_run_index_state(
+        project, source_sidecar, tower_registry, span_registry, run_index
+    )
+    _validate_run_index_span_analysis_coherence(span_registry, run_index)
 
 
 def _read_generation_content(
@@ -2305,6 +2582,7 @@ __all__ = [
     "ProjectIntegrityError",
     "PostPointerDurabilityError",
     "RunIndex",
+    "RunIndexEntry",
     "SourceReferenceSidecar",
     "SpanRegistry",
     "TowerRegistry",

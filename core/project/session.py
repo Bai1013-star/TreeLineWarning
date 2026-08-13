@@ -480,6 +480,46 @@ class WritableProjectSession(ProjectSession):
 
         return relocate_source(self, candidate_path)
 
+    def register_run(self, run_id: str, span_id: str, *, artifact_root_reference: str | None = None):
+        from core.project.run_index import register_run
+
+        return register_run(
+            self,
+            run_id,
+            span_id,
+            artifact_root_reference=artifact_root_reference,
+        )
+
+    def start_run(self, run_id: str):
+        from core.project.run_index import start_run
+
+        return start_run(self, run_id)
+
+    def complete_run(self, run_id: str):
+        from core.project.run_index import complete_run
+
+        return complete_run(self, run_id)
+
+    def fail_run(self, run_id: str):
+        from core.project.run_index import fail_run
+
+        return fail_run(self, run_id)
+
+    def interrupt_run(self, run_id: str):
+        from core.project.run_index import interrupt_run
+
+        return interrupt_run(self, run_id)
+
+    def attach_run_artifact_root(self, run_id: str, artifact_root_reference: str):
+        from core.project.run_index import attach_run_artifact_root
+
+        return attach_run_artifact_root(self, run_id, artifact_root_reference)
+
+    def reconcile_run_staleness(self):
+        from core.project.run_index import reconcile_run_staleness
+
+        return reconcile_run_staleness(self)
+
 
 class ReadOnlyProjectSession(ProjectSession):
     """Immutable project snapshot that never acquires writer ownership."""

@@ -22,10 +22,7 @@ import pytest
 import core.project as project_package
 from core.contracts.frv import frv_digest
 from core.contracts.project import (
-    SPAN_ANALYSIS_SCHEMA_VERSION,
-    AnalysisStage,
     AnalysisStatus,
-    SpanAnalysis,
     TowerRevisionReference,
     derive_span_geometry_digest,
 )
@@ -51,6 +48,7 @@ from core.project.persistence import (
     PostPointerDurabilityError,
     RUN_INDEX_SCHEMA_VERSION,
     RunIndex,
+    RunIndexEntry,
     RootPointerReplaceError,
     file_sha256,
     published_json_bytes,
@@ -96,52 +94,52 @@ def _build_topo(root: Path, project, metadata) -> None:
         )
 
 
-def _run_entry(binding) -> dict:
-    return {
-        "run_id": "run-001",
-        "span_id": "S001",
-        "status": "COMPLETE",
-        "artifact_root_reference": None,
-        "source_content_identity_digest": binding.source_content_identity_digest,
-        "source_identity_record_digest": binding.source_identity_record_digest,
-        "span_dependencies": {
-            "source_binding": binding.to_dict(),
-            "from_tower": {"tower_id": "T001", "revision": 1},
-            "to_tower": {"tower_id": "T002", "revision": 1},
-            "geometry_digest": "a" * 64,
-            "configuration_digest": "a" * 64,
-        },
-        "created_at": "2026-08-12T00:00:00Z",
-        "completed_at": "2026-08-12T00:10:00Z",
-    }
+def _run_entry(span) -> RunIndexEntry:
+    dependencies = span.current_dependencies
+    return RunIndexEntry(
+        run_id="run-001",
+        span_id=span.span_id,
+        status=AnalysisStatus.COMPLETE,
+        artifact_root_reference=None,
+        source_content_identity_digest=dependencies.source_binding.source_content_identity_digest,
+        source_identity_record_digest=dependencies.source_binding.source_identity_record_digest,
+        span_dependencies=dependencies,
+        created_at="2026-08-12T00:00:00Z",
+        completed_at="2026-08-12T00:10:00Z",
+    )
 
 
 def _seed_run_entry(root: Path, project) -> None:
     loaded = persistence.open_project(root)
+    span = loaded.span_registry.records[0]
+    entry = _run_entry(span)
+    coherent_spans = persistence.SpanRegistry(
+        loaded.span_registry.schema_version,
+        loaded.span_registry.generation_id,
+        loaded.span_registry.project_id,
+        reserved_sequences=loaded.span_registry.reserved_sequences,
+        records=(
+            replace(
+                span,
+                analysis=persistence._span_analysis_projection_for_run(
+                    entry, historical_run_ids=()
+                ),
+            ),
+        ),
+    )
     run_index = RunIndex(
         RUN_INDEX_SCHEMA_VERSION,
         loaded.generation_id,
         project.project_id,
-        entries=(_run_entry(project.source_reference.binding),),
+        entries=(entry,),
     )
     persistence._publish_generation(
         root,
         loaded.project,
         source_sidecar=loaded.source_sidecar,
         tower_registry=loaded.tower_registry,
-        span_registry=loaded.span_registry,
+        span_registry=coherent_spans,
         run_index=run_index,
-    )
-
-
-def _complete_span_analysis(binding, span) -> SpanAnalysis:
-    return SpanAnalysis(
-        schema_version=SPAN_ANALYSIS_SCHEMA_VERSION,
-        state=AnalysisStatus.COMPLETE,
-        active_run_id="run-001",
-        stage_statuses={stage: AnalysisStatus.COMPLETE for stage in AnalysisStage},
-        run_dependencies=span.current_dependencies,
-        historical_run_ids=("run-001",),
     )
 
 
@@ -350,8 +348,10 @@ def test_relocation_does_not_mark_existing_analysis_stale(tmp_path, tiny_las_pro
         binding = session.project.source_reference.binding
         session.create_tower(_tower("T001", binding, 0.0))
         session.create_tower(_tower("T002", binding, 10.0))
-        span = _span(binding, from_tower_id="T001", to_tower_id="T002")
-        session.create_span(replace(span, analysis=_complete_span_analysis(binding, span)))
+        session.create_span(_span(binding, from_tower_id="T001", to_tower_id="T002"))
+        session.register_run("run-001", "S001")
+        session.start_run("run-001")
+        session.complete_run("run-001")
         candidate = _make_candidate(tmp_path, source_path)
         session.relocate_source(str(candidate))
         relocated = session.span_registry.records[0]
@@ -602,12 +602,9 @@ def test_relocation_does_not_mutate_candidate_source(tmp_path, tiny_las_project)
 
 def test_no_public_run_index_mutation_apis_added():
     forbidden = [
-        "create_run",
         "update_run",
-        "complete_run",
-        "fail_run",
-        "mark_run_stale",
-        "attach_artifact",
+        "patch_run",
+        "replace_run_index",
         "remove_artifact",
     ]
     for name in forbidden:

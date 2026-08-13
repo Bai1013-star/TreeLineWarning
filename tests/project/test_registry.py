@@ -25,8 +25,6 @@ from core.project.persistence import (
     PersistenceError,
     PostPointerDurabilityError,
     RootPointerReplaceError,
-    RunIndex,
-    RUN_INDEX_SCHEMA_VERSION,
     file_sha256,
     logical_json_digest,
     published_json_bytes,
@@ -417,26 +415,18 @@ def test_archived_endpoint_rejects_new_active_span(tmp_path, tiny_las_project):
 
 def test_run_index_entries_survive_unrelated_registry_mutation(tmp_path, tiny_las_project):
     root, project, metadata = _project_session(tmp_path, tiny_las_project)
-    with create_project_writable(root, project, source_access_metadata=metadata):
-        pass
-    loaded = persistence.open_project(root)
-    run_index = RunIndex(
-        RUN_INDEX_SCHEMA_VERSION,
-        loaded.generation_id,
-        project.project_id,
-        entries=({"run_id": "run-1", "kind": "historical"},),
-    )
-    persistence._publish_generation(
-        root,
-        project,
-        source_sidecar=loaded.source_sidecar,
-        tower_registry=loaded.tower_registry,
-        span_registry=loaded.span_registry,
-        run_index=run_index,
-    )
+    binding = project.source_reference.binding
+    with create_project_writable(root, project, source_access_metadata=metadata) as session:
+        session.create_tower(_tower("T001", binding, 0.0))
+        session.create_tower(_tower("T002", binding, 10.0))
+        session.create_span(_span(binding, from_tower_id="T001", to_tower_id="T002"))
     with open_project_writable(root) as session:
-        session.create_tower(_tower("T001", project.source_reference.binding, 0.0))
-        assert session.run_index.to_dict()["entries"] == [{"kind": "historical", "run_id": "run-1"}]
+        session.register_run("run-1", "S001")
+        session.start_run("run-1")
+        entry = session.complete_run("run-1")
+    with open_project_writable(root) as session:
+        session.create_tower(_tower("T003", project.source_reference.binding, 20.0))
+        assert session.run_index.to_dict()["entries"] == [entry.to_dict()]
 
 
 def test_mutable_registry_projections_do_not_alias_authoritative_state(
