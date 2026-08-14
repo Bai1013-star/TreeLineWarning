@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="description" content="TreeLineWarning P3A — Giro3D + COPC viewer Candidate B">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+	<title>TreeLineWarning P3A — Giro3D + COPC Viewer</title>
+	<style>
+		html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #101418; color: #ddd; }
+		#view { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+		#p3a_giro3d_error { position: absolute; left: 16px; top: 16px; z-index: 9999; max-width: 70%;
+			background: #8b0000; color: #fff; padding: 12px 16px; font: 14px sans-serif; border-radius: 4px;
+			white-space: pre-wrap; display: none; }
+		#p3a_giro3d_loading { position: absolute; left: 16px; bottom: 16px; z-index: 9998;
+			background: rgba(0,0,0,0.6); color: #fff; padding: 10px 14px; font: 13px sans-serif; border-radius: 4px; }
+		#p3a_giro3d_status { position: absolute; right: 12px; top: 12px; z-index: 9997; min-width: 260px;
+			padding: 8px 10px; font: 11px/1.5 Consolas, Menlo, monospace; color: #cfc; background: rgba(0,0,0,0.55);
+			border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; pointer-events: none; }
+		#p3a_giro3d_lod { position: absolute; right: 12px; top: 190px; z-index: 9996; width: 260px;
+			padding: 8px 10px; font: 11px/1.5 Consolas, Menlo, monospace; color: #ddd; background: rgba(0,0,0,0.55);
+			border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; }
+		#p3a_giro3d_lod input { width: 90px; margin: 2px 4px 2px 0; }
+		#p3a_giro3d_help { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
+			z-index: 9996; padding: 6px 12px; font: 12px sans-serif; border-radius: 4px;
+			background: rgba(0,0,0,0.5); color: #fff; pointer-events: none; white-space: nowrap; }
+		#p3a_giro3d_fit { position: absolute; top: 12px; left: 12px; z-index: 10000; padding: 8px 12px;
+			font: 13px sans-serif; border: 1px solid rgba(255,255,255,0.4); border-radius: 4px;
+			background: rgba(0,0,0,0.55); color: #fff; cursor: pointer; }
+	</style>
+</head>
+<body>
+	<div id="view"></div>
+	<div id="p3a_giro3d_error"></div>
+	<div id="p3a_giro3d_loading">Loading point cloud…</div>
+	<div id="p3a_giro3d_status"></div>
+	<div id="p3a_giro3d_lod">
+		<label>subdivThresh <input id="p3a_giro3d_thresh" type="number" step="0.1" value="1.0" min="0.1"></label><br>
+		<label>pointBudget <input id="p3a_giro3d_budget" type="number" step="1000000" value="" min="0"
+			placeholder="null (no budget)"></label>
+	</div>
+	<div id="p3a_giro3d_help"></div>
+	<button id="p3a_giro3d_fit" type="button">Fit / Reset View（适配 / 重置）</button>
+
+	<script src="vendor/giro3d.bundle.js"></script>
+	<script src="viewer.js"></script>
+</body>
+</html>

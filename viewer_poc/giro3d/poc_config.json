@@ -1,0 +1,23 @@
+{
+  "title": "TreeLineWarning P3A — Giro3D + COPC Viewer Candidate B",
+  "description": "Giro3D 2.0.3 rendering of the SAME dense real-RGB 982,504-point ROI used by Potree Candidate A, from a derived COPC file.",
+  "dataset": "p3a_roi",
+  "copcUrl": "pointclouds/p3a_roi.copc.laz",
+  "pointCount": 982504,
+  "lazPerfPath": "/laz-perf",
+  "viewer": {
+    "backgroundColor": "#101418",
+    "edlEnabled": true,
+    "pointSize": 2,
+    "pointBudget": 1000000,
+    "fov": 60,
+    "loadTimeoutMs": 60000,
+    "decimate": 1
+  },
+  "controlHelp": {
+    "left": "左键拖动: 旋转",
+    "right": "右键拖动: 平移",
+    "wheel": "滚轮: 缩放",
+    "click": "单击: 读取 XYZ"
+  }
+}

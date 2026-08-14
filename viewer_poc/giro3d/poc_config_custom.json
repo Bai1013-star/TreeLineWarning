@@ -1,0 +1,23 @@
+{
+  "title": "P3A Giro3D A/B — CUSTOM ROI COPC",
+  "description": "Custom builder ROI COPC (982,504 pts). A/B control: pointBudget null, decimation 1.",
+  "dataset": "p3a_roi_custom_ab",
+  "copcUrl": "pointclouds/p3a_roi.copc.laz",
+  "pointCount": 982504,
+  "lazPerfPath": "/laz-perf",
+  "viewer": {
+    "backgroundColor": "#101418",
+    "edlEnabled": true,
+    "pointSize": 2,
+    "pointBudget": null,
+    "fov": 60,
+    "loadTimeoutMs": 60000,
+    "decimate": 1
+  },
+  "controlHelp": {
+    "left": "左键拖动: 旋转",
+    "right": "右键拖动: 平移",
+    "wheel": "滚轮: 缩放",
+    "click": "单击: 读取 XYZ"
+  }
+}
