@@ -91,9 +91,13 @@ def test_generation_layout_manifest_and_empty_envelopes_round_trip(
     root = loaded.project_root
     generation = loaded.generation_path
     assert loaded.project.project_id == tiny_project.project_id
+    # Every newly published generation is generation-v2, which always carries
+    # the candidate store index alongside the five core project files.
+    assert loaded.generation_manifest.schema_version == persistence.GENERATION_SCHEMA_VERSION_V2
     assert sorted(
         path.relative_to(generation).as_posix() for path in generation.rglob("*.json")
     ) == [
+        "candidates/index.json",
         "generation.json",
         "project.json",
         "runs/run-index.json",
@@ -106,8 +110,9 @@ def test_generation_layout_manifest_and_empty_envelopes_round_trip(
     assert loaded.tower_registry.records == ()
     assert loaded.span_registry.records == ()
     assert loaded.run_index.entries == ()
+    assert loaded.candidate_store.candidate_sets == ()
     assert loaded.generation_manifest.sealed is True
-    assert loaded.generation_manifest.files[-1].relative_path == "runs/run-index.json"
+    assert loaded.generation_manifest.files[-1].relative_path == "candidates/index.json"
 
 
 def test_root_pointer_selects_exact_generation_and_reopen_preserves_source(

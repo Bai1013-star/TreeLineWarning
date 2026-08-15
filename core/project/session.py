@@ -274,6 +274,11 @@ class ProjectSession:
         return self._loaded.run_index
 
     @property
+    def candidate_store(self):
+        self._require_open()
+        return self._loaded.candidate_store
+
+    @property
     def generation_manifest(self):
         self._require_open()
         return self._loaded.generation_manifest
@@ -479,6 +484,65 @@ class WritableProjectSession(ProjectSession):
         from core.project.source_relocation import relocate_source
 
         return relocate_source(self, candidate_path)
+
+    def persist_tower_candidate_set(self, candidate_set):
+        from core.project.tower_candidates import persist_tower_candidate_set
+
+        return persist_tower_candidate_set(self, candidate_set)
+
+    def append_tower_candidate_review(
+        self,
+        *,
+        candidate_set_reference,
+        candidate_id,
+        decision,
+        occurred_at,
+        reason,
+        refinement_state,
+        refined_raw_geometry=None,
+        refinement_evidence=None,
+        operator_identity=None,
+        review_adjusted_seed_xyz_absolute_m=None,
+        notes=None,
+    ):
+        from core.project.tower_candidates import append_tower_candidate_review
+
+        return append_tower_candidate_review(
+            self,
+            candidate_set_reference=candidate_set_reference,
+            candidate_id=candidate_id,
+            decision=decision,
+            occurred_at=occurred_at,
+            reason=reason,
+            refinement_state=refinement_state,
+            refined_raw_geometry=refined_raw_geometry,
+            refinement_evidence=refinement_evidence,
+            operator_identity=operator_identity,
+            review_adjusted_seed_xyz_absolute_m=review_adjusted_seed_xyz_absolute_m,
+            notes=notes,
+        )
+
+    def confirm_reviewed_tower_candidate(
+        self,
+        *,
+        candidate_set_reference,
+        candidate_id,
+        accepted_review_revision,
+        reviewer_identity=None,
+        notes=None,
+        confirmed_at=None,
+    ):
+        from core.project.tower_candidates import confirm_reviewed_tower_candidate
+
+        return confirm_reviewed_tower_candidate(
+            self,
+            candidate_set_reference=candidate_set_reference,
+            candidate_id=candidate_id,
+            accepted_review_revision=accepted_review_revision,
+            reviewer_identity=reviewer_identity,
+            notes=notes,
+            confirmed_at=confirmed_at,
+        )
 
     def register_run(self, run_id: str, span_id: str, *, artifact_root_reference: str | None = None):
         from core.project.run_index import register_run

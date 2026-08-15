@@ -2,11 +2,14 @@
 
 from core.project.persistence import (
     ACTIVE_POINTER_SCHEMA_VERSION,
+    CANDIDATE_STORE_INDEX_SCHEMA_VERSION,
     GENERATION_SCHEMA_VERSION,
+    GENERATION_SCHEMA_VERSION_V2,
     RUN_INDEX_SCHEMA_VERSION,
     SOURCE_REFERENCE_PERSISTENCE_SCHEMA_VERSION,
     SPAN_REGISTRY_SCHEMA_VERSION,
     TOWER_REGISTRY_SCHEMA_VERSION,
+    CandidateStore,
     FileIntegrityError,
     GenerationManifest,
     LoadedProject,
@@ -97,10 +100,22 @@ from core.project.run_index import (
     register_run,
     start_run,
 )
+from core.project.tower_candidates import (
+    AlreadyConfirmedError,
+    CandidateConfirmationPublicationUncertainError,
+    InvalidTowerCandidateState,
+    TowerCandidateMutationError,
+    append_tower_candidate_review,
+    confirm_reviewed_tower_candidate,
+    persist_tower_candidate_set,
+)
 
 __all__ = [
     "ACTIVE_POINTER_SCHEMA_VERSION",
+    "CANDIDATE_STORE_INDEX_SCHEMA_VERSION",
+    "CandidateStore",
     "GENERATION_SCHEMA_VERSION",
+    "GENERATION_SCHEMA_VERSION_V2",
     "RUN_INDEX_SCHEMA_VERSION",
     "SOURCE_REFERENCE_PERSISTENCE_SCHEMA_VERSION",
     "SPAN_REGISTRY_SCHEMA_VERSION",
@@ -184,4 +199,11 @@ __all__ = [
     "reconcile_run_staleness",
     "register_run",
     "start_run",
+    "AlreadyConfirmedError",
+    "CandidateConfirmationPublicationUncertainError",
+    "InvalidTowerCandidateState",
+    "TowerCandidateMutationError",
+    "append_tower_candidate_review",
+    "confirm_reviewed_tower_candidate",
+    "persist_tower_candidate_set",
 ]

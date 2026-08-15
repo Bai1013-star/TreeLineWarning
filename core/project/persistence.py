@@ -81,21 +81,34 @@ from core.contracts.project import (
     span_display_id_for_sequence,
     tower_display_id_for_sequence,
 )
+from core.contracts.tower_candidates import (
+    TOWER_CANDIDATE_CONFIRMATION_SCHEMA_VERSION,
+    TOWER_CANDIDATE_REVIEW_LEDGER_SCHEMA_VERSION,
+    TOWER_CANDIDATE_SET_SCHEMA_VERSION,
+    TowerCandidateConfirmation,
+    TowerCandidateReviewLedger,
+    TowerCandidateSet,
+    validate_tower_candidate_confirmation,
+    validate_tower_candidate_review_ledger,
+)
 
 
 ACTIVE_POINTER_SCHEMA_VERSION = "treeline-project-active-pointer-v1"
 GENERATION_SCHEMA_VERSION = "treeline-project-generation-v1"
+GENERATION_SCHEMA_VERSION_V2 = "treeline-project-generation-v2"
 SOURCE_REFERENCE_PERSISTENCE_SCHEMA_VERSION = (
     "treeline-project-source-reference-persistence-v1"
 )
 TOWER_REGISTRY_SCHEMA_VERSION = "treeline-tower-registry-v1"
 SPAN_REGISTRY_SCHEMA_VERSION = "treeline-span-registry-v1"
 RUN_INDEX_SCHEMA_VERSION = "treeline-run-index-v1"
+CANDIDATE_STORE_INDEX_SCHEMA_VERSION = "treeline-tower-candidate-store-index-v1"
 
 _GENERATION_RE = re.compile(r"g-[0-9]{16}-[a-z0-9]{8}\Z")
 _TOWER_ID_RE = re.compile(r"T([0-9]{3,})\Z")
 _SPAN_ID_RE = re.compile(r"S([0-9]{3,})\Z")
 _RUN_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
+_CANDIDATE_ID_RE = re.compile(r"P([0-9]{3})\Z")
 _STAGING_PREFIX = ".staging-"
 _GENERATION_FILES = (
     "project.json",
@@ -1362,6 +1375,134 @@ class RunIndex:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class CandidateStore:
+    """Immutable V5A1-B candidate artifacts bound to one project generation.
+
+    The on-disk index (``candidates/index.json``) binds these artifacts to one
+    generation through digest-protected relative references; this in-memory
+    envelope carries the decoded immutable contracts.  ``CandidateStore()`` is
+    the empty store used by legacy v1 generations that never contain a candidate
+    store.
+    """
+
+    schema_version: str = CANDIDATE_STORE_INDEX_SCHEMA_VERSION
+    candidate_sets: tuple[TowerCandidateSet, ...] = ()
+    review_ledgers: tuple[TowerCandidateReviewLedger, ...] = ()
+    confirmations: tuple[TowerCandidateConfirmation, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.schema_version != CANDIDATE_STORE_INDEX_SCHEMA_VERSION:
+            raise PersistenceError("unsupported candidate-store index schema version")
+        sets = tuple(self.candidate_sets)
+        if any(type(item) is not TowerCandidateSet for item in sets):
+            raise PersistenceError(
+                "candidate store candidate_sets must contain TowerCandidateSet values"
+            )
+        if len({item.candidate_set_id for item in sets}) != len(sets):
+            raise PersistenceError("candidate store contains duplicate candidate-set identities")
+        ledgers = tuple(self.review_ledgers)
+        if any(type(item) is not TowerCandidateReviewLedger for item in ledgers):
+            raise PersistenceError(
+                "candidate store review_ledgers must contain TowerCandidateReviewLedger values"
+            )
+        if len({item.review_ledger_id for item in ledgers}) != len(ledgers):
+            raise PersistenceError("candidate store contains duplicate review-ledger identities")
+        sets_by_id = {item.candidate_set_id: item for item in sets}
+        ledger_by_set: dict[str, TowerCandidateReviewLedger] = {}
+        for ledger in ledgers:
+            if len(ledger.candidate_sets) != 1:
+                raise PersistenceError(
+                    "a persisted review ledger must declare exactly one candidate set"
+                )
+            reference = ledger.candidate_sets[0]
+            actual = sets_by_id.get(reference.candidate_set_id)
+            if actual is None or actual.reference != reference:
+                raise PersistenceError(
+                    "review ledger candidate-set reference does not resolve to the actual set"
+                )
+            if reference.candidate_set_id in ledger_by_set:
+                raise PersistenceError("at most one review ledger is permitted per candidate set")
+            ledger_by_set[reference.candidate_set_id] = ledger
+            try:
+                validate_tower_candidate_review_ledger(actual, ledger)
+            except ValueError as exc:
+                raise PersistenceError(f"invalid tower-candidate review ledger: {exc}") from exc
+        confirmations = tuple(self.confirmations)
+        if any(type(item) is not TowerCandidateConfirmation for item in confirmations):
+            raise PersistenceError(
+                "candidate store confirmations must contain TowerCandidateConfirmation values"
+            )
+        confirmed_keys: set[tuple[str, str]] = set()
+        for confirmation in confirmations:
+            reference = confirmation.candidate_set_reference
+            actual = sets_by_id.get(reference.candidate_set_id)
+            if actual is None or actual.reference != reference:
+                raise PersistenceError(
+                    "confirmation candidate-set reference does not resolve to the actual set"
+                )
+            ledger = ledger_by_set.get(reference.candidate_set_id)
+            if ledger is None:
+                raise PersistenceError(
+                    "confirmation requires a review ledger for its candidate set"
+                )
+            key = (reference.candidate_set_id, confirmation.candidate_id)
+            if key in confirmed_keys:
+                raise PersistenceError("a candidate may have at most one confirmation")
+            confirmed_keys.add(key)
+            try:
+                validate_tower_candidate_confirmation(actual, ledger, confirmation)
+            except ValueError as exc:
+                raise PersistenceError(f"invalid tower-candidate confirmation: {exc}") from exc
+
+
+def _candidate_set_relative_path(candidate_set_id: str) -> str:
+    return f"candidates/candidate-sets/{candidate_set_id}.json"
+
+
+def _review_ledger_relative_path(review_ledger_id: str) -> str:
+    return f"candidates/review-ledgers/{review_ledger_id}.json"
+
+
+def _confirmation_relative_path(
+    candidate_set_id: str, candidate_id: str, accepted_review_revision: int
+) -> str:
+    return (
+        f"candidates/confirmations/{candidate_set_id}-{candidate_id}-r"
+        f"{accepted_review_revision}.json"
+    )
+
+
+def _candidate_store_relative_paths(store: CandidateStore) -> tuple[str, ...]:
+    # A v2 generation always carries its candidate index, even when the store
+    # holds no candidate artifacts yet.
+    paths = ["candidates/index.json"]
+    paths.extend(
+        _candidate_set_relative_path(item.candidate_set_id)
+        for item in sorted(store.candidate_sets, key=lambda s: s.candidate_set_id)
+    )
+    paths.extend(
+        _review_ledger_relative_path(item.review_ledger_id)
+        for item in sorted(store.review_ledgers, key=lambda ledger: ledger.review_ledger_id)
+    )
+    paths.extend(
+        _confirmation_relative_path(
+            item.candidate_set_reference.candidate_set_id,
+            item.candidate_id,
+            item.accepted_review_revision,
+        )
+        for item in sorted(
+            store.confirmations,
+            key=lambda c: (
+                c.candidate_set_reference.candidate_set_id,
+                c.candidate_id,
+                c.accepted_review_revision,
+            ),
+        )
+    )
+    return tuple(paths)
+
+
 def _span_analysis_projection_for_run(
     entry: RunIndexEntry,
     *,
@@ -1441,6 +1582,7 @@ class LoadedProject:
     tower_registry: TowerRegistry
     span_registry: SpanRegistry
     run_index: RunIndex
+    candidate_store: CandidateStore
     generation_id: str
     generation_manifest: GenerationManifest
     project_root: Path
@@ -1855,6 +1997,374 @@ def _decode_run_index(value: Any, project: ProjectContract, generation_id: str) 
         raise ProjectIntegrityError(f"invalid RunIndex: {exc}") from exc
 
 
+def _validate_candidate_store_relative_path(
+    value: Any, prefix: str, name: str
+) -> str:
+    if type(value) is not str or not value.startswith(prefix):
+        raise ProjectIntegrityError(f"{name} must be a generation-relative path under {prefix}")
+    try:
+        _safe_relative_posix_path(value, name)
+    except (TypeError, ValueError) as exc:
+        raise ProjectIntegrityError(f"{name} is an unsafe relative path: {exc}") from exc
+    return value
+
+
+def _decode_candidate_store_index(
+    data: Any, project: ProjectContract, generation_id: str
+) -> dict[str, Any]:
+    value = _object(
+        data,
+        "CandidateStoreIndex",
+        {
+            "schema_version",
+            "project_id",
+            "generation_id",
+            "candidate_sets",
+            "review_ledgers",
+            "confirmations",
+        },
+    )
+    if value["schema_version"] != CANDIDATE_STORE_INDEX_SCHEMA_VERSION:
+        raise ProjectIntegrityError("unsupported candidate-store index schema version")
+    if value["project_id"] != project.project_id:
+        raise ProjectIntegrityError("candidate store index project_id does not match project")
+    if value["generation_id"] != generation_id:
+        raise ProjectIntegrityError("candidate store index generation_id does not match generation")
+
+    set_records: list[dict[str, Any]] = []
+    seen_set_ids: set[str] = set()
+    for item in _sequence(value["candidate_sets"], "candidate_sets"):
+        record = _object(
+            item,
+            "CandidateSetIndexEntry",
+            {
+                "candidate_set_id",
+                "candidate_set_digest",
+                "schema_version",
+                "relative_path",
+                "sha256",
+                "byte_size",
+            },
+        )
+        if type(record["candidate_set_id"]) is not str or _RUN_ID_RE.fullmatch(
+            record["candidate_set_id"]
+        ) is None:
+            raise ProjectIntegrityError("candidate_set_id must be a lower-case opaque identifier")
+        if record["candidate_set_id"] in seen_set_ids:
+            raise ProjectIntegrityError("candidate store index has duplicate candidate-set ids")
+        seen_set_ids.add(record["candidate_set_id"])
+        _validate_digest(record["candidate_set_digest"], "candidate_set_digest")
+        if record["schema_version"] != TOWER_CANDIDATE_SET_SCHEMA_VERSION:
+            raise ProjectIntegrityError("unsupported candidate-set artifact schema version")
+        _validate_candidate_store_relative_path(
+            record["relative_path"], "candidates/candidate-sets/", "candidate-set relative_path"
+        )
+        _validate_digest(record["sha256"], "candidate-set artifact sha256")
+        if type(record["byte_size"]) is not int or record["byte_size"] < 0:
+            raise ProjectIntegrityError("candidate-set artifact byte_size must be non-negative")
+        set_records.append(record)
+
+    ledger_records: list[dict[str, Any]] = []
+    seen_ledger_ids: set[str] = set()
+    for item in _sequence(value["review_ledgers"], "review_ledgers"):
+        record = _object(
+            item,
+            "ReviewLedgerIndexEntry",
+            {
+                "review_ledger_id",
+                "schema_version",
+                "relative_path",
+                "sha256",
+                "byte_size",
+            },
+        )
+        if type(record["review_ledger_id"]) is not str or _RUN_ID_RE.fullmatch(
+            record["review_ledger_id"]
+        ) is None:
+            raise ProjectIntegrityError("review_ledger_id must be a lower-case opaque identifier")
+        if record["review_ledger_id"] in seen_ledger_ids:
+            raise ProjectIntegrityError("candidate store index has duplicate review-ledger ids")
+        seen_ledger_ids.add(record["review_ledger_id"])
+        if record["schema_version"] != TOWER_CANDIDATE_REVIEW_LEDGER_SCHEMA_VERSION:
+            raise ProjectIntegrityError("unsupported review-ledger artifact schema version")
+        _validate_candidate_store_relative_path(
+            record["relative_path"], "candidates/review-ledgers/", "review-ledger relative_path"
+        )
+        _validate_digest(record["sha256"], "review-ledger artifact sha256")
+        if type(record["byte_size"]) is not int or record["byte_size"] < 0:
+            raise ProjectIntegrityError("review-ledger artifact byte_size must be non-negative")
+        ledger_records.append(record)
+
+    confirmation_records: list[dict[str, Any]] = []
+    for item in _sequence(value["confirmations"], "confirmations"):
+        record = _object(
+            item,
+            "ConfirmationIndexEntry",
+            {
+                "candidate_set_id",
+                "candidate_id",
+                "accepted_review_revision",
+                "confirmed_tower_id",
+                "confirmed_tower_revision",
+                "schema_version",
+                "relative_path",
+                "sha256",
+                "byte_size",
+            },
+        )
+        if type(record["candidate_set_id"]) is not str or _RUN_ID_RE.fullmatch(
+            record["candidate_set_id"]
+        ) is None:
+            raise ProjectIntegrityError("candidate_set_id must be a lower-case opaque identifier")
+        if type(record["candidate_id"]) is not str or _CANDIDATE_ID_RE.fullmatch(
+            record["candidate_id"]
+        ) is None:
+            raise ProjectIntegrityError("confirmation candidate_id must be a canonical P###")
+        if type(record["accepted_review_revision"]) is not int or record[
+            "accepted_review_revision"
+        ] <= 0:
+            raise ProjectIntegrityError("accepted_review_revision must be a positive integer")
+        if type(record["confirmed_tower_id"]) is not str or _TOWER_ID_RE.fullmatch(
+            record["confirmed_tower_id"]
+        ) is None:
+            raise ProjectIntegrityError("confirmed_tower_id must be a canonical tower ID")
+        if type(record["confirmed_tower_revision"]) is not int or record[
+            "confirmed_tower_revision"
+        ] <= 0:
+            raise ProjectIntegrityError("confirmed_tower_revision must be a positive integer")
+        if record["schema_version"] != TOWER_CANDIDATE_CONFIRMATION_SCHEMA_VERSION:
+            raise ProjectIntegrityError("unsupported confirmation artifact schema version")
+        _validate_candidate_store_relative_path(
+            record["relative_path"], "candidates/confirmations/", "confirmation relative_path"
+        )
+        _validate_digest(record["sha256"], "confirmation artifact sha256")
+        if type(record["byte_size"]) is not int or record["byte_size"] < 0:
+            raise ProjectIntegrityError("confirmation artifact byte_size must be non-negative")
+        confirmation_records.append(record)
+
+    return {
+        "schema_version": value["schema_version"],
+        "candidate_sets": tuple(set_records),
+        "review_ledgers": tuple(ledger_records),
+        "confirmations": tuple(confirmation_records),
+    }
+
+
+def _read_generation_artifact(
+    generation_path: Path, record: Mapping[str, Any], name: str
+) -> bytes:
+    path = _confined_path(generation_path, record["relative_path"], name)
+    try:
+        data = path.read_bytes()
+    except (FileNotFoundError, OSError) as exc:
+        raise FileIntegrityError(f"missing or unreadable {name} {record['relative_path']}") from exc
+    if file_sha256(data) != record["sha256"]:
+        raise FileIntegrityError(f"wrong SHA-256 for {name} {record['relative_path']}")
+    if len(data) != record["byte_size"]:
+        raise FileIntegrityError(f"wrong byte size for {name} {record['relative_path']}")
+    return data
+
+
+def _read_candidate_store(
+    generation_path: Path,
+    project: ProjectContract,
+    generation_id: str,
+    *,
+    manifest_v2: bool,
+) -> CandidateStore:
+    candidates_dir = generation_path / "candidates"
+    if not manifest_v2:
+        if candidates_dir.exists():
+            raise ProjectIntegrityError(
+                "a legacy v1 generation must not contain a candidate store"
+            )
+        return CandidateStore()
+    index_path = candidates_dir / "index.json"
+    if not candidates_dir.exists() or not index_path.exists():
+        raise ProjectIntegrityError("a v2 generation requires candidates/index.json")
+    index = _decode_candidate_store_index(
+        _read_json(index_path, "candidates/index.json"), project, generation_id
+    )
+    sets: list[TowerCandidateSet] = []
+    for record in index["candidate_sets"]:
+        expected = _candidate_set_relative_path(record["candidate_set_id"])
+        if record["relative_path"] != expected:
+            raise ProjectIntegrityError("candidate-set index relative_path is not canonical")
+        data = _read_generation_artifact(generation_path, record, "candidate-set artifact")
+        try:
+            candidate_set = TowerCandidateSet.from_dict(
+                _parse_json_bytes(data, record["relative_path"])
+            )
+        except (TypeError, ValueError) as exc:
+            raise ProjectIntegrityError(f"invalid tower candidate-set artifact: {exc}") from exc
+        if (
+            candidate_set.candidate_set_id != record["candidate_set_id"]
+            or candidate_set.digest != record["candidate_set_digest"]
+        ):
+            raise ProjectIntegrityError(
+                "candidate-set artifact identity does not match the candidate index"
+            )
+        sets.append(candidate_set)
+    ledgers: list[TowerCandidateReviewLedger] = []
+    for record in index["review_ledgers"]:
+        expected = _review_ledger_relative_path(record["review_ledger_id"])
+        if record["relative_path"] != expected:
+            raise ProjectIntegrityError("review-ledger index relative_path is not canonical")
+        data = _read_generation_artifact(generation_path, record, "review-ledger artifact")
+        try:
+            ledger = TowerCandidateReviewLedger.from_dict(
+                _parse_json_bytes(data, record["relative_path"])
+            )
+        except (TypeError, ValueError) as exc:
+            raise ProjectIntegrityError(
+                f"invalid tower candidate review-ledger artifact: {exc}"
+            ) from exc
+        if ledger.review_ledger_id != record["review_ledger_id"]:
+            raise ProjectIntegrityError(
+                "review-ledger artifact identity does not match the candidate index"
+            )
+        ledgers.append(ledger)
+    confirmations: list[TowerCandidateConfirmation] = []
+    for record in index["confirmations"]:
+        expected = _confirmation_relative_path(
+            record["candidate_set_id"],
+            record["candidate_id"],
+            record["accepted_review_revision"],
+        )
+        if record["relative_path"] != expected:
+            raise ProjectIntegrityError("confirmation index relative_path is not canonical")
+        data = _read_generation_artifact(generation_path, record, "confirmation artifact")
+        try:
+            confirmation = TowerCandidateConfirmation.from_dict(
+                _parse_json_bytes(data, record["relative_path"])
+            )
+        except (TypeError, ValueError) as exc:
+            raise ProjectIntegrityError(
+                f"invalid tower candidate confirmation artifact: {exc}"
+            ) from exc
+        if (
+            confirmation.candidate_set_reference.candidate_set_id != record["candidate_set_id"]
+            or confirmation.candidate_id != record["candidate_id"]
+            or confirmation.accepted_review_revision != record["accepted_review_revision"]
+            or confirmation.confirmed_tower.tower_id != record["confirmed_tower_id"]
+            or confirmation.confirmed_tower.revision != record["confirmed_tower_revision"]
+        ):
+            raise ProjectIntegrityError(
+                "confirmation artifact identity does not match the candidate index"
+            )
+        confirmations.append(confirmation)
+    try:
+        store = CandidateStore(
+            schema_version=index["schema_version"],
+            candidate_sets=tuple(sets),
+            review_ledgers=tuple(ledgers),
+            confirmations=tuple(confirmations),
+        )
+    except PersistenceError as exc:
+        raise ProjectIntegrityError(f"invalid candidate store: {exc}") from exc
+    return store
+
+
+def _validate_candidate_store_manifest_coverage(
+    manifest: GenerationManifest,
+    candidate_store: CandidateStore,
+) -> None:
+    if manifest.schema_version == GENERATION_SCHEMA_VERSION:
+        # A historical v1 generation has no candidate-store files at all.
+        expected: tuple[str, ...] = ()
+    else:
+        expected = _candidate_store_relative_paths(candidate_store)
+    actual = tuple(
+        item.relative_path
+        for item in manifest.files
+        if item.relative_path.startswith("candidates/")
+    )
+    if actual != expected:
+        raise ProjectIntegrityError(
+            "generation manifest candidate store files do not match the candidate store index"
+        )
+
+
+def _validate_candidate_store_state(
+    project: ProjectContract,
+    source_sidecar: SourceReferenceSidecar,
+    tower_registry: TowerRegistry,
+    candidate_store: CandidateStore,
+) -> None:
+    """Validate candidate artifacts against project/source identity and the Tower registry."""
+    current_binding = project.source_reference.binding
+    allowed_record_digests = {
+        current_binding.source_identity_record_digest,
+        *(item.source_identity_record_digest for item in source_sidecar.source_identity_history),
+    }
+    expected_coordinate_contexts = {
+        current_binding.source_identity_record_digest: current_binding.coordinate_context
+    }
+    for history_identity in source_sidecar.source_identity_history:
+        expected_coordinate_contexts[history_identity.source_identity_record_digest] = (
+            SourceIdentityBinding.from_source_identity(history_identity).coordinate_context
+        )
+    for candidate_set in candidate_store.candidate_sets:
+        if candidate_set.project_id != project.project_id:
+            raise ProjectIntegrityError("candidate set project_id does not match project")
+        if (
+            candidate_set.source_binding.source_content_identity_digest
+            != current_binding.source_content_identity_digest
+        ):
+            raise ProjectIntegrityError(
+                "candidate set source content identity does not match project source"
+            )
+        if candidate_set.source_binding.source_identity_record_digest not in allowed_record_digests:
+            raise ProjectIntegrityError(
+                "candidate set source identity record is not in project source history"
+            )
+        if (
+            candidate_set.coordinate_context
+            != expected_coordinate_contexts[
+                candidate_set.source_binding.source_identity_record_digest
+            ]
+        ):
+            raise ProjectIntegrityError(
+                "candidate set coordinate context does not match its referenced source identity"
+            )
+    for confirmation in candidate_store.confirmations:
+        reference = confirmation.candidate_set_reference
+        actual_set = next(
+            (
+                item
+                for item in candidate_store.candidate_sets
+                if item.candidate_set_id == reference.candidate_set_id
+            ),
+            None,
+        )
+        if actual_set is None or actual_set.reference != reference:
+            raise ProjectIntegrityError(
+                "confirmation candidate-set reference does not resolve to the actual set"
+            )
+        try:
+            entry = tower_registry.get(confirmation.confirmed_tower.tower_id)
+            revision = entry.revision(confirmation.confirmed_tower.revision)
+        except KeyError as exc:
+            raise ProjectIntegrityError(
+                "confirmation references an unknown tower or tower revision"
+            ) from exc
+        if revision.source_binding != actual_set.source_binding:
+            raise ProjectIntegrityError("confirmation tower source binding does not agree")
+        evidence = revision.refinement.evidence
+        if not (
+            evidence.get("candidate_set_id")
+            == confirmation.candidate_set_reference.candidate_set_id
+            and evidence.get("candidate_set_digest")
+            == confirmation.candidate_set_reference.candidate_set_digest
+            and evidence.get("candidate_id") == confirmation.candidate_id
+            and evidence.get("accepted_review_revision")
+            == confirmation.accepted_review_revision
+        ):
+            raise ProjectIntegrityError(
+                "confirmation tower provenance does not agree with the candidate review"
+            )
+
+
 def _decode_manifest(value: Any, project_id: str, generation_id: str) -> GenerationManifest:
     data = _object(
         value,
@@ -1870,7 +2380,8 @@ def _decode_manifest(value: Any, project_id: str, generation_id: str) -> Generat
             "published_at",
         },
     )
-    if data["schema_version"] != GENERATION_SCHEMA_VERSION:
+    manifest_version = data["schema_version"]
+    if manifest_version not in {GENERATION_SCHEMA_VERSION, GENERATION_SCHEMA_VERSION_V2}:
         raise ProjectIntegrityError("unsupported generation schema version")
     if data["project_id"] != project_id:
         raise ProjectIntegrityError("generation manifest project_id does not match project")
@@ -1892,8 +2403,30 @@ def _decode_manifest(value: Any, project_id: str, generation_id: str) -> Generat
                 sha256=_validate_digest(record["sha256"], "file record sha256"),
             )
         )
-    if tuple(item.relative_path for item in records) != _GENERATION_FILES:
-        raise ProjectIntegrityError("generation manifest file records are not exact and ordered")
+    if manifest_version == GENERATION_SCHEMA_VERSION:
+        # Historical v1 manifests are the exact five core project files only.
+        if tuple(item.relative_path for item in records) != _GENERATION_FILES:
+            raise ProjectIntegrityError(
+                "generation manifest v1 file records are not the exact historical five files"
+            )
+    else:
+        # v2 preserves the five core files and adds the candidate review store.
+        if (
+            tuple(item.relative_path for item in records[: len(_GENERATION_FILES)])
+            != _GENERATION_FILES
+        ):
+            raise ProjectIntegrityError(
+                "generation manifest v2 core file records are not exact and ordered"
+            )
+        extra_files = [item.relative_path for item in records[len(_GENERATION_FILES) :]]
+        if not extra_files or extra_files[0] != "candidates/index.json":
+            raise ProjectIntegrityError(
+                "generation manifest v2 must begin with candidates/index.json"
+            )
+        if any(not path.startswith("candidates/") for path in extra_files):
+            raise ProjectIntegrityError(
+                "generation manifest v2 references a file outside core and candidate store"
+            )
     _validate_digest(data["project_manifest_logical_digest"], "project_manifest_logical_digest")
     _timestamp(data["created_at"], "created_at")
     _timestamp(data["published_at"], "published_at")
@@ -2190,6 +2723,7 @@ def _validate_generation_content(
     tower_registry: TowerRegistry,
     span_registry: SpanRegistry,
     run_index: RunIndex,
+    candidate_store: CandidateStore,
 ) -> None:
     if source_sidecar.project_id != project.project_id:
         raise ProjectIntegrityError("source sidecar project_id does not match project")
@@ -2211,13 +2745,23 @@ def _validate_generation_content(
         project, source_sidecar, tower_registry, span_registry, run_index
     )
     _validate_run_index_span_analysis_coherence(span_registry, run_index)
+    _validate_candidate_store_state(project, source_sidecar, tower_registry, candidate_store)
 
 
 def _read_generation_content(
     root: Path,
     generation_path: Path,
     generation_id: str,
-) -> tuple[ProjectContract, SourceReferenceSidecar, TowerRegistry, SpanRegistry, RunIndex]:
+    *,
+    manifest_v2: bool,
+) -> tuple[
+    ProjectContract,
+    SourceReferenceSidecar,
+    TowerRegistry,
+    SpanRegistry,
+    RunIndex,
+    CandidateStore,
+]:
     project_data = _read_json(generation_path / "project.json", "generation project.json")
     project = _decode_project(project_data)
     source_data = _read_json(
@@ -2235,6 +2779,9 @@ def _read_generation_content(
         raise ProjectIntegrityError("spans/spans.json has the wrong registry schema")
     run_data = _read_json(generation_path / "runs" / "run-index.json", "runs/run-index.json")
     run_index = _decode_run_index(run_data, project, generation_id)
+    candidate_store = _read_candidate_store(
+        generation_path, project, generation_id, manifest_v2=manifest_v2
+    )
     _validate_generation_content(
         root,
         generation_path,
@@ -2244,8 +2791,9 @@ def _read_generation_content(
         tower_registry,
         span_registry,
         run_index,
+        candidate_store,
     )
-    return project, source_sidecar, tower_registry, span_registry, run_index
+    return project, source_sidecar, tower_registry, span_registry, run_index, candidate_store
 
 
 def _read_root_pointer(root: Path) -> tuple[dict[str, Any], ProjectContract]:
@@ -2306,11 +2854,15 @@ def open_project(project_root: str | os.PathLike[str]) -> LoadedProject:
     project_bytes = project_path.read_bytes()
     if file_sha256(project_bytes) != pointer["project_manifest_sha256"]:
         raise FileIntegrityError("root pointer project manifest digest mismatch")
-    project, source_sidecar, tower_registry, span_registry, run_index = _read_generation_content(
-        root,
-        generation_path,
-        generation_id,
+    project, source_sidecar, tower_registry, span_registry, run_index, candidate_store = (
+        _read_generation_content(
+            root,
+            generation_path,
+            generation_id,
+            manifest_v2=manifest.schema_version == GENERATION_SCHEMA_VERSION_V2,
+        )
     )
+    _validate_candidate_store_manifest_coverage(manifest, candidate_store)
     if project != pointer_project:
         raise ProjectIntegrityError("root pointer nested project does not match generation project")
     if project.project_id != manifest.project_id or project.project_id != pointer["project_id"]:
@@ -2326,11 +2878,98 @@ def open_project(project_root: str | os.PathLike[str]) -> LoadedProject:
         tower_registry=tower_registry,
         span_registry=span_registry,
         run_index=run_index,
+        candidate_store=candidate_store,
         generation_id=generation_id,
         generation_manifest=manifest,
         project_root=root,
         generation_path=generation_path,
     )
+
+
+def _write_candidate_store_files(
+    staging_path: Path,
+    project_id: str,
+    generation_id: str,
+    candidate_store: CandidateStore,
+) -> None:
+    """Write immutable candidate artifacts plus their digest-protected index.
+
+    Every v2 generation carries ``candidates/index.json`` even when the store
+    is currently empty, so an empty v2 generation is unambiguous.
+    """
+    candidates_dir = staging_path / "candidates"
+    candidates_dir.mkdir()
+    (candidates_dir / "candidate-sets").mkdir()
+    (candidates_dir / "review-ledgers").mkdir()
+    (candidates_dir / "confirmations").mkdir()
+    set_records: list[dict[str, Any]] = []
+    for item in sorted(candidate_store.candidate_sets, key=lambda s: s.candidate_set_id):
+        relative = _candidate_set_relative_path(item.candidate_set_id)
+        data = _write_json(staging_path / relative, item.to_dict())
+        set_records.append(
+            {
+                "candidate_set_id": item.candidate_set_id,
+                "candidate_set_digest": item.digest,
+                "schema_version": item.schema_version,
+                "relative_path": relative,
+                "sha256": file_sha256(data),
+                "byte_size": len(data),
+            }
+        )
+    ledger_records: list[dict[str, Any]] = []
+    for item in sorted(candidate_store.review_ledgers, key=lambda ledger: ledger.review_ledger_id):
+        relative = _review_ledger_relative_path(item.review_ledger_id)
+        data = _write_json(staging_path / relative, item.to_dict())
+        ledger_records.append(
+            {
+                "review_ledger_id": item.review_ledger_id,
+                "schema_version": item.schema_version,
+                "relative_path": relative,
+                "sha256": file_sha256(data),
+                "byte_size": len(data),
+            }
+        )
+    confirmation_records: list[dict[str, Any]] = []
+    for item in sorted(
+        candidate_store.confirmations,
+        key=lambda confirmation: (
+            confirmation.candidate_set_reference.candidate_set_id,
+            confirmation.candidate_id,
+            confirmation.accepted_review_revision,
+        ),
+    ):
+        reference = item.candidate_set_reference
+        relative = _confirmation_relative_path(
+            reference.candidate_set_id, item.candidate_id, item.accepted_review_revision
+        )
+        data = _write_json(staging_path / relative, item.to_dict())
+        confirmation_records.append(
+            {
+                "candidate_set_id": reference.candidate_set_id,
+                "candidate_id": item.candidate_id,
+                "accepted_review_revision": item.accepted_review_revision,
+                "confirmed_tower_id": item.confirmed_tower.tower_id,
+                "confirmed_tower_revision": item.confirmed_tower.revision,
+                "schema_version": item.schema_version,
+                "relative_path": relative,
+                "sha256": file_sha256(data),
+                "byte_size": len(data),
+            }
+        )
+    _write_json(
+        candidates_dir / "index.json",
+        {
+            "schema_version": CANDIDATE_STORE_INDEX_SCHEMA_VERSION,
+            "project_id": project_id,
+            "generation_id": generation_id,
+            "candidate_sets": set_records,
+            "review_ledgers": ledger_records,
+            "confirmations": confirmation_records,
+        },
+    )
+    for child_name in ("candidate-sets", "review-ledgers", "confirmations"):
+        _fsync_directory(candidates_dir / child_name)
+    _fsync_directory(candidates_dir)
 
 
 def _write_generation_files(
@@ -2342,7 +2981,15 @@ def _write_generation_files(
     tower_registry: TowerRegistry | None = None,
     span_registry: SpanRegistry | None = None,
     run_index: RunIndex | None = None,
-) -> tuple[dict[str, Any], SourceReferenceSidecar, TowerRegistry, SpanRegistry, RunIndex]:
+    candidate_store: CandidateStore | None = None,
+) -> tuple[
+    dict[str, Any],
+    SourceReferenceSidecar,
+    TowerRegistry,
+    SpanRegistry,
+    RunIndex,
+    CandidateStore,
+]:
     (staging_path / "source").mkdir()
     (staging_path / "towers").mkdir()
     (staging_path / "spans").mkdir()
@@ -2367,23 +3014,48 @@ def _write_generation_files(
         project.project_id,
         entries=(run_index.entries if run_index is not None else ()),
     )
+    candidate_store = (
+        CandidateStore()
+        if candidate_store is None
+        else CandidateStore(
+            schema_version=candidate_store.schema_version,
+            candidate_sets=candidate_store.candidate_sets,
+            review_ledgers=candidate_store.review_ledgers,
+            confirmations=candidate_store.confirmations,
+        )
+    )
     project_payload = project.to_dict()
     _write_json(staging_path / "source" / "source-reference.json", source_sidecar.to_dict())
     _write_json(staging_path / "towers" / "towers.json", tower_registry.to_dict())
     _write_json(staging_path / "spans" / "spans.json", span_registry.to_dict())
     _write_json(staging_path / "runs" / "run-index.json", run_index.to_dict())
     _write_json(staging_path / "project.json", project_payload)
+    _write_candidate_store_files(staging_path, project.project_id, generation_id, candidate_store)
     for child_name in ("source", "towers", "spans", "runs"):
         _fsync_directory(staging_path / child_name)
     _fsync_directory(staging_path)
-    _read_generation_content(root, staging_path, generation_id)
-    return project_payload, source_sidecar, tower_registry, span_registry, run_index
+    # Staging is always published as generation v2.
+    _read_generation_content(root, staging_path, generation_id, manifest_v2=True)
+    return (
+        project_payload,
+        source_sidecar,
+        tower_registry,
+        span_registry,
+        run_index,
+        candidate_store,
+    )
 
 
-def _file_records(staging_path: Path) -> tuple[FileRecord, ...]:
+def _file_records(
+    staging_path: Path, candidate_store: CandidateStore
+) -> tuple[FileRecord, ...]:
     records: list[FileRecord] = []
     for relative in _GENERATION_FILES:
         path = _confined_path(staging_path, relative, "generation file")
+        data = path.read_bytes()
+        records.append(FileRecord(relative, len(data), file_sha256(data)))
+    for relative in _candidate_store_relative_paths(candidate_store):
+        path = _confined_path(staging_path, relative, "candidate store file")
         data = path.read_bytes()
         records.append(FileRecord(relative, len(data), file_sha256(data)))
     return tuple(records)
@@ -2398,6 +3070,7 @@ def _publish_generation(
     tower_registry: TowerRegistry | None = None,
     span_registry: SpanRegistry | None = None,
     run_index: RunIndex | None = None,
+    candidate_store: CandidateStore | None = None,
 ) -> LoadedProject:
     """Copy-on-write publisher used by locked session mutation and P2A creation/tests."""
 
@@ -2423,7 +3096,7 @@ def _publish_generation(
             source_sidecar, generation_id=generation_id, project=project
         )
     try:
-        project_payload, _, _, _, _ = _write_generation_files(
+        project_payload, _, _, _, _, candidate_store = _write_generation_files(
             root,
             staging_path,
             generation_id,
@@ -2432,14 +3105,15 @@ def _publish_generation(
             tower_registry,
             span_registry,
             run_index,
+            candidate_store,
         )
         created_at = _utc_timestamp()
         manifest = GenerationManifest(
-            schema_version=GENERATION_SCHEMA_VERSION,
+            schema_version=GENERATION_SCHEMA_VERSION_V2,
             project_id=project.project_id,
             generation_id=generation_id,
             sealed=True,
-            files=_file_records(staging_path),
+            files=_file_records(staging_path, candidate_store),
             project_manifest_logical_digest=logical_json_digest(project_payload),
             created_at=created_at,
             published_at=_utc_timestamp(),
@@ -2453,7 +3127,7 @@ def _publish_generation(
             generation_id,
         )
         _validate_generation_files(staging_path, staged_manifest)
-        _read_generation_content(root, staging_path, generation_id)
+        _read_generation_content(root, staging_path, generation_id, manifest_v2=True)
         final_path = generations / generation_id
         try:
             os.replace(staging_path, final_path)
@@ -2501,7 +3175,13 @@ def _validate_published_generation(
         generation_id,
     )
     _validate_generation_files(generation_path, manifest)
-    _read_generation_content(root, generation_path, generation_id)
+    _, _, _, _, _, candidate_store = _read_generation_content(
+        root,
+        generation_path,
+        generation_id,
+        manifest_v2=manifest.schema_version == GENERATION_SCHEMA_VERSION_V2,
+    )
+    _validate_candidate_store_manifest_coverage(manifest, candidate_store)
 
 
 def _atomic_replace_root_pointer(root: Path, pointer: Mapping[str, Any]) -> None:
@@ -2570,11 +3250,14 @@ def _create_project_unlocked_for_tests(
 
 __all__ = [
     "ACTIVE_POINTER_SCHEMA_VERSION",
+    "CANDIDATE_STORE_INDEX_SCHEMA_VERSION",
     "GENERATION_SCHEMA_VERSION",
+    "GENERATION_SCHEMA_VERSION_V2",
     "RUN_INDEX_SCHEMA_VERSION",
     "SOURCE_REFERENCE_PERSISTENCE_SCHEMA_VERSION",
     "SPAN_REGISTRY_SCHEMA_VERSION",
     "TOWER_REGISTRY_SCHEMA_VERSION",
+    "CandidateStore",
     "FileIntegrityError",
     "GenerationManifest",
     "LoadedProject",

@@ -452,6 +452,7 @@ def relocate_source(
                 tower_registry=loaded.tower_registry,
                 span_registry=loaded.span_registry,
                 run_index=loaded.run_index,
+                candidate_store=loaded.candidate_store,
             )
         except PostPointerDurabilityError as exc:
             # Reuse the reviewed P2C-A post-pointer uncertainty handling: the lock

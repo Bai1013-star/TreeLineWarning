@@ -360,6 +360,7 @@ def _publish(
             tower_registry=tower_registry,
             span_registry=span_registry,
             run_index=loaded.run_index,
+            candidate_store=loaded.candidate_store,
         )
     except PostPointerDurabilityError as exc:
         # The lock is still held.  Reopen the pointer before reporting the
@@ -411,20 +412,22 @@ def reserve_tower_id(session: WritableProjectSession) -> str:
     return tower_id
 
 
-def create_tower(
-    session: WritableProjectSession,
-    candidate: TowerDraft | TowerContract,
+def _allocated_tower(
+    loaded: Any,
+    draft: TowerDraft,
     *,
     reservation: str | None = None,
-) -> TowerContract:
-    """Validate and publish one confirmed Tower, assigning its project-local ID."""
+) -> tuple[TowerContract, TowerRegistry, Any]:
+    """Pure in-memory next-Tower allocation; never publishes or touches the session.
 
-    draft = _tower_draft(candidate)
-    if draft.state is not TowerLifecycleState.CONFIRMED:
-        raise InvalidRegistryCandidate("new Tower candidates must be CONFIRMED")
-    loaded = _require_writable(session)
-    session.require_strong_source_identity()
-    _same_current_source(session, draft.source_binding)
+    Both ``create_tower`` and the V5A1-B ``confirm_reviewed_tower_candidate``
+    adapter prepare their canonical ``T###`` through this single allocation path.
+    On any later publication failure the prepared identity lives only in an
+    unreferenced staging generation and never becomes authoritative.
+    """
+
+    if type(draft) is not TowerDraft:
+        raise InvalidRegistryCandidate("tower candidate must be a TowerDraft")
     registry = loaded.tower_registry
     represented = _tower_sequences(registry)
     if reservation is None:
@@ -453,6 +456,26 @@ def create_tower(
         records=records,
     )
     candidate_project = _updated_project(loaded.project, next_tower_sequence=new_counter)
+    return tower, candidate_registry, candidate_project
+
+
+def create_tower(
+    session: WritableProjectSession,
+    candidate: TowerDraft | TowerContract,
+    *,
+    reservation: str | None = None,
+) -> TowerContract:
+    """Validate and publish one confirmed Tower, assigning its project-local ID."""
+
+    draft = _tower_draft(candidate)
+    if draft.state is not TowerLifecycleState.CONFIRMED:
+        raise InvalidRegistryCandidate("new Tower candidates must be CONFIRMED")
+    loaded = _require_writable(session)
+    session.require_strong_source_identity()
+    _same_current_source(session, draft.source_binding)
+    tower, candidate_registry, candidate_project = _allocated_tower(
+        loaded, draft, reservation=reservation
+    )
     _publish(
         session,
         loaded,
