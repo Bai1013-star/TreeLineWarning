@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,8 +21,10 @@ from algorithms.spans.region import (
 )
 from algorithms.spans.role_tiles import (
     ROLE_TILE_CELL_SIZE_M,
+    ROLE_TILE_RECORD_DTYPE,
     RoleSpecificTileCache,
     RoleTileCacheError,
+    _canonical_source_index_chunk,
     role_tile_configuration_digest,
 )
 from algorithms.spans.wire import SpanWireResult
@@ -253,14 +257,14 @@ def test_role_specific_wire_and_vegetation_indexes_preserve_attrs_and_tile_telem
             role=role,
             source_identity=source_identity,
             config_digest=f"{role}-config",
-            source_point_count=4,
+            source_point_count=24,
         )
         loaded = RoleSpecificTileCache.load(
             cache.root,
             role=role,
             source_identity=source_identity,
             config_digest=f"{role}-config",
-            source_point_count=4,
+            source_point_count=24,
         )
         result = subset_raw_tile_cache_oriented(
             loaded, frame, spec, tmp_path / f"{role}-region"
@@ -301,7 +305,7 @@ def test_role_specific_index_fails_closed_on_role_source_or_config_mismatch(tmp_
         role="wire",
         source_identity=source,
         config_digest="wire-config",
-        source_point_count=1,
+        source_point_count=2,
     )
     with pytest.raises(RoleTileCacheError, match="ROLE_TILE_CACHE_ROLE_MISMATCH"):
         RoleSpecificTileCache.load(
@@ -309,7 +313,7 @@ def test_role_specific_index_fails_closed_on_role_source_or_config_mismatch(tmp_
             role="vegetation",
             source_identity=source,
             config_digest="wire-config",
-            source_point_count=1,
+            source_point_count=2,
         )
     with pytest.raises(RoleTileCacheError, match="ROLE_TILE_CACHE_CONFIGURATION_MISMATCH"):
         RoleSpecificTileCache.load(
@@ -317,7 +321,7 @@ def test_role_specific_index_fails_closed_on_role_source_or_config_mismatch(tmp_
             role="wire",
             source_identity=source,
             config_digest="wrong",
-            source_point_count=1,
+            source_point_count=2,
         )
 
 
@@ -349,6 +353,35 @@ def _role_identity():
     }
 
 
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _rewrite_single_role_tile_source_index(
+    cache: RoleSpecificTileCache,
+    source_index: int,
+    *,
+    update_bounds: bool,
+) -> None:
+    index_path = cache.root / "tiles" / "index.json"
+    index_payload = json.loads(index_path.read_text(encoding="utf-8"))
+    _, item = next(iter(index_payload["tiles"].items()))
+    tile_path = cache.root / "tiles" / item["file"]
+    records = np.fromfile(tile_path, dtype=ROLE_TILE_RECORD_DTYPE)
+    assert len(records) == 1
+    records["source_index"] = np.asarray((source_index,), dtype=np.int64)
+    records.tofile(tile_path)
+    item["sha256"] = _sha256_file(tile_path)
+    index_path.write_text(json.dumps(index_payload), encoding="utf-8")
+    metadata_path = cache.root / "role-tile-cache.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["artifact_references"]["tile_index"]["sha256"] = _sha256_file(index_path)
+    if update_bounds:
+        metadata["min_source_index"] = source_index
+        metadata["max_source_index"] = source_index
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+
 def test_canonical_role_tile_configuration_is_five_metres_and_digest_bound():
     assert ROLE_TILE_CELL_SIZE_M == 5.0
     assert role_tile_configuration_digest(5.0) != role_tile_configuration_digest(40.0)
@@ -362,7 +395,7 @@ def test_five_metre_index_binds_and_historical_forty_metre_index_is_rejected(tmp
         role="wire",
         source_identity=_role_identity(),
         config_digest="wire-config",
-        source_point_count=4,
+        source_point_count=24,
     )
     forty = RoleSpecificTileCache.prepare_from_raw_region(
         region,
@@ -378,7 +411,7 @@ def test_five_metre_index_binds_and_historical_forty_metre_index_is_rejected(tmp
         role="wire",
         source_identity=_role_identity(),
         config_digest="wire-config",
-        source_point_count=4,
+        source_point_count=24,
         expected_cell_size_m=5.0,
     )
     assert loaded.metadata["tile_grid"]["cell_size_m"] == 5.0
@@ -459,6 +492,273 @@ def test_unique_source_indices_conserve_records_and_preserve_half_open_boundary(
     assert cache.metadata["totals"]["point_count"] == 2
 
 
+@pytest.mark.parametrize(
+    "source_indices",
+    [(-1,), (105,), (106,), (105_000_000,), (-1, 0), (104, 105)],
+)
+def test_source_index_range_rejects_invalid_values_before_publication(
+    tmp_path: Path, source_indices,
+):
+    points = tuple((float(index), 0.0, 1.0) for index in range(len(source_indices)))
+    region = _role_region(tmp_path, "invalid-range", points, source_indices)
+    target = tmp_path / "invalid-range-index"
+    with pytest.raises(RoleTileCacheError, match="SOURCE_INDEX_INVALID"):
+        RoleSpecificTileCache.prepare_from_raw_region(
+            region,
+            target,
+            role="wire",
+            source_identity=_role_identity(),
+            config_digest="wire-config",
+            source_point_count=105,
+        )
+    assert not target.exists()
+
+
+def test_source_index_range_accepts_zero_and_last_authoritative_identity(tmp_path: Path):
+    region = _role_region(tmp_path, "valid-range", ((0.0, 0.0, 1.0), (1.0, 0.0, 1.0)), (0, 104))
+    cache = RoleSpecificTileCache.prepare_from_raw_region(
+        region,
+        tmp_path / "valid-range-index",
+        role="wire",
+        source_identity=_role_identity(),
+        config_digest="wire-config",
+        source_point_count=105,
+        chunk_size=1,
+    )
+    assert cache.metadata["min_source_index"] == 0
+    assert cache.metadata["max_source_index"] == 104
+
+
+def test_cross_chunk_duplicate_is_rejected_and_valid_chunked_input_passes(tmp_path: Path):
+    duplicate_region = _role_region(
+        tmp_path,
+        "duplicate-cross-chunk",
+        ((0.0, 0.0, 1.0), (1.0, 0.0, 1.0)),
+        (42, 42),
+    )
+    duplicate_target = tmp_path / "duplicate-cross-chunk-index"
+    with pytest.raises(RoleTileCacheError, match="SOURCE_INDEX_DUPLICATE"):
+        RoleSpecificTileCache.prepare_from_raw_region(
+            duplicate_region,
+            duplicate_target,
+            role="wire",
+            source_identity=_role_identity(),
+            config_digest="wire-config",
+            source_point_count=100,
+            chunk_size=1,
+        )
+    assert not duplicate_target.exists()
+    valid_region = _role_region(
+        tmp_path,
+        "valid-cross-chunk",
+        ((0.0, 0.0, 1.0), (1.0, 0.0, 1.0), (2.0, 0.0, 1.0)),
+        (0, 42, 99),
+    )
+    valid = RoleSpecificTileCache.prepare_from_raw_region(
+        valid_region,
+        tmp_path / "valid-cross-chunk-index",
+        role="wire",
+        source_identity=_role_identity(),
+        config_digest="wire-config",
+        source_point_count=100,
+        chunk_size=1,
+    )
+    assert valid.metadata["unique_source_index_count"] == 3
+
+
+@pytest.mark.parametrize(
+    "values, expected",
+    [
+        (np.asarray((2**63,), dtype=object), "TYPE_INVALID"),
+        (np.asarray((2**64 - 1,), dtype=np.uint64), "OVERFLOW"),
+        (np.asarray((1.5,), dtype=np.float64), "TYPE_INVALID"),
+        (np.asarray((np.nan,), dtype=np.float64), "TYPE_INVALID"),
+        (np.asarray((np.inf,), dtype=np.float64), "TYPE_INVALID"),
+    ],
+)
+def test_source_index_conversion_fails_closed(values, expected):
+    with pytest.raises(RoleTileCacheError, match=expected):
+        _canonical_source_index_chunk(values)
+
+
+def test_load_rejects_persisted_identity_bounds_outside_authoritative_source(
+    tmp_path: Path,
+):
+    region = _role_region(tmp_path, "malformed-metadata", ((0.0, 0.0, 1.0),), (0,))
+    target = tmp_path / "malformed-metadata-index"
+    cache = RoleSpecificTileCache.prepare_from_raw_region(
+        region,
+        target,
+        role="wire",
+        source_identity=_role_identity(),
+        config_digest="wire-config",
+        source_point_count=2,
+    )
+    metadata_path = cache.root / "role-tile-cache.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["min_source_index"] = 2
+    metadata["max_source_index"] = 2
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(RoleTileCacheError, match="SOURCE_INDEX_RANGE_INVALID"):
+        RoleSpecificTileCache.load(
+            cache.root,
+            role="wire",
+            source_identity=_role_identity(),
+            config_digest="wire-config",
+            source_point_count=2,
+            expected_cell_size_m=5.0,
+        )
+
+
+def test_load_rejects_partial_persisted_identity_bounds(tmp_path: Path):
+    region = _role_region(tmp_path, "partial-metadata", ((0.0, 0.0, 1.0),), (0,))
+    target = tmp_path / "partial-metadata-index"
+    cache = RoleSpecificTileCache.prepare_from_raw_region(
+        region,
+        target,
+        role="wire",
+        source_identity=_role_identity(),
+        config_digest="wire-config",
+        source_point_count=2,
+    )
+    metadata_path = cache.root / "role-tile-cache.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.pop("max_source_index")
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(RoleTileCacheError, match="SOURCE_INDEX_RANGE_INVALID"):
+        RoleSpecificTileCache.load(
+            cache.root,
+            role="wire",
+            source_identity=_role_identity(),
+            config_digest="wire-config",
+            source_point_count=2,
+            expected_cell_size_m=5.0,
+        )
+
+
+def test_load_rejects_actual_tampered_identity_even_when_self_digests_are_updated(
+    tmp_path: Path,
+):
+    region = _role_region(tmp_path, "tampered-actual", ((0.0, 0.0, 1.0),), (0,))
+    cache = RoleSpecificTileCache.prepare_from_raw_region(
+        region,
+        tmp_path / "tampered-actual-index",
+        role="wire",
+        source_identity=_role_identity(),
+        config_digest="wire-config",
+        source_point_count=2,
+    )
+    _rewrite_single_role_tile_source_index(cache, 2, update_bounds=False)
+    with pytest.raises(RoleTileCacheError, match="SOURCE_INDEX_RANGE_INVALID"):
+        RoleSpecificTileCache.load(
+            cache.root,
+            role="wire",
+            source_identity=_role_identity(),
+            config_digest="wire-config",
+            source_point_count=2,
+            expected_cell_size_m=5.0,
+        )
+
+
+@pytest.mark.parametrize("source_index", [0, 1])
+def test_load_accepts_valid_actual_persisted_identity(tmp_path: Path, source_index: int):
+    region = _role_region(
+        tmp_path,
+        f"valid-actual-{source_index}",
+        ((0.0, 0.0, 1.0),),
+        (0,),
+    )
+    cache = RoleSpecificTileCache.prepare_from_raw_region(
+        region,
+        tmp_path / f"valid-actual-{source_index}-index",
+        role="wire",
+        source_identity=_role_identity(),
+        config_digest="wire-config",
+        source_point_count=2,
+    )
+    if source_index != 0:
+        _rewrite_single_role_tile_source_index(cache, source_index, update_bounds=True)
+    loaded = RoleSpecificTileCache.load(
+        cache.root,
+        role="wire",
+        source_identity=_role_identity(),
+        config_digest="wire-config",
+        source_point_count=2,
+        expected_cell_size_m=5.0,
+    )
+    assert loaded.metadata["totals"]["point_count"] == 1
+
+
+@pytest.mark.parametrize("source_index", [-1, 2, 200_000_000])
+def test_load_rejects_invalid_actual_persisted_identity(tmp_path: Path, source_index: int):
+    region = _role_region(
+        tmp_path,
+        f"invalid-actual-{source_index}",
+        ((0.0, 0.0, 1.0),),
+        (0,),
+    )
+    cache = RoleSpecificTileCache.prepare_from_raw_region(
+        region,
+        tmp_path / f"invalid-actual-{source_index}-index",
+        role="wire",
+        source_identity=_role_identity(),
+        config_digest="wire-config",
+        source_point_count=2,
+    )
+    _rewrite_single_role_tile_source_index(cache, source_index, update_bounds=False)
+    with pytest.raises(RoleTileCacheError, match="SOURCE_INDEX_RANGE_INVALID"):
+        RoleSpecificTileCache.load(
+            cache.root,
+            role="wire",
+            source_identity=_role_identity(),
+            config_digest="wire-config",
+            source_point_count=2,
+            expected_cell_size_m=5.0,
+        )
+
+
+def test_load_memoizes_actual_identity_validation_and_invalidates_on_content_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    import algorithms.spans.role_tiles as role_tiles
+
+    region = _role_region(tmp_path, "memoized-actual", ((0.0, 0.0, 1.0),), (0,))
+    cache = RoleSpecificTileCache.prepare_from_raw_region(
+        region,
+        tmp_path / "memoized-actual-index",
+        role="wire",
+        source_identity=_role_identity(),
+        config_digest="wire-config",
+        source_point_count=2,
+    )
+    original = role_tiles._validate_persisted_source_indices
+    calls = 0
+
+    def spy(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(role_tiles, "_validate_persisted_source_indices", spy)
+    load_kwargs = {
+        "role": "wire",
+        "source_identity": _role_identity(),
+        "config_digest": "wire-config",
+        "source_point_count": 2,
+        "expected_cell_size_m": 5.0,
+    }
+    RoleSpecificTileCache.load(cache.root, **load_kwargs)
+    RoleSpecificTileCache.load(cache.root, **load_kwargs)
+    assert calls == 1
+    _rewrite_single_role_tile_source_index(cache, 1, update_bounds=True)
+    RoleSpecificTileCache.load(cache.root, **load_kwargs)
+    assert calls == 2
+    _rewrite_single_role_tile_source_index(cache, 2, update_bounds=False)
+    with pytest.raises(RoleTileCacheError, match="SOURCE_INDEX_RANGE_INVALID"):
+        RoleSpecificTileCache.load(cache.root, **load_kwargs)
+    assert calls == 3
+
+
 def test_vegetation_role_index_excludes_exact_wire_source_indices(tmp_path: Path):
     points = np.asarray(
         ((0.0, 0.0, 1.0), (1.0, 0.0, 1.0), (2.0, 0.0, 1.0), (3.0, 0.0, 1.0)),
@@ -485,7 +785,7 @@ def test_vegetation_role_index_excludes_exact_wire_source_indices(tmp_path: Path
         role="vegetation",
         source_identity=identity,
         config_digest="vegetation-config",
-        source_point_count=4,
+        source_point_count=24,
         cell_size_m=5.0,
         excluded_source_indices=np.asarray((21, 23), dtype=np.int64),
         exclusion_role="wire",
@@ -496,7 +796,7 @@ def test_vegetation_role_index_excludes_exact_wire_source_indices(tmp_path: Path
         role="vegetation",
         source_identity=identity,
         config_digest="vegetation-config",
-        source_point_count=4,
+        source_point_count=24,
         expected_source_index_exclusion={
             "role": "wire",
             "source_index_digest": "3" * 64,

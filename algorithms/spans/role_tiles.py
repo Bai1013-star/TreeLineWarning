@@ -30,7 +30,6 @@ ROLE_TILE_RECORD_DTYPE = np.dtype(
     align=False,
 )
 ROLE_TILE_CELL_SIZE_M = 5.0
-MAX_SOURCE_INDEX_IDENTITY_MAP_BYTES = 1 << 30
 _ROLE_TILE_RECORD_DESCR = [list(item) for item in ROLE_TILE_RECORD_DTYPE.descr]
 ROLE_TILE_BOUNDARY_SEMANTICS = "HALF_OPEN_XY_FINAL_EDGE_INCLUSIVE"
 
@@ -51,13 +50,28 @@ def _int64_digest(values: np.ndarray) -> str:
     return hashlib.sha256(normalized.tobytes(order="C")).hexdigest()
 
 
+def _canonical_source_index_chunk(values: Any) -> np.ndarray:
+    """Convert one source-index chunk without numeric truncation or wrapping."""
+
+    raw = np.asarray(values)
+    if raw.ndim != 1 or raw.dtype.kind not in "iu":
+        raise RoleTileCacheError("ROLE_TILE_SOURCE_INDEX_TYPE_INVALID")
+    if raw.dtype.kind == "u" and np.any(raw > np.iinfo(np.int64).max):
+        raise RoleTileCacheError("ROLE_TILE_SOURCE_INDEX_OVERFLOW")
+    if raw.dtype.kind == "i" and raw.dtype.itemsize > np.dtype("<i8").itemsize:
+        limits = np.iinfo(np.int64)
+        if np.any(raw < limits.min) or np.any(raw > limits.max):
+            raise RoleTileCacheError("ROLE_TILE_SOURCE_INDEX_OVERFLOW")
+    return np.asarray(raw, dtype="<i8")
+
+
 def _validate_unique_source_indices(
     region: RawRegion,
     *,
     source_point_count: int,
     chunk_size: int,
     exclusion: np.ndarray | None,
-) -> int:
+) -> tuple[int, int | None, int | None]:
     """Validate kept source-row identity before any cache artifact is created.
 
     The boolean identity map is one byte per source row, avoiding a boxed Python
@@ -66,36 +80,18 @@ def _validate_unique_source_indices(
     removed before uniqueness is checked.
     """
 
+    if type(source_point_count) is not int or source_point_count < 0:
+        raise ValueError("source_point_count must be a non-negative integer")
+    seen = np.zeros(source_point_count, dtype=np.bool_)
     source_index = region.original_index()
+    unique_count = 0
     minimum_index: int | None = None
     maximum_index: int | None = None
-    kept_count = 0
     for start in range(0, region.count, chunk_size):
         stop = min(region.count, start + chunk_size)
-        indices = np.asarray(source_index[start:stop], dtype=np.int64)
-        if np.any(indices < 0):
+        indices = _canonical_source_index_chunk(source_index[start:stop])
+        if np.any(indices < 0) or np.any(indices >= source_point_count):
             raise RoleTileCacheError("ROLE_TILE_SOURCE_INDEX_INVALID")
-        if exclusion is not None:
-            positions = np.searchsorted(exclusion, indices)
-            present = positions < len(exclusion)
-            present &= exclusion[np.minimum(positions, len(exclusion) - 1)] == indices
-            indices = indices[~present]
-        if len(indices):
-            chunk_min = int(np.min(indices))
-            chunk_max = int(np.max(indices))
-            minimum_index = chunk_min if minimum_index is None else min(minimum_index, chunk_min)
-            maximum_index = chunk_max if maximum_index is None else max(maximum_index, chunk_max)
-            kept_count += len(indices)
-    if minimum_index is None or maximum_index is None:
-        return 0
-    identity_span = maximum_index - minimum_index + 1
-    if identity_span > MAX_SOURCE_INDEX_IDENTITY_MAP_BYTES:
-        raise RoleTileCacheError("ROLE_TILE_SOURCE_INDEX_DOMAIN_TOO_LARGE")
-    seen = np.zeros(identity_span, dtype=np.bool_)
-    unique_count = 0
-    for start in range(0, region.count, chunk_size):
-        stop = min(region.count, start + chunk_size)
-        indices = np.asarray(source_index[start:stop], dtype=np.int64)
         if exclusion is not None:
             positions = np.searchsorted(exclusion, indices)
             present = positions < len(exclusion)
@@ -103,16 +99,18 @@ def _validate_unique_source_indices(
             indices = indices[~present]
         if not len(indices):
             continue
+        chunk_min = int(np.min(indices))
+        chunk_max = int(np.max(indices))
+        minimum_index = chunk_min if minimum_index is None else min(minimum_index, chunk_min)
+        maximum_index = chunk_max if maximum_index is None else max(maximum_index, chunk_max)
         ordered = np.sort(indices)
         if np.any(ordered[1:] == ordered[:-1]) or np.any(
-            seen[indices - minimum_index]
+            seen[indices]
         ):
             raise RoleTileCacheError("ROLE_TILE_SOURCE_INDEX_DUPLICATE")
-        seen[indices - minimum_index] = True
+        seen[indices] = True
         unique_count += len(indices)
-    if unique_count != kept_count:
-        raise RoleTileCacheError("ROLE_TILE_SOURCE_INDEX_CONSERVATION_INVALID")
-    return unique_count
+    return unique_count, minimum_index, maximum_index
 
 
 class RoleTileCacheError(RuntimeError):
@@ -205,6 +203,100 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     temporary.replace(path)
 
 
+_ROLE_TILE_VALIDATION_CACHE: dict[
+    tuple[Any, ...], tuple[int, int, int | None, int | None]
+] = {}
+
+
+def _validate_persisted_source_indices(
+    root: Path,
+    tiles: Mapping[str, Mapping[str, Any]],
+    source_point_count: int,
+    *,
+    chunk_size: int = 65_536,
+) -> tuple[int, int, int | None, int | None]:
+    """Validate actual persisted identities with bounded NumPy storage."""
+
+    seen = np.zeros(source_point_count, dtype=np.bool_)
+    total_points = 0
+    unique_points = 0
+    minimum_index: int | None = None
+    maximum_index: int | None = None
+    for item in tiles.values():
+        path = root / "tiles" / str(item["file"])
+        point_count = int(item["point_count"])
+        if point_count == 0:
+            continue
+        records = np.memmap(
+            path,
+            dtype=ROLE_TILE_RECORD_DTYPE,
+            mode="r",
+            shape=(point_count,),
+        )
+        records_seen = 0
+        for start in range(0, point_count, chunk_size):
+            stop = min(point_count, start + chunk_size)
+            indices = _canonical_source_index_chunk(records[start:stop]["source_index"])
+            if np.any(indices < 0) or np.any(indices >= source_point_count):
+                raise RoleTileCacheError("ROLE_TILE_CACHE_SOURCE_INDEX_RANGE_INVALID")
+            if len(indices):
+                ordered = np.sort(indices)
+                if np.any(ordered[1:] == ordered[:-1]) or np.any(seen[indices]):
+                    raise RoleTileCacheError("ROLE_TILE_CACHE_SOURCE_INDEX_DUPLICATE")
+                seen[indices] = True
+                records_seen += len(indices)
+                unique_points += len(indices)
+                block_min = int(np.min(indices))
+                block_max = int(np.max(indices))
+                minimum_index = (
+                    block_min
+                    if minimum_index is None
+                    else min(minimum_index, block_min)
+                )
+                maximum_index = (
+                    block_max
+                    if maximum_index is None
+                    else max(maximum_index, block_max)
+                )
+        del records
+        if records_seen != point_count:
+            raise RoleTileCacheError("ROLE_TILE_CACHE_RECORD_COUNT_INVALID")
+        total_points += records_seen
+    return total_points, unique_points, minimum_index, maximum_index
+
+
+def _role_tile_validation_key(
+    root: Path,
+    *,
+    role: str,
+    source_point_count: int,
+    metadata: Mapping[str, Any],
+    tiles: Mapping[str, Mapping[str, Any]],
+) -> tuple[Any, ...]:
+    """Bind process-local validation reuse to the verified persisted content."""
+
+    return (
+        str(root),
+        role,
+        source_point_count,
+        metadata.get("source_binding_digest"),
+        metadata.get("role_configuration_digest"),
+        metadata.get("tile_configuration_digest"),
+        metadata.get("artifact_references", {}).get("tile_index", {}).get("sha256"),
+        tuple(
+            sorted(
+                (
+                    str(tile_id),
+                    str(item.get("file")),
+                    int(item.get("point_count", -1)),
+                    item.get("sha256"),
+                )
+                for tile_id, item in tiles.items()
+            )
+        ),
+    )
+
+
 class RoleSpecificTileCache:
     """A source/config/role-bound tile index for one science role."""
 
@@ -259,7 +351,7 @@ class RoleSpecificTileCache:
                 raise ValueError("exclusion metadata requires excluded source indices")
             exclusion = None
         else:
-            exclusion = np.unique(np.asarray(excluded_source_indices, dtype="<i8"))
+            exclusion = np.unique(_canonical_source_index_chunk(excluded_source_indices))
             if exclusion.ndim != 1 or np.any(exclusion < 0):
                 raise ValueError("excluded_source_indices must be a non-negative 1-D array")
             if not exclusion_role or not exclusion_source_index_digest:
@@ -268,7 +360,11 @@ class RoleSpecificTileCache:
                 raise ValueError("exclusion_source_index_digest must be SHA-256")
             if not len(exclusion):
                 exclusion = None
-        validated_unique_count = _validate_unique_source_indices(
+        (
+            validated_unique_count,
+            validated_min_source_index,
+            validated_max_source_index,
+        ) = _validate_unique_source_indices(
             region,
             source_point_count=source_point_count,
             chunk_size=chunk_size,
@@ -295,7 +391,9 @@ class RoleSpecificTileCache:
         for start in range(0, region.count, chunk_size):
             stop = min(region.count, start + chunk_size)
             xyz = np.asarray(xyz_local[start:stop], dtype=np.float64) + origin
-            indices = np.asarray(source_index[start:stop], dtype=np.int64)
+            indices = _canonical_source_index_chunk(source_index[start:stop])
+            if np.any(indices < 0) or np.any(indices >= source_point_count):
+                raise RoleTileCacheError("ROLE_TILE_SOURCE_INDEX_INVALID")
             classes = np.asarray(classification[start:stop], dtype=np.uint8)
             source_index_hasher.update(np.asarray(indices, dtype="<i8").tobytes(order="C"))
             if exclusion is not None:
@@ -362,6 +460,8 @@ class RoleSpecificTileCache:
             "role_record_count": int(indexed_point_count),
             "unique_source_index_count": int(validated_unique_count),
             "source_index_validation": "UNIQUE_SOURCE_INDEXES_V1",
+            "min_source_index": validated_min_source_index,
+            "max_source_index": validated_max_source_index,
             "artifact_references": {
                 "tile_index": {
                     "relative_path": "tiles/index.json",
@@ -404,6 +504,10 @@ class RoleSpecificTileCache:
         expected_cell_size_m: float | None = None,
     ) -> RoleSpecificTileCache:
         root = Path(cache_root).resolve()
+        if source_point_count is not None and (
+            type(source_point_count) is not int or source_point_count < 0
+        ):
+            raise ValueError("source_point_count must be a non-negative integer")
         metadata_path = root / "role-tile-cache.json"
         index_path = root / "tiles" / "index.json"
         if not metadata_path.is_file() or not index_path.is_file():
@@ -515,6 +619,47 @@ class RoleSpecificTileCache:
             or totals.get("point_count") != total_points
         ):
             raise RoleTileCacheError("ROLE_TILE_CACHE_TOTALS_INVALID")
+        if source_point_count is not None:
+            validation_key = _role_tile_validation_key(
+                root,
+                role=role,
+                source_point_count=source_point_count,
+                metadata=metadata,
+                tiles=tiles,
+            )
+            actual_validation = _ROLE_TILE_VALIDATION_CACHE.get(validation_key)
+            if actual_validation is None:
+                actual_validation = _validate_persisted_source_indices(
+                    root, tiles, source_point_count
+                )
+                _ROLE_TILE_VALIDATION_CACHE[validation_key] = actual_validation
+            actual_count, actual_unique_count, actual_min, actual_max = actual_validation
+            if actual_count != total_points or actual_unique_count != total_points:
+                raise RoleTileCacheError("ROLE_TILE_CACHE_RECORD_COUNT_INVALID")
+            persisted_min = metadata.get("min_source_index")
+            persisted_max = metadata.get("max_source_index")
+            if persisted_min is not None and type(persisted_min) is not int:
+                raise RoleTileCacheError("ROLE_TILE_CACHE_SOURCE_INDEX_RANGE_INVALID")
+            if persisted_max is not None and type(persisted_max) is not int:
+                raise RoleTileCacheError("ROLE_TILE_CACHE_SOURCE_INDEX_RANGE_INVALID")
+            if (persisted_min is None) != (persisted_max is None):
+                raise RoleTileCacheError("ROLE_TILE_CACHE_SOURCE_INDEX_RANGE_INVALID")
+            if persisted_min is not None and persisted_max is not None:
+                if (
+                    total_points == 0
+                    or persisted_min < 0
+                    or persisted_max < persisted_min
+                    or persisted_max >= source_point_count
+                    or persisted_min != actual_min
+                    or persisted_max != actual_max
+                ):
+                    raise RoleTileCacheError("ROLE_TILE_CACHE_SOURCE_INDEX_RANGE_INVALID")
+            else:
+                if total_points == 0:
+                    if actual_min is not None or actual_max is not None:
+                        raise RoleTileCacheError("ROLE_TILE_CACHE_SOURCE_INDEX_RANGE_INVALID")
+                elif actual_min is None or actual_max is None:
+                    raise RoleTileCacheError("ROLE_TILE_CACHE_SOURCE_INDEX_RANGE_INVALID")
         role_record_count = metadata.get("role_record_count")
         unique_source_index_count = metadata.get("unique_source_index_count")
         if role_record_count is not None or unique_source_index_count is not None:
