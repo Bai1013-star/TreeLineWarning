@@ -13,29 +13,24 @@ from datetime import UTC, datetime
 from typing import Any
 
 from core.contracts.project import (
-    CoordinateContext,
     ArtifactReference,
+    CoordinateContext,
     PredictionCapability,
     SourceIdentityBinding,
-    SPAN_SCHEMA_VERSION,
     SpanAnalysis,
     SpanContract,
     SpanGeometry,
     SpanTopologyState,
-    TOWER_SCHEMA_VERSION,
     TowerContract,
     TowerGeometry,
     TowerLifecycleState,
     TowerRefinement,
-    TowerRevisionReference,
-    tower_display_id_for_sequence,
     span_display_id_for_sequence,
+    tower_display_id_for_sequence,
 )
 from core.project import persistence
 from core.project.persistence import (
     PostPointerDurabilityError,
-    RunIndex,
-    SourceReferenceSidecar,
     SpanRegistry,
     TowerRegistry,
     TowerRegistryEntry,
@@ -155,7 +150,7 @@ class TowerDraft:
         )
 
     @classmethod
-    def from_contract(cls, tower: TowerContract) -> "TowerDraft":
+    def from_contract(cls, tower: TowerContract) -> TowerDraft:
         if type(tower) is not TowerContract:
             raise InvalidRegistryCandidate("tower candidate must be a TowerContract")
         return cls(
@@ -225,7 +220,7 @@ class SpanDraft:
         )
 
     @classmethod
-    def from_contract(cls, span: SpanContract) -> "SpanDraft":
+    def from_contract(cls, span: SpanContract) -> SpanDraft:
         if type(span) is not SpanContract:
             raise InvalidRegistryCandidate("span candidate must be a SpanContract")
         return cls(
@@ -361,6 +356,7 @@ def _publish(
             span_registry=span_registry,
             run_index=loaded.run_index,
             candidate_store=loaded.candidate_store,
+            tower_group_registry=loaded.tower_group_registry,
         )
     except PostPointerDurabilityError as exc:
         # The lock is still held.  Reopen the pointer before reporting the

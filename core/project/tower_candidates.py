@@ -15,6 +15,7 @@ semantics; ``P###`` candidate identities are never tower identities.
 from __future__ import annotations
 
 import secrets
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
@@ -191,11 +192,14 @@ def _publish(
     candidate_store: CandidateStore,
     project: Any | None = None,
     tower_registry: Any | None = None,
+    tower_group_registry: Any | None = None,
 ) -> Any:
     if project is None:
         project = _updated_project(loaded.project)
     if tower_registry is None:
         tower_registry = loaded.tower_registry
+    if tower_group_registry is None:
+        tower_group_registry = loaded.tower_group_registry
     try:
         published = persistence._publish_generation(
             loaded.project_root,
@@ -205,6 +209,7 @@ def _publish(
             span_registry=loaded.span_registry,
             run_index=loaded.run_index,
             candidate_store=candidate_store,
+            tower_group_registry=tower_group_registry,
         )
     except PostPointerDurabilityError as exc:
         try:
@@ -350,6 +355,7 @@ def _tower_draft_from_accepted(
     candidate: TowerCandidate,
     event: TowerCandidateReviewEvent,
     accepted_review_revision: int,
+    local_region_reference: Any | None = None,
 ) -> TowerDraft:
     """Map one effective ACCEPTED + RAW_REFINED review onto the existing TowerDraft."""
     assert event.refined_raw_geometry is not None
@@ -377,7 +383,7 @@ def _tower_draft_from_accepted(
             evidence=evidence,
             algorithm_version=event.refinement_evidence.algorithm_version,
             confirmed_at=event.occurred_at,
-            local_region_reference=None,
+            local_region_reference=local_region_reference,
         ),
         notes=event.notes,
         created_at=event.occurred_at,
@@ -394,6 +400,8 @@ def confirm_reviewed_tower_candidate(
     reviewer_identity: str | None = None,
     notes: str | None = None,
     confirmed_at: str | None = None,
+    local_region_reference: Any | None = None,
+    tower_group_registry_updater: Callable[[Any, Any], Any] | None = None,
 ) -> TowerCandidateConfirmation:
     """Confirm one effective ACCEPTED review into the existing TowerRegistry.
 
@@ -451,7 +459,11 @@ def confirm_reviewed_tower_candidate(
         )
     session.require_strong_source_identity()
     draft = _tower_draft_from_accepted(
-        candidate_set, candidate, source, accepted_review_revision
+        candidate_set,
+        candidate,
+        source,
+        accepted_review_revision,
+        local_region_reference=local_region_reference,
     )
     _same_current_source(session, draft.source_binding)
     tower, candidate_tower_registry, candidate_project = _allocated_tower(loaded, draft)
@@ -483,12 +495,17 @@ def confirm_reviewed_tower_candidate(
         review_ledgers=loaded.candidate_store.review_ledgers,
         confirmations=(*loaded.candidate_store.confirmations, confirmation),
     )
+    if tower_group_registry_updater is not None:
+        candidate_group_registry = tower_group_registry_updater(tower, loaded)
+    else:
+        candidate_group_registry = loaded.tower_group_registry
     _publish(
         session,
         loaded,
         project=candidate_project,
         tower_registry=candidate_tower_registry,
         candidate_store=candidate_store,
+        tower_group_registry=candidate_group_registry,
     )
     return confirmation
 

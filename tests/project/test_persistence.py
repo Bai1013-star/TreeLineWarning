@@ -92,7 +92,8 @@ def test_generation_layout_manifest_and_empty_envelopes_round_trip(
     generation = loaded.generation_path
     assert loaded.project.project_id == tiny_project.project_id
     # Every newly published generation is generation-v2, which always carries
-    # the candidate store index alongside the five core project files.
+    # the candidate store index and the ordered-group artifact alongside the
+    # five core project files.
     assert loaded.generation_manifest.schema_version == persistence.GENERATION_SCHEMA_VERSION_V2
     assert sorted(
         path.relative_to(generation).as_posix() for path in generation.rglob("*.json")
@@ -103,8 +104,14 @@ def test_generation_layout_manifest_and_empty_envelopes_round_trip(
         "runs/run-index.json",
         "source/source-reference.json",
         "spans/spans.json",
+        "tower-groups/tower-groups.json",
         "towers/towers.json",
     ]
+    # The group registry is present (empty, group-capable) and never
+    # bootstrap-pending on a newly published generation.
+    assert loaded.tower_group_registry.groups == ()
+    assert loaded.tower_group_registry.bootstrap_pending is False
+    assert loaded.tower_group_registry.next_group_sequence == 1
     assert not (root / "project.lock").exists()
     assert not (root / "viewer").exists()
     assert loaded.tower_registry.records == ()

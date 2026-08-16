@@ -17,12 +17,14 @@ import hashlib
 import math
 import os
 import stat as stat_module
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from algorithms.io.headers import read_las_header_summary
+
 from core.contracts.frv import (
     validate_source_content_identity_digest,
     validate_source_identity_record_digest,
@@ -36,7 +38,6 @@ from core.project.locking import (
     prepare_project_root,
 )
 from core.project.persistence import LoadedProject, PersistenceError
-
 
 _WRITABLE_SESSION_TOKEN = object()
 
@@ -279,6 +280,11 @@ class ProjectSession:
         return self._loaded.candidate_store
 
     @property
+    def tower_group_registry(self):
+        self._require_open()
+        return self._loaded.tower_group_registry
+
+    @property
     def generation_manifest(self):
         self._require_open()
         return self._loaded.generation_manifest
@@ -382,7 +388,7 @@ class ProjectSession:
         if writer_lock is not None:
             writer_lock.close()
 
-    def reopen(self) -> "ProjectSession":
+    def reopen(self) -> ProjectSession:
         """Explicitly close this immutable snapshot and open a fresh session."""
 
         self._require_open()
@@ -394,7 +400,7 @@ class ProjectSession:
             return open_project_writable(root, application_version=application_version)
         return open_project_read_only(root, application_version=application_version)
 
-    def __enter__(self) -> "ProjectSession":
+    def __enter__(self) -> ProjectSession:
         self._require_open()
         return self
 
@@ -531,6 +537,8 @@ class WritableProjectSession(ProjectSession):
         reviewer_identity=None,
         notes=None,
         confirmed_at=None,
+        local_region_reference=None,
+        tower_group_registry_updater=None,
     ):
         from core.project.tower_candidates import confirm_reviewed_tower_candidate
 
@@ -542,9 +550,30 @@ class WritableProjectSession(ProjectSession):
             reviewer_identity=reviewer_identity,
             notes=notes,
             confirmed_at=confirmed_at,
+            local_region_reference=local_region_reference,
+            tower_group_registry_updater=tower_group_registry_updater,
         )
 
-    def register_run(self, run_id: str, span_id: str, *, artifact_root_reference: str | None = None):
+    def ensure_ordered_group(self):
+        from core.project.tower_groups import ensure_ordered_group
+
+        return ensure_ordered_group(self)
+
+    def create_tower_group(self, *, display_name):
+        from core.project.tower_groups import create_tower_group
+
+        return create_tower_group(self, display_name=display_name)
+
+    def append_confirmed_tower_to_group(self, *, group_id, tower_id):
+        from core.project.tower_groups import append_confirmed_tower_to_group
+
+        return append_confirmed_tower_to_group(
+            self, group_id=group_id, tower_id=tower_id
+        )
+
+    def register_run(
+        self, run_id: str, span_id: str, *, artifact_root_reference: str | None = None
+    ):
         from core.project.run_index import register_run
 
         return register_run(
@@ -646,6 +675,7 @@ def create_project_writable(
     project: ProjectContract,
     *,
     source_access_metadata: Mapping[str, Any] | None = None,
+    tower_group_registry: Any | None = None,
     application_version: str = DEFAULT_APPLICATION_VERSION,
 ) -> WritableProjectSession:
     """Create the initial P2A generation while retaining its writer lock."""
@@ -663,6 +693,7 @@ def create_project_writable(
             root,
             project,
             source_access_metadata=source_access_metadata,
+            tower_group_registry=tower_group_registry,
         )
         return _build_writable_session(writer_lock, application_version=application_version)
     except BaseException:

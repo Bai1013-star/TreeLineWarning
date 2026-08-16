@@ -15,8 +15,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
-from scripts.serve_p3a_giro3d import DATASET_ROOT, VIEWER_ROOT, VENDOR_ROOT, LAZPERF_ROOT
+from scripts.serve_p3a_giro3d import DATASET_ROOT, LAZPERF_ROOT, VENDOR_ROOT, VIEWER_ROOT
 
 # Comment stripping for source-level checks (docstrings describe what the viewer
 # does NOT do; the checks must assert about CODE).
@@ -81,11 +80,25 @@ def test_config_points_match_active_copc_header() -> None:
     assert cfg["pointCount"] == count
 
 
-FULL_COPC = Path(__file__).resolve().parents[2] / "cache" / "giro3d_full_source" / "dataset" / "p3a_full.copc.laz"
+FULL_COPC = (
+    Path(__file__).resolve().parents[2]
+    / "cache" / "giro3d_full_source" / "dataset" / "p3a_full.copc.laz"
+)
 FULL_CONFIG = VIEWER_ROOT / "poc_config_full.json"
+PDAL_FULL_COPC = (
+    Path(__file__).resolve().parents[2]
+    / "cache" / "giro3d_full_pdal" / "dataset" / "p3a_full_pdal.copc.laz"
+)
+PDAL_FULL_CONFIG = VIEWER_ROOT / "poc_config_full_pdal.json"
+LAUNCHER = Path(__file__).resolve().parents[2] / "RUN_TOWER_REVIEW_FULL.bat"
+_PDAL_EXE = (
+    Path(__file__).resolve().parents[2]
+    / "cache" / "giro3d_pdal_env" / "Library" / "bin" / "pdal.exe"
+)
 
 
 def test_full_source_config_valid() -> None:
+    """The historical custom-builder full config remains a valid comparison."""
     cfg = json.loads(FULL_CONFIG.read_text(encoding="utf-8"))
     assert cfg["dataset"] == "p3a_full"
     assert cfg["pointCount"] == 105055350
@@ -96,12 +109,86 @@ def test_full_source_config_valid() -> None:
 
 @pytest.mark.skipif(not FULL_COPC.is_file(), reason="full-source COPC not converted")
 def test_full_source_copc_header_matches_source_count() -> None:
-    """The full-source COPC LAS header must report the complete source count."""
+    """The historical full-source COPC LAS header reports the complete count."""
     hdr = FULL_COPC.read_bytes()[:375]
     count = int.from_bytes(hdr[107:115], "little")
     assert count == 105055350
     cfg = json.loads(FULL_CONFIG.read_text(encoding="utf-8"))
     assert cfg["pointCount"] == count
+
+
+def test_full_pdal_production_config_valid() -> None:
+    """The production Owner config points at the PDAL writers.copc COPC."""
+    cfg = json.loads(PDAL_FULL_CONFIG.read_text(encoding="utf-8"))
+    assert cfg["dataset"] == "p3a_full_pdal"
+    assert cfg["pointCount"] == 105055350
+    assert cfg["copcUrl"].endswith("p3a_full_pdal.copc.laz")
+    assert cfg["lazPerfPath"].startswith("/")
+    assert cfg["viewer"]["pointBudget"] > 0
+
+
+@pytest.mark.skipif(not PDAL_FULL_COPC.is_file(), reason="PDAL full COPC not converted")
+@pytest.mark.skipif(not _PDAL_EXE.is_file(), reason="isolated PDAL not available")
+def test_full_pdal_copc_header_matches_source_count() -> None:
+    """The production PDAL full COPC reports the complete source count.
+
+    A COPC stores its point count in the hierarchy (the LAS header count is 0
+    per the COPC spec), so the count is read through the isolated PDAL reader.
+    """
+    result = subprocess.run(
+        [str(_PDAL_EXE), "info", str(PDAL_FULL_COPC), "--metadata"],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert result.returncode == 0, f"pdal info failed:\n{result.stdout}\n{result.stderr}"
+    meta = json.loads(result.stdout)["metadata"]
+    assert meta["count"] == 105055350
+    assert meta["copc"] is True
+    assert meta["dataformat_id"] == 7
+    cfg = json.loads(PDAL_FULL_CONFIG.read_text(encoding="utf-8"))
+    assert cfg["pointCount"] == meta["count"]
+
+
+def test_owner_launcher_uses_production_pdal_copc() -> None:
+    """The normal Owner workflow defaults to the PDAL full COPC.
+
+    The historical custom-builder COPC stays available for comparison but must
+    not be the production default.
+    """
+    text = LAUNCHER.read_text(encoding="utf-8", errors="replace")
+    assert "poc_config_full_pdal.json" in text
+    assert "cache\\giro3d_full_pdal\\dataset" in text
+    assert "p3a_full_pdal.copc.laz" in text
+    assert "cache\\giro3d_full_source\\dataset" in text  # historical, kept for comparison
+    assert "poc_config_full.json" in text  # historical config retained
+
+
+def test_owner_launcher_is_cmd_safe_ascii_crlf() -> None:
+    """The launcher must survive real cmd.exe: ASCII-only, CRLF, no non-ASCII source literal.
+
+    The protected LAS filename contains a non-ASCII character that cmd.exe mangles
+    when read from a UTF-8 batch file (the observed Owner failure: the filename
+    was corrupted to ``16娌?4``).  The launcher therefore must be ASCII-only with
+    CRLF line endings and must NOT embed the Chinese filename in a ``--source``
+    argument; ``prepare_tower_ordered_project.py`` resolves the path via Python.
+    """
+    raw = LAUNCHER.read_bytes()
+    assert raw[:3] != b"\xef\xbb\xbf", "launcher must not carry a UTF-8 BOM"
+    assert b"\r\n" in raw, "launcher must use CRLF line endings for cmd.exe"
+    assert b"\n" not in raw.replace(b"\r\n", b""), "launcher must have no bare LF line endings"
+    assert all(byte < 0x80 for byte in raw), "launcher must be ASCII-only (no non-ASCII bytes)"
+    text = raw.decode("ascii")
+    assert "--source" not in text, "launcher must not pass a hard-coded --source path"
+    assert "2026-08-07" not in text, "launcher must not embed the protected LAS filename"
+    # Every non-comment line is a valid cmd.exe command (no raw prose executed).
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("REM"):
+            continue
+        assert not any(char in stripped for char in "()"), (
+            f"executable launcher line must be parenthesis-free for cmd.exe: {stripped!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -139,13 +226,18 @@ check(b.max.x === 110 && b.max.y === 210 && b.max.z === 310, 'bounds max parsed'
 // Framing math
 const f = u.computeFitCamera({ x: 0, y: 0, z: 0 }, { x: 100, y: 100, z: 100 }, 60);
 check(Math.abs(f.maxDim - 100) < 1e-9, 'fit maxDim');
-check(Math.abs(f.target.x - 50) < 1e-9 && Math.abs(f.target.z - 50) < 1e-9, 'fit target is box center');
+check(Math.abs(f.target.x - 50) < 1e-9 && Math.abs(f.target.z - 50) < 1e-9,
+  'fit target is box center');
 // The default direction frames from above-and-to-the-side (z above the target),
 // so the corridor/towers are recognizable immediately — not a top-center dot.
 check(f.position.z > f.target.z, 'fit camera is above the target');
-check(f.position.x !== f.target.x || f.position.y !== f.target.y, 'fit camera is off-axis (angled view)');
+check(f.position.x !== f.target.x || f.position.y !== f.target.y,
+  'fit camera is off-axis (angled view)');
 // Default direction frames the occupied box at a useful distance.
-const dist = Math.sqrt((f.position.x - f.target.x) ** 2 + (f.position.y - f.target.y) ** 2 + (f.position.z - f.target.z) ** 2);
+const dist = Math.sqrt(
+  (f.position.x - f.target.x) ** 2 + (f.position.y - f.target.y) ** 2
+  + (f.position.z - f.target.z) ** 2
+);
 check(dist > 40 && dist < 200, 'fit camera distance is useful, got ' + dist.toFixed(1));
 
 // Click -> XYZ plumbing
@@ -178,8 +270,10 @@ def test_pure_decision_helpers() -> None:
 
 
 def test_viewer_never_runs_scientific_pipeline() -> None:
-    # Strip comments first — the viewer docstring legitimately says "no
-    # prediction / no tower review"; the check is about CODE, not documentation.
+    # Strip comments first — the viewer docstring legitimately says "interaction
+    # only"; the check is about CODE, not documentation.  The viewer may run the
+    # tower-review JSON API (detection/refinement happen server-side), but it
+    # must never invoke any local conversion/prediction/processing script.
     js = _COMMENT_RE_BLOCK.sub(" ", _viewer_src())
     js = _COMMENT_RE_LINE.sub(" ", js)
     for token in (
@@ -188,10 +282,10 @@ def test_viewer_never_runs_scientific_pipeline() -> None:
         "PotreeConverter",
         "run_manual_single_span",
         "SourceIdentity",
-        "predict",
-        "tower",
+        "detect_pole_candidates",
+        "refine_tower_from_raw",
     ):
-        assert token not in js, f"scientific/prediction token present in viewer code: {token}"
+        assert token not in js, f"scientific/pipeline token present in viewer code: {token}"
     # The viewer only loads the configured COPC URL (no conversion/processing).
     assert "COPCSource" in js
     assert "cfg.copcUrl" in js
@@ -210,3 +304,98 @@ def test_viewer_has_required_features() -> None:
         "fitBtn.addEventListener",
     ):
         assert token in js, f"missing viewer feature: {token}"
+
+
+def test_viewer_has_tower_review_overlay() -> None:
+    """The V5A2/V5A3 review overlay + interaction modes are present in the viewer."""
+    js = _viewer_src()
+    for token in (
+        "makeTowerReview",
+        "reviewMarkerColors",
+        "towerMarkerColors",
+        "candidateDisplayLabel",
+        "spriteScaleForDistance",
+        "attachOverlayGroup",
+        "/api/tower-review/state",
+        "manual-candidates",
+        "adjusted_seed_xyz",
+        "trp_accept",
+        "trp_reject",
+        "trp_manual",
+        "setMode",
+    ):
+        assert token in js, f"missing tower-review feature: {token}"
+
+
+def test_viewer_has_selected_candidate_visibility_ux() -> None:
+    """The selected-candidate UX (region, big label, locate, details) is present."""
+    js = _viewer_src()
+    html = INDEX.read_text(encoding="utf-8")
+    for token in (
+        "rebuildSelection",
+        "applySelectionVisuals",
+        "updateDetails",
+        "focusOnSelected",
+        "selectedLabel",
+        "labelPx",
+        "selectionGroup",
+        "scaleLabels",
+        "candidateRegion",
+        "selectionMarkerSpec",
+        "BoxGeometry",
+        "候选区域",
+        "Candidate Region",
+        "inspection volume",
+        "EdgesGeometry",
+        "候选标记仅用于定位",
+        "localization only",
+        "Candidate bounds",
+    ):
+        assert token in js, f"missing selected-candidate viewer feature: {token}"
+    for token in ("trp_locate", "trp_details"):
+        assert token in html, f"missing selected-candidate panel control: {token}"
+
+
+def test_viewer_long_beacon_removed() -> None:
+    """The confusing ~60 m beacon must be gone (replaced by the region + stub)."""
+    js = _viewer_src()
+    assert "beaconTopZ" not in js
+    assert "isBeacon" not in js
+    assert "CylinderGeometry(0.18" not in js
+
+
+def test_viewer_no_large_filled_candidate_cylinder() -> None:
+    """The misleading large filled horizontal cylinder is gone.
+
+    The V5A3 owner finding: the selected-candidate region rendered as a large
+    translucent Y-axis-aligned ``CylinderGeometry`` tube (Three.js default) that
+    crossed the scene horizontally.  The marker must now be a thin Z-up
+    wireframe ``BoxGeometry`` with no filled translucent surface.
+    """
+    js = _viewer_src()
+    assert "new THREE.CylinderGeometry(radius, radius, height" not in js
+    assert "regionMesh" not in js
+    assert "opacity: 0.22" not in js
+    assert "selectionMarkerSpec" in js
+    assert "new THREE.BoxGeometry(spec.width, spec.depth, spec.height)" in js
+
+
+def test_viewer_attaches_overlays_via_instance_not_view() -> None:
+    """The overlay group must be attached to the Instance's native-object surface.
+
+    The pinned Giro3D exposes ``threeObjects``/``scene`` on the Instance, not on
+    ``instance.view``; attaching via ``instance.view.scene.add`` fails with
+    "Cannot read properties of undefined (reading 'add')".
+    """
+    js = _viewer_src()
+    assert "attachOverlayGroup(viewer.instance" in js
+    assert "viewer.instance.view.scene.add" not in js
+    assert "threeObjects" in js
+
+
+def test_viewer_overlay_state_serialization() -> None:
+    """The pure marker/label helpers produce deterministic review-facing output."""
+    u = "p3aGiro3dUtil"
+    js = _viewer_src()
+    assert f"{u}.reviewMarkerColors" in js or "reviewMarkerColors" in js
+    assert "candidateDisplayLabel" in js

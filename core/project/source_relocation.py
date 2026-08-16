@@ -30,7 +30,6 @@ from __future__ import annotations
 import hashlib
 import os
 from dataclasses import dataclass
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -227,7 +226,7 @@ class _VerifiedSourceLease:
             self._closed = True
             self._handle.close()
 
-    def __enter__(self) -> "_VerifiedSourceLease":
+    def __enter__(self) -> _VerifiedSourceLease:
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> bool:
@@ -453,6 +452,7 @@ def relocate_source(
                 span_registry=loaded.span_registry,
                 run_index=loaded.run_index,
                 candidate_store=loaded.candidate_store,
+                tower_group_registry=loaded.tower_group_registry,
             )
         except PostPointerDurabilityError as exc:
             # Reuse the reviewed P2C-A post-pointer uncertainty handling: the lock

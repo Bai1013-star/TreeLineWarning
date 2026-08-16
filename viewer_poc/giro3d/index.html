@@ -16,7 +16,7 @@
 		#p3a_giro3d_status { position: absolute; right: 12px; top: 12px; z-index: 9997; min-width: 260px;
 			padding: 8px 10px; font: 11px/1.5 Consolas, Menlo, monospace; color: #cfc; background: rgba(0,0,0,0.55);
 			border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; pointer-events: none; }
-		#p3a_giro3d_lod { position: absolute; right: 12px; top: 190px; z-index: 9996; width: 260px;
+		#p3a_giro3d_lod { position: absolute; right: 12px; top: 200px; z-index: 9996; width: 260px;
 			padding: 8px 10px; font: 11px/1.5 Consolas, Menlo, monospace; color: #ddd; background: rgba(0,0,0,0.55);
 			border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; }
 		#p3a_giro3d_lod input { width: 90px; margin: 2px 4px 2px 0; }
@@ -26,6 +26,67 @@
 		#p3a_giro3d_fit { position: absolute; top: 12px; left: 12px; z-index: 10000; padding: 8px 12px;
 			font: 13px sans-serif; border: 1px solid rgba(255,255,255,0.4); border-radius: 4px;
 			background: rgba(0,0,0,0.55); color: #fff; cursor: pointer; }
+		/* V5A2/V5A3 tower-review panel */
+		#trp_panel { position: absolute; left: 12px; top: 56px; z-index: 9996; width: 300px; max-height: 62vh;
+			display: flex; flex-direction: column; font: 12px/1.45 sans-serif; color: #e8eaf6;
+			background: rgba(10,13,20,0.86); border: 1px solid rgba(255,255,255,0.22); border-radius: 6px;
+			overflow: hidden; }
+		#trp_panel .trp-head { display: flex; justify-content: space-between; align-items: center;
+			padding: 6px 10px; font-weight: 600; background: rgba(255,255,255,0.06); }
+		#trp_panel .trp-buttons { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 10px; }
+		#trp_panel button { font: 12px sans-serif; color: #fff; background: rgba(40,50,70,0.9);
+			border: 1px solid rgba(255,255,255,0.35); border-radius: 4px; padding: 4px 8px; cursor: pointer; }
+		#trp_panel button:hover { background: rgba(70,90,130,0.9); }
+		#trp_panel button:disabled { opacity: 0.4; cursor: default; }
+		#trp_accept { background: #1b5e20; }
+		#trp_reject { background: #4a148c; }
+		#trp_manual { background: #b71c1c; }
+		#trp_mode { padding: 2px 10px; font: 11px/1.4 Consolas, Menlo, monospace; color: #ffd54f;
+			background: rgba(0,0,0,0.35); }
+		#trp_status { padding: 4px 10px; min-height: 1.4em; color: #a5d6a7; }
+		#trp_details { padding: 6px 10px; font: 11px/1.6 Consolas, Menlo, monospace; color: #ffe082;
+			background: rgba(255,61,129,0.10); border-top: 1px solid rgba(255,61,129,0.35);
+			white-space: pre-line; min-height: 2em; }
+		#trp_locate { background: #00695c; }
+		#trp_list { overflow-y: auto; max-height: 40vh; padding: 4px 6px 8px; }
+		#trp_list div { padding: 5px 8px; border-radius: 4px; cursor: pointer; display: flex; gap: 8px; align-items: baseline; }
+		#trp_list div:hover { background: rgba(255,255,255,0.10); }
+		#trp_list div.sel { background: rgba(255,200,80,0.22); outline: 1px solid rgba(255,200,80,0.5); }
+		#trp_list .pill { font-weight: 700; color: #ffb300; }
+		#trp_list .info { color: #cfd8dc; font-size: 11px; }
+		#trp_list .empty { cursor: default; color: #78909c; }
+		/* V5A3 ordered manual tower selection (primary) */
+		#trp_ordered_next { padding: 4px 10px; font: 13px/1.5 sans-serif; color: #ffd54f;
+			background: rgba(0,0,0,0.30); border-top: 1px solid rgba(255,255,255,0.10); }
+		#trp_ordered_preview { padding: 6px 10px; font: 11px/1.6 Consolas, Menlo, monospace;
+			color: #ffe082; background: rgba(255,61,129,0.10); border-top: 1px solid rgba(255,61,129,0.35);
+			white-space: pre-line; min-height: 2em; }
+		#trp_order_confirm { background: #1b5e20; }
+		#trp_order_reselect { background: #4a148c; }
+		#trp_order_cancel { background: #37474f; }
+		#trp_order_select { background: #00695c; font-weight: 700; }
+		.trp-ordered-buttons { border-top: 1px solid rgba(255,255,255,0.10); }
+		#trp_auto_toggle { padding: 4px 10px; font: 12px sans-serif; color: #b0bec5; cursor: pointer;
+			background: rgba(0,0,0,0.25); border-top: 1px solid rgba(255,255,255,0.10); }
+		#trp_auto_toggle:hover { background: rgba(0,0,0,0.45); }
+		#trp_auto_body { display: none; }
+		#trp_auto_body.open { display: block; }
+		/* V5A3 tower groups + confirmed visibility */
+		#trp_group_bar { padding: 6px 10px; display: flex; gap: 6px; align-items: center;
+			flex-wrap: wrap; border-top: 1px solid rgba(255,255,255,0.10); }
+		#trp_group_bar select { font: 12px sans-serif; background: #263238; color: #ffd54f;
+			border: 1px solid rgba(255,255,255,0.3); border-radius: 4px; padding: 3px 6px; max-width: 190px; }
+		#trp_group_bar select:disabled { opacity: 0.45; }
+		#trp_group_create_row { display: none; padding: 4px 10px; gap: 4px; }
+		#trp_group_create_row input { font: 12px sans-serif; width: 150px; }
+		#trp_group_list { overflow-y: auto; max-height: 26vh; padding: 4px 6px 8px; font: 12px/1.5 sans-serif; }
+		#trp_group_list .ghead { font-weight: 700; color: #ffb300; cursor: pointer; padding: 3px 4px; display: flex; gap: 8px; align-items: baseline; }
+		#trp_group_list .gtower { display: flex; gap: 8px; padding: 3px 4px 3px 20px; align-items: baseline; }
+		#trp_group_list .gtower .tid { font-weight: 700; color: #80cbc4; }
+		#trp_group_list .gtower button { font: 11px sans-serif; padding: 1px 6px; }
+		#trp_group_list .empty { color: #78909c; cursor: default; }
+		#trp_group_status { padding: 4px 10px; font: 11px/1.6 Consolas, Menlo, monospace; color: #a5d6a7; white-space: pre-line; }
+		#trp_confirmed_membership { padding: 4px 10px; font: 11px/1.6 Consolas, Menlo, monospace; color: #81d4fa; white-space: pre-line; min-height: 1em; }
 	</style>
 </head>
 <body>
@@ -37,6 +98,43 @@
 		<label>subdivThresh <input id="p3a_giro3d_thresh" type="number" step="0.1" value="1.0" min="0.1"></label><br>
 		<label>pointBudget <input id="p3a_giro3d_budget" type="number" step="1000000" value="" min="0"
 			placeholder="null (no budget)"></label>
+	</div>
+	<div id="trp_panel">
+		<div class="trp-head"><span>顺序选杆 / Ordered Tower Selection</span><span id="trp_status"></span></div>
+		<div id="trp_ordered_next">下一根: —</div>
+		<div id="trp_group_bar">
+			<label>当前区域: <select id="trp_group_select"></select></label>
+			<button id="trp_group_create" type="button">+ 新建区域</button>
+		</div>
+		<div id="trp_group_create_row">
+			<input id="trp_group_name" maxlength="64" placeholder="区域名称 (e.g. 道路右侧)">
+			<button id="trp_group_name_ok" type="button">创建</button>
+			<button id="trp_group_name_cancel" type="button">取消</button>
+		</div>
+		<div class="trp-buttons trp-ordered-buttons">
+			<button id="trp_order_select" type="button">选择下一根杆塔</button>
+			<button id="trp_order_confirm" type="button" disabled>确认</button>
+			<button id="trp_order_reselect" type="button" disabled>重新选择</button>
+			<button id="trp_order_cancel" type="button" disabled>取消</button>
+		</div>
+		<div id="trp_ordered_preview">待确认杆塔 / Tower Preview: —</div>
+		<div id="trp_group_status"></div>
+		<div id="trp_confirmed_membership">已确认杆塔成员 / Confirmed Tower Membership: —</div>
+		<div id="trp_group_list"></div>
+		<div id="trp_mode">mode: NAVIGATE</div>
+		<div id="trp_details">—</div>
+		<div id="trp_auto_toggle">自动候选辅助 / Automatic Suggestions ▸</div>
+		<div id="trp_auto_body">
+			<div class="trp-buttons">
+				<button id="trp_accept" type="button" disabled>Accept</button>
+				<button id="trp_reject" type="button" disabled>Reject</button>
+				<button id="trp_adjust" type="button">Adjust</button>
+				<button id="trp_manual" type="button">Manual Add</button>
+				<button id="trp_locate" type="button">定位 / Locate</button>
+				<button id="trp_refresh" type="button">Refresh</button>
+			</div>
+			<div id="trp_list"><div class="empty">loading…</div></div>
+		</div>
 	</div>
 	<div id="p3a_giro3d_help"></div>
 	<button id="p3a_giro3d_fit" type="button">Fit / Reset View（适配 / 重置）</button>

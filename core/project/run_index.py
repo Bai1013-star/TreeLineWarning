@@ -182,6 +182,7 @@ def _publish(
             span_registry=span_registry,
             run_index=run_index,
             candidate_store=loaded.candidate_store,
+            tower_group_registry=loaded.tower_group_registry,
         )
     except PostPointerDurabilityError as exc:
         try:

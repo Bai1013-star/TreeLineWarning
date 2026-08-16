@@ -1,0 +1,23 @@
+{
+  "title": "TreeLineWarning P3A — Giro3D + PDAL FULL-SOURCE COPC (production)",
+  "description": "Giro3D 2.0.3 rendering of the COMPLETE protected source (105,055,350 pts) from the PRODUCTION PDAL writers.copc full-source COPC. Replaces the historical custom-builder full COPC (root spacing ~310.65 m) which had incorrect/non-production LOD semantics.",
+  "dataset": "p3a_full_pdal",
+  "copcUrl": "pointclouds/p3a_full_pdal.copc.laz",
+  "pointCount": 105055350,
+  "lazPerfPath": "/laz-perf",
+  "viewer": {
+    "backgroundColor": "#101418",
+    "edlEnabled": true,
+    "pointSize": 2,
+    "pointBudget": 5000000,
+    "fov": 60,
+    "loadTimeoutMs": 180000,
+    "decimate": 1
+  },
+  "controlHelp": {
+    "left": "左键拖动: 旋转",
+    "right": "右键拖动: 平移",
+    "wheel": "滚轮: 缩放",
+    "click": "单击: 读取 XYZ"
+  }
+}

@@ -7,8 +7,8 @@ can become the sole authoritative writer boundary.
 
 from __future__ import annotations
 
-import hashlib
 import errno
+import hashlib
 import json
 import os
 import re
@@ -25,26 +25,18 @@ from core.contracts._json import json_safe
 from core.contracts.frv import (
     SourceIdentity,
     canonical_frv_json_bytes,
-    frv_digest,
     validate_source_content_identity_digest,
     validate_source_identity_record_digest,
 )
 from core.contracts.project import (
+    SPAN_ANALYSIS_SCHEMA_VERSION,
     AnalysisStage,
     AnalysisStatus,
     AnalysisTreeObservationIdentity,
     ArtifactReference,
-    COORDINATE_CONTEXT_SCHEMA_VERSION,
     CoordinateContext,
     CoordinateFrame,
     CoordinateUnit,
-    PREDICTION_ARTIFACT_REFERENCE_SCHEMA_VERSION,
-    PREDICTION_CAPABILITY_SCHEMA_VERSION,
-    PREDICTION_PROVIDER_SCHEMA_VERSION,
-    PREDICTION_REQUEST_SCHEMA_VERSION,
-    PREDICTION_RESULT_SCHEMA_VERSION,
-    PROJECT_SCHEMA_VERSION,
-    PROJECT_SOURCE_REFERENCE_SCHEMA_VERSION,
     PredictionArtifactReference,
     PredictionCapability,
     PredictionCapabilityState,
@@ -56,17 +48,12 @@ from core.contracts.project import (
     ProjectContract,
     ProjectSourceReference,
     ProviderPayload,
-    SPAN_ANALYSIS_SCHEMA_VERSION,
-    SPAN_GEOMETRY_SCHEMA_VERSION,
-    SPAN_SCHEMA_VERSION,
+    SourceIdentityBinding,
     SpanAnalysis,
     SpanContract,
     SpanDependencySnapshot,
     SpanGeometry,
     SpanTopologyState,
-    SourceIdentityBinding,
-    TOWER_REFINEMENT_SCHEMA_VERSION,
-    TOWER_SCHEMA_VERSION,
     TowerContract,
     TowerGeometry,
     TowerLifecycleState,
@@ -74,7 +61,6 @@ from core.contracts.project import (
     TowerRefinementQuality,
     TowerRefinementStatus,
     TowerRevisionReference,
-    VIEWER_REFERENCE_SCHEMA_VERSION,
     ViewerCacheState,
     ViewerReference,
     _safe_relative_posix_path,
@@ -91,7 +77,11 @@ from core.contracts.tower_candidates import (
     validate_tower_candidate_confirmation,
     validate_tower_candidate_review_ledger,
 )
-
+from core.contracts.tower_groups import (
+    TOWER_GROUP_REGISTRY_SCHEMA_VERSION,
+    TowerGroupRegistry,
+    group_display_id_for_sequence,
+)
 
 ACTIVE_POINTER_SCHEMA_VERSION = "treeline-project-active-pointer-v1"
 GENERATION_SCHEMA_VERSION = "treeline-project-generation-v1"
@@ -103,10 +93,12 @@ TOWER_REGISTRY_SCHEMA_VERSION = "treeline-tower-registry-v1"
 SPAN_REGISTRY_SCHEMA_VERSION = "treeline-span-registry-v1"
 RUN_INDEX_SCHEMA_VERSION = "treeline-run-index-v1"
 CANDIDATE_STORE_INDEX_SCHEMA_VERSION = "treeline-tower-candidate-store-index-v1"
+TOWER_GROUPS_RELATIVE_PATH = "tower-groups/tower-groups.json"
 
 _GENERATION_RE = re.compile(r"g-[0-9]{16}-[a-z0-9]{8}\Z")
 _TOWER_ID_RE = re.compile(r"T([0-9]{3,})\Z")
 _SPAN_ID_RE = re.compile(r"S([0-9]{3,})\Z")
+_GROUP_ID_RE = re.compile(r"G([0-9]{3})\Z")
 _RUN_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
 _CANDIDATE_ID_RE = re.compile(r"P([0-9]{3})\Z")
 _STAGING_PREFIX = ".staging-"
@@ -1583,6 +1575,7 @@ class LoadedProject:
     span_registry: SpanRegistry
     run_index: RunIndex
     candidate_store: CandidateStore
+    tower_group_registry: TowerGroupRegistry
     generation_id: str
     generation_manifest: GenerationManifest
     project_root: Path
@@ -2285,6 +2278,118 @@ def _validate_candidate_store_manifest_coverage(
         )
 
 
+def _validate_group_registry_manifest_coverage(
+    manifest: GenerationManifest,
+    tower_group_registry: TowerGroupRegistry,
+) -> None:
+    """A group artifact in the manifest must match the loaded registry state.
+
+    A legacy group-less generation has no ``tower-groups/tower-groups.json`` in
+    its manifest and loads as GROUP_BOOTSTRAP_PENDING.  A group-capable
+    generation must list the group artifact and never load as bootstrap-pending.
+    Any mismatch is a malformed manifest, never silently repaired.
+    """
+    group_in_manifest = any(
+        item.relative_path == TOWER_GROUPS_RELATIVE_PATH for item in manifest.files
+    )
+    if group_in_manifest and tower_group_registry.bootstrap_pending:
+        raise ProjectIntegrityError(
+            "generation manifest lists a group artifact for a legacy registry"
+        )
+    if not group_in_manifest and not tower_group_registry.bootstrap_pending:
+        raise ProjectIntegrityError(
+            "group-capable generation is missing its group artifact from the manifest"
+        )
+
+
+def _read_tower_group_registry(
+    generation_path: Path,
+    project: ProjectContract,
+    generation_id: str,
+    *,
+    required: bool,
+) -> TowerGroupRegistry:
+    """Read the group registry strictly, or return GROUP_BOOTSTRAP_PENDING.
+
+    ``required`` is derived from the sealed generation manifest: a legacy
+    generation that never carried a group artifact loads as bootstrap-pending;
+    a group-capable generation that omits/corrupts the artifact fails closed.
+    """
+    if not required:
+        return TowerGroupRegistry(
+            schema_version=TOWER_GROUP_REGISTRY_SCHEMA_VERSION,
+            generation_id=generation_id,
+            project_id=project.project_id,
+            next_group_sequence=1,
+            groups=(),
+            bootstrap_pending=True,
+        )
+    path = generation_path / "tower-groups" / "tower-groups.json"
+    if not path.is_file():
+        raise ProjectIntegrityError(
+            "group-capable generation requires tower-groups/tower-groups.json"
+        )
+    data = _read_json(path, "tower-groups/tower-groups.json")
+    try:
+        registry = TowerGroupRegistry.from_dict(data)
+    except (TypeError, ValueError) as exc:
+        raise ProjectIntegrityError(f"invalid tower-group registry: {exc}") from exc
+    if registry.generation_id != generation_id:
+        raise ProjectIntegrityError(
+            "tower-group registry generation_id does not match generation"
+        )
+    if registry.project_id != project.project_id:
+        raise ProjectIntegrityError("tower-group registry project_id does not match project")
+    return registry
+
+
+def _validate_group_registry_state(
+    project: ProjectContract,
+    source_sidecar: SourceReferenceSidecar,
+    tower_registry: TowerRegistry,
+    tower_group_registry: TowerGroupRegistry,
+) -> None:
+    """Validate the group graph against the project and Tower registry.
+
+    Cross-references (every referenced ``T###`` exists) are validated here;
+    exclusive membership, canonical IDs, and monotonic sequences are enforced by
+    the ``TowerGroupRegistry`` contract.  Corrupt state is never silently
+    repaired.
+    """
+    if tower_group_registry.bootstrap_pending:
+        if tower_group_registry.groups:
+            raise ProjectIntegrityError(
+                "bootstrap-pending group registry must not carry groups"
+            )
+        if tower_group_registry.next_group_sequence != 1:
+            raise ProjectIntegrityError(
+                "bootstrap-pending group registry must start at sequence 1"
+            )
+        return
+    if tower_group_registry.project_id != project.project_id:
+        raise ProjectIntegrityError("group registry project identity does not match project")
+    for group in tower_group_registry.groups:
+        matched = _GROUP_ID_RE.fullmatch(group.group_id)
+        if matched is None or (
+            group_display_id_for_sequence(int(matched.group(1))) != group.group_id
+        ):
+            raise ProjectIntegrityError("group registry contains a non-canonical group ID")
+        for tower_id in group.ordered_tower_ids:
+            try:
+                entry = tower_registry.get(tower_id)
+            except KeyError as exc:
+                raise ProjectIntegrityError(
+                    f"group {group.group_id} references missing tower {tower_id}"
+                ) from exc
+            if (
+                entry.current.source_binding.source_content_identity_digest
+                != project.source_reference.binding.source_content_identity_digest
+            ):
+                raise ProjectIntegrityError(
+                    f"group {group.group_id} tower {tower_id} source does not match the project"
+                )
+
+
 def _validate_candidate_store_state(
     project: ProjectContract,
     source_sidecar: SourceReferenceSidecar,
@@ -2410,7 +2515,9 @@ def _decode_manifest(value: Any, project_id: str, generation_id: str) -> Generat
                 "generation manifest v1 file records are not the exact historical five files"
             )
     else:
-        # v2 preserves the five core files and adds the candidate review store.
+        # v2 preserves the five core files and adds the candidate review store; a
+        # group-capable v2 generation additionally carries the ordered-group
+        # artifact (legacy v2 generations do not, and remain valid).
         if (
             tuple(item.relative_path for item in records[: len(_GENERATION_FILES)])
             != _GENERATION_FILES
@@ -2419,6 +2526,8 @@ def _decode_manifest(value: Any, project_id: str, generation_id: str) -> Generat
                 "generation manifest v2 core file records are not exact and ordered"
             )
         extra_files = [item.relative_path for item in records[len(_GENERATION_FILES) :]]
+        if extra_files and extra_files[0] == TOWER_GROUPS_RELATIVE_PATH:
+            extra_files = extra_files[1:]
         if not extra_files or extra_files[0] != "candidates/index.json":
             raise ProjectIntegrityError(
                 "generation manifest v2 must begin with candidates/index.json"
@@ -2724,6 +2833,7 @@ def _validate_generation_content(
     span_registry: SpanRegistry,
     run_index: RunIndex,
     candidate_store: CandidateStore,
+    tower_group_registry: TowerGroupRegistry,
 ) -> None:
     if source_sidecar.project_id != project.project_id:
         raise ProjectIntegrityError("source sidecar project_id does not match project")
@@ -2746,6 +2856,9 @@ def _validate_generation_content(
     )
     _validate_run_index_span_analysis_coherence(span_registry, run_index)
     _validate_candidate_store_state(project, source_sidecar, tower_registry, candidate_store)
+    _validate_group_registry_state(
+        project, source_sidecar, tower_registry, tower_group_registry
+    )
 
 
 def _read_generation_content(
@@ -2754,6 +2867,7 @@ def _read_generation_content(
     generation_id: str,
     *,
     manifest_v2: bool,
+    group_registry_required: bool,
 ) -> tuple[
     ProjectContract,
     SourceReferenceSidecar,
@@ -2761,6 +2875,7 @@ def _read_generation_content(
     SpanRegistry,
     RunIndex,
     CandidateStore,
+    TowerGroupRegistry,
 ]:
     project_data = _read_json(generation_path / "project.json", "generation project.json")
     project = _decode_project(project_data)
@@ -2782,6 +2897,12 @@ def _read_generation_content(
     candidate_store = _read_candidate_store(
         generation_path, project, generation_id, manifest_v2=manifest_v2
     )
+    tower_group_registry = _read_tower_group_registry(
+        generation_path,
+        project,
+        generation_id,
+        required=group_registry_required,
+    )
     _validate_generation_content(
         root,
         generation_path,
@@ -2792,8 +2913,17 @@ def _read_generation_content(
         span_registry,
         run_index,
         candidate_store,
+        tower_group_registry,
     )
-    return project, source_sidecar, tower_registry, span_registry, run_index, candidate_store
+    return (
+        project,
+        source_sidecar,
+        tower_registry,
+        span_registry,
+        run_index,
+        candidate_store,
+        tower_group_registry,
+    )
 
 
 def _read_root_pointer(root: Path) -> tuple[dict[str, Any], ProjectContract]:
@@ -2854,15 +2984,25 @@ def open_project(project_root: str | os.PathLike[str]) -> LoadedProject:
     project_bytes = project_path.read_bytes()
     if file_sha256(project_bytes) != pointer["project_manifest_sha256"]:
         raise FileIntegrityError("root pointer project manifest digest mismatch")
-    project, source_sidecar, tower_registry, span_registry, run_index, candidate_store = (
-        _read_generation_content(
-            root,
-            generation_path,
-            generation_id,
-            manifest_v2=manifest.schema_version == GENERATION_SCHEMA_VERSION_V2,
-        )
+    (
+        project,
+        source_sidecar,
+        tower_registry,
+        span_registry,
+        run_index,
+        candidate_store,
+        tower_group_registry,
+    ) = _read_generation_content(
+        root,
+        generation_path,
+        generation_id,
+        manifest_v2=manifest.schema_version == GENERATION_SCHEMA_VERSION_V2,
+        group_registry_required=any(
+            item.relative_path == TOWER_GROUPS_RELATIVE_PATH for item in manifest.files
+        ),
     )
     _validate_candidate_store_manifest_coverage(manifest, candidate_store)
+    _validate_group_registry_manifest_coverage(manifest, tower_group_registry)
     if project != pointer_project:
         raise ProjectIntegrityError("root pointer nested project does not match generation project")
     if project.project_id != manifest.project_id or project.project_id != pointer["project_id"]:
@@ -2879,6 +3019,7 @@ def open_project(project_root: str | os.PathLike[str]) -> LoadedProject:
         span_registry=span_registry,
         run_index=run_index,
         candidate_store=candidate_store,
+        tower_group_registry=tower_group_registry,
         generation_id=generation_id,
         generation_manifest=manifest,
         project_root=root,
@@ -2982,6 +3123,7 @@ def _write_generation_files(
     span_registry: SpanRegistry | None = None,
     run_index: RunIndex | None = None,
     candidate_store: CandidateStore | None = None,
+    tower_group_registry: TowerGroupRegistry | None = None,
 ) -> tuple[
     dict[str, Any],
     SourceReferenceSidecar,
@@ -2989,6 +3131,7 @@ def _write_generation_files(
     SpanRegistry,
     RunIndex,
     CandidateStore,
+    TowerGroupRegistry,
 ]:
     (staging_path / "source").mkdir()
     (staging_path / "towers").mkdir()
@@ -3024,18 +3167,41 @@ def _write_generation_files(
             confirmations=candidate_store.confirmations,
         )
     )
+    if tower_group_registry is None:
+        tower_group_registry = TowerGroupRegistry(
+            schema_version=TOWER_GROUP_REGISTRY_SCHEMA_VERSION,
+            generation_id=generation_id,
+            project_id=project.project_id,
+            next_group_sequence=1,
+            groups=(),
+        )
+    else:
+        tower_group_registry = TowerGroupRegistry(
+            schema_version=tower_group_registry.schema_version,
+            generation_id=generation_id,
+            project_id=project.project_id,
+            next_group_sequence=tower_group_registry.next_group_sequence,
+            groups=tower_group_registry.groups,
+            bootstrap_pending=False,
+        )
     project_payload = project.to_dict()
     _write_json(staging_path / "source" / "source-reference.json", source_sidecar.to_dict())
     _write_json(staging_path / "towers" / "towers.json", tower_registry.to_dict())
     _write_json(staging_path / "spans" / "spans.json", span_registry.to_dict())
     _write_json(staging_path / "runs" / "run-index.json", run_index.to_dict())
     _write_json(staging_path / "project.json", project_payload)
+    (staging_path / "tower-groups").mkdir()
+    _write_json(
+        staging_path / "tower-groups" / "tower-groups.json", tower_group_registry.to_dict()
+    )
     _write_candidate_store_files(staging_path, project.project_id, generation_id, candidate_store)
-    for child_name in ("source", "towers", "spans", "runs"):
+    for child_name in ("source", "towers", "spans", "runs", "tower-groups"):
         _fsync_directory(staging_path / child_name)
     _fsync_directory(staging_path)
-    # Staging is always published as generation v2.
-    _read_generation_content(root, staging_path, generation_id, manifest_v2=True)
+    # Staging is always published as generation v2 with a group artifact.
+    _read_generation_content(
+        root, staging_path, generation_id, manifest_v2=True, group_registry_required=True
+    )
     return (
         project_payload,
         source_sidecar,
@@ -3043,6 +3209,7 @@ def _write_generation_files(
         span_registry,
         run_index,
         candidate_store,
+        tower_group_registry,
     )
 
 
@@ -3054,6 +3221,10 @@ def _file_records(
         path = _confined_path(staging_path, relative, "generation file")
         data = path.read_bytes()
         records.append(FileRecord(relative, len(data), file_sha256(data)))
+    # A group-capable generation always carries the ordered-group artifact.
+    group_path = _confined_path(staging_path, TOWER_GROUPS_RELATIVE_PATH, "generation file")
+    group_data = group_path.read_bytes()
+    records.append(FileRecord(TOWER_GROUPS_RELATIVE_PATH, len(group_data), file_sha256(group_data)))
     for relative in _candidate_store_relative_paths(candidate_store):
         path = _confined_path(staging_path, relative, "candidate store file")
         data = path.read_bytes()
@@ -3071,6 +3242,7 @@ def _publish_generation(
     span_registry: SpanRegistry | None = None,
     run_index: RunIndex | None = None,
     candidate_store: CandidateStore | None = None,
+    tower_group_registry: TowerGroupRegistry | None = None,
 ) -> LoadedProject:
     """Copy-on-write publisher used by locked session mutation and P2A creation/tests."""
 
@@ -3096,7 +3268,15 @@ def _publish_generation(
             source_sidecar, generation_id=generation_id, project=project
         )
     try:
-        project_payload, _, _, _, _, candidate_store = _write_generation_files(
+        (
+            project_payload,
+            _,
+            _,
+            _,
+            _,
+            candidate_store,
+            tower_group_registry,
+        ) = _write_generation_files(
             root,
             staging_path,
             generation_id,
@@ -3106,6 +3286,7 @@ def _publish_generation(
             span_registry,
             run_index,
             candidate_store,
+            tower_group_registry,
         )
         created_at = _utc_timestamp()
         manifest = GenerationManifest(
@@ -3127,7 +3308,13 @@ def _publish_generation(
             generation_id,
         )
         _validate_generation_files(staging_path, staged_manifest)
-        _read_generation_content(root, staging_path, generation_id, manifest_v2=True)
+        _read_generation_content(
+            root,
+            staging_path,
+            generation_id,
+            manifest_v2=True,
+            group_registry_required=True,
+        )
         final_path = generations / generation_id
         try:
             os.replace(staging_path, final_path)
@@ -3175,13 +3362,17 @@ def _validate_published_generation(
         generation_id,
     )
     _validate_generation_files(generation_path, manifest)
-    _, _, _, _, _, candidate_store = _read_generation_content(
+    _, _, _, _, _, candidate_store, tower_group_registry = _read_generation_content(
         root,
         generation_path,
         generation_id,
         manifest_v2=manifest.schema_version == GENERATION_SCHEMA_VERSION_V2,
+        group_registry_required=any(
+            item.relative_path == TOWER_GROUPS_RELATIVE_PATH for item in manifest.files
+        ),
     )
     _validate_candidate_store_manifest_coverage(manifest, candidate_store)
+    _validate_group_registry_manifest_coverage(manifest, tower_group_registry)
 
 
 def _atomic_replace_root_pointer(root: Path, pointer: Mapping[str, Any]) -> None:
