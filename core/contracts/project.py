@@ -45,6 +45,7 @@ PREDICTION_ARTIFACT_REFERENCE_SCHEMA_VERSION = "treeline-prediction-artifact-ref
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _TOWER_ID_RE = re.compile(r"T([0-9]{3,})\Z")
 _SPAN_ID_RE = re.compile(r"S([0-9]{3,})\Z")
+_GROUP_ID_RE = re.compile(r"G([0-9]{3})\Z")
 _RUN_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
 _CACHE_ID_RE = re.compile(r"[a-z][a-z0-9._-]{0,127}\Z")
 _PROVIDER_ID_RE = re.compile(r"[a-z0-9]+(?:[.-][a-z0-9]+)*\Z")
@@ -1328,6 +1329,11 @@ class SpanContract:
     analysis: SpanAnalysis
     artifact_index_reference: ArtifactReference | None
     prediction: PredictionCapability = field(default_factory=PredictionCapability.not_connected)
+    # Added for the ordered multi-Span projection.  ``None`` is retained as a
+    # controlled legacy value for immutable generations written before group
+    # synchronization existed; synchronized records always carry both fields.
+    group_id: str | None = None
+    within_group_order: int | None = None
 
     def __post_init__(self) -> None:
         if self.schema_version != SPAN_SCHEMA_VERSION:
@@ -1372,6 +1378,14 @@ class SpanContract:
             raise ValueError("artifact_index_reference must be an ArtifactReference or null")
         if type(self.prediction) is not PredictionCapability:
             raise ValueError("prediction must be a PredictionCapability")
+        if (self.group_id is None) != (self.within_group_order is None):
+            raise ValueError("group_id and within_group_order must be supplied together")
+        if self.group_id is not None:
+            if type(self.group_id) is not str or _GROUP_ID_RE.fullmatch(self.group_id) is None:
+                raise ValueError("group_id must be a canonical G001-G999 group ID")
+            if int(self.group_id[1:]) <= 0 or int(self.group_id[1:]) > 999:
+                raise ValueError("group_id must be a canonical G001-G999 group ID")
+            _positive_int(self.within_group_order, "within_group_order")
 
     @property
     def from_tower_reference(self) -> TowerRevisionReference:
@@ -1416,6 +1430,8 @@ class SpanContract:
                 else None
             ),
             "prediction": self.prediction.to_dict(),
+            "group_id": self.group_id,
+            "within_group_order": self.within_group_order,
         }
 
 

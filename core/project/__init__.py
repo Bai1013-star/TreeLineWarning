@@ -93,6 +93,7 @@ from core.project.run_index import (
     RunIndexPublicationUncertainError,
     UnknownRunError,
     attach_run_artifact_root,
+    attach_span_artifact_index,
     complete_run,
     fail_run,
     interrupt_run,
@@ -108,6 +109,15 @@ from core.project.tower_candidates import (
     append_tower_candidate_review,
     confirm_reviewed_tower_candidate,
     persist_tower_candidate_set,
+)
+from core.project.span_sync import (
+    DesiredSpan,
+    MissingTowerEndpointError,
+    SpanSynchronizationResult,
+    SpanTopologyError,
+    TopologyDriftError,
+    desired_group_spans,
+    synchronize_group_spans,
 )
 
 __all__ = [
@@ -193,6 +203,7 @@ __all__ = [
     "RunIndexPublicationUncertainError",
     "UnknownRunError",
     "attach_run_artifact_root",
+    "attach_span_artifact_index",
     "complete_run",
     "fail_run",
     "interrupt_run",
@@ -206,4 +217,11 @@ __all__ = [
     "append_tower_candidate_review",
     "confirm_reviewed_tower_candidate",
     "persist_tower_candidate_set",
+    "DesiredSpan",
+    "MissingTowerEndpointError",
+    "SpanSynchronizationResult",
+    "SpanTopologyError",
+    "TopologyDriftError",
+    "desired_group_spans",
+    "synchronize_group_spans",
 ]

@@ -21,7 +21,12 @@ from core.config.fast_baseline import FastBaselineConfig
 
 from algorithms.poles.evidence import PoleEvidenceError
 from algorithms.poles.topology import SpanRecord
-from algorithms.spans.region import subset_raw_region
+from algorithms.spans.region import (
+    SpanLocalFrame,
+    SpanRegionQueryResult,
+    SpanRegionSpec,
+    subset_raw_region_oriented,
+)
 from algorithms.spans.tree import (
     assign_span_tree_membership,
     build_span_chm,
@@ -52,6 +57,14 @@ class SpanTreeOutcome:
     accepted_tree_tops: int
     assigned_raw_point_count: int
     artifact_root: Path
+    fine_representative_count: int = 0
+    aabb_query_points: int = 0
+    oriented_region_points: int = 0
+    source_tiles: tuple[str, ...] = ()
+    source_total_tiles: int = 0
+    source_intersecting_aabb_tiles: int = 0
+    source_opened_tiles: int = 0
+    source_points_read: int = 0
 
     def to_manifest(self) -> dict[str, Any]:
         return {
@@ -63,16 +76,39 @@ class SpanTreeOutcome:
             "raw_local_maxima": self.raw_local_maxima,
             "accepted_tree_tops": self.accepted_tree_tops,
             "assigned_raw_point_count": self.assigned_raw_point_count,
+            "fine_representative_count": self.fine_representative_count,
+            "aabb_query_points": self.aabb_query_points,
+            "oriented_region_points": self.oriented_region_points,
+            "source_tiles": list(self.source_tiles),
+            "source_total_tiles": self.source_total_tiles,
+            "source_intersecting_aabb_tiles": self.source_intersecting_aabb_tiles,
+            "source_opened_tiles": self.source_opened_tiles,
+            "source_points_read": self.source_points_read,
         }
 
 
 def _row_in_span_core(
-    xyz_local_m: np.ndarray, span: SpanRecord
+    xyz_local_m: np.ndarray, span: SpanRecord, origin_xyz: tuple[float, float, float]
 ) -> np.ndarray:
-    core_min = np.asarray(span.core_bounds_min_xyz, dtype=np.float64)
-    core_max = np.asarray(span.core_bounds_max_xyz, dtype=np.float64)
+    core_min, core_max = _span_bounds_in_scene_local_frame(
+        span.core_bounds_min_xyz, span.core_bounds_max_xyz, origin_xyz
+    )
     return np.all(xyz_local_m >= core_min, axis=1) & np.all(
         xyz_local_m <= core_max, axis=1
+    )
+
+
+def _span_bounds_in_scene_local_frame(
+    bounds_min_xyz: tuple[float, float, float],
+    bounds_max_xyz: tuple[float, float, float],
+    origin_xyz: tuple[float, float, float],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Convert authoritative absolute bounds to the RawRegion local frame."""
+
+    origin = np.asarray(origin_xyz, dtype=np.float64)
+    return (
+        np.asarray(bounds_min_xyz, dtype=np.float64) - origin,
+        np.asarray(bounds_max_xyz, dtype=np.float64) - origin,
     )
 
 
@@ -84,6 +120,7 @@ def run_span_tree_pipeline(
     *,
     output_dir: Any,
     origin_xyz: tuple[float, float, float],
+    vegetation_query: SpanRegionQueryResult | None = None,
 ) -> SpanTreeOutcome:
     """Run the span-local tree pipeline and persist per-span artifacts.
 
@@ -95,12 +132,24 @@ def run_span_tree_pipeline(
     output_root.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
 
-    subset = subset_raw_region(
-        vegetation_region,
-        span.halo_bounds_min_xyz,
-        span.halo_bounds_max_xyz,
-        output_root / "recovered_region",
-    )
+    if vegetation_query is None:
+        frame = SpanLocalFrame.from_endpoints(
+            span.start_xyz_absolute_m, span.end_xyz_absolute_m, origin_xyz
+        )
+        vegetation_query = subset_raw_region_oriented(
+            vegetation_region,
+            frame,
+            SpanRegionSpec(
+                role="vegetation-search",
+                half_width_m=float(span.half_width_m),
+                longitudinal_before_m=float(span.halo_m),
+                longitudinal_after_m=float(span.halo_m),
+                z_min_m=float(span.halo_bounds_min_xyz[2]),
+                z_max_m=float(span.halo_bounds_max_xyz[2]),
+            ),
+            output_root / "recovered_region",
+        )
+    subset = vegetation_query.region
     if subset.count == 0:
         empty = SpanTreeOutcome(
             span=span,
@@ -113,6 +162,13 @@ def run_span_tree_pipeline(
             accepted_tree_tops=0,
             assigned_raw_point_count=0,
             artifact_root=output_root,
+            aabb_query_points=vegetation_query.aabb_query_points,
+            oriented_region_points=vegetation_query.oriented_region_points,
+            source_tiles=vegetation_query.tiles,
+            source_total_tiles=vegetation_query.total_tiles,
+            source_intersecting_aabb_tiles=vegetation_query.intersecting_aabb_tiles,
+            source_opened_tiles=vegetation_query.opened_tiles,
+            source_points_read=vegetation_query.points_read,
         )
         _write_json(
             output_root / "span_tree_manifest.json",
@@ -153,7 +209,7 @@ def run_span_tree_pipeline(
     raw_tree = np.asarray(result["raw_tree_id"], dtype=np.int32)
     raw_xyz_all = subset.xyz().astype(np.float64, copy=False)
     assigned_rows = np.flatnonzero(raw_tree >= 0)
-    in_core = _row_in_span_core(raw_xyz_all, span)
+    in_core = _row_in_span_core(raw_xyz_all, span, origin_xyz)
     assigned_original = np.asarray(subset.original_index(), dtype=np.int64)[assigned_rows]
     assigned_xyz = raw_xyz_all[assigned_rows]
     assigned_tree = raw_tree[assigned_rows]
@@ -200,6 +256,14 @@ def run_span_tree_pipeline(
         accepted_tree_tops=tops.accepted_count,
         assigned_raw_point_count=int(len(assigned_rows)),
         artifact_root=output_root,
+        fine_representative_count=len(fine_xyz),
+        aabb_query_points=vegetation_query.aabb_query_points,
+        oriented_region_points=vegetation_query.oriented_region_points,
+        source_tiles=vegetation_query.tiles,
+        source_total_tiles=vegetation_query.total_tiles,
+        source_intersecting_aabb_tiles=vegetation_query.intersecting_aabb_tiles,
+        source_opened_tiles=vegetation_query.opened_tiles,
+        source_points_read=vegetation_query.points_read,
     )
     manifest = outcome.to_manifest()
     manifest["runtime_seconds"] = time.perf_counter() - started
@@ -234,6 +298,14 @@ def load_span_tree_outcome(
         accepted_tree_tops=int(manifest.get("accepted_tree_tops", 0)),
         assigned_raw_point_count=int(len(original_index)),
         artifact_root=root,
+        fine_representative_count=int(manifest.get("fine_representative_count", 0)),
+        aabb_query_points=int(manifest.get("aabb_query_points", 0)),
+        oriented_region_points=int(manifest.get("oriented_region_points", 0)),
+        source_tiles=tuple(str(value) for value in manifest.get("source_tiles", ())),
+        source_total_tiles=int(manifest.get("source_total_tiles", 0)),
+        source_intersecting_aabb_tiles=int(manifest.get("source_intersecting_aabb_tiles", 0)),
+        source_opened_tiles=int(manifest.get("source_opened_tiles", 0)),
+        source_points_read=int(manifest.get("source_points_read", 0)),
     )
 
 

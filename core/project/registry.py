@@ -201,6 +201,8 @@ class SpanDraft:
     analysis: SpanAnalysis
     artifact_index_reference: ArtifactReference | None = None
     prediction: PredictionCapability = field(default_factory=PredictionCapability.not_connected)
+    group_id: str | None = None
+    within_group_order: int | None = None
 
     def __post_init__(self) -> None:
         SpanContract(
@@ -217,6 +219,8 @@ class SpanDraft:
             analysis=self.analysis,
             artifact_index_reference=self.artifact_index_reference,
             prediction=self.prediction,
+            group_id=self.group_id,
+            within_group_order=self.within_group_order,
         )
 
     @classmethod
@@ -236,6 +240,8 @@ class SpanDraft:
             analysis=span.analysis,
             artifact_index_reference=span.artifact_index_reference,
             prediction=span.prediction,
+            group_id=span.group_id,
+            within_group_order=span.within_group_order,
         )
 
     def to_contract(self, span_id: str) -> SpanContract:
@@ -253,6 +259,8 @@ class SpanDraft:
             analysis=self.analysis,
             artifact_index_reference=self.artifact_index_reference,
             prediction=self.prediction,
+            group_id=self.group_id,
+            within_group_order=self.within_group_order,
         )
 
 

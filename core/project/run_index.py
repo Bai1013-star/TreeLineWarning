@@ -12,6 +12,7 @@ from typing import Any
 
 from core.contracts.project import (
     AnalysisStatus,
+    ArtifactReference,
     SpanAnalysis,
     SpanTopologyState,
 )
@@ -78,7 +79,9 @@ def _require_writable(session: WritableProjectSession) -> Any:
     except (ProjectSessionClosedError, ProjectSessionError):
         raise
     except (AttributeError, TypeError) as exc:
-        raise WriterAuthorityError("P2C-B2 mutation received a fabricated writable session") from exc
+        raise WriterAuthorityError(
+            "P2C-B2 mutation received a fabricated writable session"
+        ) from exc
 
 
 def _updated_project(project: Any) -> Any:
@@ -344,7 +347,7 @@ def attach_run_artifact_root(
         raise InvalidRunTransitionError(
             "artifact_root_reference cannot be changed on a terminal historical run"
         )
-    span = _require_active_span_for_entry(loaded, entry)
+    _require_active_span_for_entry(loaded, entry)
     if entry.artifact_root_reference is not None:
         if entry.artifact_root_reference == artifact_root_reference:
             return entry
@@ -362,6 +365,33 @@ def attach_run_artifact_root(
     return replacement
 
 
+def attach_span_artifact_index(
+    session: WritableProjectSession,
+    span_id: str,
+    artifact_reference: ArtifactReference,
+) -> None:
+    """Publish the compact terminal index reference before COMPLETE is allowed."""
+
+    loaded = _require_writable(session)
+    if type(artifact_reference) is not ArtifactReference:
+        raise InvalidRunCandidate("artifact_reference must be an ArtifactReference")
+    span = _span(loaded, span_id)
+    if span.analysis.active_run_id is None:
+        raise InvalidRunCandidate("Span has no active run for an artifact index")
+    updated = replace(span, artifact_index_reference=artifact_reference)
+    registry = SpanRegistry(
+        loaded.span_registry.schema_version,
+        loaded.span_registry.generation_id,
+        loaded.span_registry.project_id,
+        reserved_sequences=loaded.span_registry.reserved_sequences,
+        records=tuple(
+            updated if item.span_id == span_id else item
+            for item in loaded.span_registry.records
+        ),
+    )
+    _publish(session, loaded, run_index=loaded.run_index, span_registry=registry)
+
+
 def reconcile_run_staleness(session: WritableProjectSession) -> tuple[RunIndexEntry, ...]:
     """Mark dependency-mismatched historical runs STALE without rewriting them."""
 
@@ -371,7 +401,10 @@ def reconcile_run_staleness(session: WritableProjectSession) -> tuple[RunIndexEn
     replacement_analyses: dict[str, SpanAnalysis] = {}
     for entry in loaded.run_index.entries:
         span = spans[entry.span_id]
-        if entry.status is AnalysisStatus.STALE or entry.span_dependencies == span.current_dependencies:
+        if (
+            entry.status is AnalysisStatus.STALE
+            or entry.span_dependencies == span.current_dependencies
+        ):
             continue
         replacement = replace(entry, status=AnalysisStatus.STALE)
         replacements[entry.run_id] = replacement
@@ -406,7 +439,11 @@ def reconcile_run_staleness(session: WritableProjectSession) -> tuple[RunIndexEn
         ),
     )
     _publish(session, loaded, run_index=run_index, span_registry=span_registry)
-    return tuple(replacements[entry.run_id] for entry in loaded.run_index.entries if entry.run_id in replacements)
+    return tuple(
+        replacements[entry.run_id]
+        for entry in loaded.run_index.entries
+        if entry.run_id in replacements
+    )
 
 
 __all__ = [
@@ -417,6 +454,7 @@ __all__ = [
     "RunIndexPublicationUncertainError",
     "UnknownRunError",
     "attach_run_artifact_root",
+    "attach_span_artifact_index",
     "complete_run",
     "fail_run",
     "interrupt_run",

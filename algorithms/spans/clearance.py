@@ -27,6 +27,18 @@ from algorithms.vegetation.tree_wire_clearance import (
 
 SPAN_CLEARANCE_SCHEMA = "fast-baseline-span-clearance-v1"
 
+# The current FAST wire reconstruction produces small edge bundles.  For those
+# bundles a bounded, vectorized direct evaluation is materially cheaper than
+# entering the Python BVH for every raw point.  The reference BVH remains the
+# oracle and is retained for larger bundles until measured evidence says the
+# crossover should move.
+# Benchmark evidence on the real S002 edge bundle shows bounded NumPy direct
+# evaluation remains substantially faster through 256 edges.  The BVH remains
+# the exact reference oracle and the cap is deliberately conservative for
+# larger/future bundles until another benchmark justifies extending it.
+DIRECT_EDGE_CAP = 256
+DIRECT_CHUNK_SIZE = 65_536
+
 VALID = "VALID"
 BLOCKED = "BLOCKED"
 NO_DISTANCE_READY_EDGE = "NO_DISTANCE_READY_EDGE"
@@ -187,10 +199,127 @@ def segment_wire_id_at(result: SpanWireResult, position: int) -> int:
     return int(result.w1_arrays["segment_wire_id"][position])
 
 
+def _edge_order_by_key(edge_bundle: Any) -> np.ndarray:
+    """Return edge positions in the frozen wire/segment/edge key order."""
+
+    return np.lexsort(
+        (
+            np.asarray(edge_bundle.polyline_edge_index, dtype=np.int64),
+            np.asarray(edge_bundle.segment_index, dtype=np.int64),
+            np.asarray(edge_bundle.wire_id, dtype=np.int64),
+        )
+    ).astype(np.int64, copy=False)
+
+
+def _direct_nearest_edges(
+    points: np.ndarray,
+    edge_bundle: Any,
+    tolerance: float,
+    *,
+    chunk_size: int = DIRECT_CHUNK_SIZE,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
+    """Evaluate exact point-to-edge distances in bounded NumPy batches.
+
+    This is not an approximation: every point is evaluated against every edge
+    using the same float64 projection formula as the reference implementation.
+    Edges are visited in canonical key order, which is equivalent to the
+    reference tie rule (minimum distance, then lexicographically smallest edge
+    key within the frozen tolerance).
+    """
+
+    xyz = np.asarray(points, dtype=np.float64)
+    if xyz.ndim != 2 or xyz.shape[1] != 3:
+        raise ValueError("points must have shape (N, 3)")
+    if type(chunk_size) is not int or chunk_size <= 0:
+        raise ValueError("chunk_size must be a positive integer")
+    edge_count = int(edge_bundle.edge_count)
+    if edge_count <= 0:
+        raise ValueError("at least one edge is required")
+    order = _edge_order_by_key(edge_bundle)
+    a_xyz = np.asarray(edge_bundle.a_xyz, dtype=np.float64)
+    b_xyz = np.asarray(edge_bundle.b_xyz, dtype=np.float64)
+    if a_xyz.shape != (edge_count, 3) or b_xyz.shape != (edge_count, 3):
+        raise ValueError("edge bundle coordinates are malformed")
+    edge_d = b_xyz - a_xyz
+    edge_denom = np.einsum("ij,ij->i", edge_d, edge_d)
+    edge_denom_safe = np.where(edge_denom == 0.0, 1.0, edge_denom)
+    selected_edge = np.empty(len(xyz), dtype=np.int64)
+    selected_distance = np.empty(len(xyz), dtype=np.float64)
+    selected_q = np.empty((len(xyz), 3), dtype=np.float64)
+    selected_t = np.empty(len(xyz), dtype=np.float64)
+    for start in range(0, len(xyz), chunk_size):
+        stop = min(len(xyz), start + chunk_size)
+        p = xyz[start:stop]
+        best_distance = np.full(len(p), np.inf, dtype=np.float64)
+        best_edge = np.full(len(p), -1, dtype=np.int64)
+        best_q = np.empty((len(p), 3), dtype=np.float64)
+        best_t = np.zeros(len(p), dtype=np.float64)
+        for edge_position in order:
+            edge_position = int(edge_position)
+            d = edge_d[edge_position]
+            if edge_denom[edge_position] == 0.0:
+                t = np.zeros(len(p), dtype=np.float64)
+            else:
+                t = np.einsum("ij,j->i", p - a_xyz[edge_position], d) / edge_denom_safe[
+                    edge_position
+                ]
+                np.clip(t, 0.0, 1.0, out=t)
+            q = a_xyz[edge_position] + t[:, None] * d
+            delta = p - q
+            distance = np.sqrt(np.einsum("ij,ij->i", delta, delta))
+            # The canonical edge order makes the lexicographically smaller key
+            # win all tolerance ties without a per-point Python reduction.
+            better = distance < best_distance - tolerance
+            better |= ~np.isfinite(best_distance)
+            if np.any(better):
+                best_distance[better] = distance[better]
+                best_edge[better] = edge_position
+                best_q[better] = q[better]
+                best_t[better] = t[better]
+        if np.any(best_edge < 0):  # pragma: no cover - guarded by edge_count
+            raise ValueError("direct exact backend found no edge")
+        selected_edge[start:stop] = best_edge
+        selected_distance[start:stop] = best_distance
+        selected_q[start:stop] = best_q
+        selected_t[start:stop] = best_t
+    return selected_edge, selected_distance, selected_q, selected_t, len(xyz) * edge_count
+
+
+def _nearest_edges(
+    points: np.ndarray,
+    bvh: SegmentEdgeBvh,
+    edge_bundle: Any,
+    tolerance: float,
+    *,
+    backend: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
+    """Dispatch one tree's exact distance search to the selected backend."""
+
+    if backend == "NUMPY_DIRECT":
+        return _direct_nearest_edges(points, edge_bundle, tolerance)
+    if backend != "PYTHON_BVH":
+        raise ValueError(f"unknown clearance backend: {backend}")
+    edge_positions = np.empty(len(points), dtype=np.int64)
+    distances = np.empty(len(points), dtype=np.float64)
+    nearest = np.empty((len(points), 3), dtype=np.float64)
+    parameters = np.empty(len(points), dtype=np.float64)
+    evaluated_total = 0
+    for position, point in enumerate(points):
+        edge_position, distance, q, t, evaluated = bvh.nearest_edge(point, tolerance)
+        edge_positions[position] = edge_position
+        distances[position] = distance
+        nearest[position] = q
+        parameters[position] = t
+        evaluated_total += evaluated
+    return edge_positions, distances, nearest, parameters, evaluated_total
+
+
 def run_span_tree_wire_clearance(
     reconciled: TreeReconciliationResult,
     wire_results: list[SpanWireResult],
     config: FastBaselineConfig,
+    *,
+    backend: str | None = None,
 ) -> SpanClearanceResult:
     """Compute full-resolution tree-wire clearance per span, fail closed.
 
@@ -252,6 +381,11 @@ def run_span_tree_wire_clearance(
         )
 
     bvh = SegmentEdgeBvh(edge_bundle, config.clearance_bvh_leaf_cap)
+    selected_backend = backend or (
+        "NUMPY_DIRECT" if edge_count <= DIRECT_EDGE_CAP else "PYTHON_BVH"
+    )
+    if selected_backend not in {"NUMPY_DIRECT", "PYTHON_BVH"}:
+        raise ValueError(f"unknown clearance backend: {selected_backend}")
     # Group final members by global tree id (deterministic).
     final_tree = np.asarray(reconciled.final_tree_id, dtype=np.int32)
     final_xyz = np.asarray(reconciled.final_xyz_local_m, dtype=np.float64)
@@ -268,12 +402,19 @@ def run_span_tree_wire_clearance(
         best_original = -1
         best_point: np.ndarray | None = None
         evaluated_total = 0
-        for position in rows:
+        points = final_xyz[rows]
+        edge_positions, distances, nearest_xyz, _parameters, evaluated_total = _nearest_edges(
+            points,
+            bvh,
+            edge_bundle,
+            config.clearance_tie_tolerance_m,
+            backend=selected_backend,
+        )
+        for local_position, position in enumerate(rows):
+            edge_position = int(edge_positions[local_position])
+            distance = float(distances[local_position])
+            q = nearest_xyz[local_position]
             point = final_xyz[position]
-            edge_position, distance, q, _t, evaluated = bvh.nearest_edge(
-                point, config.clearance_tie_tolerance_m
-            )
-            evaluated_total += evaluated
             original_index = int(final_original[position])
             key = (
                 int(edge_bundle.wire_id[edge_position]),
@@ -331,6 +472,10 @@ def run_span_tree_wire_clearance(
             "edge_count": edge_count,
             "tree_count": len(records),
             "evaluated_edge_total": sum(record.evaluated_edge_count for record in records),
+            "backend": selected_backend,
+            "chunk_size": DIRECT_CHUNK_SIZE if selected_backend == "NUMPY_DIRECT" else None,
+            "clearance_broad_phase_points": int(len(final_xyz)),
+            "clearance_exact_points": int(len(final_xyz)),
             "runtime_seconds": time.perf_counter() - started,
         },
     )

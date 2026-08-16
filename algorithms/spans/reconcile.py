@@ -135,6 +135,93 @@ def _adjacent_spans(
     return pairs
 
 
+def _reconcile_single_span(
+    outcome: SpanTreeOutcome,
+    config: FastBaselineConfig,
+    started: float,
+) -> TreeReconciliationResult:
+    """Reconcile one span without the general cross-span raw-row loop."""
+
+    raw_tree = np.asarray(outcome.raw_tree_id, dtype=np.int32)
+    valid = raw_tree >= 0
+    raw_original = np.asarray(outcome.raw_original_index, dtype=np.int64)[valid]
+    raw_xyz = np.asarray(outcome.raw_xyz_local_m, dtype=np.float64)[valid]
+    raw_tree = raw_tree[valid]
+    raw_core = np.asarray(outcome.in_core, dtype=bool)[valid]
+    order = np.argsort(raw_original, kind="stable")
+    sorted_original = raw_original[order]
+    unique = np.r_[True, sorted_original[1:] != sorted_original[:-1]]
+    keep = order[unique]
+    final_original = raw_original[keep]
+    final_xyz = raw_xyz[keep]
+    final_tree = raw_tree[keep]
+    final_core = raw_core[keep]
+    tree_ids = np.unique(final_tree)
+    tree_to_global = {int(tree_id): index for index, tree_id in enumerate(tree_ids)}
+    final_global = np.asarray(
+        [tree_to_global[int(tree_id)] for tree_id in final_tree], dtype=np.int32
+    )
+    span = outcome.span
+    records: list[GlobalTreeRecord] = []
+    review_ids: list[int] = []
+    for new_id, tree_id_value in enumerate(tree_ids):
+        tree_id = int(tree_id_value)
+        rows = final_tree == tree_id
+        total = int(np.count_nonzero(rows))
+        core_points = int(np.count_nonzero(rows & final_core))
+        primary_record = next(
+            (record for record in outcome.tree_records if record["tree_id"] == tree_id),
+            None,
+        )
+        apex_xy = (
+            tuple(primary_record["apex_xy_local_m"])
+            if primary_record and primary_record.get("apex_xy_local_m")
+            else (0.0, 0.0, 0.0)
+        )
+        height = float(primary_record["apex_height_m"]) if primary_record else 0.0
+        core_fraction = core_points / total if total else 0.0
+        review = core_fraction < 0.15 or total < config.tree_min_final_members
+        if review:
+            review_ids.append(new_id)
+        records.append(
+            GlobalTreeRecord(
+                global_tree_id=new_id,
+                line_id=span.line_id,
+                span_id=span.span_id,
+                span_name=span.span_name,
+                external_name=f"{span.line_name}-Span{span.span_id + 1:03d}-Tree{new_id + 1:03d}",
+                primary_span_tree_id=tree_id,
+                apex_xy_local_m=apex_xy,
+                apex_height_m=height,
+                full_resolution_point_count=total,
+                core_point_count=core_points,
+                halo_point_count=total - core_points,
+                core_fraction=core_fraction,
+                review=review,
+                merged_span_tree_keys=((0, tree_id),),
+            )
+        )
+    return TreeReconciliationResult(
+        global_tree_records=tuple(records),
+        final_original_index=final_original,
+        final_xyz_local_m=final_xyz,
+        final_tree_id=final_global,
+        review_tree_ids=tuple(review_ids),
+        span_tree_to_global={
+            (0, int(tree_id)): tree_to_global[int(tree_id)] for tree_id in tree_ids
+        },
+        diagnostics={
+            "schema": RECONCILE_SCHEMA,
+            "span_count": 1,
+            "global_tree_count": len(records),
+            "review_tree_count": len(review_ids),
+            "final_raw_member_count": int(len(final_original)),
+            "runtime_seconds": time.perf_counter() - started,
+            "single_span_fast_path": True,
+        },
+    )
+
+
 def reconcile_trees(
     outcomes: list[SpanTreeOutcome],
     config: FastBaselineConfig,
@@ -145,6 +232,8 @@ def reconcile_trees(
 
     del origin_xyz  # reserved for future span-specific thresholds
     started = time.perf_counter()
+    if len(outcomes) == 1:
+        return _reconcile_single_span(outcomes[0], config, started)
     members_by_span = [_span_tree_members(outcome) for outcome in outcomes]
     union_find = _UnionFind()
 
@@ -178,15 +267,21 @@ def reconcile_trees(
             span_tree_to_global[(span_index, tree_id)] = components[root]
 
     # Choose a primary per-span tree per global tree (largest core membership).
-    # global -> (core_count, line_id, span_id, per_span_tree_id)
-    core_count: dict[int, tuple[int, int, int, int]] = {}
+    # global -> (core_count, line_id, span_id, span_index, per_span_tree_id)
+    core_count: dict[int, tuple[int, int, int, int, int]] = {}
     for span_index, outcome in enumerate(outcomes):
         members = members_by_span[span_index]
         for tree_id in members:
             rows = np.flatnonzero(outcome.raw_tree_id == tree_id)
             core = int(np.count_nonzero(outcome.in_core[rows]))
             global_id = span_tree_to_global[(span_index, tree_id)]
-            candidate = (core, outcome.span.line_id, outcome.span.span_id, tree_id)
+            candidate = (
+                core,
+                outcome.span.line_id,
+                outcome.span.span_id,
+                span_index,
+                tree_id,
+            )
             current = core_count.get(global_id)
             if current is None or candidate > current:
                 core_count[global_id] = candidate
@@ -259,7 +354,7 @@ def reconcile_trees(
         key=lambda global_id: (
             core_count[global_id][1],
             core_count[global_id][2],
-            core_count[global_id][3],
+            core_count[global_id][4],
         ),
     )
     # Remap to dense sequential global ids in that deterministic order.
@@ -276,8 +371,8 @@ def reconcile_trees(
     records: list[GlobalTreeRecord] = []
     review_ids: list[int] = []
     for new_id, old_id in enumerate(ordered_globals):
-        _core, line_id, span_id, primary_tree = core_count[old_id]
-        outcome = outcomes[span_id]
+        _core, line_id, span_id, span_index, primary_tree = core_count[old_id]
+        outcome = outcomes[span_index]
         span = outcome.span
         rows = np.flatnonzero(final_tree_remapped == new_id)
         total = int(len(rows))

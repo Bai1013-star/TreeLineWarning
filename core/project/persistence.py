@@ -319,6 +319,23 @@ def _object(value: Any, name: str, fields: set[str]) -> dict[str, Any]:
     return dict(value)
 
 
+def _object_with_optional(
+    value: Any, name: str, required_fields: set[str], optional_fields: set[str]
+) -> dict[str, Any]:
+    """Strict object decoding with explicitly version-tolerant optional fields."""
+
+    if not isinstance(value, Mapping):
+        raise PersistenceError(f"{name} must be a JSON object")
+    actual = set(value)
+    unknown = sorted(actual - required_fields - optional_fields)
+    if unknown:
+        raise PersistenceError(f"{name} has unknown field(s): {', '.join(unknown)}")
+    missing = sorted(required_fields - actual)
+    if missing:
+        raise PersistenceError(f"{name} is missing required field(s): {', '.join(missing)}")
+    return dict(value)
+
+
 def _sequence(value: Any, name: str) -> list[Any]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         raise PersistenceError(f"{name} must be a JSON array")
@@ -788,7 +805,7 @@ def _decode_span_analysis(value: Any) -> SpanAnalysis:
 
 
 def _decode_span(value: Any) -> SpanContract:
-    data = _object(
+    data = _object_with_optional(
         value,
         "SpanContract",
         {
@@ -806,6 +823,7 @@ def _decode_span(value: Any) -> SpanContract:
             "artifact_index_reference",
             "prediction",
         },
+        {"group_id", "within_group_order"},
     )
     try:
         return SpanContract(
@@ -826,6 +844,8 @@ def _decode_span(value: Any) -> SpanContract:
                 else None
             ),
             prediction=_decode_prediction_capability(data["prediction"]),
+            group_id=data.get("group_id"),
+            within_group_order=data.get("within_group_order"),
         )
     except (TypeError, ValueError) as exc:
         raise PersistenceError(f"invalid SpanContract: {exc}") from exc
