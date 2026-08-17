@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from core.config.fast_baseline import FastBaselineConfig
 from core.contracts.project import AnalysisStatus, ArtifactReference
 from core.project.run_index import (
     attach_span_artifact_index,
@@ -32,6 +33,10 @@ from algorithms.spans.project_adapter import (
     prepare_source_shared,
     publish_terminal_artifact_index,
     run_canonical_span_science,
+)
+from algorithms.spans.tree_identity import (
+    finalize_tree_identity_terminal,
+    recover_tree_identity_terminal_transaction,
 )
 
 _SPAN_LOCKS: dict[tuple[str, str], threading.Lock] = {}
@@ -114,6 +119,21 @@ class ProjectSpanOrchestrator:
         try:
             self.synchronize(session)
             reconcile_run_staleness(session)
+
+            def _run_complete(candidate_run_id: str) -> bool:
+                return any(
+                    entry.run_id == candidate_run_id
+                    and entry.status is AnalysisStatus.COMPLETE
+                    for entry in session.run_index.entries
+                )
+
+            # A crash may leave a durable identity transaction after the run
+            # state was committed.  Resolve that before admitting another run.
+            recover_tree_identity_terminal_transaction(
+                session.project_root / "tree_identity_registry.json",
+                FastBaselineConfig(),
+                is_run_complete=_run_complete,
+            )
             span = self._span(session, span_id)
             if (
                 not force_new_run
@@ -187,11 +207,34 @@ class ProjectSpanOrchestrator:
                 result = run_canonical_span_science(
                     input_data, preparation, output_root, executor=self.science_executor
                 )
-                artifact_reference = publish_terminal_artifact_index(
-                    session.project_root, input_data, preparation, result, output_root
-                )
-                attach_span_artifact_index(session, span_id, artifact_reference)
-                complete_run(session, run_id)
+                if result.identity_terminal_preparation is not None:
+                    if result.identity_terminal_publish is None:
+                        raise ScienceAdapterError("TREE_IDENTITY_TERMINAL_HANDOFF_INVALID")
+
+                    def _publish_terminal_identity(assigned):
+                        terminal_result = result.identity_terminal_publish(assigned)
+                        artifact_reference = publish_terminal_artifact_index(
+                            session.project_root,
+                            input_data,
+                            preparation,
+                            terminal_result,
+                            output_root,
+                        )
+                        attach_span_artifact_index(session, span_id, artifact_reference)
+                        complete_run(session, run_id)
+                        return terminal_result
+
+                    _assigned, result = finalize_tree_identity_terminal(
+                        result.identity_terminal_preparation,
+                        publish_terminal=_publish_terminal_identity,
+                        is_run_complete=_run_complete,
+                    )
+                else:
+                    artifact_reference = publish_terminal_artifact_index(
+                        session.project_root, input_data, preparation, result, output_root
+                    )
+                    attach_span_artifact_index(session, span_id, artifact_reference)
+                    complete_run(session, run_id)
                 self.rebuild_project_result_index(session)
                 return SpanRunOutcome(
                     span_id,
@@ -205,6 +248,10 @@ class ProjectSpanOrchestrator:
                     },
                 )
             except Exception as exc:  # terminal state must truthfully remain FAILED
+                if _run_complete(run_id):
+                    # A journal remains available for deterministic recovery;
+                    # never attempt an illegal COMPLETE -> FAILED transition.
+                    raise
                 _write_failure(
                     _safe_failure_path(session.project_root, span.group_id, span_id, run_id),
                     exc,

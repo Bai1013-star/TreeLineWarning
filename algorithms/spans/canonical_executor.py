@@ -36,8 +36,8 @@ from algorithms.spans.role_tiles import (
     RoleSpecificTileCache,
     RoleTileCacheError,
 )
+from algorithms.spans.tree_identity import prepare_tree_identity
 from algorithms.spans.tree_runner import run_span_tree_pipeline
-from algorithms.spans.tree_identity import finalize_tree_identity, prepare_tree_identity
 from algorithms.spans.wire import run_span_wire_pipeline
 
 _DISPLAY_ID_RE = re.compile(r"^[A-Z](\d+)$")
@@ -314,29 +314,25 @@ def run_tracked_canonical_span_science(
     )
     tree_runtime = time.perf_counter() - tree_started
 
+    clearance_started = time.perf_counter()
+    clearance = run_span_tree_wire_clearance(reconciled, [wire_result], config)
+    clearance_runtime = time.perf_counter() - clearance_started
+
     def _publish_identity_terminal(assigned):
-        clearance_started = time.perf_counter()
-        clearance = run_span_tree_wire_clearance(assigned, [wire_result], config)
-        clearance_runtime = time.perf_counter() - clearance_started
+        terminal_clearance = run_span_tree_wire_clearance(assigned, [wire_result], config)
         _write_json(output_root / "reconciliation.json", reconciliation_to_dict(assigned))
         _write_json(
             output_root / "clearance.json",
             {
                 "schema": "treeline-span-clearance-result-v1",
-                "status": clearance.status,
-                "global_minimum_clearance_m": clearance.global_minimum_clearance_m,
-                "records": [record.to_dict() for record in clearance.records],
-                "diagnostics": dict(clearance.diagnostics),
+                "status": terminal_clearance.status,
+                "global_minimum_clearance_m": terminal_clearance.global_minimum_clearance_m,
+                "records": [record.to_dict() for record in terminal_clearance.records],
+                "diagnostics": dict(terminal_clearance.diagnostics),
             },
         )
-        return clearance, clearance_runtime
+        return result
 
-    reconciled, published = finalize_tree_identity(
-        identity_preparation, publish=_publish_identity_terminal
-    )
-    if published is None:  # pragma: no cover - callback always returns a value
-        raise ScienceAdapterError("TREE_IDENTITY_FINALIZATION_NOT_PUBLISHED")
-    clearance, clearance_runtime = published
     threshold = RISK_THRESHOLD_M
     below_threshold = sum(
         record.minimum_clearance_m is not None
@@ -351,7 +347,7 @@ def run_tracked_canonical_span_science(
             record.status == "NO_DISTANCE_READY_EDGE" for record in clearance.records
         ),
     }
-    return SpanScienceResult(
+    result = SpanScienceResult(
         tree_count=reconciled.final_tree_count,
         minimum_clearance_m=clearance.global_minimum_clearance_m,
         risk_threshold_m=threshold,
@@ -416,7 +412,10 @@ def run_tracked_canonical_span_science(
                 ),
             },
         },
+        identity_terminal_preparation=identity_preparation,
+        identity_terminal_publish=_publish_identity_terminal,
     )
+    return result
 
 
 __all__ = ["run_tracked_canonical_span_science"]

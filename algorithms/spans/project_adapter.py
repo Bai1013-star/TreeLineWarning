@@ -281,6 +281,10 @@ class SpanScienceResult:
     risk_counts: Mapping[str, int]
     artifact_files: Mapping[str, str] = field(default_factory=dict)
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
+    # Runtime-only terminal identity handoff.  It is deliberately absent from
+    # serialized artifacts so tentative IDs cannot be published as canonical.
+    identity_terminal_preparation: Any | None = None
+    identity_terminal_publish: Callable[[Any], SpanScienceResult] | None = None
 
 
 ScienceExecutor = Callable[[SpanAnalysisInput, SourceSharedPreparation, Path], SpanScienceResult]

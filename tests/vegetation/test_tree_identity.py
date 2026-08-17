@@ -14,7 +14,9 @@ from algorithms.spans.tree_identity import (
     TreeIdentityError,
     assign_persistent_tree_ids,
     finalize_tree_identity,
+    finalize_tree_identity_terminal,
     prepare_tree_identity,
+    recover_tree_identity_terminal_transaction,
 )
 from core.config.fast_baseline import default_fast_baseline_config
 
@@ -228,6 +230,144 @@ def test_corrupt_registry_fails_closed(tmp_path: Path, corrupt: str, message: st
     with pytest.raises(TreeIdentityError, match=message):
         _assign(tmp_path, _result([[1, 2, 3]]), "run-a")
     assert registry_path.read_text("utf-8") == corrupt
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        '{"schema":"treeline-persistent-tree-registry-v1",'
+        '"schema":"treeline-persistent-tree-registry-v1",'
+        '"next_sequence_by_group":{},"entities":{}}',
+        '{"schema":"treeline-persistent-tree-registry-v1",'
+        '"next_sequence_by_group":{},"entities":{"G002-T001":{},"G002-T001":{}}}',
+        '{"schema":"treeline-persistent-tree-registry-v1",'
+        '"next_sequence_by_group":{},"entities":{"G002-T001":'
+        '{"persistent_tree_id":"G002-T001","group_id":"G002",'
+        '"source_key":"same-source","lineage":[{"event":"SPLIT_FROM",'
+        '"event":"SPLIT_FROM","persistent_tree_id":"G002-T001"}]}}}',
+    ],
+)
+def test_duplicate_json_keys_fail_closed_without_registry_mutation(
+    tmp_path: Path, corrupt: str
+) -> None:
+    registry_path = tmp_path / "tree_identity_registry.json"
+    registry_path.write_text(corrupt, "utf-8")
+    before = registry_path.read_bytes()
+
+    with pytest.raises(TreeIdentityError, match="DUPLICATE_JSON_KEY"):
+        _assign(tmp_path, _result([[1, 2, 3]]), "run-a")
+
+    assert registry_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("failed_terminal_stage", ["index", "attachment", "completion"])
+def test_terminal_failure_does_not_consume_identity_sequence(
+    tmp_path: Path, failed_terminal_stage: str
+) -> None:
+    _assign(tmp_path, _result([[1, 2, 3]]), "run-a")
+    registry_path, membership_path = _paths(tmp_path, "run-b")
+    prepared = prepare_tree_identity(
+        _result([[8, 9, 10]]),
+        default_fast_baseline_config(),
+        registry_path=registry_path,
+        membership_path=membership_path,
+        group_id="G002",
+        source_key="same-source",
+        run_id="run-b",
+    )
+    before = registry_path.read_bytes()
+
+    def fail_terminal(_assigned):
+        raise RuntimeError(f"{failed_terminal_stage} failure")
+
+    with pytest.raises(RuntimeError, match=failed_terminal_stage):
+        finalize_tree_identity_terminal(
+            prepared,
+            publish_terminal=fail_terminal,
+            is_run_complete=lambda _run_id: False,
+        )
+    assert registry_path.read_bytes() == before
+    assert not (tmp_path / "tree_identity_registry.json.pending.json").exists()
+
+    completed = {"value": False}
+
+    def complete_terminal(_assigned):
+        completed["value"] = True
+        return "complete"
+
+    assigned, published = finalize_tree_identity_terminal(
+        prepared,
+        publish_terminal=complete_terminal,
+        is_run_complete=lambda _run_id: completed["value"],
+    )
+    assert published == "complete"
+    assert assigned.global_tree_records[0].persistent_tree_id == "G002-T002"
+
+
+def test_terminal_transaction_recovery_rolls_back_incomplete_and_rolls_forward_complete(
+    tmp_path: Path,
+) -> None:
+    registry_path, membership_path = _paths(tmp_path, "run-a")
+    prepared = prepare_tree_identity(
+        _result([[1, 2, 3]]),
+        default_fast_baseline_config(),
+        registry_path=registry_path,
+        membership_path=membership_path,
+        group_id="G002",
+        source_key="same-source",
+        run_id="run-a",
+    )
+    baseline = tree_identity._read_registry(registry_path)
+    proposed = tree_identity.deepcopy(baseline)
+    assigned = tree_identity._assign_from_registry(
+        prepared.result,
+        prepared.config,
+        proposed,
+        registry_path=registry_path,
+        membership_path=membership_path,
+        group_id=prepared.group_id,
+        source_key=prepared.source_key,
+        run_id=prepared.run_id,
+    )
+    assert assigned.global_tree_records[0].persistent_tree_id == "G002-T001"
+    journal = tree_identity._transaction_path(registry_path)
+    tree_identity._write_json_atomic(
+        journal,
+        {
+            "schema": tree_identity.TREE_IDENTITY_TRANSACTION_SCHEMA,
+            "run_id": "run-a",
+            "baseline_registry_digest": tree_identity._registry_digest(baseline),
+            "baseline_registry": baseline,
+            "proposed_registry_digest": tree_identity._registry_digest(proposed),
+            "proposed_registry": proposed,
+        },
+    )
+    assert recover_tree_identity_terminal_transaction(
+        registry_path,
+        prepared.config,
+        is_run_complete=lambda _run_id: False,
+    )
+    assert tree_identity._read_registry(registry_path) == baseline
+    assert not journal.exists()
+
+    tree_identity._write_json_atomic(
+        journal,
+        {
+            "schema": tree_identity.TREE_IDENTITY_TRANSACTION_SCHEMA,
+            "run_id": "run-a",
+            "baseline_registry_digest": tree_identity._registry_digest(baseline),
+            "baseline_registry": baseline,
+            "proposed_registry_digest": tree_identity._registry_digest(proposed),
+            "proposed_registry": proposed,
+        },
+    )
+    assert recover_tree_identity_terminal_transaction(
+        registry_path,
+        prepared.config,
+        is_run_complete=lambda _run_id: True,
+    )
+    assert _registry(tmp_path) == proposed
+    assert not journal.exists()
 
 
 def test_two_processes_allocate_unique_ids_without_lost_update(tmp_path: Path) -> None:
