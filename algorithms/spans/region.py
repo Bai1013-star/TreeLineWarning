@@ -80,6 +80,68 @@ def subset_raw_region(
         raise
 
 
+def subset_raw_region_excluding_source_indices(
+    region: RawRegion,
+    excluded_source_indices: np.ndarray,
+    output_root: Any,
+    *,
+    chunk_size: int = _RAW_REGION_CHUNK,
+) -> RawRegion:
+    """Stream *region* and drop rows whose exact source index is excluded.
+
+    Used to subtract ONLY the exact FULL_RESOLUTION source identity of final
+    confirmed conductor members from the Span-local vegetation tree input.
+    Broad wire candidate/search points are never excluded here.
+    """
+    excluded = np.unique(np.asarray(excluded_source_indices, dtype=np.int64))
+    if excluded.ndim != 1 or np.any(excluded < 0):
+        raise FastResearchError("SPAN_EXCLUDED_SOURCE_INDEX_INVALID")
+    if len(excluded) == 0:
+        return region
+    output_root = Path(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+    writer = _RawRegionWriter(
+        output_root, origin_xyz=tuple(float(value) for value in region.origin_xyz)
+    )
+    xyz = region.xyz()
+    original_index = region.original_index()
+    classification = region.classification()
+    kept = 0
+    try:
+        for start in range(0, region.count, chunk_size):
+            stop = min(region.count, start + chunk_size)
+            indices = np.asarray(original_index[start:stop], dtype=np.int64)
+            positions = np.searchsorted(excluded, indices)
+            present = positions < len(excluded)
+            present &= excluded[np.minimum(positions, len(excluded) - 1)] == indices
+            keep = ~present
+            if np.any(keep):
+                kept += int(np.count_nonzero(keep))
+                writer.append(
+                    np.asarray(xyz[start:stop], dtype=np.float64)[keep],
+                    indices[keep],
+                    np.asarray(classification[start:stop], dtype=np.uint8)[keep],
+                )
+        try:
+            subset = writer.close()
+        except FastResearchError:
+            return RawRegion(
+                xyz_local_m_path=str(output_root / "xyz_local.bin"),
+                original_index_path=str(output_root / "original_index.bin"),
+                classification_path=str(output_root / "classification.bin"),
+                count=0,
+                bounds_min_xyz=tuple(float(value) for value in region.bounds_min_xyz),
+                bounds_max_xyz=tuple(float(value) for value in region.bounds_max_xyz),
+                origin_xyz=tuple(float(value) for value in region.origin_xyz),
+            )
+        if subset.count != kept:
+            raise FastResearchError("SPAN_EXCLUSION_SUBSET_COUNT_MISMATCH")
+        return subset
+    except Exception:
+        writer.abort()
+        raise
+
+
 @dataclass(frozen=True, slots=True)
 class SpanRegionSubset:
     """A span-local raw subset plus the scene-local origin it shares."""

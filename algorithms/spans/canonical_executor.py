@@ -23,6 +23,7 @@ from algorithms.spans.project_adapter import (
     PROJECT_SPAN_CORE_HALF_WIDTH_M,
     PROJECT_SPAN_GEOMETRY_CONFIGURATION_DIGEST,
     PROJECT_SPAN_LONGITUDINAL_HALO_M,
+    PROJECT_SPAN_VEGETATION_ROLE_CONFIGURATION_DIGEST,
     RISK_THRESHOLD_M,
     ScienceAdapterError,
     SourceSharedPreparation,
@@ -30,7 +31,13 @@ from algorithms.spans.project_adapter import (
     SpanScienceResult,
 )
 from algorithms.spans.reconcile import reconcile_trees, reconciliation_to_dict
-from algorithms.spans.region import SpanLocalFrame, SpanRegionSpec, subset_raw_tile_cache_oriented
+from algorithms.spans.region import (
+    SpanLocalFrame,
+    SpanRegionQueryResult,
+    SpanRegionSpec,
+    subset_raw_region_excluding_source_indices,
+    subset_raw_tile_cache_oriented,
+)
 from algorithms.spans.role_tiles import (
     ROLE_TILE_CELL_SIZE_M,
     RoleSpecificTileCache,
@@ -179,11 +186,14 @@ def _tile_cache_from_preparation(
         return None
     root = _resolve_directory_reference(project_root, reference)
     try:
-        config_digest = (
-            FastBaselineConfig().computed_digest()
-            if role == "wire"
-            else PROJECT_SPAN_GEOMETRY_CONFIGURATION_DIGEST
-        )
+        if role == "wire":
+            config_digest = FastBaselineConfig().computed_digest()
+        elif role == "vegetation":
+            # HIGH-RECALL vegetation admission: no broad wire-role exclusion is
+            # bound at the source-shared role-index level.
+            config_digest = PROJECT_SPAN_VEGETATION_ROLE_CONFIGURATION_DIGEST
+        else:  # pragma: no cover - only wire/vegetation are role caches
+            config_digest = PROJECT_SPAN_GEOMETRY_CONFIGURATION_DIGEST
         return RoleSpecificTileCache.load(
             root,
             role=role,
@@ -216,20 +226,17 @@ def run_tracked_canonical_span_science(
     wire_tile_cache = _tile_cache_from_preparation(
         project_root, payload, input_data, "wire"
     )
+    # Vegetation is HIGH RECALL: the source-shared vegetation role index is
+    # built WITHOUT any wire-role source exclusion.  Broad wire candidate /
+    # search points may overlap vegetation candidates.  Only the EXACT final
+    # confirmed conductor member source indices are subtracted per Span from the
+    # Span-local vegetation tree input (see below).
     vegetation_tile_cache = _tile_cache_from_preparation(
         project_root,
         payload,
         input_data,
         "vegetation",
-        expected_source_index_exclusion=(
-            {
-                "role": "wire",
-                "source_index_digest": wire_tile_cache.metadata.get("source_index_digest"),
-            }
-            if wire_tile_cache is not None
-            and wire_tile_cache.metadata.get("source_index_digest")
-            else None
-        ),
+        expected_source_index_exclusion=None,
     )
     if wire_tile_cache is None or vegetation_tile_cache is None:
         raise ScienceAdapterError("SPAN_LOCAL_ROLE_TILE_INDEX_NOT_BOUND")
@@ -277,10 +284,9 @@ def run_tracked_canonical_span_science(
         output_root / "regions" / "vegetation",
     )
     vegetation_query_runtime = time.perf_counter() - vegetation_query_started
-    vegetation_exclusion = vegetation_tile_cache.metadata.get("source_index_exclusion")
-    if not isinstance(vegetation_exclusion, dict):
-        raise ScienceAdapterError("SOURCE_SPATIAL_INDEX_EXCLUSION_NOT_VALIDATED")
-    wire_vegetation_source_overlap_in_tree_input = 0
+    # HIGH-RECALL vegetation: the role index carries no wire exclusion, so the
+    # Span-local vegetation query may include points adjacent to the conductor.
+    vegetation_before_confirmed_wire_exclusion = int(vegetation_query.region.count)
     wire_started = time.perf_counter()
     wire_result = run_span_wire_pipeline(
         span,
@@ -288,8 +294,79 @@ def run_tracked_canonical_span_science(
         config,
         origin_xyz=tuple(float(item) for item in origin_value),
         output_dir=output_root / "wire",
+        authoritative_source_point_count=input_data.source_point_count,
     )
     wire_runtime = time.perf_counter() - wire_started
+    # Subtract ONLY the exact FINAL confirmed conductor member source indices
+    # from the Span-local vegetation tree input.  Broad wire candidate / search
+    # points that are not exact confirmed conductor members stay in vegetation.
+    confirmed_wire_indices = np.asarray(
+        wire_result.confirmed_member_source_index, dtype=np.int64
+    )
+    if confirmed_wire_indices.ndim != 1 or np.any(confirmed_wire_indices < 0):
+        raise ScienceAdapterError("CONFIRMED_CONDUCTOR_SOURCE_IDENTITY_INVALID")
+    if len(confirmed_wire_indices) != len(np.unique(confirmed_wire_indices)):
+        raise ScienceAdapterError("CONFIRMED_CONDUCTOR_SOURCE_IDENTITY_DUPLICATE")
+    vegetation_source_index_before = np.asarray(
+        vegetation_query.region.original_index(), dtype=np.int64
+    )
+    if len(vegetation_source_index_before) != len(np.unique(vegetation_source_index_before)):
+        raise ScienceAdapterError("TREE_INPUT_SOURCE_IDENTITY_DUPLICATE")
+    confirmed_wire_excluded_count = int(
+        np.intersect1d(
+            confirmed_wire_indices, vegetation_source_index_before, assume_unique=True
+        ).size
+    )
+    if len(confirmed_wire_indices):
+        filtered_vegetation_region = subset_raw_region_excluding_source_indices(
+            vegetation_query.region,
+            confirmed_wire_indices,
+            output_root / "regions" / "vegetation_after_confirmed_wire",
+        )
+        confirmed_wire_members_removed = int(
+            vegetation_query.region.count - filtered_vegetation_region.count
+        )
+        vegetation_query = SpanRegionQueryResult(
+            region=filtered_vegetation_region,
+            aabb_query_points=vegetation_query.aabb_query_points,
+            oriented_region_points=int(filtered_vegetation_region.count),
+            tiles=vegetation_query.tiles,
+            total_tiles=vegetation_query.total_tiles,
+            intersecting_aabb_tiles=vegetation_query.intersecting_aabb_tiles,
+            opened_tiles=vegetation_query.opened_tiles,
+            points_read=vegetation_query.points_read,
+        )
+    else:
+        confirmed_wire_members_removed = 0
+    vegetation_after_confirmed_wire_exclusion = int(vegetation_query.region.count)
+    wire_vegetation_source_overlap_in_tree_input = int(
+        np.intersect1d(
+            confirmed_wire_indices,
+            vegetation_query.region.original_index(),
+            assume_unique=False,
+        ).size
+    )
+    # This accounting covers the boundary immediately before the frozen tree
+    # core.  There is deliberately no broad wire, tile, or proximity exclusion:
+    # the only subtraction is a source-identity match with FINAL CONFIRMED
+    # conductors.  Make any routing regression fail closed before tree science.
+    tree_input_accounting = {
+        "high_recall_candidate_count": vegetation_before_confirmed_wire_exclusion,
+        "confirmed_wire_excluded_count": confirmed_wire_excluded_count,
+        "other_excluded_count": 0,
+        "final_tree_input_count": vegetation_after_confirmed_wire_exclusion,
+    }
+    if confirmed_wire_members_removed != confirmed_wire_excluded_count:
+        raise ScienceAdapterError("CONFIRMED_CONDUCTOR_EXCLUSION_ACCOUNTING_MISMATCH")
+    if (
+        tree_input_accounting["high_recall_candidate_count"]
+        != tree_input_accounting["confirmed_wire_excluded_count"]
+        + tree_input_accounting["other_excluded_count"]
+        + tree_input_accounting["final_tree_input_count"]
+    ):
+        raise ScienceAdapterError("TREE_INPUT_SOURCE_ACCOUNTING_MISMATCH")
+    if wire_vegetation_source_overlap_in_tree_input:
+        raise ScienceAdapterError("CONFIRMED_CONDUCTOR_REACHED_TREE_INPUT")
     tree_started = time.perf_counter()
     tree_outcome = run_span_tree_pipeline(
         span,
@@ -398,6 +475,14 @@ def run_tracked_canonical_span_science(
                 "vegetation_search_region_points": int(
                     vegetation_query.oriented_region_points
                 ),
+                "vegetation_before_confirmed_wire_exclusion": int(
+                    vegetation_before_confirmed_wire_exclusion
+                ),
+                "confirmed_conductor_member_count": int(len(confirmed_wire_indices)),
+                "confirmed_wire_members_removed": int(confirmed_wire_members_removed),
+                "vegetation_after_confirmed_wire_exclusion": int(
+                    vegetation_after_confirmed_wire_exclusion
+                ),
                 "vegetation_candidates": int(tree_outcome.fine_representative_count),
                 "full_resolution_vegetation_points": int(
                     vegetation_query.oriented_region_points
@@ -408,8 +493,9 @@ def run_tracked_canonical_span_science(
                     wire_vegetation_source_overlap_in_tree_input
                 ),
                 "wire_vegetation_source_overlap_validation": (
-                    "EXACT_SOURCE_INDEX_EXCLUSION_CONTRACT_VALIDATED"
+                    "EXACT_CONFIRMED_CONDUCTOR_SOURCE_EXCLUSION_VALIDATED"
                 ),
+                "tree_input_source_accounting": tree_input_accounting,
             },
         },
         identity_terminal_preparation=identity_preparation,

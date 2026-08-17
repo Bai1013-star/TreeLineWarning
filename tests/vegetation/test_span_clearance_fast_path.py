@@ -759,7 +759,11 @@ def test_load_memoizes_actual_identity_validation_and_invalidates_on_content_cha
     assert calls == 3
 
 
-def test_vegetation_role_index_excludes_exact_wire_source_indices(tmp_path: Path):
+def test_vegetation_role_index_is_high_recall_no_broad_wire_exclusion(tmp_path: Path):
+    """Vegetation admission is HIGH RECALL: no broad wire-role exclusion at the
+    role-index level.  Points that are wire candidates / inside the wire search
+    corridor MUST stay in vegetation; only exact final confirmed conductor
+    members are subtracted later, per Span, from the tree input."""
     points = np.asarray(
         ((0.0, 0.0, 1.0), (1.0, 0.0, 1.0), (2.0, 0.0, 1.0), (3.0, 0.0, 1.0)),
         dtype=np.float32,
@@ -779,6 +783,22 @@ def test_vegetation_role_index_excludes_exact_wire_source_indices(tmp_path: Path
         "source_content_identity_digest": "1" * 64,
         "source_identity_record_digest": "2" * 64,
     }
+    # OLD semantics (vegetation carrying a broad wire-role exclusion) must fail.
+    with pytest.raises(ValueError):
+        RoleSpecificTileCache.prepare_from_raw_region(
+            region,
+            tmp_path / "vegetation-role-tile-index-old",
+            role="vegetation",
+            source_identity=identity,
+            config_digest="vegetation-config",
+            source_point_count=24,
+            cell_size_m=5.0,
+            excluded_source_indices=np.asarray((21, 23), dtype=np.int64),
+            exclusion_role="wire",
+            exclusion_source_index_digest="3" * 64,
+        )
+    # NEW semantics: high-recall vegetation keeps every point (wire candidates
+    # and points adjacent to the conductor are allowed to overlap vegetation).
     cache = RoleSpecificTileCache.prepare_from_raw_region(
         region,
         tmp_path / "vegetation-role-tile-index",
@@ -787,9 +807,6 @@ def test_vegetation_role_index_excludes_exact_wire_source_indices(tmp_path: Path
         config_digest="vegetation-config",
         source_point_count=24,
         cell_size_m=5.0,
-        excluded_source_indices=np.asarray((21, 23), dtype=np.int64),
-        exclusion_role="wire",
-        exclusion_source_index_digest="3" * 64,
     )
     loaded = RoleSpecificTileCache.load(
         cache.root,
@@ -797,10 +814,6 @@ def test_vegetation_role_index_excludes_exact_wire_source_indices(tmp_path: Path
         source_identity=identity,
         config_digest="vegetation-config",
         source_point_count=24,
-        expected_source_index_exclusion={
-            "role": "wire",
-            "source_index_digest": "3" * 64,
-        },
     )
     result = loaded.query(
         (1.0, 0.0, 1.0),
@@ -808,8 +821,11 @@ def test_vegetation_role_index_excludes_exact_wire_source_indices(tmp_path: Path
         z_context_below_m=1.0,
         z_context_above_m=1.0,
     )
-    np.testing.assert_array_equal(result.source_index, [20, 22])
-    assert loaded.metadata["totals"]["point_count"] == 2
+    # All four points (including the former "wire candidate" source indices 21,23)
+    # remain in the HIGH-RECALL vegetation role index.
+    np.testing.assert_array_equal(np.sort(result.source_index), [20, 21, 22, 23])
+    assert loaded.metadata["totals"]["point_count"] == 4
+    assert loaded.metadata["admission_semantics"] == "HIGH_RECALL"
 
 
 def test_long_line_role_indexes_route_wire_and_vegetation_locally(tmp_path: Path):

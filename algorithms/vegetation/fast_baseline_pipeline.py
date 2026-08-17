@@ -668,6 +668,7 @@ def _stage_span_wires(
                 cfg,
                 origin_xyz=origin_xyz,
                 output_dir=span_dir,
+                authoritative_source_point_count=working.source_point_count,
             )
             payload = {
                 "strand_count": wire_result.strand_count,

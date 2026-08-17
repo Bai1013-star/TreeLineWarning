@@ -37,6 +37,18 @@ PROJECT_SPAN_GEOMETRY_CONFIGURATION_DIGEST = canonical_digest(
         "z_top_margin_m": 5.0,
     }
 )
+# Vegetation role admission digest: HIGH RECALL (no broad wire-role exclusion).
+# The OLD vegetation role index was built with the span-geometry digest AND the
+# entire wire-role source set excluded, which systematically dropped
+# conductor-adjacent vegetation.  This new digest identity makes stale caches
+# fail closed under the corrected admission semantics.
+PROJECT_SPAN_VEGETATION_ROLE_CONFIGURATION_DIGEST = canonical_digest(
+    {
+        "adapter": "project-span-vegetation-role-v2",
+        "geometry": PROJECT_SPAN_GEOMETRY_CONFIGURATION_DIGEST,
+        "admission": "HIGH_RECALL_NO_BROAD_WIRE_EXCLUSION",
+    }
+)
 RISK_POLICY = "exact-tree-wire"
 RISK_THRESHOLD_M = 2.0
 RISK_CONFIGURATION_DIGEST = canonical_digest(

@@ -346,6 +346,13 @@ class RoleSpecificTileCache:
             raise ValueError("cell_size_m must be positive")
         if type(chunk_size) is not int or chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
+        # Vegetation admission is HIGH RECALL: no broad wire candidate/search
+        # region may be excluded at the source-shared role-index level.  Only the
+        # exact final confirmed conductor members are subtracted later, per Span.
+        if role == "vegetation" and excluded_source_indices is not None:
+            raise ValueError(
+                "vegetation role index must not carry a broad wire source exclusion"
+            )
         if excluded_source_indices is None:
             if exclusion_role is not None or exclusion_source_index_digest is not None:
                 raise ValueError("exclusion metadata requires excluded source indices")
@@ -470,6 +477,9 @@ class RoleSpecificTileCache:
                 }
             },
             "preparation_runtime_seconds": time.perf_counter() - started,
+            # Semantic identity of the role admission rule.  VEGETATION is HIGH
+            # RECALL (no broad wire exclusion); WIRE is the reconstruction role.
+            "admission_semantics": "HIGH_RECALL" if role == "vegetation" else "WIRE_ROLE",
         }
         if exclusion is not None:
             metadata["source_index_exclusion"] = {
@@ -544,6 +554,15 @@ class RoleSpecificTileCache:
                 or len(source_exclusion.get("reference_source_index_digest")) != 64
             ):
                 raise RoleTileCacheError("ROLE_TILE_CACHE_EXCLUSION_INVALID")
+        # High-recall vegetation admission: a vegetation role index built with
+        # the OLD broad wire-role exclusion must FAIL CLOSED instead of silently
+        # loading as the new semantics.  Only exact final confirmed conductor
+        # members are subtracted later, per Span, from the tree input.
+        if role == "vegetation":
+            if source_exclusion is not None:
+                raise RoleTileCacheError("ROLE_TILE_CACHE_VEGETATION_BROAD_WIRE_EXCLUSION")
+            if metadata.get("admission_semantics") != "HIGH_RECALL":
+                raise RoleTileCacheError("ROLE_TILE_CACHE_VEGETATION_ADMISSION_MISMATCH")
         if expected_source_index_exclusion is not None:
             if not isinstance(source_exclusion, dict):
                 raise RoleTileCacheError("ROLE_TILE_CACHE_EXCLUSION_MISMATCH")

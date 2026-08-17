@@ -182,6 +182,26 @@ class FastBaselineConfig:
     wire_approach_pole_radius_m: float = 5.0
     wire_endpoint_hag_tolerance_m: float = 4.0
 
+    # --- V2 conductor confirmation (slice-track evidence) -----------------
+    # One metre slices are deliberately longer than the 0.10 m fine voxel but
+    # short enough to expose local branches and unsupported gaps.
+    wire_slice_width_m: float = 1.0
+    wire_slice_observation_u_radius_m: float = 0.45
+    wire_slice_observation_z_radius_m: float = 0.45
+    wire_track_association_u_max_m: float = 0.75
+    wire_track_association_z_max_m: float = 0.85
+    wire_track_max_unsupported_gap_m: float = 5.0
+    wire_confirmed_min_supported_slices: int = 8
+    wire_confirmed_min_supported_slice_ratio: float = 0.55
+    wire_confirmed_min_inlier_ratio: float = 0.70
+    wire_confirmed_max_median_residual_m: float = 0.20
+    wire_confirmed_max_p95_residual_m: float = 0.45
+    wire_confirmed_max_u_residual_m: float = 0.30
+    # Weak endpoint returns are allowed only when the interior is much more
+    # completely supported; this avoids a hard, unjustified two-end rule.
+    wire_confirmed_strong_interior_coverage_ratio: float = 0.80
+    wire_catenary_min_sag_m: float = 0.15
+
     # --- clearance ----------------------------------------------------------
     clearance_bvh_leaf_cap: int = 16
     clearance_tie_tolerance_m: float = 1e-9
@@ -209,6 +229,7 @@ class FastBaselineConfig:
                 "wire_dbscan_min_samples",
                 "wire_min_strand_points",
                 "wire_max_curve_samples",
+                "wire_confirmed_min_supported_slices",
                 "tree_top_min_support_points",
                 "tree_min_final_members",
                 "identity_split_min_child_members",
@@ -227,19 +248,22 @@ class FastBaselineConfig:
         )
         for name in {
             "wire_coarse_robust_z_quantile_fraction",
-            "identity_same_source_min_iou",
-            "identity_same_source_min_coverage_fraction",
-            "identity_split_min_child_parent_fraction",
-            "identity_split_min_child_purity",
-            "identity_split_min_union_parent_coverage",
-            "tree_top_suppressed_peak_min_height_ratio",
-            "tree_top_suppressed_peak_min_path_occupancy_fraction",
             "wire_coarse_residual_quantile_fraction",
             "wire_coarse_min_longitudinal_coverage_fraction",
             "pole_attachment_lower_quantile",
             "pole_attachment_upper_quantile",
             "topology_min_corridor_continuity",
             "topology_corridor_gap_fraction",
+            "wire_confirmed_min_supported_slice_ratio",
+            "wire_confirmed_min_inlier_ratio",
+            "wire_confirmed_strong_interior_coverage_ratio",
+            "tree_top_suppressed_peak_min_height_ratio",
+            "tree_top_suppressed_peak_min_path_occupancy_fraction",
+            "identity_same_source_min_iou",
+            "identity_same_source_min_coverage_fraction",
+            "identity_split_min_child_parent_fraction",
+            "identity_split_min_child_purity",
+            "identity_split_min_union_parent_coverage",
         }:
             object.__setattr__(self, name, _fraction(getattr(self, name), name))
         if self.pole_attachment_lower_quantile >= self.pole_attachment_upper_quantile:

@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -54,6 +54,13 @@ class SpanWireStrand:
     residual_stats_m: tuple[float, float]  # (median, p95)
     approach_start: bool
     approach_end: bool
+    status: str = "CONFIRMED"
+    model_type: str = "ROBUST_QUADRATIC"
+    supported_s_domain_m: tuple[float, float] = (0.0, 0.0)
+    supported_slice_count: int = 0
+    supported_slice_ratio: float = 0.0
+    maximum_gap_m: float = 0.0
+    inlier_ratio: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -69,18 +76,35 @@ class SpanWireStrand:
             "residual_stats_m": list(self.residual_stats_m),
             "approach_start": self.approach_start,
             "approach_end": self.approach_end,
+            "status": self.status,
+            "model_type": self.model_type,
+            "supported_s_domain_m": list(self.supported_s_domain_m),
+            "supported_slice_count": self.supported_slice_count,
+            "supported_slice_ratio": self.supported_slice_ratio,
+            "maximum_gap_m": self.maximum_gap_m,
+            "inlier_ratio": self.inlier_ratio,
         }
 
 
 @dataclass(frozen=True, slots=True)
 class SpanWireResult:
-    """Per-span conductor reconstruction result with W1-compatible arrays."""
+    """Per-span conductor reconstruction result with W1-compatible arrays.
+
+    ``confirmed_member_source_index`` is the exact, sorted-unique FULL_RESOLUTION
+    source-row identity of every raw point belonging to a FINAL CONFIRMED
+    conductor strand (the strand's fine-representative voxels).  This is the
+    only source-index set a tree stage may subtract from vegetation — broad wire
+    candidate/search points are never excluded from vegetation by role index.
+    """
 
     strands: tuple[SpanWireStrand, ...]
     w1_arrays: dict[str, np.ndarray]
     candidate_mask: np.ndarray  # bool per fine rep
     cluster_id_by_rep: np.ndarray  # int32 per fine rep
     diagnostics: dict[str, Any]
+    confirmed_member_source_index: np.ndarray = field(  # sorted unique
+        default_factory=lambda: np.empty(0, dtype=np.int64)
+    )
 
     @property
     def strand_count(self) -> int:
@@ -108,6 +132,155 @@ def _local_pca_features(
 # ---------------------------------------------------------------------------
 # Deterministic DBSCAN (scipy-only)
 # ---------------------------------------------------------------------------
+
+
+def _confirmed_strand_member_source_indices(
+    region: Any,
+    strand_groups: list[np.ndarray],
+    voxel_size_m: float,
+    *,
+    authoritative_source_point_count: int | None = None,
+    chunk_size: int = 1_000_000,
+) -> np.ndarray:
+    """Exact source-row identity of every raw point in confirmed strand voxels.
+
+    Each confirmed strand is a set of fine-representative (voxel) row indices.
+    The voxel assignment is re-derived from the RAW wire region with the exact
+    same keys as ``build_fine_representatives``, so every raw point is mapped to
+    its representative and the strand's raw member source indices are recovered
+    exactly (never approximated from Viewer/nearest-point geometry).
+    """
+    if not strand_groups:
+        return np.empty(0, dtype=np.int64)
+    from algorithms.vegetation.coarse_to_fine import _linear_keys
+
+    count = region.count
+    bounds_min = np.asarray(region.bounds_min_xyz, dtype=np.float64)
+    cell_shape = (
+        np.floor((np.asarray(region.bounds_max_xyz) - bounds_min) / voxel_size_m).astype(
+            np.int64
+        )
+        + 2
+    )
+    # Copy the small one-dimensional identity vector before validation so a
+    # fail-closed error does not leave an open memmap handle on Windows.
+    source_index = np.asarray(region.original_index(), dtype=np.int64).copy()
+    if not np.issubdtype(source_index.dtype, np.integer) or np.any(source_index < 0):
+        raise PoleEvidenceError("SPAN_WIRE_SOURCE_INDEX_INVALID")
+    if (
+        authoritative_source_point_count is not None
+        and np.any(source_index >= authoritative_source_point_count)
+    ):
+        raise PoleEvidenceError("SPAN_WIRE_SOURCE_INDEX_OUT_OF_RANGE")
+    if len(np.unique(source_index)) != len(source_index):
+        raise PoleEvidenceError("SPAN_WIRE_SOURCE_INDEX_DUPLICATE_OWNERSHIP")
+    raw_xyz = region.xyz()
+    strand_rep_rows = np.unique(
+        np.concatenate([np.asarray(rows, dtype=np.int64) for rows in strand_groups])
+    )
+    if sum(len(np.asarray(rows, dtype=np.int64)) for rows in strand_groups) != len(strand_rep_rows):
+        raise PoleEvidenceError("SPAN_WIRE_REPRESENTATIVE_DUPLICATE_OWNERSHIP")
+    # Global voxel keys — the exact same representative indexing that
+    # ``build_fine_representatives`` produced — so each raw point maps to its
+    # representative and the strand's exact raw member source indices are
+    # recovered without any temp file.
+    raw_keys = np.empty(count, dtype=np.int64)
+    for start in range(0, count, chunk_size):
+        stop = min(count, start + chunk_size)
+        raw_keys[start:stop] = _linear_keys(
+            raw_xyz[start:stop].astype("<f8", copy=False),
+            bounds_min,
+            voxel_size_m,
+            cell_shape,
+        )
+    unique_keys = np.unique(raw_keys)
+    rep_index = np.searchsorted(unique_keys, raw_keys)
+    member = np.isin(rep_index, strand_rep_rows)
+    if not np.any(member):
+        return np.empty(0, dtype=np.int64)
+    return np.unique(np.asarray(source_index[member], dtype=np.int64))
+
+
+def _track_member_source_indices(
+    region: Any,
+    track_groups: list[np.ndarray],
+    voxel_size_m: float,
+    representative_count: int,
+    *,
+    authoritative_source_point_count: int | None = None,
+    chunk_size: int = 1_000_000,
+) -> tuple[list[np.ndarray], list[dict[str, int]]]:
+    """Recover per-track raw source identities from actual V2 representative rows.
+
+    This is an artifact projection only.  It reuses the fine-voxel ownership
+    identity already established by the running pipeline and does not use a
+    fitted curve, a cluster label, or any Viewer-derived geometry.
+    """
+    from algorithms.vegetation.coarse_to_fine import _linear_keys
+
+    normalized = [np.unique(np.asarray(rows, dtype=np.int64)) for rows in track_groups]
+    for rows in normalized:
+        if np.any(rows < 0) or np.any(rows >= representative_count):
+            raise PoleEvidenceError("SPAN_WIRE_TRACK_REPRESENTATIVE_OUT_OF_RANGE")
+    owner = np.full(representative_count, -1, dtype=np.int64)
+    overlap_pairs: dict[tuple[int, int], int] = {}
+    for track_id, rows in enumerate(normalized):
+        previous = owner[rows]
+        for prior_track in np.unique(previous[previous >= 0]):
+            pair = (int(prior_track), track_id)
+            overlap_pairs[pair] = int(np.count_nonzero(previous == prior_track))
+        owner[rows[previous < 0]] = track_id
+    overlaps = [
+        {"first_track_id": first, "second_track_id": second, "representative_count": count}
+        for (first, second), count in sorted(overlap_pairs.items())
+    ]
+    count = region.count
+    source_index = np.asarray(region.original_index(), dtype=np.int64).copy()
+    if not np.issubdtype(source_index.dtype, np.integer) or np.any(source_index < 0):
+        raise PoleEvidenceError("SPAN_WIRE_SOURCE_INDEX_INVALID")
+    if (
+        authoritative_source_point_count is not None
+        and np.any(source_index >= authoritative_source_point_count)
+    ):
+        raise PoleEvidenceError("SPAN_WIRE_SOURCE_INDEX_OUT_OF_RANGE")
+    if len(np.unique(source_index)) != len(source_index):
+        raise PoleEvidenceError("SPAN_WIRE_SOURCE_INDEX_DUPLICATE_OWNERSHIP")
+    bounds_min = np.asarray(region.bounds_min_xyz, dtype=np.float64)
+    cell_shape = (
+        np.floor((np.asarray(region.bounds_max_xyz) - bounds_min) / voxel_size_m).astype(
+            np.int64
+        )
+        + 2
+    )
+    raw_xyz = region.xyz()
+    raw_keys = np.empty(count, dtype=np.int64)
+    for start in range(0, count, chunk_size):
+        stop = min(count, start + chunk_size)
+        raw_keys[start:stop] = _linear_keys(
+            raw_xyz[start:stop].astype("<f8", copy=False),
+            bounds_min,
+            voxel_size_m,
+            cell_shape,
+        )
+    rep_index = np.searchsorted(np.unique(raw_keys), raw_keys)
+    if overlaps:
+        # A non-disjoint candidate is anomalous but remains inspectable.  Do
+        # not silently assign its shared raw source identities to the first
+        # owner; materialize each actual group for the report instead.
+        result = [
+            np.sort(source_index[np.isin(rep_index, rows)]).astype(np.int64, copy=False)
+            for rows in normalized
+        ]
+    else:
+        raw_owner = owner[rep_index]
+        result = [
+            np.sort(source_index[raw_owner == track_id]).astype(np.int64, copy=False)
+            for track_id in range(len(normalized))
+        ]
+    for values in result:
+        if len(values) != len(np.unique(values)):
+            raise PoleEvidenceError("SPAN_WIRE_TRACK_SOURCE_DUPLICATE_OWNERSHIP")
+    return result, overlaps
 
 
 def _dbscan(
@@ -244,6 +417,7 @@ def run_span_wire_pipeline(
     origin_xyz: tuple[float, float, float],
     output_dir: Any = None,
     fine_voxel_size_m: float | None = None,
+    authoritative_source_point_count: int | None = None,
 ) -> SpanWireResult:
     """Reconstruct conductor strands inside one confirmed span.
 
@@ -269,6 +443,7 @@ def run_span_wire_pipeline(
             w1_arrays=_empty_w1_arrays(),
             candidate_mask=np.empty(0, dtype=bool),
             cluster_id_by_rep=np.empty(0, dtype=np.int32),
+            confirmed_member_source_index=np.empty(0, dtype=np.int64),
             diagnostics={
                 "schema": SPAN_WIRE_SCHEMA,
                 "reason": "no wire region points",
@@ -297,6 +472,7 @@ def run_span_wire_pipeline(
             w1_arrays=_empty_w1_arrays(),
             candidate_mask=np.empty(0, dtype=bool),
             cluster_id_by_rep=np.empty(0, dtype=np.int32),
+            confirmed_member_source_index=np.empty(0, dtype=np.int64),
             diagnostics={"schema": SPAN_WIRE_SCHEMA, "reason": "empty fine wire reps"},
         )
     # Scene-local absolute-frame fine wire representatives.
@@ -333,66 +509,90 @@ def run_span_wire_pipeline(
     )
     candidate &= in_corridor
 
-    suz = np.column_stack((s_values, u_values, z_values))
     candidate_rows = np.flatnonzero(candidate)
-    candidate_suz = suz[candidate_rows]
+    candidate_suz = np.column_stack(
+        (s_values[candidate_rows], u_values[candidate_rows], z_values[candidate_rows])
+    )
     cluster_labels = _dbscan(
         candidate_suz,
         eps=config.wire_dbscan_eps_m,
         min_samples=config.wire_dbscan_min_samples,
     )
-    cluster_id_by_rep = np.full(len(suz), -1, dtype=np.int32)
+    cluster_id_by_rep = np.full(len(s_values), -1, dtype=np.int32)
     cluster_id_by_rep[candidate_rows] = cluster_labels
 
-    # Collect raw strand row-groups from DBSCAN clusters split in (u, z).
-    # ``_split_strand_by_u_z`` returns candidate-subset indices; they are
-    # remapped to full-array indices before the merge and the longitudinal
-    # gates so each strand is fitted from the correct representatives.
-    strand_groups: list[np.ndarray] = []
-    for cluster_id in np.unique(cluster_labels[cluster_labels >= 0]):
-        for group in _split_strand_by_u_z(
-            candidate_suz, cluster_labels, int(cluster_id), config
-        ):
-            if len(group) >= config.wire_min_strand_points:
-                strand_groups.append(candidate_rows[group])
-    strand_groups = _merge_strand_groups(
-        strand_groups, s_values, u_values, z_values, span_length, config
+    # DBSCAN remains a high-recall diagnostic only.  V2 never promotes a
+    # global cluster into a conductor: independent longitudinal slices are
+    # associated with bounded `(u,z)` continuity, then robustly fitted and
+    # fail-closed through explicit confirmation gates.
+    from algorithms.spans.wire_v2 import (
+        CONFIRMED,
+        REVIEW_ONLY,
+        evaluate_catenary,
+        evaluate_polynomial,
+        reconstruct_slice_tracks,
     )
 
+    tracks = reconstruct_slice_tracks(
+        candidate_rows,
+        s_values,
+        u_values,
+        z_values,
+        raw_count_fine,
+        span_length,
+        config,
+    )
     strands: list[SpanWireStrand] = []
-    for rows in strand_groups:
-        s_strand = s_values[rows]
-        span_run = float(np.max(s_strand) - np.min(s_strand))
-        if span_run < config.wire_min_longitudinal_span_m:
-            continue
-        coverage = float(min(1.0, span_run / max(1e-6, span_length)))
-        if coverage < config.wire_min_longitudinal_coverage_frac:
-            continue
-        order = np.argsort(s_strand, kind="stable")
-        sorted_rows = rows[order]
-        s_sorted = s_values[sorted_rows]
-        u_sorted = u_values[sorted_rows]
-        z_sorted = z_values[sorted_rows]
-        coeff_u = _robust_quadratic_fit(
-            s_sorted, u_sorted, config.wire_residual_tolerance_m
-        )[0]
-        coeff_z, residuals, _kept = _robust_quadratic_fit(
-            s_sorted, z_sorted, config.wire_residual_tolerance_m
+    confirmed_groups: list[np.ndarray] = []
+    track_diagnostics: list[dict[str, Any]] = []
+    # The exact curve that is passed into the existing W1 clearance interface,
+    # keyed by the originating V2 track.  The evidence sidecar reuses this
+    # object rather than re-evaluating a mathematically equivalent model.
+    confirmed_model_samples: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    for track_id, track in enumerate(tracks):
+        rows = track.inlier_rows
+        approach_start = _strand_approaches_pole(
+            s_values[rows], u_values[rows], z_values[rows], span, 0.0, config
+        ) if len(rows) else False
+        approach_end = _strand_approaches_pole(
+            s_values[rows], u_values[rows], z_values[rows], span, span_length, config
+        ) if len(rows) else False
+        status, reasons = track.status, list(track.reasons)
+        if status == CONFIRMED and not (approach_start or approach_end):
+            status, reasons = REVIEW_ONLY, reasons + ["missing_endpoint_approach_evidence"]
+        if (
+            status == CONFIRMED
+            and not (approach_start and approach_end)
+            and track.coverage_ratio < config.wire_confirmed_strong_interior_coverage_ratio
+        ):
+            status, reasons = REVIEW_ONLY, reasons + [
+                "weak_endpoint_requires_stronger_interior_coverage"
+            ]
+        diagnostic = track.diagnostic_dict(
+            track_id, approach_start=approach_start, approach_end=approach_end
         )
-        # Sample the reconstructed curve.
+        diagnostic["status"] = status
+        diagnostic["reasons"] = reasons
+        track_diagnostics.append(diagnostic)
+        if status != CONFIRMED:
+            continue
+        span_run = track.supported_s_max_m - track.supported_s_min_m
         sample_step = max(config.wire_curve_sample_spacing_m, 0.1)
         sample_count = min(
             config.wire_max_curve_samples,
             max(2, int(math.ceil(span_run / sample_step)) + 1),
         )
+        # The published curve has no samples outside this raw inlier-supported
+        # domain.  Large unsupported gaps have already failed the track gate.
         sample_s = np.linspace(
-            float(np.min(s_sorted)), float(np.max(s_sorted)), sample_count
+            track.supported_s_min_m, track.supported_s_max_m, sample_count
         )
-        sample_u = np.polyval(np.flip(coeff_u), sample_s)
-        # ``z_values`` are absolute elevation (``span_to_suz`` does not shift
-        # z); the distance-ready curve is published in the scene-local frame,
-        # so the z samples are shifted to local by the shared origin's z.
-        sample_z = np.polyval(np.flip(coeff_z), sample_s) - origin[2]
+        sample_u = evaluate_polynomial(track.model_u_coefficients, sample_s)
+        sample_z = (
+            evaluate_catenary(track.catenary_parameters, sample_s)
+            if track.model_type == "CATENARY"
+            else evaluate_polynomial(track.model_z_coefficients, sample_s)
+        ) - origin[2]
         axis = np.asarray(span.direction_xy[:2], dtype=np.float64)
         perp = np.asarray((-axis[1], axis[0]), dtype=np.float64)
         start_xy = np.asarray(span.start_xyz_absolute_m[:2], dtype=np.float64) - origin[:2]
@@ -402,28 +602,7 @@ def run_span_wire_pipeline(
             + sample_u[:, None] * perp[None, :]
         )
         curve_xyz = np.column_stack((curve_xy, sample_z)).astype(np.float32)
-        # Endpoint / pole evidence.
-        approach_start = _strand_approaches_pole(
-            s_values[rows],
-            u_values[rows],
-            z_values[rows],
-            span,
-            0.0,
-            config,
-        )
-        approach_end = _strand_approaches_pole(
-            s_values[rows],
-            u_values[rows],
-            z_values[rows],
-            span,
-            span_length,
-            config,
-        )
-        median_u = float(np.median(u_values[rows]))
-        residual_pair = (
-            float(np.median(residuals)),
-            float(np.quantile(residuals, 0.95)),
-        )
+        confirmed_model_samples[track_id] = (sample_s, curve_xyz)
         strands.append(
             SpanWireStrand(
                 wire_id=len(strands),
@@ -431,18 +610,71 @@ def run_span_wire_pipeline(
                 representative_count=int(len(rows)),
                 raw_point_count=int(np.sum(raw_count_fine[rows], dtype=np.int64)),
                 s_span_m=span_run,
-                coverage_ratio=coverage,
-                median_u_m=median_u,
+                coverage_ratio=track.coverage_ratio,
+                median_u_m=track.median_u_m,
                 median_hag_m=(
                     float(np.median(z_values[rows])) - span.start_xyz_absolute_m[2]
                 ),
                 curve_sample_count=sample_count,
                 curve_xyz_local_m=curve_xyz,
-                residual_stats_m=residual_pair,
+                residual_stats_m=(track.median_residual_m, track.p95_residual_m),
                 approach_start=approach_start,
                 approach_end=approach_end,
+                status=status,
+                model_type=track.model_type,
+                supported_s_domain_m=(track.supported_s_min_m, track.supported_s_max_m),
+                supported_slice_count=track.supported_slice_count,
+                supported_slice_ratio=track.supported_slice_ratio,
+                maximum_gap_m=track.maximum_gap_m,
+                inlier_ratio=track.inlier_ratio,
             )
         )
+        confirmed_groups.append(rows)
+
+    # A read-only Owner artifact may show the fitted diagnostic model for any
+    # track, including REVIEW_ONLY and REJECTED tracks.  These samples are made
+    # from the already-fitted coefficients over the already-published inlier
+    # domain; they never become clearance geometry unless the final status is
+    # CONFIRMED.  This intentionally runs after all endpoint policy decisions.
+    evidence_model_s: list[np.ndarray] = []
+    evidence_model_xyz: list[np.ndarray] = []
+    axis = np.asarray(span.direction_xy[:2], dtype=np.float64)
+    perp = np.asarray((-axis[1], axis[0]), dtype=np.float64)
+    start_xy = np.asarray(span.start_xyz_absolute_m[:2], dtype=np.float64) - origin[:2]
+    for track_id, track in enumerate(tracks):
+        if track_id in confirmed_model_samples:
+            sample_s, curve_xyz = confirmed_model_samples[track_id]
+            evidence_model_s.append(sample_s)
+            evidence_model_xyz.append(curve_xyz)
+            continue
+        span_run = track.supported_s_max_m - track.supported_s_min_m
+        if (
+            len(track.inlier_rows) < 2
+            or not np.isfinite(span_run)
+            or span_run <= 0.0
+        ):
+            evidence_model_s.append(np.empty(0, dtype=np.float64))
+            evidence_model_xyz.append(np.empty((0, 3), dtype=np.float32))
+            continue
+        sample_step = max(config.wire_curve_sample_spacing_m, 0.1)
+        sample_count = min(
+            config.wire_max_curve_samples,
+            max(2, int(math.ceil(span_run / sample_step)) + 1),
+        )
+        sample_s = np.linspace(track.supported_s_min_m, track.supported_s_max_m, sample_count)
+        sample_u = evaluate_polynomial(track.model_u_coefficients, sample_s)
+        sample_z = (
+            evaluate_catenary(track.catenary_parameters, sample_s)
+            if track.model_type == "CATENARY"
+            else evaluate_polynomial(track.model_z_coefficients, sample_s)
+        ) - origin[2]
+        curve_xy = (
+            start_xy[None, :]
+            + sample_s[:, None] * axis[None, :]
+            + sample_u[:, None] * perp[None, :]
+        )
+        evidence_model_s.append(sample_s)
+        evidence_model_xyz.append(np.column_stack((curve_xy, sample_z)).astype(np.float32))
 
     # Deterministic wire ordering by (median u, then wire id).
     strands.sort(key=lambda strand: (strand.median_u_m, strand.wire_id))
@@ -462,8 +694,64 @@ def run_span_wire_pipeline(
             residual_stats_m=strand.residual_stats_m,
             approach_start=strand.approach_start,
             approach_end=strand.approach_end,
+            status=strand.status,
+            model_type=strand.model_type,
+            supported_s_domain_m=strand.supported_s_domain_m,
+            supported_slice_count=strand.supported_slice_count,
+            supported_slice_ratio=strand.supported_slice_ratio,
+            maximum_gap_m=strand.maximum_gap_m,
+            inlier_ratio=strand.inlier_ratio,
         )
     w1_arrays = _build_w1_arrays(span, strands, config)
+    # Exact FULL_RESOLUTION source-row identity of every raw point in a FINAL
+    # CONFIRMED conductor strand.  Only this exact set may be subtracted from
+    # vegetation; broad wire candidate/search points are never excluded.
+    if output_root is None:
+        confirmed_member_source_index = _confirmed_strand_member_source_indices(
+            wire_region_subset,
+            confirmed_groups,
+            voxel_size,
+            authoritative_source_point_count=authoritative_source_point_count,
+        )
+        support_source_indices: list[np.ndarray] = []
+        inlier_source_indices: list[np.ndarray] = []
+        support_overlap_pairs: list[dict[str, int]] = []
+        inlier_overlap_pairs: list[dict[str, int]] = []
+    else:
+        support_source_indices, support_overlap_pairs = _track_member_source_indices(
+            wire_region_subset,
+            [track.rows for track in tracks],
+            voxel_size,
+            len(s_values),
+            authoritative_source_point_count=authoritative_source_point_count,
+        )
+        inlier_source_indices, inlier_overlap_pairs = _track_member_source_indices(
+            wire_region_subset,
+            [track.inlier_rows for track in tracks],
+            voxel_size,
+            len(s_values),
+            authoritative_source_point_count=authoritative_source_point_count,
+        )
+        for track, sources in zip(tracks, support_source_indices, strict=True):
+            if len(sources) != track.raw_support_count:
+                raise PoleEvidenceError("SPAN_WIRE_TRACK_SOURCE_SUPPORT_COUNT_MISMATCH")
+        final_statuses = [str(item["status"]) for item in track_diagnostics]
+        for overlap in inlier_overlap_pairs:
+            if (
+                final_statuses[overlap["first_track_id"]] == CONFIRMED
+                and final_statuses[overlap["second_track_id"]] == CONFIRMED
+            ):
+                raise PoleEvidenceError("SPAN_WIRE_CONFIRMED_TRACK_OWNERSHIP_OVERLAP")
+        confirmed_source_groups = [
+            source
+            for status, source in zip(final_statuses, inlier_source_indices, strict=True)
+            if status == CONFIRMED
+        ]
+        confirmed_member_source_index = (
+            np.unique(np.concatenate(confirmed_source_groups)).astype(np.int64)
+            if confirmed_source_groups
+            else np.empty(0, dtype=np.int64)
+        )
     if output_root is not None:
         _write_npz(
             output_root / "span_wire_diagnostics.npz",
@@ -475,8 +763,24 @@ def run_span_wire_pipeline(
             s_m=s_values,
             u_m=u_values,
             z_m=z_values,
+            confirmed_member_source_index=confirmed_member_source_index,
         )
         _write_npz(output_root / "w1_arrays.npz", **w1_arrays)
+        from algorithms.spans.wire_v2_evidence import write_track_evidence
+
+        write_track_evidence(
+            output_root,
+            span_name=span.span_name,
+            source_point_count=authoritative_source_point_count,
+            tracks=tracks,
+            diagnostics=track_diagnostics,
+            support_source_indices=support_source_indices,
+            inlier_source_indices=inlier_source_indices,
+            model_s_m=evidence_model_s,
+            model_xyz_local_m=evidence_model_xyz,
+            support_overlap_pairs=support_overlap_pairs,
+            inlier_overlap_pairs=inlier_overlap_pairs,
+        )
         _write_json(
             output_root / "span_wire_result.json",
             {
@@ -493,6 +797,9 @@ def run_span_wire_pipeline(
                         np.count_nonzero(np.unique(cluster_labels[cluster_labels >= 0]))
                     ),
                     "wire_strand_count": len(strands),
+                    "v2_track_count": len(track_diagnostics),
+                    "v2_tracks": track_diagnostics,
+                    "confirmed_conductor_member_count": int(len(confirmed_member_source_index)),
                     "runtime_seconds": time.perf_counter() - started,
                 },
             },
@@ -502,6 +809,7 @@ def run_span_wire_pipeline(
         w1_arrays=w1_arrays,
         candidate_mask=candidate,
         cluster_id_by_rep=cluster_id_by_rep,
+        confirmed_member_source_index=confirmed_member_source_index,
         diagnostics={
             "schema": SPAN_WIRE_SCHEMA,
             "marker": FAST_MATURE_SPAN_WIRE,
@@ -511,6 +819,9 @@ def run_span_wire_pipeline(
                 np.count_nonzero(np.unique(cluster_labels[cluster_labels >= 0]))
             ),
             "wire_strand_count": len(strands),
+            "v2_track_count": len(track_diagnostics),
+            "v2_tracks": track_diagnostics,
+            "confirmed_conductor_member_count": int(len(confirmed_member_source_index)),
             "fine_representatives_npz_path": str(output_root / "fine_representatives.npz")
             if output_root is not None
             else None,
@@ -583,21 +894,36 @@ def load_span_wire_result(artifact_root: Any) -> SpanWireResult:
                 ),
                 approach_start=bool(item["approach_start"]),
                 approach_end=bool(item["approach_end"]),
+                status=str(item.get("status", "CONFIRMED")),
+                model_type=str(item.get("model_type", "ROBUST_QUADRATIC")),
+                supported_s_domain_m=tuple(
+                    float(value) for value in item.get("supported_s_domain_m", (0.0, 0.0))
+                ),
+                supported_slice_count=int(item.get("supported_slice_count", 0)),
+                supported_slice_ratio=float(item.get("supported_slice_ratio", 0.0)),
+                maximum_gap_m=float(item.get("maximum_gap_m", 0.0)),
+                inlier_ratio=float(item.get("inlier_ratio", 0.0)),
             )
         )
     strands = tuple(strands)
     diagnostics_path = root / "span_wire_diagnostics.npz"
     candidate_mask = np.empty(0, dtype=bool)
     cluster_id_by_rep = np.empty(0, dtype=np.int32)
+    confirmed_member_source_index = np.empty(0, dtype=np.int64)
     if diagnostics_path.is_file():
         with np.load(diagnostics_path, allow_pickle=False) as stream:
             candidate_mask = np.asarray(stream["candidate_mask"], dtype=bool)
             cluster_id_by_rep = np.asarray(stream["cluster_id_by_rep"], dtype=np.int32)
+            if "confirmed_member_source_index" in stream.files:
+                confirmed_member_source_index = np.asarray(
+                    stream["confirmed_member_source_index"], dtype=np.int64
+                )
     return SpanWireResult(
         strands=strands,
         w1_arrays=w1_arrays,
         candidate_mask=candidate_mask,
         cluster_id_by_rep=cluster_id_by_rep,
+        confirmed_member_source_index=confirmed_member_source_index,
         diagnostics=dict(payload.get("diagnostics", {})),
     )
 
