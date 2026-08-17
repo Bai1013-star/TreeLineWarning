@@ -94,6 +94,7 @@ class SpanCrownSegmentation:
     region_label_by_cell: np.ndarray  # int32 (rows, cols); 0 unassigned
     crown_cell_count_by_top: np.ndarray  # int64 (K,)
     ambiguity_mask: np.ndarray  # bool (rows, cols)
+    marker_seed_mask: np.ndarray  # bool (rows, cols), accepted apex cells only
     diagnostics: dict[str, Any]
 
 
@@ -229,6 +230,32 @@ def _annulus_median_height(
     return float(np.median(values))
 
 
+def _saddle_evidence(
+    height: np.ndarray,
+    occupied: np.ndarray,
+    left: tuple[int, int],
+    right: tuple[int, int],
+) -> tuple[float | None, float]:
+    """Return the CHM path bottleneck and occupied fraction between two peaks.
+
+    This intentionally stays on the small candidate-peak scale.  It is a
+    deterministic h-maxima-style test, not a second watershed implementation:
+    a real neighbouring crown must have a meaningful drop from the lower peak
+    to the intervening saddle, while a branch shoulder usually does not.
+    """
+
+    row0, col0 = left
+    row1, col1 = right
+    samples = max(abs(row1 - row0), abs(col1 - col0)) + 1
+    rows = np.rint(np.linspace(row0, row1, samples)).astype(np.int64)
+    cols = np.rint(np.linspace(col0, col1, samples)).astype(np.int64)
+    valid = occupied[rows, cols] & np.isfinite(height[rows, cols])
+    occupancy = float(np.count_nonzero(valid) / samples) if samples else 0.0
+    if not np.any(valid):
+        return None, occupancy
+    return float(np.min(height[rows[valid], cols[valid]])), occupancy
+
+
 def detect_span_tree_tops(
     chm: SpanChm,
     smoothed: np.ndarray,
@@ -322,28 +349,30 @@ def detect_span_tree_tops(
     accepted: list[TreeTopRecord] = []
     accepted_positions: list[tuple[float, float]] = []  # xy
     accepted_radii: list[float] = []
+    accepted_candidates: list[dict[str, Any]] = []
+    candidate_diagnostics: list[dict[str, Any]] = []
     for item in candidates:
         xy = (
             chm.origin_xy[0] + (item["col"] + 0.5) * chm.cell_size_m,
             chm.origin_xy[1] + (item["row"] + 0.5) * chm.cell_size_m,
         )
-        dominated = False
-        for accepted_xy, accepted_radius in zip(
-            accepted_positions, accepted_radii, strict=True
-        ):
-            distance = math.hypot(xy[0] - accepted_xy[0], xy[1] - accepted_xy[1])
-            if distance <= accepted_radius + 1e-9:
-                dominated = True
-                break
-        if dominated:
-            continue
+        diagnostic: dict[str, Any] = {
+            "row": item["row"], "col": item["col"], "xy_local_m": list(xy),
+            "height_m": item["height"], "prominence_m": item["prominence"],
+            "support_cell_count": item["support"], "suppression_radius_m": item["radius"],
+        }
         required_prominence = max(
             config.tree_top_min_prominence_m,
             config.tree_top_min_prominence_fraction * item["height"],
         )
         if item["prominence"] < required_prominence:
+            diagnostic["reason"] = "REJECTED_LOW_PROMINENCE"
+            diagnostic["required_prominence_m"] = required_prominence
+            candidate_diagnostics.append(diagnostic)
             continue
         if item["support"] < config.tree_top_min_support_points:
+            diagnostic["reason"] = "REJECTED_LOW_SUPPORT"
+            candidate_diagnostics.append(diagnostic)
             continue
         radius_cells = max(1, int(math.ceil(item["radius"] / chm.cell_size_m)))
         r0 = max(0, item["row"] - radius_cells)
@@ -352,7 +381,49 @@ def detect_span_tree_tops(
         c1 = min(cols, item["col"] + radius_cells + 1)
         window_occupied = int(np.count_nonzero(occupied[r0:r1, c0:c1]))
         window_total = (r1 - r0) * (c1 - c0)
-        if window_total and window_occupied / window_total < 0.20:
+        occupancy = window_occupied / window_total if window_total else 0.0
+        if occupancy < 0.20:
+            diagnostic["reason"] = "REJECTED_LOW_OCCUPANCY"
+            diagnostic["occupancy_fraction"] = occupancy
+            candidate_diagnostics.append(diagnostic)
+            continue
+
+        suppressed_by: dict[str, Any] | None = None
+        independent = False
+        for accepted_xy, accepted_radius, accepted_item in zip(
+            accepted_positions, accepted_radii, accepted_candidates, strict=True
+        ):
+            distance = math.hypot(xy[0] - accepted_xy[0], xy[1] - accepted_xy[1])
+            if distance <= accepted_radius + 1e-9:
+                saddle, path_occupancy = _saddle_evidence(
+                    smoothed, occupied,
+                    (int(accepted_item["row"]), int(accepted_item["col"])),
+                    (int(item["row"]), int(item["col"])),
+                )
+                lower_height = min(float(accepted_item["height"]), float(item["height"]))
+                saddle_drop = lower_height - saddle if saddle is not None else None
+                independent = (
+                    item["height"] >= accepted_item["height"]
+                    * config.tree_top_suppressed_peak_min_height_ratio
+                    and saddle_drop is not None
+                    and saddle_drop >= config.tree_top_suppressed_peak_min_saddle_drop_m
+                    and path_occupancy
+                    >= config.tree_top_suppressed_peak_min_path_occupancy_fraction
+                )
+                suppressed_by = {
+                    "tree_top_id": len(accepted) - 1,
+                    "distance_m": distance,
+                    "saddle_height_m": saddle,
+                    "saddle_drop_m": saddle_drop,
+                    "path_occupancy_fraction": path_occupancy,
+                    "independent_peak_evidence": independent,
+                }
+                if not independent:
+                    break
+        if suppressed_by is not None and not independent:
+            diagnostic["reason"] = "SUPPRESSED_BY_NEIGHBOUR"
+            diagnostic["suppressed_by"] = suppressed_by
+            candidate_diagnostics.append(diagnostic)
             continue
         accepted.append(
             TreeTopRecord(
@@ -369,6 +440,11 @@ def detect_span_tree_tops(
         )
         accepted_positions.append(xy)
         accepted_radii.append(item["radius"])
+        accepted_candidates.append(item)
+        diagnostic["reason"] = "ACCEPTED"
+        if suppressed_by is not None:
+            diagnostic["independent_peak_evidence"] = suppressed_by
+        candidate_diagnostics.append(diagnostic)
     return SpanTreeTops(
         accepted=tuple(accepted),
         raw_local_maxima_count=raw_count,
@@ -377,6 +453,7 @@ def detect_span_tree_tops(
             "schema": SPAN_TREE_SCHEMA,
             "raw_local_maxima_count": raw_count,
             "accepted_tree_top_count": len(accepted),
+            "candidate_diagnostics": candidate_diagnostics,
             "runtime_seconds": time.perf_counter() - started,
         },
     )
@@ -414,6 +491,7 @@ def segment_span_crowns(
             region_label_by_cell=labels,
             crown_cell_count_by_top=np.zeros(len(tops.accepted), dtype=np.int64),
             ambiguity_mask=np.zeros((rows, cols), dtype=bool),
+            marker_seed_mask=np.zeros((rows, cols), dtype=bool),
             diagnostics={
                 "schema": SPAN_TREE_SCHEMA,
                 "marker_count": len(tops.accepted),
@@ -483,6 +561,7 @@ def segment_span_crowns(
         region_label_by_cell=labels,
         crown_cell_count_by_top=crown_cells,
         ambiguity_mask=np.zeros((rows, cols), dtype=bool),
+        marker_seed_mask=marker_seed,
         diagnostics={
             "schema": SPAN_TREE_SCHEMA,
             "marker_count": len(tops.accepted),
@@ -504,12 +583,16 @@ def assign_span_tree_membership(
     smoothed: np.ndarray,
     crowns: SpanCrownSegmentation,
     config: FastBaselineConfig,
+    diagnostics: dict[str, Any] | None = None,
 ) -> np.ndarray:
     """Map 2D watershed crown ids onto 3D fine vegetation representatives.
 
     A fine representative belongs to a crown when its XY cell carries that
-    crown label and its HAG is consistent with the local canopy surface
-    (``hag <= surface_height + tolerance`` and ``hag >= tree_minimum_hag_m``).
+    crown label and its HAG is consistent with the local smoothed canopy
+    surface (``hag <= surface_height + tolerance`` and
+    ``hag >= tree_minimum_hag_m``).  An accepted marker seed is the sole
+    bounded exception: it may use the raw measured CHM envelope so smoothing
+    cannot erase its own apex representative.
     """
 
     xyz = np.asarray(fine_xyz_local_m, dtype=np.float64)
@@ -528,24 +611,48 @@ def assign_span_tree_membership(
     hag = np.asarray(fine_hag_m, dtype=np.float32)
     crown_label = crowns.region_label_by_cell.ravel()
     surface = np.asarray(smoothed, dtype=np.float32).ravel()
+    raw_surface = np.asarray(chm.height_m, dtype=np.float32).ravel()
+    marker_seed = np.asarray(crowns.marker_seed_mask, dtype=bool).ravel()
     # Reps outside the CHM grid must never index it; clip for the lookup and
     # mask with ``inside`` so the out-of-bounds value is never used.
     safe_flat = np.where(inside, flat, 0)
     candidate = crown_label[safe_flat] > 0
     surface_at = surface[safe_flat]
+    # Only a marker seed cell gets an apex rescue against the measured raw CHM
+    # envelope.  Everywhere else retains the smoothed canopy-surface gate, so
+    # a high/wrong-vertical point cannot enter merely because another point in
+    # its cell established a raw CHM maximum.
+    upper_surface = np.where(marker_seed[safe_flat], raw_surface[safe_flat], surface_at)
     mask = (
         inside
         & candidate
         & (hag >= config.tree_minimum_hag_m)
-        & (np.isfinite(surface_at) & (hag <= surface_at + config.tree_membership_hag_tolerance_m))
+        & (
+            np.isfinite(upper_surface)
+            & (hag <= upper_surface + config.tree_membership_hag_tolerance_m)
+        )
     )
     label[mask] = crown_label[safe_flat[mask]] - 1
     # Drop crowns with too few final members (leaf-scale noise).
     if len(label):
         counts = np.bincount(label[label >= 0], minlength=0)
         small = np.flatnonzero(counts < config.tree_min_final_members)
+        if diagnostics is not None:
+            diagnostics.update({
+                "pre_min_members_tree_count": int(np.count_nonzero(counts)),
+                "dropped_low_final_members_tree_ids": [int(value) for value in small],
+                "dropped_low_final_members_counts": {
+                    str(int(value)): int(counts[value]) for value in small
+                },
+            })
         for tree_id in small:
             label[label == tree_id] = -1
+    elif diagnostics is not None:
+        diagnostics.update({
+            "pre_min_members_tree_count": 0,
+            "dropped_low_final_members_tree_ids": [],
+            "dropped_low_final_members_counts": {},
+        })
     return label
 
 

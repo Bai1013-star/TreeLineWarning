@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 from algorithms.spans.tree import (
     SpanChm,
+    SpanCrownSegmentation,
     assign_span_tree_membership,
     build_span_chm,
     detect_span_tree_tops,
@@ -85,6 +86,43 @@ def test_two_touching_crowns_produce_two_markers_when_justified() -> None:
     assert len(crown_labels) - 1 == 2  # labels 1 and 2 for the two markers
 
 
+def test_close_shorter_tree_survives_only_with_meaningful_saddle() -> None:
+    # The shorter peak is inside the taller tree's adaptive window.  A deep
+    # CHM saddle and continuous canopy path are the evidence that it is a real
+    # neighbour, not merely a branch shoulder.
+    height = np.full((11, 15), 3.0, dtype=np.float32)
+    height[5, 4] = 12.0
+    height[5, 8] = 8.0
+    height[5, 5:8] = np.asarray((8.0, 4.0, 6.0), dtype=np.float32)
+    chm = SpanChm(
+        height, np.ones_like(height, dtype=bool), np.ones_like(height, dtype=np.int32),
+        (0.0, 0.0), 0.5, 1.5,
+    )
+    tops = detect_span_tree_tops(chm, height, _CFG)
+    assert tops.accepted_count == 2
+    accepted = [
+        item for item in tops.diagnostics["candidate_diagnostics"]
+        if item["reason"] == "ACCEPTED"
+    ]
+    assert any("independent_peak_evidence" in item for item in accepted)
+
+
+def test_shallow_shoulder_remains_suppressed() -> None:
+    height = np.full((11, 15), 3.0, dtype=np.float32)
+    height[5, 4] = 12.0
+    height[5, 8] = 9.0
+    height[5, 5:8] = np.asarray((10.5, 8.7, 8.8), dtype=np.float32)
+    chm = SpanChm(
+        height, np.ones_like(height, dtype=bool), np.ones_like(height, dtype=np.int32),
+        (0.0, 0.0), 0.5, 1.5,
+    )
+    tops = detect_span_tree_tops(chm, height, _CFG)
+    assert tops.accepted_count == 1
+    assert "SUPPRESSED_BY_NEIGHBOUR" in {
+        item["reason"] for item in tops.diagnostics["candidate_diagnostics"]
+    }
+
+
 def test_chm_rejects_empty_and_low_cells_explicitly() -> None:
     xyz = _smooth_crown(0.0, 0.0, 10.0, 2.0, 300)
     hag = xyz[:, 2].astype(np.float32)
@@ -111,3 +149,55 @@ def test_membership_requires_hag_consistency_with_surface() -> None:
     xyz = np.vstack((crown, np.asarray([[0.0, 0.0, 0.2]])))
     chm, smoothed, tops, crowns, membership = _run_tree_pipeline(xyz)
     assert membership[-1] == -1
+
+
+def _apex_rescue_fixture() -> tuple[SpanChm, np.ndarray, SpanCrownSegmentation]:
+    raw = np.full((3, 3), 5.0, dtype=np.float32)
+    raw[1, 1] = 12.0
+    raw[0, 0] = 8.0
+    smoothed = np.full((3, 3), 5.0, dtype=np.float32)
+    smoothed[1, 1] = 8.0
+    labels = np.ones((3, 3), dtype=np.int32)
+    seeds = np.zeros((3, 3), dtype=bool)
+    seeds[1, 1] = True
+    chm = SpanChm(
+        raw, np.ones_like(raw, dtype=bool), np.ones_like(raw, dtype=np.int32),
+        (0.0, 0.0), 1.0, 1.5,
+    )
+    crowns = SpanCrownSegmentation(
+        labels, np.asarray([9], dtype=np.int64), np.zeros((3, 3), dtype=bool),
+        seeds, {},
+    )
+    return chm, smoothed, crowns
+
+
+def test_marker_seed_apex_is_preserved_when_smoothing_underestimates_it() -> None:
+    chm, smoothed, crowns = _apex_rescue_fixture()
+    xyz = np.asarray([[1.5, 1.5, 12.0]], dtype=np.float64)
+    membership = assign_span_tree_membership(
+        xyz, xyz[:, 2].astype(np.float32), chm, smoothed, crowns,
+        default_fast_baseline_config(tree_min_final_members=1),
+    )
+    assert membership.tolist() == [0]
+
+
+def test_non_apex_cell_does_not_degenerate_to_raw_chm_upper_bound() -> None:
+    chm, smoothed, crowns = _apex_rescue_fixture()
+    # Raw CHM in this ordinary cell is 8 m, but a wrong-vertical 8 m point
+    # must not become a member just because a raw-cell maximum exists.
+    xyz = np.asarray([[0.5, 0.5, 8.0]], dtype=np.float64)
+    membership = assign_span_tree_membership(
+        xyz, xyz[:, 2].astype(np.float32), chm, smoothed, crowns,
+        default_fast_baseline_config(tree_min_final_members=1),
+    )
+    assert membership.tolist() == [-1]
+
+
+def test_non_apex_crown_cell_still_uses_smoothed_surface_constraint() -> None:
+    chm, smoothed, crowns = _apex_rescue_fixture()
+    xyz = np.asarray([[2.5, 2.5, 5.8], [2.5, 2.5, 6.3]], dtype=np.float64)
+    membership = assign_span_tree_membership(
+        xyz, xyz[:, 2].astype(np.float32), chm, smoothed, crowns,
+        default_fast_baseline_config(tree_min_final_members=1),
+    )
+    assert membership.tolist() == [0, -1]

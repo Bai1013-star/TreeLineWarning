@@ -57,6 +57,8 @@ class SpanTreeOutcome:
     accepted_tree_tops: int
     assigned_raw_point_count: int
     artifact_root: Path
+    tree_top_diagnostics: dict[str, Any] | None = None
+    membership_diagnostics: dict[str, Any] | None = None
     fine_representative_count: int = 0
     aabb_query_points: int = 0
     oriented_region_points: int = 0
@@ -76,6 +78,8 @@ class SpanTreeOutcome:
             "raw_local_maxima": self.raw_local_maxima,
             "accepted_tree_tops": self.accepted_tree_tops,
             "assigned_raw_point_count": self.assigned_raw_point_count,
+            "tree_top_diagnostics": dict(self.tree_top_diagnostics or {}),
+            "membership_diagnostics": dict(self.membership_diagnostics or {}),
             "fine_representative_count": self.fine_representative_count,
             "aabb_query_points": self.aabb_query_points,
             "oriented_region_points": self.oriented_region_points,
@@ -162,6 +166,8 @@ def run_span_tree_pipeline(
             accepted_tree_tops=0,
             assigned_raw_point_count=0,
             artifact_root=output_root,
+            tree_top_diagnostics={},
+            membership_diagnostics={},
             aabb_query_points=vegetation_query.aabb_query_points,
             oriented_region_points=vegetation_query.oriented_region_points,
             source_tiles=vegetation_query.tiles,
@@ -193,8 +199,9 @@ def run_span_tree_pipeline(
     smoothed = smooth_span_chm(chm, config)
     tops = detect_span_tree_tops(chm, smoothed, config)
     crowns = segment_span_crowns(chm, smoothed, tops, config)
+    membership_diagnostics: dict[str, Any] = {}
     tree_id_by_fine = assign_span_tree_membership(
-        fine_xyz, fine_hag, chm, smoothed, crowns, config
+        fine_xyz, fine_hag, chm, smoothed, crowns, config, membership_diagnostics
     )
     result = build_span_tree_result(
         subset,
@@ -239,6 +246,7 @@ def run_span_tree_pipeline(
         chm_origin_xy=np.asarray(chm.origin_xy, dtype=np.float64),
         chm_cell_size_m=np.asarray(chm.cell_size_m, dtype=np.float64),
         crown_label= crowns.region_label_by_cell,
+        marker_seed_mask=crowns.marker_seed_mask,
         accepted_tops_xy=np.asarray(
             [list(top.xy_local_m) for top in tops.accepted], dtype=np.float64
         )
@@ -256,6 +264,8 @@ def run_span_tree_pipeline(
         accepted_tree_tops=tops.accepted_count,
         assigned_raw_point_count=int(len(assigned_rows)),
         artifact_root=output_root,
+        tree_top_diagnostics=dict(tops.diagnostics),
+        membership_diagnostics=membership_diagnostics,
         fine_representative_count=len(fine_xyz),
         aabb_query_points=vegetation_query.aabb_query_points,
         oriented_region_points=vegetation_query.oriented_region_points,
@@ -298,6 +308,8 @@ def load_span_tree_outcome(
         accepted_tree_tops=int(manifest.get("accepted_tree_tops", 0)),
         assigned_raw_point_count=int(len(original_index)),
         artifact_root=root,
+        tree_top_diagnostics=dict(manifest.get("tree_top_diagnostics") or {}),
+        membership_diagnostics=dict(manifest.get("membership_diagnostics") or {}),
         fine_representative_count=int(manifest.get("fine_representative_count", 0)),
         aabb_query_points=int(manifest.get("aabb_query_points", 0)),
         oriented_region_points=int(manifest.get("oriented_region_points", 0)),

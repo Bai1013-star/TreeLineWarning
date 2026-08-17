@@ -145,6 +145,12 @@ class FastBaselineConfig:
     tree_top_radius0_m: float = 1.20
     tree_top_radius_per_meter: float = 0.10
     tree_top_radius_cap_m: float = 5.0
+    # A lower peak inside a taller crown's adaptive window is not discarded
+    # blindly.  It may be a neighbouring tree when its height/support and the
+    # CHM saddle between the two peaks provide independent-crown evidence.
+    tree_top_suppressed_peak_min_height_ratio: float = 0.55
+    tree_top_suppressed_peak_min_saddle_drop_m: float = 1.20
+    tree_top_suppressed_peak_min_path_occupancy_fraction: float = 0.80
     tree_min_crown_area_m2: float = 1.0
     watershed_mask_min_occupancy: int = 1
     tree_membership_hag_tolerance_m: float = 1.20
@@ -213,6 +219,8 @@ class FastBaselineConfig:
         )
         for name in {
             "wire_coarse_robust_z_quantile_fraction",
+            "tree_top_suppressed_peak_min_height_ratio",
+            "tree_top_suppressed_peak_min_path_occupancy_fraction",
             "wire_coarse_residual_quantile_fraction",
             "wire_coarse_min_longitudinal_coverage_fraction",
             "pole_attachment_lower_quantile",
