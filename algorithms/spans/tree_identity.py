@@ -21,6 +21,9 @@ from algorithms.spans.reconcile import TreeReconciliationResult
 TREE_IDENTITY_SCHEMA = "treeline-persistent-tree-registry-v1"
 TREE_IDENTITY_MEMBERSHIP_SCHEMA = "treeline-persistent-tree-membership-v2"
 TREE_IDENTITY_TRANSACTION_SCHEMA = "treeline-persistent-tree-transaction-v1"
+_TRANSACTION_PREPARED = "PREPARED"
+_TRANSACTION_REGISTRY_PUBLISHED_PENDING_COMPLETION = "REGISTRY_PUBLISHED_PENDING_COMPLETION"
+_TRANSACTION_COMPLETED = "COMPLETED"
 _LOCK_POLL_SECONDS = 0.05
 _Published = TypeVar("_Published")
 
@@ -161,8 +164,15 @@ def _read_transaction(path: Path) -> dict[str, Any] | None:
     if (
         not isinstance(data, dict)
         or data.get("schema") != TREE_IDENTITY_TRANSACTION_SCHEMA
+        or data.get("state")
+        not in {
+            _TRANSACTION_PREPARED,
+            _TRANSACTION_REGISTRY_PUBLISHED_PENDING_COMPLETION,
+            _TRANSACTION_COMPLETED,
+        }
         or not isinstance(data.get("run_id"), str)
         or not isinstance(data.get("baseline_registry_digest"), str)
+        or not isinstance(data.get("baseline_registry_exists"), bool)
         or not isinstance(data.get("proposed_registry_digest"), str)
         or not isinstance(data.get("baseline_registry"), dict)
         or not isinstance(data.get("proposed_registry"), dict)
@@ -193,6 +203,7 @@ def _recover_terminal_transaction_locked(
     current = _read_registry(registry_path)
     current_digest = _registry_digest(current)
     baseline_digest = transaction["baseline_registry_digest"]
+    baseline_exists = transaction["baseline_registry_exists"]
     baseline = transaction["baseline_registry"]
     proposed = transaction["proposed_registry"]
     proposed_digest = transaction["proposed_registry_digest"]
@@ -209,7 +220,13 @@ def _recover_terminal_transaction_locked(
         if current_digest == baseline_digest:
             _write_json_atomic(registry_path, proposed)
     elif current_digest == proposed_digest:
-        _write_json_atomic(registry_path, baseline)
+        if baseline_exists:
+            _write_json_atomic(registry_path, baseline)
+        else:
+            try:
+                registry_path.unlink(missing_ok=True)
+            except OSError as exc:
+                raise TreeIdentityError("TREE_IDENTITY_REGISTRY_ROLLBACK_FAILED") from exc
     _remove_transaction(transaction_path)
     return True
 
@@ -585,19 +602,21 @@ def finalize_tree_identity_terminal(
     prepared: TreeIdentityPreparation,
     *,
     publish_terminal: Callable[[TreeReconciliationResult], _Published],
+    complete_terminal: Callable[[], None],
     is_run_complete: Callable[[str], bool],
 ) -> tuple[TreeReconciliationResult, _Published]:
     """Commit identity only after the caller has atomically completed its run.
 
-    The pending journal is durable before the terminal callback.  A failed or
-    incomplete callback never publishes its proposed registry; a crash after a
-    completed callback is deterministically rolled forward on recovery.
+    The pending journal is durable before terminal artifact publication.  The
+    registry is published before COMPLETE becomes visible; a failure before
+    COMPLETE rolls back to the journal baseline under the same project lock.
     """
 
     with _project_registry_lock(
         prepared.registry_path, prepared.config.identity_registry_lock_timeout_seconds
     ):
         _recover_terminal_transaction_locked(prepared.registry_path, is_run_complete)
+        baseline_exists = prepared.registry_path.is_file()
         baseline = _read_registry(prepared.registry_path)
         proposed = deepcopy(baseline)
         assigned = _assign_from_registry(
@@ -621,8 +640,10 @@ def finalize_tree_identity_terminal(
             transaction_path,
             {
                 "schema": TREE_IDENTITY_TRANSACTION_SCHEMA,
+                "state": _TRANSACTION_PREPARED,
                 "run_id": prepared.run_id,
                 "baseline_registry_digest": _registry_digest(baseline),
+                "baseline_registry_exists": baseline_exists,
                 "baseline_registry": baseline,
                 "proposed_registry_digest": _registry_digest(proposed),
                 "proposed_registry": proposed,
@@ -630,19 +651,41 @@ def finalize_tree_identity_terminal(
         )
         try:
             published = publish_terminal(assigned)
+            _write_json_atomic(prepared.registry_path, proposed)
+            _write_json_atomic(
+                transaction_path,
+                {
+                    "schema": TREE_IDENTITY_TRANSACTION_SCHEMA,
+                    "state": _TRANSACTION_REGISTRY_PUBLISHED_PENDING_COMPLETION,
+                    "run_id": prepared.run_id,
+                    "baseline_registry_digest": _registry_digest(baseline),
+                    "baseline_registry_exists": baseline_exists,
+                    "baseline_registry": baseline,
+                    "proposed_registry_digest": _registry_digest(proposed),
+                    "proposed_registry": proposed,
+                },
+            )
+            complete_terminal()
             if not is_run_complete(prepared.run_id):
                 raise TreeIdentityError("TREE_IDENTITY_TERMINAL_RUN_NOT_COMPLETE")
+            _write_json_atomic(
+                transaction_path,
+                {
+                    "schema": TREE_IDENTITY_TRANSACTION_SCHEMA,
+                    "state": _TRANSACTION_COMPLETED,
+                    "run_id": prepared.run_id,
+                    "baseline_registry_digest": _registry_digest(baseline),
+                    "baseline_registry_exists": baseline_exists,
+                    "baseline_registry": baseline,
+                    "proposed_registry_digest": _registry_digest(proposed),
+                    "proposed_registry": proposed,
+                },
+            )
         except BaseException:
             if not is_run_complete(prepared.run_id):
-                _remove_transaction(transaction_path)
+                _recover_terminal_transaction_locked(prepared.registry_path, is_run_complete)
             raise
-        try:
-            _write_json_atomic(prepared.registry_path, proposed)
-            _remove_transaction(transaction_path)
-        except TreeIdentityError:
-            # A completed run must be rolled forward from its durable journal;
-            # never mark it FAILED after terminal completion succeeded.
-            _recover_terminal_transaction_locked(prepared.registry_path, is_run_complete)
+        _remove_transaction(transaction_path)
         return assigned, published
 
 

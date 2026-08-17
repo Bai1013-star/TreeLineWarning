@@ -284,6 +284,7 @@ def test_terminal_failure_does_not_consume_identity_sequence(
         finalize_tree_identity_terminal(
             prepared,
             publish_terminal=fail_terminal,
+            complete_terminal=lambda: None,
             is_run_complete=lambda _run_id: False,
         )
     assert registry_path.read_bytes() == before
@@ -292,19 +293,22 @@ def test_terminal_failure_does_not_consume_identity_sequence(
     completed = {"value": False}
 
     def complete_terminal(_assigned):
-        completed["value"] = True
         return "complete"
+
+    def mark_complete() -> None:
+        completed["value"] = True
 
     assigned, published = finalize_tree_identity_terminal(
         prepared,
         publish_terminal=complete_terminal,
+        complete_terminal=mark_complete,
         is_run_complete=lambda _run_id: completed["value"],
     )
     assert published == "complete"
     assert assigned.global_tree_records[0].persistent_tree_id == "G002-T002"
 
 
-def test_terminal_transaction_recovery_rolls_back_incomplete_and_rolls_forward_complete(
+def test_terminal_transaction_recovery_rolls_back_incomplete_and_keeps_complete(
     tmp_path: Path,
 ) -> None:
     registry_path, membership_path = _paths(tmp_path, "run-a")
@@ -335,13 +339,16 @@ def test_terminal_transaction_recovery_rolls_back_incomplete_and_rolls_forward_c
         journal,
         {
             "schema": tree_identity.TREE_IDENTITY_TRANSACTION_SCHEMA,
+            "state": tree_identity._TRANSACTION_REGISTRY_PUBLISHED_PENDING_COMPLETION,
             "run_id": "run-a",
             "baseline_registry_digest": tree_identity._registry_digest(baseline),
+            "baseline_registry_exists": False,
             "baseline_registry": baseline,
             "proposed_registry_digest": tree_identity._registry_digest(proposed),
             "proposed_registry": proposed,
         },
     )
+    tree_identity._write_json_atomic(registry_path, proposed)
     assert recover_tree_identity_terminal_transaction(
         registry_path,
         prepared.config,
@@ -350,12 +357,15 @@ def test_terminal_transaction_recovery_rolls_back_incomplete_and_rolls_forward_c
     assert tree_identity._read_registry(registry_path) == baseline
     assert not journal.exists()
 
+    tree_identity._write_json_atomic(registry_path, proposed)
     tree_identity._write_json_atomic(
         journal,
         {
             "schema": tree_identity.TREE_IDENTITY_TRANSACTION_SCHEMA,
+            "state": tree_identity._TRANSACTION_COMPLETED,
             "run_id": "run-a",
             "baseline_registry_digest": tree_identity._registry_digest(baseline),
+            "baseline_registry_exists": False,
             "baseline_registry": baseline,
             "proposed_registry_digest": tree_identity._registry_digest(proposed),
             "proposed_registry": proposed,
@@ -368,6 +378,95 @@ def test_terminal_transaction_recovery_rolls_back_incomplete_and_rolls_forward_c
     )
     assert _registry(tmp_path) == proposed
     assert not journal.exists()
+    assert not recover_tree_identity_terminal_transaction(
+        registry_path,
+        prepared.config,
+        is_run_complete=lambda _run_id: True,
+    )
+
+
+def test_complete_is_never_visible_before_its_registry_identity(tmp_path: Path) -> None:
+    registry_path, membership_path = _paths(tmp_path, "run-a")
+    prepared = prepare_tree_identity(
+        _result([[1, 2, 3]]),
+        default_fast_baseline_config(),
+        registry_path=registry_path,
+        membership_path=membership_path,
+        group_id="G002",
+        source_key="same-source",
+        run_id="run-a",
+    )
+    complete = {"value": False}
+
+    def complete_terminal() -> None:
+        # This is the precise externally-visible COMPLETE transition boundary.
+        registry = _registry(tmp_path)
+        assert "G002-T001" in registry["entities"]
+        complete["value"] = True
+
+    assigned, _published = finalize_tree_identity_terminal(
+        prepared,
+        publish_terminal=lambda _assigned: "terminal artifacts attached",
+        complete_terminal=complete_terminal,
+        is_run_complete=lambda _run_id: complete["value"],
+    )
+    assert assigned.global_tree_records[0].persistent_tree_id == "G002-T001"
+
+
+def test_complete_failure_rolls_back_published_registry_and_reuses_next_id(tmp_path: Path) -> None:
+    _assign(tmp_path, _result([[1, 2, 3]]), "run-a")
+    registry_path, membership_path = _paths(tmp_path, "run-b")
+    before = registry_path.read_bytes()
+    prepared = prepare_tree_identity(
+        _result([[8, 9, 10]]),
+        default_fast_baseline_config(),
+        registry_path=registry_path,
+        membership_path=membership_path,
+        group_id="G002",
+        source_key="same-source",
+        run_id="run-b",
+    )
+    with pytest.raises(OSError, match="complete failure"):
+        finalize_tree_identity_terminal(
+            prepared,
+            publish_terminal=lambda _assigned: "terminal artifacts attached",
+            complete_terminal=lambda: (_ for _ in ()).throw(OSError("complete failure")),
+            is_run_complete=lambda _run_id: False,
+        )
+    assert registry_path.read_bytes() == before
+    recovered = _assign(tmp_path, _result([[8, 9, 10]]), "run-c")
+    assert recovered.global_tree_records[0].persistent_tree_id == "G002-T002"
+
+
+def test_registry_publication_failure_prevents_complete(tmp_path: Path, monkeypatch) -> None:
+    registry_path, membership_path = _paths(tmp_path, "run-a")
+    prepared = prepare_tree_identity(
+        _result([[1, 2, 3]]),
+        default_fast_baseline_config(),
+        registry_path=registry_path,
+        membership_path=membership_path,
+        group_id="G002",
+        source_key="same-source",
+        run_id="run-a",
+    )
+    completed = {"value": False}
+    original_write = tree_identity._write_json_atomic
+
+    def fail_registry(path: Path, payload: dict) -> None:
+        if path == registry_path:
+            raise TreeIdentityError("TREE_IDENTITY_REGISTRY_WRITE_FAILED")
+        original_write(path, payload)
+
+    monkeypatch.setattr(tree_identity, "_write_json_atomic", fail_registry)
+    with pytest.raises(TreeIdentityError, match="REGISTRY_WRITE_FAILED"):
+        finalize_tree_identity_terminal(
+            prepared,
+            publish_terminal=lambda _assigned: "terminal artifacts attached",
+            complete_terminal=lambda: completed.__setitem__("value", True),
+            is_run_complete=lambda _run_id: completed["value"],
+        )
+    assert not completed["value"]
+    assert not registry_path.exists()
 
 
 def test_two_processes_allocate_unique_ids_without_lost_update(tmp_path: Path) -> None:

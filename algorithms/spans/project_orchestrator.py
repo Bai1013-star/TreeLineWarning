@@ -221,12 +221,15 @@ class ProjectSpanOrchestrator:
                             output_root,
                         )
                         attach_span_artifact_index(session, span_id, artifact_reference)
-                        complete_run(session, run_id)
                         return terminal_result
+
+                    def _complete_terminal_identity() -> None:
+                        complete_run(session, run_id)
 
                     _assigned, result = finalize_tree_identity_terminal(
                         result.identity_terminal_preparation,
                         publish_terminal=_publish_terminal_identity,
+                        complete_terminal=_complete_terminal_identity,
                         is_run_complete=_run_complete,
                     )
                 else:
