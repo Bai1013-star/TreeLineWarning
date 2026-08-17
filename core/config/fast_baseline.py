@@ -151,6 +151,8 @@ class FastBaselineConfig:
     tree_top_suppressed_peak_min_height_ratio: float = 0.55
     tree_top_suppressed_peak_min_saddle_drop_m: float = 1.20
     tree_top_suppressed_peak_min_path_occupancy_fraction: float = 0.80
+    identity_same_source_min_iou: float = 0.50
+    identity_same_source_min_coverage_fraction: float = 0.70
     tree_min_crown_area_m2: float = 1.0
     watershed_mask_min_occupancy: int = 1
     tree_membership_hag_tolerance_m: float = 1.20
@@ -219,6 +221,8 @@ class FastBaselineConfig:
         )
         for name in {
             "wire_coarse_robust_z_quantile_fraction",
+            "identity_same_source_min_iou",
+            "identity_same_source_min_coverage_fraction",
             "tree_top_suppressed_peak_min_height_ratio",
             "tree_top_suppressed_peak_min_path_occupancy_fraction",
             "wire_coarse_residual_quantile_fraction",

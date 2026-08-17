@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from core.config.fast_baseline import FastBaselineConfig
+from core.config.fast_baseline import FastBaselineConfig, canonical_digest
 
 from algorithms.poles.topology import SpanRecord
 from algorithms.spans.clearance import run_span_tree_wire_clearance
@@ -37,6 +37,7 @@ from algorithms.spans.role_tiles import (
     RoleTileCacheError,
 )
 from algorithms.spans.tree_runner import run_span_tree_pipeline
+from algorithms.spans.tree_identity import assign_persistent_tree_ids
 from algorithms.spans.wire import run_span_wire_pipeline
 
 _DISPLAY_ID_RE = re.compile(r"^[A-Z](\d+)$")
@@ -301,6 +302,18 @@ def run_tracked_canonical_span_science(
     )
     reconciled = reconcile_trees(
         [tree_outcome], config, origin_xyz=tuple(float(item) for item in origin_value)
+    )
+    # Keep biological/entity identity outside the run-local reconciliation id.
+    # The registry is project-scoped; its membership sidecar remains inside the
+    # immutable run artifact for auditable same-source rerun matching.
+    reconciled = assign_persistent_tree_ids(
+        reconciled,
+        config,
+        registry_path=project_root / "tree_identity_registry.json",
+        membership_path=output_root / "tree_identity_membership.npz",
+        group_id=input_data.group_id,
+        source_key=canonical_digest({"source_identity": dict(input_data.source_identity)}),
+        run_id=output_root.name,
     )
     tree_runtime = time.perf_counter() - tree_started
     clearance_started = time.perf_counter()

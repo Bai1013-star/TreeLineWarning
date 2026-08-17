@@ -14,16 +14,62 @@ identity ``LineXX-SpanYYY-TreeZZZ``.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from core.config.fast_baseline import FastBaselineConfig
 
-from algorithms.spans.tree_runner import SpanTreeOutcome
+if TYPE_CHECKING:
+    from algorithms.spans.tree_runner import SpanTreeOutcome
 
 RECONCILE_SCHEMA = "fast-baseline-tree-reconciliation-v1"
 _OVERLAP_IOU_MIN = 0.30
+
+
+def _span_coordinates(
+    span: Any,
+    apex_xy_local_m: tuple[float, ...],
+    origin_xyz: tuple[float, float, float],
+) -> tuple[float | None, float | None]:
+    """Project an apex in the authoritative start-to-end Span frame."""
+
+    if (
+        len(apex_xy_local_m) < 2
+        or not hasattr(span, "start_xyz_absolute_m")
+        or not hasattr(span, "end_xyz_absolute_m")
+    ):
+        return None, None
+    start = np.asarray(span.start_xyz_absolute_m[:2], dtype=np.float64)
+    end = np.asarray(span.end_xyz_absolute_m[:2], dtype=np.float64)
+    axis = end - start
+    length = float(np.linalg.norm(axis))
+    if length <= 0.0:
+        return None, None
+    axis /= length
+    absolute = np.asarray(apex_xy_local_m[:2], dtype=np.float64) + np.asarray(
+        origin_xyz[:2], dtype=np.float64
+    )
+    delta = absolute - start
+    return float(delta @ axis), float(delta @ np.asarray((-axis[1], axis[0])))
+
+
+def _apply_span_order(records: list[GlobalTreeRecord]) -> list[GlobalTreeRecord]:
+    """Assign presentation-only per-span order without altering durable ids."""
+
+    ordered: list[GlobalTreeRecord] = []
+    for span_id in sorted({record.span_id for record in records}):
+        group = [record for record in records if record.span_id == span_id]
+        group.sort(key=lambda record: (
+            float("inf") if record.longitudinal_s_m is None else record.longitudinal_s_m,
+            float("inf") if record.lateral_n_m is None else record.lateral_n_m,
+            record.global_tree_id,
+        ))
+        ordered.extend(
+            replace(record, span_order_index=index)
+            for index, record in enumerate(group, start=1)
+        )
+    return sorted(ordered, key=lambda record: record.global_tree_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +90,11 @@ class GlobalTreeRecord:
     core_fraction: float
     review: bool
     merged_span_tree_keys: tuple[tuple[int, int], ...]
+    persistent_tree_id: str = ""
+    identity_state: str = "RUN_LOCAL_ONLY"
+    longitudinal_s_m: float | None = None
+    lateral_n_m: float | None = None
+    span_order_index: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -63,6 +114,11 @@ class GlobalTreeRecord:
             "merged_span_tree_keys": [
                 [int(a), int(b)] for a, b in self.merged_span_tree_keys
             ],
+            "persistent_tree_id": self.persistent_tree_id,
+            "identity_state": self.identity_state,
+            "longitudinal_s_m": self.longitudinal_s_m,
+            "lateral_n_m": self.lateral_n_m,
+            "span_order_index": self.span_order_index,
         }
 
 
@@ -139,6 +195,7 @@ def _reconcile_single_span(
     outcome: SpanTreeOutcome,
     config: FastBaselineConfig,
     started: float,
+    origin_xyz: tuple[float, float, float],
 ) -> TreeReconciliationResult:
     """Reconcile one span without the general cross-span raw-row loop."""
 
@@ -180,6 +237,7 @@ def _reconcile_single_span(
         )
         height = float(primary_record["apex_height_m"]) if primary_record else 0.0
         core_fraction = core_points / total if total else 0.0
+        longitudinal_s_m, lateral_n_m = _span_coordinates(span, apex_xy, origin_xyz)
         review = core_fraction < 0.15 or total < config.tree_min_final_members
         if review:
             review_ids.append(new_id)
@@ -199,8 +257,11 @@ def _reconcile_single_span(
                 core_fraction=core_fraction,
                 review=review,
                 merged_span_tree_keys=((0, tree_id),),
+                longitudinal_s_m=longitudinal_s_m,
+                lateral_n_m=lateral_n_m,
             )
         )
+    records = _apply_span_order(records)
     return TreeReconciliationResult(
         global_tree_records=tuple(records),
         final_original_index=final_original,
@@ -230,10 +291,9 @@ def reconcile_trees(
 ) -> TreeReconciliationResult:
     """Merge duplicate halo hypotheses and build the final tree inventory."""
 
-    del origin_xyz  # reserved for future span-specific thresholds
     started = time.perf_counter()
     if len(outcomes) == 1:
-        return _reconcile_single_span(outcomes[0], config, started)
+        return _reconcile_single_span(outcomes[0], config, started, origin_xyz)
     members_by_span = [_span_tree_members(outcome) for outcome in outcomes]
     union_find = _UnionFind()
 
@@ -397,6 +457,7 @@ def reconcile_trees(
             else 0.0
         )
         core_fraction = core_points / total if total else 0.0
+        longitudinal_s_m, lateral_n_m = _span_coordinates(span, apex_xy, origin_xyz)
         review = core_fraction < 0.15 or total < config.tree_min_final_members
         if review:
             review_ids.append(new_id)
@@ -420,8 +481,11 @@ def reconcile_trees(
                 core_fraction=core_fraction,
                 review=review,
                 merged_span_tree_keys=merged_keys,
+                longitudinal_s_m=longitudinal_s_m,
+                lateral_n_m=lateral_n_m,
             )
         )
+    records = _apply_span_order(records)
     return TreeReconciliationResult(
         global_tree_records=tuple(records),
         final_original_index=final_original_array,

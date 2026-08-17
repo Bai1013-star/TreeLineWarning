@@ -61,11 +61,13 @@ class SpanTreeWireRecord:
     tree_point_count: int
     evaluated_edge_count: int
     status: str
+    persistent_tree_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "global_tree_id": self.global_tree_id,
             "external_name": self.external_name,
+            "persistent_tree_id": self.persistent_tree_id,
             "line_id": self.line_id,
             "span_id": self.span_id,
             "span_name": self.span_name,
@@ -340,6 +342,9 @@ def run_span_tree_wire_clearance(
         record.global_tree_id: {
             "global_tree_id": record.global_tree_id,
             "external_name": record.external_name,
+            # Accept legacy reconciliation-shaped records in reference/backend
+            # tests while production GlobalTreeRecord always supplies this.
+            "persistent_tree_id": str(getattr(record, "persistent_tree_id", "")),
             "line_id": record.line_id,
             "span_id": record.span_id,
             "span_name": record.span_name,
@@ -364,6 +369,7 @@ def run_span_tree_wire_clearance(
                     tree_point_count=record.full_resolution_point_count,
                     evaluated_edge_count=0,
                     status=NO_DISTANCE_READY_EDGE,
+                    persistent_tree_id=str(getattr(record, "persistent_tree_id", "")),
                 )
             )
         return SpanClearanceResult(
@@ -452,6 +458,7 @@ def run_span_tree_wire_clearance(
                 tree_point_count=point_count,
                 evaluated_edge_count=evaluated_total,
                 status=VALID,
+                persistent_tree_id=str(tree_context.get("persistent_tree_id", "")),
             )
         )
     valid_values = [
