@@ -1,10 +1,21 @@
-"""Persistent entity identity tests independent of run-local tree ordering."""
+"""Persistent identity safety, lineage, and transaction tests."""
 
 from __future__ import annotations
 
+import json
+import multiprocessing
+from pathlib import Path
+
 import numpy as np
+import pytest
+from algorithms.spans import tree_identity
 from algorithms.spans.reconcile import GlobalTreeRecord, TreeReconciliationResult
-from algorithms.spans.tree_identity import assign_persistent_tree_ids
+from algorithms.spans.tree_identity import (
+    TreeIdentityError,
+    assign_persistent_tree_ids,
+    finalize_tree_identity,
+    prepare_tree_identity,
+)
 from core.config.fast_baseline import default_fast_baseline_config
 
 
@@ -15,11 +26,20 @@ def _result(groups: list[list[int]], *, span_id: int = 4) -> TreeReconciliationR
     )
     records = tuple(
         GlobalTreeRecord(
-            global_tree_id=gid, line_id=2, span_id=span_id, span_name="S005",
-            external_name=f"G002-Span005-Tree{gid + 1:03d}", primary_span_tree_id=gid,
-            apex_xy_local_m=(float(gid), 0.0), apex_height_m=10.0,
-            full_resolution_point_count=len(group), core_point_count=len(group), halo_point_count=0,
-            core_fraction=1.0, review=False, merged_span_tree_keys=((0, gid),),
+            global_tree_id=gid,
+            line_id=2,
+            span_id=span_id,
+            span_name=f"S{span_id:03d}",
+            external_name=f"G002-Span{span_id:03d}-Tree{gid + 1:03d}",
+            primary_span_tree_id=gid,
+            apex_xy_local_m=(float(gid), 0.0),
+            apex_height_m=10.0,
+            full_resolution_point_count=len(group),
+            core_point_count=len(group),
+            halo_point_count=0,
+            core_fraction=1.0,
+            review=False,
+            merged_span_tree_keys=((0, gid),),
             span_order_index=gid + 1,
         )
         for gid, group in enumerate(groups)
@@ -29,35 +49,239 @@ def _result(groups: list[list[int]], *, span_id: int = 4) -> TreeReconciliationR
     )
 
 
-def _assign(tmp_path, result, run_id):
+def _paths(root: Path, run_id: str) -> tuple[Path, Path]:
+    return root / "tree_identity_registry.json", root / run_id / "tree_identity_membership.npz"
+
+
+def _assign(root: Path, result: TreeReconciliationResult, run_id: str) -> TreeReconciliationResult:
+    registry, membership = _paths(root, run_id)
     return assign_persistent_tree_ids(
         result,
         default_fast_baseline_config(),
-        registry_path=tmp_path / "tree_identity_registry.json",
-        membership_path=tmp_path / run_id / "tree_identity_membership.npz",
-        group_id="G002", source_key="same-source", run_id=run_id,
+        registry_path=registry,
+        membership_path=membership,
+        group_id="G002",
+        source_key="same-source",
+        run_id=run_id,
     )
 
 
-def test_same_source_rerun_preserves_ids_and_new_tree_does_not_renumber(tmp_path) -> None:
+def _registry(root: Path) -> dict:
+    return json.loads((root / "tree_identity_registry.json").read_text("utf-8"))
+
+
+def _concurrent_assign(root_text: str, members: list[int], run_id: str, queue) -> None:
+    """Spawn-safe worker: two processes must serialize registry allocation."""
+
+    result = _assign(Path(root_text), _result([members]), run_id)
+    queue.put(result.global_tree_records[0].persistent_tree_id)
+
+
+def test_same_source_rerun_preserves_ids_and_new_tree_does_not_renumber(tmp_path: Path) -> None:
     first = _assign(tmp_path, _result([[1, 2, 3], [10, 11, 12]]), "run-a")
     assert [record.persistent_tree_id for record in first.global_tree_records] == [
-        "G002-T001", "G002-T002"
+        "G002-T001",
+        "G002-T002",
     ]
-    # A missed tree is inserted spatially between the old entities, but IDs are
-    # matched by original-index membership and the new one takes the next ID.
     second = _assign(
         tmp_path, _result([[1, 2, 3], [6, 7, 8], [10, 11, 12]]), "run-b"
     )
     assert [record.persistent_tree_id for record in second.global_tree_records] == [
-        "G002-T001", "G002-T003", "G002-T002"
+        "G002-T001",
+        "G002-T003",
+        "G002-T002",
+    ]
+    ownership_changed = _assign(
+        tmp_path,
+        _result([[1, 2, 3], [6, 7, 8], [10, 11, 12]], span_id=19),
+        "run-c",
+    )
+    assert [record.persistent_tree_id for record in ownership_changed.global_tree_records] == [
+        "G002-T001",
+        "G002-T003",
+        "G002-T002",
     ]
 
 
-def test_split_and_merge_are_not_silently_inherited(tmp_path) -> None:
-    _assign(tmp_path, _result([[1, 2, 3, 4, 5, 6]]), "run-a")
+def test_partition_split_supersedes_parent_and_assigns_children(tmp_path: Path) -> None:
+    original = _assign(tmp_path, _result([[1, 2, 3, 4, 5, 6]]), "run-a")
+    assert original.global_tree_records[0].persistent_tree_id == "G002-T001"
     split = _assign(tmp_path, _result([[1, 2, 3], [4, 5, 6]]), "run-b")
-    assert {record.identity_state for record in split.global_tree_records} == {"NEW_ENTITY"}
-    # Two established entities observed as one do not auto-merge either.
-    merged = _assign(tmp_path, _result([[1, 2, 3, 4, 5, 6]]), "run-c")
-    assert merged.global_tree_records[0].identity_state == "MERGE_AMBIGUOUS_REVIEW"
+    assert [record.persistent_tree_id for record in split.global_tree_records] == [
+        "G002-T002",
+        "G002-T003",
+    ]
+    assert {record.identity_state for record in split.global_tree_records} == {
+        "SPLIT_CHILD_NEW_ENTITY"
+    }
+    assert all(record.candidate_persistent_tree_ids == () for record in split.global_tree_records)
+    registry = _registry(tmp_path)
+    assert registry["entities"]["G002-T001"]["current_status"] == "SUPERSEDED_BY_SPLIT"
+    assert registry["entities"]["G002-T002"]["lineage"] == [
+        {"event": "SPLIT_FROM", "persistent_tree_id": "G002-T001"}
+    ]
+    assert registry["next_sequence_by_group"]["G002"] == 4
+
+
+def test_ambiguous_merge_is_unbound_and_rerun_does_not_consume_ids(tmp_path: Path) -> None:
+    _assign(tmp_path, _result([[1, 2, 3], [4, 5, 6]]), "run-a")
+    merged = _assign(tmp_path, _result([[1, 2, 3, 4, 5, 6]]), "run-b")
+    record = merged.global_tree_records[0]
+    assert record.persistent_tree_id is None
+    assert record.identity_state == "MERGE_AMBIGUOUS_REVIEW"
+    assert record.candidate_persistent_tree_ids == ("G002-T001", "G002-T002")
+    before = _registry(tmp_path)
+    repeated = _assign(tmp_path, _result([[1, 2, 3, 4, 5, 6]]), "run-c")
+    assert repeated.global_tree_records[0].persistent_tree_id is None
+    assert (
+        repeated.global_tree_records[0].candidate_persistent_tree_ids
+        == record.candidate_persistent_tree_ids
+    )
+    after = _registry(tmp_path)
+    assert after["next_sequence_by_group"] == before["next_sequence_by_group"]
+    assert set(after["entities"]) == {"G002-T001", "G002-T002"}
+
+
+@pytest.mark.parametrize("kind", ["missing", "outside", "malformed", "schema"])
+def test_invalid_historical_membership_fails_closed_without_registry_change(
+    tmp_path: Path, kind: str
+) -> None:
+    _assign(tmp_path, _result([[1, 2, 3]]), "run-a")
+    registry_path = tmp_path / "tree_identity_registry.json"
+    before = registry_path.read_bytes()
+    registry = json.loads(before)
+    entity = registry["entities"]["G002-T001"]
+    membership_path = tmp_path / entity["last_membership_reference"]
+    if kind == "missing":
+        membership_path.unlink()
+    elif kind == "outside":
+        entity["last_membership_reference"] = "../outside.npz"
+        registry_path.write_text(json.dumps(registry), "utf-8")
+        before = registry_path.read_bytes()
+    elif kind == "malformed":
+        membership_path.write_bytes(b"not an npz")
+    else:
+        np.savez(
+            membership_path,
+            schema=np.asarray("wrong-schema"),
+            source_key=np.asarray("same-source"),
+            group_id=np.asarray("G002"),
+            original_index=np.asarray([1, 2, 3], dtype=np.int64),
+            global_tree_id=np.asarray([0, 0, 0], dtype=np.int32),
+        )
+    with pytest.raises(TreeIdentityError):
+        _assign(tmp_path, _result([[1, 2, 3], [8, 9, 10]]), "run-b")
+    assert registry_path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("corrupt", "message"),
+    [
+        ("{not json", "REGISTRY"),
+        (
+            json.dumps(
+                {
+                    "schema": "unsupported-schema",
+                    "next_sequence_by_group": {},
+                    "entities": {},
+                }
+            ),
+            "REGISTRY_SCHEMA_INVALID",
+        ),
+        (
+            json.dumps(
+                {
+                    "schema": "treeline-persistent-tree-registry-v1",
+                    "next_sequence_by_group": {"G002": 0},
+                    "entities": {},
+                }
+            ),
+            "REGISTRY_SEQUENCE_INVALID",
+        ),
+        (
+            json.dumps(
+                {
+                    "schema": "treeline-persistent-tree-registry-v1",
+                    "next_sequence_by_group": {"G002": 2},
+                    "entities": {
+                        "G002-T001": {
+                            "persistent_tree_id": "G002-T001",
+                            "group_id": "G002",
+                            "source_key": "same-source",
+                            "lineage": [
+                                {
+                                    "event": "SPLIT_FROM",
+                                    "persistent_tree_id": "G002-T404",
+                                }
+                            ],
+                        }
+                    },
+                }
+            ),
+            "REGISTRY_LINEAGE_INVALID",
+        ),
+    ],
+)
+def test_corrupt_registry_fails_closed(tmp_path: Path, corrupt: str, message: str) -> None:
+    registry_path = tmp_path / "tree_identity_registry.json"
+    registry_path.write_text(corrupt, "utf-8")
+    with pytest.raises(TreeIdentityError, match=message):
+        _assign(tmp_path, _result([[1, 2, 3]]), "run-a")
+    assert registry_path.read_text("utf-8") == corrupt
+
+
+def test_two_processes_allocate_unique_ids_without_lost_update(tmp_path: Path) -> None:
+    context = multiprocessing.get_context("spawn")
+    for round_id in range(2):
+        root = tmp_path / f"round-{round_id}"
+        queue = context.Queue()
+        first = context.Process(
+            target=_concurrent_assign, args=(str(root), [1, 2, 3], "run-a", queue)
+        )
+        second = context.Process(
+            target=_concurrent_assign, args=(str(root), [10, 11, 12], "run-b", queue)
+        )
+        first.start()
+        second.start()
+        first.join(30)
+        second.join(30)
+        assert first.exitcode == 0
+        assert second.exitcode == 0
+        assigned = {queue.get(timeout=5), queue.get(timeout=5)}
+        assert assigned == {"G002-T001", "G002-T002"}
+        registry = _registry(root)
+        assert set(registry["entities"]) == assigned
+        assert registry["next_sequence_by_group"]["G002"] == 3
+
+
+def test_publish_failures_do_not_consume_identity_sequence(tmp_path: Path, monkeypatch) -> None:
+    _assign(tmp_path, _result([[1, 2, 3]]), "run-a")
+    registry_path, membership_path = _paths(tmp_path, "run-b")
+    prepared = prepare_tree_identity(
+        _result([[8, 9, 10]]),
+        default_fast_baseline_config(),
+        registry_path=registry_path,
+        membership_path=membership_path,
+        group_id="G002",
+        source_key="same-source",
+        run_id="run-b",
+    )
+    before = registry_path.read_bytes()
+    def fail_publish(_result):
+        raise OSError("artifact failure")
+
+    with pytest.raises(OSError):
+        finalize_tree_identity(prepared, publish=fail_publish)
+    assert registry_path.read_bytes() == before
+    assert not membership_path.exists()
+
+    def fail_registry_write(_path, _payload):
+        raise TreeIdentityError("TREE_IDENTITY_REGISTRY_WRITE_FAILED")
+
+    monkeypatch.setattr(tree_identity, "_write_json_atomic", fail_registry_write)
+    with pytest.raises(TreeIdentityError, match="WRITE_FAILED"):
+        finalize_tree_identity(prepared, publish=lambda _result: "published")
+    assert registry_path.read_bytes() == before
+    monkeypatch.undo()
+    successful = _assign(tmp_path, _result([[8, 9, 10]]), "run-c")
+    assert successful.global_tree_records[0].persistent_tree_id == "G002-T002"

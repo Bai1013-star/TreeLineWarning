@@ -153,6 +153,11 @@ class FastBaselineConfig:
     tree_top_suppressed_peak_min_path_occupancy_fraction: float = 0.80
     identity_same_source_min_iou: float = 0.50
     identity_same_source_min_coverage_fraction: float = 0.70
+    identity_registry_lock_timeout_seconds: float = 15.0
+    identity_split_min_child_members: int = 3
+    identity_split_min_child_parent_fraction: float = 0.20
+    identity_split_min_child_purity: float = 0.90
+    identity_split_min_union_parent_coverage: float = 0.95
     tree_min_crown_area_m2: float = 1.0
     watershed_mask_min_occupancy: int = 1
     tree_membership_hag_tolerance_m: float = 1.20
@@ -206,6 +211,7 @@ class FastBaselineConfig:
                 "wire_max_curve_samples",
                 "tree_top_min_support_points",
                 "tree_min_final_members",
+                "identity_split_min_child_members",
                 "watershed_mask_min_occupancy",
                 "clearance_bvh_leaf_cap",
             }:
@@ -223,6 +229,9 @@ class FastBaselineConfig:
             "wire_coarse_robust_z_quantile_fraction",
             "identity_same_source_min_iou",
             "identity_same_source_min_coverage_fraction",
+            "identity_split_min_child_parent_fraction",
+            "identity_split_min_child_purity",
+            "identity_split_min_union_parent_coverage",
             "tree_top_suppressed_peak_min_height_ratio",
             "tree_top_suppressed_peak_min_path_occupancy_fraction",
             "wire_coarse_residual_quantile_fraction",
@@ -246,6 +255,11 @@ class FastBaselineConfig:
             raise ValueError("span_halo_m must be positive")
         if self.span_half_width_m <= 0.0:
             raise ValueError("span_half_width_m must be positive")
+        if (
+            not math.isfinite(self.identity_registry_lock_timeout_seconds)
+            or self.identity_registry_lock_timeout_seconds <= 0.0
+        ):
+            raise ValueError("identity_registry_lock_timeout_seconds must be positive")
 
     def to_dict(self) -> dict[str, Any]:
         payload = {

@@ -90,8 +90,9 @@ class GlobalTreeRecord:
     core_fraction: float
     review: bool
     merged_span_tree_keys: tuple[tuple[int, int], ...]
-    persistent_tree_id: str = ""
+    persistent_tree_id: str | None = None
     identity_state: str = "RUN_LOCAL_ONLY"
+    candidate_persistent_tree_ids: tuple[str, ...] = ()
     longitudinal_s_m: float | None = None
     lateral_n_m: float | None = None
     span_order_index: int | None = None
@@ -116,6 +117,7 @@ class GlobalTreeRecord:
             ],
             "persistent_tree_id": self.persistent_tree_id,
             "identity_state": self.identity_state,
+            "candidate_persistent_tree_ids": list(self.candidate_persistent_tree_ids),
             "longitudinal_s_m": self.longitudinal_s_m,
             "lateral_n_m": self.lateral_n_m,
             "span_order_index": self.span_order_index,
