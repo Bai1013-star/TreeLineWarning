@@ -1778,6 +1778,7 @@
 
 		window.p3aGiro3dViewer = viewer;
 		viewer.review.init();
+		window.dispatchEvent(new Event("p3a-giro3d-ready"));
 	}
 
 	function withTimeout(promise, ms, message) {

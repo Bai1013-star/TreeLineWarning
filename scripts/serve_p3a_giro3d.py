@@ -55,6 +55,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from scripts.tree_viewer_api import TreeViewerApiMixin
+
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 # The launcher may be executed directly (sys.path[0] = scripts/) rather than as
 # a module, so make the repository root importable for the lazy API imports.
@@ -147,7 +149,7 @@ class _ApiError(Exception):
         self.message = message
 
 
-class TowerReviewApi:
+class TowerReviewApi(TreeViewerApiMixin):
     """Thin HTTP-facing boundary; all project work goes through the session."""
 
     def __init__(self, config: TowerReviewConfig) -> None:
@@ -165,6 +167,9 @@ class TowerReviewApi:
         from core.project.session import open_project_writable
 
         return open_project_writable(self.config.project_root)
+
+    def _tree_error(self, status: int, code: str, message: str) -> _ApiError:
+        return _ApiError(status, code, message)
 
     def _tile_cache(self, session) -> Any:
         from algorithms.towers.raw_access import RawTileCache, RawTileCacheConfig
@@ -700,6 +705,38 @@ class _P3aHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _handle_tree_viewer_api(self) -> None:
+        """Serve Tree Viewer D's read-only span/list/preview routes."""
+
+        api = self.tower_review_api
+        if api is None:
+            self._json_response(
+                HTTPStatus.NOT_FOUND,
+                {
+                    "ok": False,
+                    "error": {"code": "API_DISABLED", "message": "Tree API is not enabled"},
+                },
+            )
+            return
+        path = self.path.split("?")[0].rstrip("/")
+        preview = re.fullmatch(r"/api/spans/(S[0-9]{3,})/trees/([0-9]+)/preview", path)
+        trees = re.fullmatch(r"/api/spans/(S[0-9]{3,})/trees", path)
+        try:
+            if path == "/api/spans":
+                result = api.tree_spans_list()
+            elif preview:
+                result = api.spans_tree_preview(preview.group(1), preview.group(2))
+            elif trees:
+                result = api.spans_trees(trees.group(1))
+            else:
+                raise _ApiError(HTTPStatus.NOT_FOUND, "NOT_FOUND", "unknown Tree API route")
+        except _ApiError as exc:
+            self._json_response(
+                exc.status, {"ok": False, "error": {"code": exc.code, "message": exc.message}}
+            )
+            return
+        self._json_response(HTTPStatus.OK, {"ok": True, **result})
+
     def _query_param(self, name: str) -> str:
         parsed = urllib.parse.urlparse(self.path)
         values = urllib.parse.parse_qs(parsed.query)
@@ -860,6 +897,11 @@ class _P3aHandler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/p3a_giro3d_healthz":
             self._serve_healthz()
+            return
+        if path == "/api/spans" or re.fullmatch(
+            r"/api/spans/S[0-9]{3,}/trees(?:/[0-9]+/preview)?", path
+        ):
+            self._handle_tree_viewer_api()
             return
         if path.startswith("/api/"):
             self._handle_tower_api()

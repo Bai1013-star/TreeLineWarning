@@ -85,6 +85,22 @@
 		#trp_group_list .gtower .tid { font-weight: 700; color: #80cbc4; }
 		#trp_group_list .gtower button { font: 11px sans-serif; padding: 1px 6px; }
 		#trp_group_list .empty { color: #78909c; cursor: default; }
+		/* Persistent Tree identity panel (Tree Viewer D) */
+		#tree_panel { border-top: 1px solid rgba(255,255,255,0.12); }
+		#tree_panel label { display: block; padding: 4px 10px; color: #b3e5fc; }
+		#tree_span_select { width: calc(100% - 20px); margin: 0 10px 4px; background: #263238; color: #ffd54f; }
+		#tree_header { padding: 4px 10px; font: 11px/1.5 Consolas, Menlo, monospace; color: #ffd54f; }
+		#tree_list { overflow-y: auto; max-height: 22vh; padding: 2px 6px 6px; font: 11px/1.4 Consolas, Menlo, monospace; }
+		#tree_list div { padding: 3px 5px; cursor: pointer; display: flex; gap: 6px; align-items: baseline; }
+		#tree_list div:hover, #tree_list div.sel { background: rgba(0,229,255,0.16); }
+		#tree_list .tcat { font-weight: 700; }
+		#tree_list .tswatch { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 10px; display: inline-block; }
+		#tree_list .tname { color: #b3e5fc; }
+		#tree_list .tmeta { color: #90a4ae; }
+		#tree_list .tclear { margin-left: auto; color: #ffe082; }
+		#tree_details { padding: 4px 10px; white-space: pre-line; color: #ffe082; font: 11px/1.6 Consolas, Menlo, monospace;
+			background: rgba(255,61,129,0.08); min-height: 1em; }
+		#tree_empty { color: #78909c; padding: 4px 10px; }
 		#trp_group_status { padding: 4px 10px; font: 11px/1.6 Consolas, Menlo, monospace; color: #a5d6a7; white-space: pre-line; }
 		#trp_confirmed_membership { padding: 4px 10px; font: 11px/1.6 Consolas, Menlo, monospace; color: #81d4fa; white-space: pre-line; min-height: 1em; }
 	</style>
@@ -120,6 +136,12 @@
 		<div id="trp_ordered_preview">待确认杆塔 / Tower Preview: —</div>
 		<div id="trp_group_status"></div>
 		<div id="trp_confirmed_membership">已确认杆塔成员 / Confirmed Tower Membership: —</div>
+		<div id="tree_panel">
+			<label>Tree Span: <select id="tree_span_select" aria-label="Tree Span"></select></label>
+			<div id="tree_header">Trees: —</div>
+			<div id="tree_list"></div>
+			<div id="tree_details">—</div>
+		</div>
 		<div id="trp_group_list"></div>
 		<div id="trp_mode">mode: NAVIGATE</div>
 		<div id="trp_details">—</div>
@@ -141,5 +163,6 @@
 
 	<script src="vendor/giro3d.bundle.js"></script>
 	<script src="viewer.js"></script>
+	<script src="tree_viewer.js"></script>
 </body>
 </html>
