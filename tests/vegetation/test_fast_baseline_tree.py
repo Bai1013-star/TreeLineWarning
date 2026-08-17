@@ -123,6 +123,56 @@ def test_shallow_shoulder_remains_suppressed() -> None:
     }
 
 
+def test_suppression_diagnostic_identifies_actual_neighbour() -> None:
+    """The diagnostic points to the first accepted marker that suppresses it."""
+    height = np.full((15, 25), 3.0, dtype=np.float32)
+    height[7, 3] = 15.0
+    height[7, 11] = 12.0
+    height[7, 15] = 9.0
+    height[7, 4:11] = np.linspace(14.0, 11.0, 7, dtype=np.float32)
+    height[7, 12:17] = np.asarray((10.0, 9.0, 8.0, 9.0, 7.0), dtype=np.float32)
+    chm = SpanChm(
+        height, np.ones_like(height, dtype=bool), np.ones_like(height, dtype=np.int32),
+        (0.0, 0.0), 0.5, 1.5,
+    )
+    tops = detect_span_tree_tops(chm, height, _CFG)
+    suppressed = next(
+        item for item in tops.diagnostics["candidate_diagnostics"]
+        if item["reason"] == "SUPPRESSED_BY_NEIGHBOUR"
+    )
+    assert suppressed["suppressed_by"]["tree_top_id"] == 1
+    assert (
+        suppressed["suppressed_by"]["suppression_radius_m"]
+        == tops.accepted[1].suppression_radius_m
+    )
+
+
+def test_full_tree_segmentation_path_is_deterministic() -> None:
+    """Tops, watershed labels, membership, and rejection evidence are repeatable."""
+    xyz = np.concatenate((
+        _smooth_crown(0.0, 0.0, 12.0, 2.4, 500),
+        _smooth_crown(4.5, 0.0, 9.0, 2.0, 420),
+    ))
+    first = _run_tree_pipeline(xyz)
+    second = _run_tree_pipeline(xyz)
+    _, _, first_tops, first_crowns, first_membership = first
+    _, _, second_tops, second_crowns, second_membership = second
+    assert first_tops.accepted_count == second_tops.accepted_count
+    assert [item.to_dict() for item in first_tops.accepted] == [
+        item.to_dict() for item in second_tops.accepted
+    ]
+    assert first_tops.diagnostics["candidate_diagnostics"] == second_tops.diagnostics[
+        "candidate_diagnostics"
+    ]
+    np.testing.assert_array_equal(
+        first_crowns.region_label_by_cell, second_crowns.region_label_by_cell
+    )
+    np.testing.assert_array_equal(first_membership, second_membership)
+    np.testing.assert_array_equal(
+        np.flatnonzero(first_membership >= 0), np.flatnonzero(second_membership >= 0)
+    )
+
+
 def test_chm_rejects_empty_and_low_cells_explicitly() -> None:
     xyz = _smooth_crown(0.0, 0.0, 10.0, 2.0, 300)
     hag = xyz[:, 2].astype(np.float32)

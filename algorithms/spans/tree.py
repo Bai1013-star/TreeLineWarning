@@ -390,8 +390,8 @@ def detect_span_tree_tops(
 
         suppressed_by: dict[str, Any] | None = None
         independent = False
-        for accepted_xy, accepted_radius, accepted_item in zip(
-            accepted_positions, accepted_radii, accepted_candidates, strict=True
+        for accepted_id, (accepted_xy, accepted_radius, accepted_item) in enumerate(
+            zip(accepted_positions, accepted_radii, accepted_candidates, strict=True)
         ):
             distance = math.hypot(xy[0] - accepted_xy[0], xy[1] - accepted_xy[1])
             if distance <= accepted_radius + 1e-9:
@@ -411,8 +411,9 @@ def detect_span_tree_tops(
                     >= config.tree_top_suppressed_peak_min_path_occupancy_fraction
                 )
                 suppressed_by = {
-                    "tree_top_id": len(accepted) - 1,
+                    "tree_top_id": accepted_id,
                     "distance_m": distance,
+                    "suppression_radius_m": accepted_radius,
                     "saddle_height_m": saddle,
                     "saddle_drop_m": saddle_drop,
                     "path_occupancy_fraction": path_occupancy,
