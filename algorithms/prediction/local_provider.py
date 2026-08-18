@@ -1,22 +1,21 @@
 """Strict local prediction-provider boundary.
 
-This module intentionally does *not* estimate missing biological, weather, or
-electrical inputs.  A configured local core must declare the fields it needs;
-otherwise it is reported as unavailable instead of receiving invented values.
+The desktop's shipped provider invokes the locally tracked rule-based core
+from ``origin/feature/chinese-ui``. It uses only defaults that the core's
+own I1 adapter formally defines; every such default remains visible in output.
 """
 
 from __future__ import annotations
 
-import importlib
-import os
 import time
-from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 PREDICTION_INTERFACE_VERSION = "treeline-local-prediction-v1"
-PREDICTION_ENTRYPOINT_ENV = "TREELINE_WARNING_PREDICTION_ENTRYPOINT"
+BASELINE_MODEL_ID = "tree-risk-rule-baseline"
+BASELINE_MODEL_VERSION = "origin-feature-chinese-ui-a502ec9"
+BASELINE_HORIZON = "current-baseline"
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,118 +98,32 @@ def build_prediction_input(
     )
 
 
-def _load_configured_core() -> tuple[Callable[[dict[str, Any]], Any] | None, str | None]:
-    target = os.environ.get(PREDICTION_ENTRYPOINT_ENV, "").strip()
-    if not target:
-        return None, None
-    module_name, separator, attribute = target.partition(":")
-    if not separator or not module_name or not attribute:
-        return None, "PREDICTION_ENTRYPOINT_INVALID"
-    try:
-        entrypoint = getattr(importlib.import_module(module_name), attribute)
-    except (ImportError, AttributeError) as exc:
-        return None, f"PREDICTION_ENTRYPOINT_UNAVAILABLE: {type(exc).__name__}"
-    return entrypoint, None
-
-
-def _required_fields(core: Callable[[dict[str, Any]], Any]) -> tuple[str, ...] | None:
-    required = getattr(core, "PREDICTION_REQUIRED_FIELDS", None)
-    if not isinstance(required, (list, tuple)) or not all(
-        isinstance(item, str) for item in required
-    ):
-        return None
-    return tuple(required)
-
-
-def adapt_prediction_core_output(
-    raw: Any, package: PredictionInputPackage, elapsed: float
-) -> PredictionResultPackage:
-    """Validate a core result without assigning results by array position."""
-
-    if not isinstance(raw, dict):
-        raise ValueError("prediction core output must be an object")
-    entries = raw.get("entries")
-    if not isinstance(entries, list):
-        raise ValueError("prediction core output must contain entries[]")
-    known_ids = {item.get("persistent_tree_id") for item in package.observations}
-    normalized = []
-    for entry in entries:
-        if not isinstance(entry, dict) or entry.get("persistent_tree_id") not in known_ids:
-            raise ValueError("prediction core returned an unknown persistent_tree_id")
-        normalized.append(dict(entry))
-    horizons = raw.get("horizons", [])
-    if not isinstance(horizons, list) or not all(isinstance(item, str) for item in horizons):
-        raise ValueError("prediction core horizons must be string labels")
-    return PredictionResultPackage(
-        schema_version=PREDICTION_INTERFACE_VERSION,
-        project_id=package.project_id,
-        group_id=package.group_id,
-        span_id=package.span_id,
-        source_science_run_id=package.source_science_run_id,
-        status="COMPLETE",
-        entries=tuple(normalized),
-        horizons=tuple(horizons),
-        missing_fields=(),
-        diagnostic=None,
-        runtime_seconds=elapsed,
-    )
-
-
 class LocalPredictionProvider:
-    """Calls an explicitly configured, contract-declaring local prediction core."""
+    """Run the shipped local baseline through the stable desktop contract."""
 
     interface_version = PREDICTION_INTERFACE_VERSION
 
     def run(self, package: PredictionInputPackage) -> PredictionResultPackage:
         started = time.perf_counter()
-        core, load_error = _load_configured_core()
-        if core is None:
-            return PredictionResultPackage(
-                schema_version=PREDICTION_INTERFACE_VERSION,
-                project_id=package.project_id,
-                group_id=package.group_id,
-                span_id=package.span_id,
-                source_science_run_id=package.source_science_run_id,
-                status="BLOCKED",
-                entries=(),
-                horizons=(),
-                missing_fields=(),
-                diagnostic=load_error or "PREDICTION_CORE_NOT_CONFIGURED",
-                runtime_seconds=time.perf_counter() - started,
-            )
-        required = _required_fields(core)
-        if required is None:
-            return PredictionResultPackage(
-                schema_version=PREDICTION_INTERFACE_VERSION,
-                project_id=package.project_id,
-                group_id=package.group_id,
-                span_id=package.span_id,
-                source_science_run_id=package.source_science_run_id,
-                status="BLOCKED",
-                entries=(), horizons=(), missing_fields=(),
-                diagnostic="PREDICTION_CORE_HAS_NO_DECLARED_INTERFACE",
-                runtime_seconds=time.perf_counter() - started,
-            )
-        available = set(package.observations[0]) if package.observations else set()
-        missing = tuple(sorted(set(required) - available))
-        if missing:
-            return PredictionResultPackage(
-                schema_version=PREDICTION_INTERFACE_VERSION,
-                project_id=package.project_id,
-                group_id=package.group_id,
-                span_id=package.span_id,
-                source_science_run_id=package.source_science_run_id,
-                status="BLOCKED",
-                entries=(),
-                horizons=(),
-                missing_fields=missing,
-                diagnostic="PREDICTION_INPUT_FIELDS_UNAVAILABLE",
-                runtime_seconds=time.perf_counter() - started,
-            )
         try:
-            raw = core(package.to_dict())
-            return adapt_prediction_core_output(raw, package, time.perf_counter() - started)
-        except (TypeError, ValueError, KeyError) as exc:
+            entries = tuple(_run_baseline(item, package.source_science_run_id) for item in package.observations)
+            return PredictionResultPackage(
+                schema_version=PREDICTION_INTERFACE_VERSION,
+                project_id=package.project_id,
+                group_id=package.group_id,
+                span_id=package.span_id,
+                source_science_run_id=package.source_science_run_id,
+                status="COMPLETE",
+                entries=entries,
+                horizons=(BASELINE_HORIZON,),
+                missing_fields=(),
+                diagnostic=(
+                    "Baseline / Rule-based: no forward growth model is packaged; "
+                    "current-baseline risk uses documented core defaults."
+                ),
+                runtime_seconds=time.perf_counter() - started,
+            )
+        except (TypeError, ValueError, KeyError, ImportError) as exc:
             return PredictionResultPackage(
                 schema_version=PREDICTION_INTERFACE_VERSION,
                 project_id=package.project_id,
@@ -224,3 +137,73 @@ class LocalPredictionProvider:
                 diagnostic=f"PREDICTION_CORE_REJECTED_OUTPUT: {exc}",
                 runtime_seconds=time.perf_counter() - started,
             )
+
+
+def _run_baseline(observation: dict[str, Any], science_run_id: str) -> dict[str, Any]:
+    """Adapt one terminal-science record using only core-defined defaults."""
+
+    from algorithms.prediction.predictor import TreeInput, TreeRiskPredictor
+
+    geometry = observation.get("tree_geometry") or {}
+    safety = observation.get("current_safety") or {}
+    clearance = safety.get("minimum_clearance_m")
+    missing_features = [
+        "species",
+        "age",
+        "diameter",
+        "wind_speed",
+        "rainfall",
+        "humidity",
+        "slope",
+        "voltage_level_kv",
+    ]
+    if geometry.get("apex_height_m") is None:
+        missing_features.append("apex_height_m")
+    if clearance is None:
+        missing_features.append("minimum_clearance_m")
+    # These are the explicit defaults used by the source core's I1 adapter.
+    defaulted_features = (
+        "species:未知",
+        "age:0",
+        "diameter:0",
+        "weather:zero",
+        "slope:0",
+        "voltage_level_kv:110",
+    )
+    source_input = TreeInput(
+        species="未知",
+        height=float(geometry.get("apex_height_m") or 0.0),
+        age=0,
+        diameter=0.0,
+        wind_speed=0.0,
+        rainfall=0.0,
+        humidity=0.0,
+        slope=0.0,
+        distance_to_wire=float(clearance) if clearance is not None else 999.0,
+    )
+    result = TreeRiskPredictor().predict(source_input)
+    return {
+        "persistent_tree_id": observation["persistent_tree_id"],
+        "science_run_id": science_run_id,
+        "prediction_run_id": f"{BASELINE_MODEL_ID}:{science_run_id}",
+        "prediction_model_id": BASELINE_MODEL_ID,
+        "prediction_model_version": BASELINE_MODEL_VERSION,
+        "model_label": "Baseline / Rule-based",
+        "current_science": {
+            "minimum_clearance_m": clearance,
+            "dangerous": safety.get("dangerous"),
+        },
+        "horizons": [{
+            "horizon": BASELINE_HORIZON,
+            "future_clearance_m": None,
+            "future_growth_m": None,
+            "predicted_risk_level": result.risk_level,
+            "predicted_risk_score": result.risk_score,
+            "confidence": None,
+        }],
+        "input_quality": "PARTIAL_WITH_CORE_DEFAULTS"
+        if len(missing_features) == 8
+        else "INCOMPLETE",
+        "missing_feature_flags": missing_features,
+        "core_default_flags": list(defaulted_features),
+    }

@@ -712,7 +712,7 @@ class TowerReviewApi(TreeViewerApiMixin):
             }, **self._spans_payload(session)}
 
     def spans_prediction(self, span_id: str) -> dict[str, Any]:
-        """Build a strict downstream package and invoke a configured local core.
+        """Build a strict downstream package and invoke the shipped local core.
 
         This endpoint intentionally reads only terminal science projections.  It
         does not change a Span's analysis state or synthesize unavailable model
@@ -734,11 +734,35 @@ class TowerReviewApi(TreeViewerApiMixin):
                 trees=trees["trees"],
             )
         result = LocalPredictionProvider().run(package)
+        artifact = {
+            "artifact_type": "treeline_prediction_result",
+            "source_science_run_id": package.source_science_run_id,
+            "input": package.to_dict(),
+            "result": result.to_dict(),
+        }
+        artifact_path = (
+            self.config.project_root
+            / "artifacts"
+            / "prediction-runs"
+            / "groups"
+            / package.group_id
+            / package.span_id
+            / package.source_science_run_id
+            / "baseline-rule-based.json"
+        )
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = artifact_path.with_suffix(".tmp")
+        temporary_path.write_text(
+            json.dumps(artifact, ensure_ascii=False, indent=2, allow_nan=False),
+            encoding="utf-8",
+        )
+        temporary_path.replace(artifact_path)
         return {
             "input": package.to_dict(),
             "result": result.to_dict(),
             "input_tree_count": len(package.observations),
             "output_tree_count": len(result.entries),
+            "prediction_artifact": str(artifact_path.relative_to(self.config.project_root)),
         }
 
     def spans_analyze_pending(self) -> dict[str, Any]:

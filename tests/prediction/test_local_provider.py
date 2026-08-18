@@ -1,8 +1,7 @@
 from algorithms.prediction.local_provider import LocalPredictionProvider, build_prediction_input
 
 
-def test_local_provider_preserves_terminal_fields_and_blocks_without_core(monkeypatch):
-    monkeypatch.delenv("TREELINE_WARNING_PREDICTION_ENTRYPOINT", raising=False)
+def test_local_provider_runs_shipped_rule_based_baseline():
     package = build_prediction_input(
         project_id="project-1",
         group_id="G002",
@@ -26,7 +25,12 @@ def test_local_provider_preserves_terminal_fields_and_blocks_without_core(monkey
     assert package.observations[0]["persistent_tree_id"] == "G002-T001"
     assert package.observations[0]["current_safety"]["minimum_clearance_m"] == 0.05
     result = LocalPredictionProvider().run(package)
-    assert result.status == "BLOCKED"
-    assert result.diagnostic == "PREDICTION_CORE_NOT_CONFIGURED"
-    assert result.entries == ()
-
+    assert result.status == "COMPLETE"
+    assert result.horizons == ("current-baseline",)
+    assert result.entries[0]["persistent_tree_id"] == "G002-T001"
+    assert result.entries[0]["science_run_id"] == "s005-run"
+    assert result.entries[0]["model_label"] == "Baseline / Rule-based"
+    assert result.entries[0]["current_science"]["minimum_clearance_m"] == 0.05
+    assert result.entries[0]["horizons"][0]["future_clearance_m"] is None
+    assert "species:未知" in result.entries[0]["core_default_flags"]
+    assert "voltage_level_kv" in result.entries[0]["missing_feature_flags"]

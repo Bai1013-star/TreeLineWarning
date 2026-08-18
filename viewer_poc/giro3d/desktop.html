@@ -60,10 +60,11 @@
   <script>
   (() => {
     'use strict';
-    const state = { spans: [], active: null, layers: { trees:true,wires:true,danger:true,labels:false } };
+    const state = { spans: [], active: null, selectedTree: null, predictions: new Map(), layers: { trees:true,wires:true,danger:true,labels:false } };
     const $ = id => document.getElementById(id);
     const api = (path, options) => fetch(path, Object.assign({ cache:'no-store' }, options)).then(async response => { const payload = await response.json(); if (!response.ok || !payload.ok) throw new Error((payload.error||{}).message || '请求失败'); return payload; });
     const fmt = value => value == null || Number.isNaN(Number(value)) ? '—' : Number(value).toFixed(4) + ' m';
+    const optionalMetric = value => value == null || Number.isNaN(Number(value)) ? '未提供' : Number(value).toFixed(4) + ' m';
     const viewer = $('viewer');
     function sendViewer(message) { if (viewer.contentWindow) viewer.contentWindow.postMessage(message, location.origin); }
     function renderTree() {
@@ -86,12 +87,21 @@
       $('analysisState').className = 'state ' + (s.status === 'COMPLETE' ? 'complete' : '');
     }
     function selectSpan(id) { const target = state.spans.find(s => s.span_id === id); if (!target) return; state.active = target; renderSpan(); sendViewer({type:'treeline:select-span',span_id:id}); }
+    function renderObject() {
+      const t = state.selectedTree; if (!t) return;
+      const p = state.predictions.get(t.persistent_tree_id); const h = p && p.horizons && p.horizons[0];
+      let text = '单木：' + (t.display_id || ('Tree ' + t.global_tree_id)) + '\nPermanent ID：' + (t.persistent_tree_id || '未绑定') + '\n质量：' + (t.category || '—') + '\n树种：待识别\n高度：' + (t.apex_height_m ?? '—') + ' m\n当前最小净空：' + fmt(t.minimum_clearance_m) + '\n当前风险：' + (t.dangerous ? '危险' : '未触发危险') + '\n危险点：' + (t.danger_point_count ?? '—');
+      if (!p) { $('object').textContent = text + '\n预测：未计算 / 无预测结果'; return; }
+      text += '\n预测模型：' + p.model_label + '\n预测期：' + (h ? h.horizon : '未计算') + '\n未来净空：' + optionalMetric(h && h.future_clearance_m) + '\n未来生长：' + optionalMetric(h && h.future_growth_m) + '\n预测风险：' + (h && h.predicted_risk_level ? h.predicted_risk_level : '未提供') + '\n置信度：' + (h && h.confidence != null ? h.confidence : '未提供') + '\n输入质量：' + (p.input_quality || '未提供');
+      if (p.core_default_flags && p.core_default_flags.length) text += '\n模型默认项：' + p.core_default_flags.join(', ');
+      $('object').textContent = text;
+    }
     function load() { api('/api/spans').then(payload => { state.spans = payload.spans || []; $('projectName').textContent = payload.project_id || '未命名项目'; renderTree(); if (state.spans.length) selectSpan(state.spans.find(s => s.span_id === 'S005')?.span_id || state.spans[0].span_id); $('appStatus').textContent = '应用状态：本地 Viewer 已连接'; }).catch(error => { $('appStatus').textContent = 'Viewer 后端不可用：' + error.message; $('projectName').textContent='项目不可用'; }); }
-    window.addEventListener('message', event => { if (event.origin !== location.origin || !event.data) return; if (event.data.type === 'treeline:span-selected') { const found = state.spans.find(s => s.span_id === event.data.detail.span_id); if (found) { state.active = found; renderSpan(); } } if (event.data.type === 'treeline:tree-selected') { const t=event.data.detail; $('object').textContent = '单木：' + (t.display_id || ('Tree ' + t.global_tree_id)) + '\nPermanent ID：' + (t.persistent_tree_id || '未绑定') + '\n质量：' + (t.category || '—') + '\n树种：待识别\n高度：' + (t.apex_height_m ?? '—') + ' m\n当前最小净空：' + fmt(t.minimum_clearance_m) + '\n危险点：' + (t.danger_point_count ?? '—') + '\n预测：未计算 / 无预测结果'; } });
+    window.addEventListener('message', event => { if (event.origin !== location.origin || !event.data) return; if (event.data.type === 'treeline:span-selected') { const found = state.spans.find(s => s.span_id === event.data.detail.span_id); if (found) { state.active = found; renderSpan(); } } if (event.data.type === 'treeline:tree-selected') { state.selectedTree=event.data.detail; renderObject(); } });
     document.querySelectorAll('[data-layer]').forEach(box => box.addEventListener('change', () => { state.layers[box.dataset.layer] = box.checked; sendViewer({type:'treeline:layers',layers:state.layers}); }));
     $('help').addEventListener('click', () => alert('TreeLineWarning Desktop Demo v0.1\n\n使用左侧档距切换当前分析对象；在 3D 场景中旋转、平移、缩放并选择对象。未实现功能已禁用。'));
     $('analyze').addEventListener('click', () => { if (!state.active) return; $('analyze').disabled=true; $('analyze').textContent='分析中…'; api('/api/spans/' + encodeURIComponent(state.active.span_id) + '/analyze', {method:'POST'}).then(() => load()).catch(error => alert('分析未完成：' + error.message)).finally(() => { $('analyze').disabled=false; $('analyze').textContent='开始分析'; }); });
-    $('predict').addEventListener('click', () => { if (!state.active) return; $('predict').disabled=true; $('prediction').textContent='正在构建 PredictionInputPackage…'; api('/api/spans/' + encodeURIComponent(state.active.span_id) + '/prediction', {method:'POST'}).then(payload => { const r=payload.result; $('prediction').textContent = r.status === 'COMPLETE' ? ('已计算\n结果树：' + payload.output_tree_count + '\n预测期：' + r.horizons.join(', ')) : ('未计算 / 无预测结果\n' + (r.diagnostic || 'Prediction Core unavailable') + (r.missing_fields.length ? '\n缺少字段：' + r.missing_fields.join(', ') : '')); $('predictionState').textContent = r.status === 'COMPLETE' ? '完成' : '未配置'; $('predictionState').className='state ' + (r.status === 'COMPLETE' ? 'complete':'blocked'); }).catch(error => { $('prediction').textContent='未计算 / 无预测结果\n' + error.message; }).finally(() => $('predict').disabled=false); });
+    $('predict').addEventListener('click', () => { if (!state.active) return; $('predict').disabled=true; $('prediction').textContent='正在构建 PredictionInputPackage…'; api('/api/spans/' + encodeURIComponent(state.active.span_id) + '/prediction', {method:'POST'}).then(payload => { const r=payload.result; if (r.status === 'COMPLETE') { (r.entries || []).forEach(entry => state.predictions.set(entry.persistent_tree_id, entry)); const first=(r.entries||[])[0]||{}; $('prediction').textContent='已计算\n模型：' + (first.model_label || '未提供') + '\n结果树：' + payload.output_tree_count + '\n预测期：' + r.horizons.join(', ') + '\n' + (r.diagnostic || ''); renderObject(); } else { $('prediction').textContent='未计算 / 无预测结果\n' + (r.diagnostic || 'Prediction Core unavailable') + (r.missing_fields.length ? '\n缺少字段：' + r.missing_fields.join(', ') : ''); } $('predictionState').textContent = r.status === 'COMPLETE' ? '完成' : '未配置'; $('predictionState').className='state ' + (r.status === 'COMPLETE' ? 'complete':'blocked'); }).catch(error => { $('prediction').textContent='未计算 / 无预测结果\n' + error.message; }).finally(() => $('predict').disabled=false); });
     load();
   })();
   </script>
