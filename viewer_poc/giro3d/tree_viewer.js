@@ -98,16 +98,27 @@
 		if (!THREE) return;
 		const markerGroup = new THREE.Group();
 		const previewGroup = new THREE.Group();
+		const wireGroup = new THREE.Group();
+		const dangerGroup = new THREE.Group();
 		markerGroup.name = "persistent-tree-markers";
 		previewGroup.name = "persistent-tree-selection-preview";
+		wireGroup.name = "confirmed-wire-overlay";
+		dangerGroup.name = "danger-point-overlay";
 		const attach = window.p3aGiro3dUtil && window.p3aGiro3dUtil.attachOverlayGroup;
 		if (typeof attach !== "function") return;
 		attach(host.instance, markerGroup);
 		attach(host.instance, previewGroup);
+		attach(host.instance, wireGroup);
+		attach(host.instance, dangerGroup);
 		let activeSpanId = null;
 		let activeRunId = null;
 		let payload = null;
 		let activeTree = null;
+		const layerVisibility = { trees: true, wires: true, danger: true, labels: false };
+
+		function notifyDesktop(type, detail) {
+			if (window.parent !== window) window.parent.postMessage({ type: type, detail: detail }, window.location.origin);
+		}
 
 		function disposeGroup(group) {
 			while (group.children.length) {
@@ -142,6 +153,41 @@
 			const material = new THREE.PointsMaterial({ color: treeColor(tree), size: 0.7, sizeAttenuation: true, transparent: true, opacity: 0.98 });
 			previewGroup.add(new THREE.Points(geometry, material));
 			host.instance.notifyChange(host.instance.view.camera);
+		}
+
+		function renderWires(next) {
+			disposeGroup(wireGroup);
+			(next.strands || []).forEach(function (strand) {
+				api("/api/spans/" + encodeURIComponent(activeSpanId) + "/wire/" + strand.wire_id + "/preview")
+					.then(function (preview) {
+						if (activeSpanId !== next.span_id || !layerVisibility.wires) return;
+						const points = preview.sampled_xyz_absolute_m || [];
+						if (!points.length) return;
+						const geometry = new THREE.BufferGeometry();
+						geometry.setAttribute("position", new THREE.Float32BufferAttribute(points.flat(), 3));
+						wireGroup.add(new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: "#ffd54f", depthTest: false })));
+						host.instance.notifyChange(host.instance.view.camera);
+					}).catch(function () {});
+			});
+		}
+
+		function renderDanger(next) {
+			disposeGroup(dangerGroup);
+			const points = next.points_xyz_absolute_m || [];
+			if (!points.length) return;
+			const geometry = new THREE.BufferGeometry();
+			geometry.setAttribute("position", new THREE.Float32BufferAttribute(points.flat(), 3));
+			dangerGroup.add(new THREE.Points(geometry, new THREE.PointsMaterial({ color: "#ff1744", size: 0.35, sizeAttenuation: true, depthTest: false })));
+			host.instance.notifyChange(host.instance.view.camera);
+		}
+
+		function loadSpanOverlays(spanId) {
+			api("/api/spans/" + encodeURIComponent(spanId) + "/wire").then(function (next) {
+				if (activeSpanId === spanId && layerVisibility.wires) renderWires(next);
+			}).catch(function () { disposeGroup(wireGroup); });
+			api("/api/spans/" + encodeURIComponent(spanId) + "/danger-points").then(function (next) {
+				if (activeSpanId === spanId && layerVisibility.danger) renderDanger(next);
+			}).catch(function () { disposeGroup(dangerGroup); });
 		}
 
 		function renderDetails(tree) {
@@ -204,6 +250,7 @@
 			activeTree = tree;
 			renderList();
 			renderDetails(tree);
+			notifyDesktop("treeline:tree-selected", tree);
 			api("/api/spans/" + encodeURIComponent(activeSpanId) + "/trees/" + tree.global_tree_id + "/preview")
 				.then(function (preview) { if (activeTree === tree && preview.span_id === activeSpanId && preview.run_id === activeRunId) { renderPreview(preview.sampled_xyz_absolute_m || [], tree); focus(preview, tree); } })
 				.catch(function () {});
@@ -214,12 +261,16 @@
 			activeRunId = runId || activeRunId;
 			activeTree = null;
 			disposeGroup(previewGroup);
+			disposeGroup(wireGroup);
+			disposeGroup(dangerGroup);
 			api("/api/spans/" + encodeURIComponent(spanId) + "/trees").then(function (next) {
 				if (activeSpanId !== spanId || !next.run_id || (activeRunId && next.run_id !== activeRunId)) return;
 				activeRunId = next.run_id;
 				payload = next;
 				renderList();
 				details.textContent = "—";
+				loadSpanOverlays(spanId);
+				notifyDesktop("treeline:span-selected", { span_id: spanId, run_id: next.run_id, tree_count: next.tree_count });
 			}).catch(function (error) {
 				if (activeSpanId !== spanId) return;
 				payload = null;
@@ -243,6 +294,19 @@
 			if (!detail || !detail.span_id) return;
 			spanSelect.value = detail.span_id;
 			if (activeSpanId !== detail.span_id || activeRunId !== detail.run_id) loadTrees(detail.span_id, detail.run_id);
+		});
+		window.addEventListener("message", function (event) {
+			if (event.origin !== window.location.origin || !event.data) return;
+			if (event.data.type === "treeline:select-span" && event.data.span_id) requestActiveSpan(event.data.span_id);
+			if (event.data.type === "treeline:layers" && event.data.layers) {
+				Object.assign(layerVisibility, event.data.layers);
+				markerGroup.visible = layerVisibility.trees;
+				previewGroup.visible = layerVisibility.trees;
+				wireGroup.visible = layerVisibility.wires;
+				dangerGroup.visible = layerVisibility.danger;
+				if (activeSpanId) loadSpanOverlays(activeSpanId);
+				host.instance.notifyChange(host.instance.view.camera);
+			}
 		});
 		api("/api/spans").then(function (spansPayload) {
 			const spans = spansPayload.spans || [];

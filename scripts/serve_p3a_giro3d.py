@@ -56,13 +56,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from scripts.tree_viewer_api import TreeViewerApiMixin
-
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 # The launcher may be executed directly (sys.path[0] = scripts/) rather than as
 # a module, so make the repository root importable for the lazy API imports.
 if str(_REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPOSITORY_ROOT))
+
+from scripts.tree_viewer_api import TreeViewerApiMixin  # noqa: E402
 
 VIEWER_ROOT = _REPOSITORY_ROOT / "viewer_poc" / "giro3d"
 VENDOR_ROOT = VIEWER_ROOT / "vendor"
@@ -711,6 +711,36 @@ class TowerReviewApi(TreeViewerApiMixin):
                 "summary": outcome.summary,
             }, **self._spans_payload(session)}
 
+    def spans_prediction(self, span_id: str) -> dict[str, Any]:
+        """Build a strict downstream package and invoke a configured local core.
+
+        This endpoint intentionally reads only terminal science projections.  It
+        does not change a Span's analysis state or synthesize unavailable model
+        inputs.
+        """
+        from algorithms.prediction.local_provider import (
+            LocalPredictionProvider,
+            build_prediction_input,
+        )
+
+        trees = self.spans_trees(span_id)
+        with self._opened() as session:
+            span = self._resolve_span_record(session, span_id)
+            package = build_prediction_input(
+                project_id=session.project.project_id,
+                group_id=span.group_id,
+                span_id=span_id,
+                run_id=trees["run_id"],
+                trees=trees["trees"],
+            )
+        result = LocalPredictionProvider().run(package)
+        return {
+            "input": package.to_dict(),
+            "result": result.to_dict(),
+            "input_tree_count": len(package.observations),
+            "output_tree_count": len(result.entries),
+        }
+
     def spans_analyze_pending(self) -> dict[str, Any]:
         with self._opened_writable() as session:
             outcomes = self.span_orchestrator.analyze_pending(session)
@@ -1351,6 +1381,9 @@ class _P3aHandler(BaseHTTPRequestHandler):
             return ("analyze-pending", "", "")
         if path == "/api/spans/retry-failed":
             return ("retry-failed", "", "")
+        prediction = re.fullmatch(r"/api/spans/(S[0-9]{3,})/prediction", path)
+        if prediction:
+            return ("prediction", prediction.group(1), "")
         wire_preview = re.fullmatch(r"/api/spans/(S[0-9]{3,})/wire/([0-9]+)/preview", path)
         if wire_preview:
             return ("wire-preview", wire_preview.group(1), wire_preview.group(2))
@@ -1404,6 +1437,8 @@ class _P3aHandler(BaseHTTPRequestHandler):
                 result = api.spans_analyze_pending()
             elif self.command == "POST" and action == "retry-failed":
                 result = api.spans_retry_failed()
+            elif self.command == "POST" and action == "prediction":
+                result = api.spans_prediction(span_id)
             else:
                 raise _ApiError(HTTPStatus.NOT_FOUND, "NOT_FOUND", "unsupported Span route")
         except _ApiError as exc:

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>TreeLineWarning Desktop</title>
+  <style>
+    :root { color-scheme: dark; --bg:#10151b; --panel:#171e26; --border:#2a3744; --muted:#8ea0af; --accent:#36b8d8; --good:#66bb6a; --warn:#ffb74d; }
+    * { box-sizing:border-box } html,body { margin:0; width:100%; height:100%; overflow:hidden; background:var(--bg); font:13px "Microsoft YaHei",Segoe UI,sans-serif; color:#e5edf4 }
+    button { color:#e5edf4; background:#253442; border:1px solid #3d5263; border-radius:4px; padding:7px 10px; cursor:pointer } button:hover:not(:disabled){background:#304759} button:disabled { opacity:.5; cursor:not-allowed }
+    #app { display:grid; grid-template-rows:54px 1fr 28px; height:100%; }
+    header { display:flex; align-items:center; gap:7px; padding:8px 12px; border-bottom:1px solid var(--border); background:#151c24 }
+    .brand { font-weight:700; color:#fff; margin-right:16px; white-space:nowrap }.brand small{display:block;color:var(--muted);font-size:10px;font-weight:400}
+    .toolbar { display:flex; gap:5px }.toolbar button { padding:6px 8px; font-size:12px }.project-name { flex:1; text-align:center; color:#b8cad7 }.project-name strong { color:#fff; margin-left:6px }
+    #workspace { display:grid; grid-template-columns:250px minmax(500px,1fr) 290px; min-height:0 }
+    aside { overflow:auto; background:var(--panel); border-right:1px solid var(--border) }.right { border-left:1px solid var(--border); border-right:0; padding:12px }
+    h2 { margin:2px 0 10px; font-size:13px; color:#bcd4e4 } h3 { margin:0 0 7px; font-size:12px; color:#8db8cd; text-transform:uppercase; letter-spacing:.04em }
+    .section { padding:12px; border-bottom:1px solid var(--border) }.tree { list-style:none; margin:0; padding:0 }.tree li { padding:5px 4px; border-radius:3px; cursor:pointer }.tree li:hover,.tree li.active{background:#253d4f}.tree .child { padding-left:18px; color:#bed0dc }.tree .node{color:#fff;font-weight:600}.badge{float:right;color:#8ea0af;font-size:11px}
+    #center { min-width:0; display:grid; grid-template-rows:minmax(0,1fr) 150px; background:#0d1217 }.viewer-wrap{position:relative;min-height:0}.viewer-wrap iframe{border:0;width:100%;height:100%;display:block}.viewer-label{position:absolute;z-index:5;top:10px;right:14px;background:rgba(10,16,22,.78);padding:5px 8px;border-radius:3px;color:#a9c7d8;pointer-events:none}
+    #topdown { border-top:1px solid var(--border); background:#151c24; padding:10px 18px; position:relative }.xy-title{font-weight:600;color:#bcd4e4}.xy-note{font-size:11px;color:var(--muted);margin-top:3px}.line{position:absolute;left:15%;right:15%;top:76px;border-top:2px solid var(--accent)}.tower{position:absolute;top:65px;width:20px;height:20px;border-radius:50%;background:#ffca28;border:3px solid #fff;box-shadow:0 0 0 2px #1e2b35}.tower.a{left:15%}.tower.b{right:15%}.tower span{position:absolute;top:23px;white-space:nowrap;left:-9px;font-size:11px}.current-span{position:absolute;left:42%;top:56px;background:#1d4d5c;color:#dff7ff;padding:3px 7px;border-radius:3px;font-size:11px}
+    .layer { display:flex; gap:8px; padding:4px 0; color:#d5e3ec }.layer input{accent-color:var(--accent)} .muted{color:var(--muted)} .metric{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #25313c}.metric b{font-weight:600;color:#e7f5ff}.workflow { list-style:none;margin:0;padding:0;counter-reset:item}.workflow li{counter-increment:item;padding:7px 0;border-bottom:1px solid #25313c;color:#d6e2e9}.workflow li:before{content:counter(item);display:inline-grid;place-items:center;width:18px;height:18px;margin-right:7px;border-radius:50%;background:#294657;color:#cfeffc;font-size:11px}.state{float:right;font-size:11px;color:var(--muted)}.state.complete{color:var(--good)}.state.blocked{color:var(--warn)}
+    #object { white-space:pre-line; line-height:1.6; color:#cfdee7; min-height:74px }.action{width:100%;margin-top:8px}.notice{font-size:11px;color:var(--muted);padding-top:7px;line-height:1.45} footer{display:flex;gap:18px;align-items:center;padding:0 12px;color:#9eafbb;border-top:1px solid var(--border);background:#151c24;font-size:11px} footer span:last-child{margin-left:auto}
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <div class="brand">TreeLineWarning<small>Power-Line Vegetation Risk Analysis</small></div>
+      <div class="toolbar">
+        <button disabled title="暂未实现">新建项目</button><button disabled title="请以 --project-root 启动">打开项目</button><button disabled title="暂未实现">保存</button><button disabled title="暂未实现">另存为</button><button disabled title="暂未实现">导入点云</button><button disabled title="暂未实现">导出</button><button disabled title="暂未实现">设置</button><button type="button" id="help">帮助</button>
+      </div>
+      <div class="project-name">当前项目：<strong id="projectName">加载中…</strong></div>
+    </header>
+    <main id="workspace">
+      <aside>
+        <section class="section"><h2>项目浏览器</h2><ul id="projectTree" class="tree"><li class="muted">加载项目结构…</li></ul></section>
+        <section class="section"><h2>图层</h2>
+          <label class="layer"><input type="checkbox" checked disabled> 原始场景 <span class="muted">LOD</span></label>
+          <label class="layer"><input type="checkbox" checked disabled> 地面 / 背景</label>
+          <label class="layer"><input type="checkbox" checked disabled> 杆塔</label>
+          <label class="layer"><input data-layer="wires" type="checkbox" checked> 确认导线</label>
+          <label class="layer"><input data-layer="trees" type="checkbox" checked> 单木</label>
+          <label class="layer"><input data-layer="danger" type="checkbox" checked> 危险点</label>
+          <label class="layer"><input data-layer="labels" type="checkbox"> Tree ID 标签 <span class="muted">预留</span></label>
+        </section>
+      </aside>
+      <section id="center">
+        <div class="viewer-wrap"><span class="viewer-label">3D 场景 · Giro3D · 原始点云 LOD</span><iframe id="viewer" src="/"></iframe></div>
+        <div id="topdown"><div class="xy-title">俯视 XY · 杆塔建档 / 当前档距</div><div class="xy-note">杆塔选择与确认沿用嵌入 Viewer 的既有工作流；当前档距方向同步显示。</div><div class="line"></div><div class="tower a"><span id="towerA">—</span></div><div class="tower b"><span id="towerB">—</span></div><div class="current-span" id="spanDirection">Current Span —</div></div>
+      </section>
+      <aside class="right">
+        <section class="section"><h3>当前档距</h3><div id="spanInfo" class="muted">等待选择档距…</div><button class="action" id="analyze">开始分析</button><div class="notice">仅对当前档距调用既有 canonical science pipeline。</div></section>
+        <section class="section"><h3>对象属性</h3><div id="object">选择单木、导线或杆塔以查看属性。</div></section>
+        <section class="section"><h3>预测</h3><div id="prediction" class="muted">未计算 / 无预测结果</div><button class="action" id="predict">风险预测</button><div class="notice">仅发送现有 terminal science 字段；缺失模型字段会明确报告，不会补默认值。</div></section>
+        <section class="section"><h3>工作流</h3><ol class="workflow"><li>导入点云 <span class="state complete">完成</span></li><li>选杆建档 <span class="state complete">完成</span></li><li>一键分析 <span class="state" id="analysisState">未开始</span></li><li>风险预测 <span class="state" id="predictionState">未计算</span></li><li>导出报告 <span class="state">未配置</span></li></ol></section>
+      </aside>
+    </main>
+    <footer><span id="appStatus">应用状态：正在连接本地 Viewer</span><span id="activeStatus">当前档距：—</span><span id="displayStatus">显示点：LOD 管理</span><span>分析状态：<b id="footerAnalysis">—</b></span></footer>
+  </div>
+  <script>
+  (() => {
+    'use strict';
+    const state = { spans: [], active: null, layers: { trees:true,wires:true,danger:true,labels:false } };
+    const $ = id => document.getElementById(id);
+    const api = (path, options) => fetch(path, Object.assign({ cache:'no-store' }, options)).then(async response => { const payload = await response.json(); if (!response.ok || !payload.ok) throw new Error((payload.error||{}).message || '请求失败'); return payload; });
+    const fmt = value => value == null || Number.isNaN(Number(value)) ? '—' : Number(value).toFixed(4) + ' m';
+    const viewer = $('viewer');
+    function sendViewer(message) { if (viewer.contentWindow) viewer.contentWindow.postMessage(message, location.origin); }
+    function renderTree() {
+      const groups = new Map(); state.spans.forEach(span => { if (!groups.has(span.group_id)) groups.set(span.group_id, []); groups.get(span.group_id).push(span); });
+      let html = '<li class="node">Project <span class="badge">已加载</span></li><li class="child">点云数据 <span class="badge">LOD</span></li><li class="node">杆塔列表</li>';
+      const towers = new Set(); state.spans.forEach(s => { towers.add(s.from_tower_id); towers.add(s.to_tower_id); });
+      [...towers].sort().forEach(id => html += '<li class="child">' + id + '</li>');
+      html += '<li class="node">档距</li>';
+      state.spans.forEach(s => html += '<li class="child span-node" data-span="' + s.span_id + '">' + (s.display_name || (s.from_tower_id + '-' + s.to_tower_id)) + '<span class="badge">' + s.status + '</span></li>');
+      html += '<li class="node">分析结果</li><li class="child">导线 · 单木 · 净空 · 危险点 · 预测</li>';
+      $('projectTree').innerHTML = html;
+      document.querySelectorAll('.span-node').forEach(node => node.addEventListener('click', () => selectSpan(node.dataset.span)));
+    }
+    function renderSpan() {
+      const s = state.active; if (!s) return; const summary = s.summary || {};
+      document.querySelectorAll('.span-node').forEach(n => n.classList.toggle('active', n.dataset.span === s.span_id));
+      $('spanInfo').innerHTML = '<div class="metric"><span>档距</span><b>' + s.from_tower_id + ' → ' + s.to_tower_id + '</b></div><div class="metric"><span>Status</span><b>' + s.status + '</b></div><div class="metric"><span>Wire</span><b>' + (summary.wire_count ?? '—') + '</b></div><div class="metric"><span>Trees</span><b>' + (summary.tree_count ?? '—') + '</b></div><div class="metric"><span>Danger trees</span><b>' + ((summary.risk_counts||{}).below_threshold ?? '—') + '</b></div><div class="metric"><span>Danger points</span><b>' + (summary.danger_point_count ?? '—') + '</b></div><div class="metric"><span>Minimum clearance</span><b>' + fmt(summary.minimum_clearance_m) + '</b></div>';
+      $('towerA').textContent = s.from_tower_id; $('towerB').textContent = s.to_tower_id; $('spanDirection').textContent = 'Current Span ' + s.from_tower_id + ' → ' + s.to_tower_id;
+      $('activeStatus').textContent = '当前档距：' + s.span_id + ' (' + s.from_tower_id + ' → ' + s.to_tower_id + ')'; $('footerAnalysis').textContent = s.status; $('analysisState').textContent = s.status === 'COMPLETE' ? '完成' : s.status;
+      $('analysisState').className = 'state ' + (s.status === 'COMPLETE' ? 'complete' : '');
+    }
+    function selectSpan(id) { const target = state.spans.find(s => s.span_id === id); if (!target) return; state.active = target; renderSpan(); sendViewer({type:'treeline:select-span',span_id:id}); }
+    function load() { api('/api/spans').then(payload => { state.spans = payload.spans || []; $('projectName').textContent = payload.project_id || '未命名项目'; renderTree(); if (state.spans.length) selectSpan(state.spans.find(s => s.span_id === 'S005')?.span_id || state.spans[0].span_id); $('appStatus').textContent = '应用状态：本地 Viewer 已连接'; }).catch(error => { $('appStatus').textContent = 'Viewer 后端不可用：' + error.message; $('projectName').textContent='项目不可用'; }); }
+    window.addEventListener('message', event => { if (event.origin !== location.origin || !event.data) return; if (event.data.type === 'treeline:span-selected') { const found = state.spans.find(s => s.span_id === event.data.detail.span_id); if (found) { state.active = found; renderSpan(); } } if (event.data.type === 'treeline:tree-selected') { const t=event.data.detail; $('object').textContent = '单木：' + (t.display_id || ('Tree ' + t.global_tree_id)) + '\nPermanent ID：' + (t.persistent_tree_id || '未绑定') + '\n质量：' + (t.category || '—') + '\n树种：待识别\n高度：' + (t.apex_height_m ?? '—') + ' m\n当前最小净空：' + fmt(t.minimum_clearance_m) + '\n危险点：' + (t.danger_point_count ?? '—') + '\n预测：未计算 / 无预测结果'; } });
+    document.querySelectorAll('[data-layer]').forEach(box => box.addEventListener('change', () => { state.layers[box.dataset.layer] = box.checked; sendViewer({type:'treeline:layers',layers:state.layers}); }));
+    $('help').addEventListener('click', () => alert('TreeLineWarning Desktop Demo v0.1\n\n使用左侧档距切换当前分析对象；在 3D 场景中旋转、平移、缩放并选择对象。未实现功能已禁用。'));
+    $('analyze').addEventListener('click', () => { if (!state.active) return; $('analyze').disabled=true; $('analyze').textContent='分析中…'; api('/api/spans/' + encodeURIComponent(state.active.span_id) + '/analyze', {method:'POST'}).then(() => load()).catch(error => alert('分析未完成：' + error.message)).finally(() => { $('analyze').disabled=false; $('analyze').textContent='开始分析'; }); });
+    $('predict').addEventListener('click', () => { if (!state.active) return; $('predict').disabled=true; $('prediction').textContent='正在构建 PredictionInputPackage…'; api('/api/spans/' + encodeURIComponent(state.active.span_id) + '/prediction', {method:'POST'}).then(payload => { const r=payload.result; $('prediction').textContent = r.status === 'COMPLETE' ? ('已计算\n结果树：' + payload.output_tree_count + '\n预测期：' + r.horizons.join(', ')) : ('未计算 / 无预测结果\n' + (r.diagnostic || 'Prediction Core unavailable') + (r.missing_fields.length ? '\n缺少字段：' + r.missing_fields.join(', ') : '')); $('predictionState').textContent = r.status === 'COMPLETE' ? '完成' : '未配置'; $('predictionState').className='state ' + (r.status === 'COMPLETE' ? 'complete':'blocked'); }).catch(error => { $('prediction').textContent='未计算 / 无预测结果\n' + error.message; }).finally(() => $('predict').disabled=false); });
+    load();
+  })();
+  </script>
+</body>
+</html>
