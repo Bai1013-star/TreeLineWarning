@@ -22,4 +22,6 @@ def test_desktop_page_uses_existing_local_viewer_and_product_actions():
     assert 'id="importPointCloud"' in page
     assert 'id="exportWorkOrder"' in page
     assert "导出风险工单" in page
+    assert "预测胸径" in page
+    assert "预测数据质量" in page
     assert "/prediction" in page

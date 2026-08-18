@@ -198,11 +198,20 @@ def prediction_smoke(project_root: Path | None) -> int:
             result = payload["result"]
             if result["status"] != "COMPLETE" or payload["output_tree_count"] != 22:
                 raise RuntimeError(f"{mode} prediction smoke failed: {result.get('diagnostic')}")
+            g002_t007 = next(
+                item for item in result["entries"]
+                if item.get("persistent_tree_id") == "G002-T007"
+            )
+            day_14 = next(item for item in g002_t007["horizons"] if item["horizon"] == "14天")
+            if day_14.get("future_height_m") is None or day_14.get("future_crown_width_m") is None:
+                raise RuntimeError(f"{mode} geometry mapping smoke failed")
             results[mode] = {
                 "trees": payload["output_tree_count"],
                 "uses_temporal_model": bool(
                     payload["result"]["entries"][0].get("uses_temporal_model")
                 ),
+                "g002_t007_14d_height": day_14["future_height_m"],
+                "g002_t007_14d_crown_width": day_14["future_crown_width_m"],
             }
         selected_id = payload["result"]["entries"][0]["persistent_tree_id"]
         work_order_request = urllib.request.Request(

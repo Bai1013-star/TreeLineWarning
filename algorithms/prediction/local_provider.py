@@ -266,6 +266,12 @@ def _run_forecast(
     horizons = [_short_horizon(item) for item in forecast.get("short_term_forecast", [])]
     horizons.extend(_long_horizon(item) for item in forecast.get("long_term_forecast", []))
     method = forecast.get("prediction_method") or {}
+    input_availability = forecast.get("input_availability") or {}
+    data_quality = forecast.get("data_quality") or {}
+    fallback_reasons = ["树种未识别 → 其他（模型回退）"]
+    labels = input_availability.get("field_labels") or {}
+    for field_name in (input_availability.get("imputations") or {}):
+        fallback_reasons.append(f"{labels.get(field_name, field_name)}未提供 → 模型默认")
     return {
         "persistent_tree_id": observation["persistent_tree_id"],
         "science_run_id": package.source_science_run_id, "prediction_mode": mode,
@@ -287,26 +293,43 @@ def _run_forecast(
         "risk_timeline_analysis": forecast.get("risk_timeline_analysis"),
         "maintenance_decision": forecast.get("maintenance_decision"),
         "treatment_advice": forecast.get("treatment_advice"),
-        "input_quality": (forecast.get("data_quality") or {}).get("status", "未提供"),
-        "input_availability": forecast.get("input_availability"),
-        "data_quality": forecast.get("data_quality"),
+        "input_quality": data_quality.get("status", "未提供"),
+        "input_availability": input_availability,
+        "data_quality": data_quality,
+        "fallback_reasons": fallback_reasons,
         "species_fallback": "未识别 / 其他（模型回退）",
     }
 
 
 def _short_horizon(item: dict[str, Any]) -> dict[str, Any]:
-    return {"horizon": item.get("period"), "target_date": item.get("target_date"),
-            "future_clearance_m": item.get("predicted_clearance_distance"),
-            "future_growth_m": item.get("predicted_height_change"),
-            "predicted_risk_level": item.get("risk_level"),
-            "predicted_risk_score": item.get("risk_score"), "confidence": None}
+    return {
+        "horizon": item.get("period"), "target_date": item.get("target_date"),
+        "target_year_month": item.get("target_year_month"),
+        "future_height_m": item.get("predicted_height"),
+        "future_crown_width_m": item.get("predicted_crown_width"),
+        "future_diameter": item.get("predicted_diameter"),
+        "future_clearance_m": item.get("predicted_clearance_distance"),
+        "future_effective_clearance_m": item.get("predicted_effective_clearance"),
+        "future_growth_m": item.get("height_growth"),
+        "predicted_risk_level": item.get("risk_level"),
+        "predicted_risk_score": item.get("risk_score"),
+        "clearance_interval": item.get("clearance_interval"),
+        "confidence": (item.get("clearance_interval") or {}).get("confidence"),
+    }
 
 
 def _long_horizon(item: dict[str, Any]) -> dict[str, Any]:
-    return {"horizon": f"{item.get('horizon_months')}个月", "target_date": item.get("target_date"),
-            "future_height_m": item.get("predicted_height"),
-            "future_crown_width_m": item.get("predicted_crown_width"),
-            "future_clearance_m": item.get("predicted_clearance_distance"),
-            "future_growth_m": item.get("predicted_height_change"),
-            "predicted_risk_level": item.get("risk_level"),
-            "predicted_risk_score": item.get("risk_score"), "confidence": None}
+    return {
+        "horizon": f"{item.get('horizon_months')}个月", "target_date": item.get("target_date"),
+        "target_year_month": item.get("target_year_month"),
+        "future_height_m": item.get("predicted_height"),
+        "future_crown_width_m": item.get("predicted_crown_width"),
+        "future_diameter": item.get("predicted_diameter"),
+        "future_clearance_m": item.get("predicted_clearance_distance"),
+        "future_effective_clearance_m": item.get("predicted_effective_clearance"),
+        "future_growth_m": item.get("predicted_height_change"),
+        "predicted_risk_level": item.get("risk_level"),
+        "predicted_risk_score": item.get("risk_score"),
+        "clearance_interval": item.get("clearance_interval"),
+        "confidence": (item.get("clearance_interval") or {}).get("confidence"),
+    }

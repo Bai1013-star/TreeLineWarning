@@ -63,3 +63,22 @@ def test_forecast_modes_preserve_persistent_identity_and_horizons(mode):
     )
     assert result.entries[0]["uses_temporal_model"] is (mode == "ai")
     assert result.entries[0]["species_fallback"] == "未识别 / 其他（模型回退）"
+
+
+@pytest.mark.parametrize("mode", ["formula", "ai"])
+def test_forecast_geometry_is_preserved_for_short_and_long_horizons(mode):
+    entry = LocalPredictionProvider().run(_package(), prediction_mode=mode).entries[0]
+
+    short = next(item for item in entry["horizons"] if item["horizon"] == "14天")
+    long = next(item for item in entry["horizons"] if item["horizon"] == "12个月")
+    for item in (short, long):
+        assert item["target_date"]
+        assert item["future_height_m"] is not None
+        assert item["future_crown_width_m"] is not None
+        assert item["future_diameter"] is not None
+        assert item["future_clearance_m"] is not None
+        assert item["predicted_risk_level"]
+        assert item["predicted_risk_score"] is not None
+        assert item["confidence"] == 0.95
+        assert item["clearance_interval"]["source"]
+    assert entry["fallback_reasons"] == ["树种未识别 → 其他（模型回退）"]
