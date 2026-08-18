@@ -311,6 +311,162 @@
 		};
 	}
 
+	/** One coordinate path for confirmed Tower markers, Locate, and Span overlays. */
+	function towerViewerPosition(tower) {
+		const geometry = tower && tower.refined_geometry;
+		const position = tower && (
+			tower.display_xyz_absolute_m ||
+			tower.base_xyz_absolute_m ||
+			(geometry && geometry.base_xyz_absolute_m)
+		);
+		if (!position || position.length !== 3) {
+			return null;
+		}
+		// The active Giro3D source is SOURCE_LAS_ABSOLUTE with origin [0, 0, 0].
+		// Keep this identity explicit and centralized so a future viewer transform
+		// cannot diverge between confirmed Tower and selected-Span overlays.
+		return [Number(position[0]), Number(position[1]), Number(position[2])];
+	}
+
+	function spanEndpointViewerPosition(span, key) {
+		const geometry = span && span[key];
+		return towerViewerPosition({
+			display_xyz_absolute_m: geometry && geometry.base_xyz_absolute_m
+		});
+	}
+
+	/**
+	 * Viewer-only frame for the currently selected project Span.  This is a
+	 * display envelope, never project/science geometry: it is derived only from
+	 * the two refined endpoint base positions in the existing API projection.
+	 */
+	function spanSelectionFrame(span, width, height) {
+		if (!span || !span.from_tower_geometry || !span.to_tower_geometry) {
+			return null;
+		}
+		const from = spanEndpointViewerPosition(span, "from_tower_geometry");
+		const to = spanEndpointViewerPosition(span, "to_tower_geometry");
+		if (!from || !to || from.length !== 3 || to.length !== 3) {
+			return null;
+		}
+		const dx = to[0] - from[0];
+		const dy = to[1] - from[1];
+		const length = Math.sqrt(dx * dx + dy * dy);
+		if (!isFinite(length) || length <= 0) {
+			return null;
+		}
+		const frameWidth = width || 8;
+		const frameHeight = height || 12;
+		const baseZ = Math.min(from[2], to[2]);
+		return {
+			span_id: span.span_id,
+			group_id: span.group_id,
+			from_tower_id: span.from_tower_id,
+			to_tower_id: span.to_tower_id,
+			from: [from[0], from[1], from[2]],
+			to: [to[0], to[1], to[2]],
+			midpoint: [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2, (from[2] + to[2]) / 2],
+			length: length,
+			angle: Math.atan2(dy, dx),
+			width: frameWidth,
+			height: frameHeight,
+			baseZ: baseZ,
+			topZ: (from[2] + to[2]) / 2 + frameHeight,
+			label: span.span_id + "  " + span.from_tower_id + "→" + span.to_tower_id
+		};
+	}
+
+	/**
+	 * Viewer-only oriented clipping envelope for the active Span.  The returned
+	 * plane descriptors use this bundle's clipping convention n·p + constant >= 0
+	 * for the retained half-space.  This is deliberately separate from the cyan frame
+	 * and from all scientific corridor/halo inputs.
+	 */
+	function spanFocusClipPlanes(frame, margins) {
+		if (!frame || !frame.from || !frame.to || !isFinite(frame.length) || frame.length <= 0) {
+			return null;
+		}
+		const options = margins || {};
+		const alongMargin = options.along == null ? 15 : Number(options.along);
+		const acrossMargin = options.across == null ? 12 : Number(options.across);
+		const verticalBelow = options.below == null ? 6 : Number(options.below);
+		const verticalAbove = options.above == null ? 18 : Number(options.above);
+		const safeAlong = Math.max(0, alongMargin);
+		const safeAcross = Math.max(0, acrossMargin);
+		const base = Math.min(frame.from[2], frame.to[2]) - Math.max(0, verticalBelow);
+		const top = Math.max(frame.from[2], frame.to[2]) + Math.max(0, verticalAbove);
+		const center = [frame.midpoint[0], frame.midpoint[1], 0];
+		const axis = [Math.cos(frame.angle), Math.sin(frame.angle), 0];
+		const across = [-Math.sin(frame.angle), Math.cos(frame.angle), 0];
+		const planes = [];
+		function addPair(normal, halfExtent) {
+			const dot = normal[0] * center[0] + normal[1] * center[1];
+			planes.push({ normal: [-normal[0], -normal[1], -normal[2]], constant: dot + halfExtent });
+			planes.push({ normal: [normal[0], normal[1], normal[2]], constant: -dot + halfExtent });
+		}
+		addPair(axis, frame.length / 2 + safeAlong);
+		addPair(across, frame.width / 2 + safeAcross);
+		planes.push({ normal: [0, 0, -1], constant: top });
+		planes.push({ normal: [0, 0, 1], constant: -base });
+		return {
+			kind: "viewer-span-focus-envelope",
+			span_id: frame.span_id,
+			along_margin: safeAlong,
+			across_margin: safeAcross,
+			below_margin: Math.max(0, verticalBelow),
+			above_margin: Math.max(0, verticalAbove),
+			base_z: base,
+			top_z: top,
+			planes: planes
+		};
+	}
+
+	/** Explicit Z-up corridor edges; no BoxGeometry axis or rotation assumptions. */
+	function spanCorridorVertices(frame) {
+		const half = frame.width / 2;
+		const px = -Math.sin(frame.angle) * half;
+		const py = Math.cos(frame.angle) * half;
+		const from = frame.from;
+		const to = frame.to;
+		const corners = [
+			[from[0] + px, from[1] + py, from[2]],
+			[from[0] - px, from[1] - py, from[2]],
+			[from[0] + px, from[1] + py, from[2] + frame.height],
+			[from[0] - px, from[1] - py, from[2] + frame.height],
+			[to[0] + px, to[1] + py, to[2]],
+			[to[0] - px, to[1] - py, to[2]],
+			[to[0] + px, to[1] + py, to[2] + frame.height],
+			[to[0] - px, to[1] - py, to[2] + frame.height]
+		];
+		const edgePairs = [
+			[0, 1], [1, 3], [3, 2], [2, 0],
+			[4, 5], [5, 7], [7, 6], [6, 4],
+			[0, 4], [1, 5], [2, 6], [3, 7]
+		];
+		const positions = [];
+		edgePairs.forEach(function (pair) {
+			positions.push.apply(positions, corners[pair[0]]);
+			positions.push.apply(positions, corners[pair[1]]);
+		});
+		return positions;
+	}
+
+	/**
+	 * Viewer-only Span focus state.  This plain projection intentionally carries
+	 * no geometry or science inputs, so it can later map activeSpanId to visible
+	 * tiles without changing the Owner interaction contract.
+	 */
+	function spanFocusDisplayState(span, mode) {
+		const focused = mode === "SPAN_FOCUS" && span && span.span_id;
+		return {
+			mode: focused ? "SPAN_FOCUS" : "PROJECT_VIEW",
+			active_span_id: focused ? span.span_id : null,
+			group_id: focused ? (span.group_id || null) : null,
+			from_tower_id: focused ? (span.from_tower_id || null) : null,
+			to_tower_id: focused ? (span.to_tower_id || null) : null
+		};
+	}
+
 	/**
 	 * Attach an overlay group to the Giro3D instance that is actually served by
 	 * the pinned bundle.  The pinned Instance exposes ``threeObjects`` (the group
@@ -345,6 +501,11 @@
 		candidateDisplayLabel: candidateDisplayLabel,
 		candidateRegion: candidateRegion,
 		selectionMarkerSpec: selectionMarkerSpec,
+		spanSelectionFrame: spanSelectionFrame,
+		spanCorridorVertices: spanCorridorVertices,
+		spanFocusClipPlanes: spanFocusClipPlanes,
+		spanFocusDisplayState: spanFocusDisplayState,
+		towerViewerPosition: towerViewerPosition,
 		attachOverlayGroup: attachOverlayGroup,
 		nextTowerLabel: nextTowerLabel,
 		confirmedTowerLine: confirmedTowerLine,
@@ -456,6 +617,13 @@
 		// localStorage keyed by project; the TowerGroupRegistry is authoritative.
 		let activeGroupId = null;
 		let confirmedMembership = null; // { tower_id, preview } for reinspection
+		let spanState = null;
+		let selectedSpan = null;
+		let spanFocusMode = "PROJECT_VIEW";
+		let activeSpanId = null;
+		let activeSpanGroupId = null;
+		let activeSpanRequestGeneration = 0;
+		let activeSpanFocusEnvelope = null;
 		const labelGroup = new THREE.Group();
 		labelGroup.name = "tower-review-overlays";
 		labelGroup.renderOrder = 999;
@@ -477,12 +645,108 @@
 		const confirmedPointsGroup = new THREE.Group();
 		confirmedPointsGroup.name = "tower-review-confirmed-membership";
 		confirmedPointsGroup.renderOrder = 1001;
+		// Exactly one selected-Span visualization lives here.  It is deliberately
+		// separate from candidate/tower science-review overlays and is never sent
+		// back to the project API.
+		const spanSelectionGroup = new THREE.Group();
+		spanSelectionGroup.name = "selected-span-overlay";
+		spanSelectionGroup.renderOrder = 1002;
+		// Final reconciled Tree inspection (read-only): exactly one active Tree's
+		// bounded authoritative member preview + clearance pair render here.
+		let treeListState = null; // { span_id, trees, core_count, halo_review_count }
+		let activeTree = null; // one tree row from treeListState.trees
+		let activeTreeSpanId = null;
+		let spanAnalysisRequestGeneration = 0;
+		const confirmedWireOverlayGroup = new THREE.Group();
+		confirmedWireOverlayGroup.name = "confirmed-wire-overlay";
+		confirmedWireOverlayGroup.renderOrder = 1005;
+		const dangerPointsOverlayGroup = new THREE.Group();
+		dangerPointsOverlayGroup.name = "authoritative-danger-points-overlay";
+		dangerPointsOverlayGroup.renderOrder = 1006;
+		const treePreviewGroup = new THREE.Group();
+		treePreviewGroup.name = "span-tree-member-preview";
+		treePreviewGroup.renderOrder = 1003;
+		const treeClearanceGroup = new THREE.Group();
+		treeClearanceGroup.name = "span-tree-clearance-pair";
+		treeClearanceGroup.renderOrder = 1004;
 		// The pinned Giro3D exposes native-object insertion on the Instance
 		// (threeObjects / scene), not on instance.view.
 		attachOverlayGroup(viewer.instance, labelGroup);
 		attachOverlayGroup(viewer.instance, selectionGroup);
 		attachOverlayGroup(viewer.instance, previewPointsGroup);
 		attachOverlayGroup(viewer.instance, confirmedPointsGroup);
+		attachOverlayGroup(viewer.instance, spanSelectionGroup);
+		attachOverlayGroup(viewer.instance, treePreviewGroup);
+		attachOverlayGroup(viewer.instance, treeClearanceGroup);
+		attachOverlayGroup(viewer.instance, confirmedWireOverlayGroup);
+		attachOverlayGroup(viewer.instance, dangerPointsOverlayGroup);
+
+		function clearSpanAnalysisLayers() {
+			spanAnalysisRequestGeneration += 1;
+			[confirmedWireOverlayGroup, dangerPointsOverlayGroup].forEach(function (group) {
+				while (group.children.length) {
+					const child = group.children[0]; group.remove(child); disposeSpanOverlayObject(child);
+				}
+			});
+			const details = document.getElementById("confirmed_wire_details");
+			if (details) details.textContent = "—";
+		}
+		function matchesActiveSpanRun(payload) {
+			return Boolean(payload && selectedSpan && payload.span_id === activeSpanId &&
+				payload.run_id && payload.run_id === selectedSpan.active_run_id);
+		}
+		function renderConfirmedWireList(payload) {
+			const box = document.getElementById("confirmed_wire_inspector"); const list = document.getElementById("confirmed_wire_list");
+			if (!box || !list) return;
+			box.style.display = "block";
+			list.innerHTML = (payload.strands || []).map(function (wire) { return "<div data-confirmed-wire='" + wire.wire_id + "'><b>" + wire.wire_name + "</b> · CONFIRMED · " + wire.model_type + " <button>Locate</button></div>"; }).join("") || "无可用结果 / no confirmed wire";
+			Array.prototype.forEach.call(list.querySelectorAll("[data-confirmed-wire] button"), function (button) { button.addEventListener("click", function () { focusConfirmedWireOverlay(); }); });
+		}
+		function focusConfirmedWireOverlay() {
+			const bounds = new THREE.Box3().setFromObject(confirmedWireOverlayGroup);
+			if (bounds.isEmpty() || !Number.isFinite(bounds.min.x) || !Number.isFinite(bounds.max.x) || !Number.isFinite(bounds.min.y) || !Number.isFinite(bounds.max.y) || !Number.isFinite(bounds.min.z) || !Number.isFinite(bounds.max.z)) return;
+			bounds.expandByScalar(8);
+			const frame = computeFitCamera(bounds.min, bounds.max, 60);
+			const cam = viewer.instance.view.camera;
+			cam.position.set(frame.position.x, frame.position.y, frame.position.z);
+			cam.lookAt(frame.target.x, frame.target.y, frame.target.z);
+			viewer.controls.target.set(frame.target.x, frame.target.y, frame.target.z);
+			viewer.controls.update(); viewer.instance.notifyChange(cam);
+		}
+		function addConfirmedWirePreview(payload, token) {
+			if (token !== spanAnalysisRequestGeneration || !matchesActiveSpanRun(payload) || !payload.authoritative) return;
+			const points = payload.sampled_xyz_absolute_m || [];
+			if (points.length < 2) return;
+			const geometry = new THREE.BufferGeometry();
+			geometry.setAttribute("position", new THREE.Float32BufferAttribute(points.flat(), 3));
+			const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: 0x00e5ff, linewidth: 2 }));
+			line.userData.spanId = payload.span_id; line.userData.runId = payload.run_id;
+			confirmedWireOverlayGroup.add(line);
+			viewer.instance.notifyChange(viewer.instance.view.camera);
+		}
+		function renderDangerPoints(payload, token) {
+			if (token !== spanAnalysisRequestGeneration || !matchesActiveSpanRun(payload) || !payload.authoritative) return;
+			const points = payload.points_xyz_absolute_m || [];
+			if (points.length) {
+				const geometry = new THREE.BufferGeometry();
+				geometry.setAttribute("position", new THREE.Float32BufferAttribute(points.flat(), 3));
+				const overlay = new THREE.Points(geometry, new THREE.PointsMaterial({ color: 0xff1a1a, size: 0.42, sizeAttenuation: true, depthTest: true }));
+				overlay.userData.spanId = payload.span_id; overlay.userData.runId = payload.run_id;
+				dangerPointsOverlayGroup.add(overlay);
+			}
+			const details = document.getElementById("confirmed_wire_details");
+			if (details) details.textContent = "Run: " + (payload.run_id || "N/A") + "\nRisk threshold: " + (payload.risk_threshold_m == null ? "N/A" : payload.risk_threshold_m + " m") + "\nDanger trees: " + (payload.danger_tree_count == null ? "N/A" : payload.danger_tree_count) + "\nDanger points: " + Number(payload.danger_point_count || 0).toLocaleString();
+			viewer.instance.notifyChange(viewer.instance.view.camera);
+		}
+		function fetchSpanAnalysisLayers(spanId) {
+			const token = ++spanAnalysisRequestGeneration;
+			api("/api/spans/" + encodeURIComponent(spanId) + "/wire", { cache: "no-store" }).then(function (payload) {
+				if (token !== spanAnalysisRequestGeneration || !matchesActiveSpanRun(payload) || !payload.authoritative) return;
+				renderConfirmedWireList(payload);
+				(payload.strands || []).forEach(function (wire) { api("/api/spans/" + encodeURIComponent(spanId) + "/wire/" + wire.wire_id + "/preview", { cache: "no-store" }).then(function (preview) { addConfirmedWirePreview(preview, token); }).catch(function () {}); });
+			}).catch(function () { const box = document.getElementById("confirmed_wire_inspector"); if (box) box.style.display = "none"; });
+			api("/api/spans/" + encodeURIComponent(spanId) + "/danger-points", { cache: "no-store" }).then(function (payload) { renderDangerPoints(payload, token); }).catch(function () {});
+		}
 
 		function api(path, options) {
 			return fetch(apiBase + path, options).then(function (resp) {
@@ -589,7 +853,7 @@
 				});
 			});
 			(state.confirmed_towers || []).forEach(function (t) {
-				const p = t.display_xyz_absolute_m || t.top_xyz_absolute_m;
+				const p = towerViewerPosition(t) || t.top_xyz_absolute_m;
 				if (!p) {
 					return;
 				}
@@ -713,6 +977,26 @@
 			rebuildSelection();
 		}
 
+		/** Dim unrelated labels while retaining lightweight project context. */
+		function applySpanFocusVisuals() {
+			const focused = spanFocusMode === "SPAN_FOCUS" && selectedSpan;
+			const endpointIds = focused
+				? [selectedSpan.from_tower_id, selectedSpan.to_tower_id]
+				: [];
+			labelGroup.children.forEach(function (sprite) {
+				const kind = sprite.userData && sprite.userData.kind;
+				const towerId = sprite.userData && sprite.userData.tower_id;
+				const dim = !!focused && (
+					kind !== "tower" || endpointIds.indexOf(towerId) === -1
+				);
+				sprite.userData.dimmed = dim;
+				if (sprite.material) {
+					sprite.material.opacity = dim ? 0.25 : 1.0;
+				}
+				scaleLabelSprite(sprite, viewer.instance.view.camera);
+			});
+		}
+
 		function updateDetails() {
 			const el = document.getElementById("trp_details");
 			if (!el) {
@@ -797,6 +1081,16 @@
 				}
 			});
 			selectionGroup.children.forEach(function (child) {
+				if (child.userData && child.userData.isLabel) {
+					scaleLabelSprite(child, cam);
+				}
+			});
+			spanSelectionGroup.children.forEach(function (child) {
+				if (child.userData && child.userData.isLabel) {
+					scaleLabelSprite(child, cam);
+				}
+			});
+			treeClearanceGroup.children.forEach(function (child) {
 				if (child.userData && child.userData.isLabel) {
 					scaleLabelSprite(child, cam);
 				}
@@ -900,13 +1194,601 @@
 				renderOrderedPanel(state);
 				renderGroupBar(state);
 				applySelectionVisuals();
+				applySpanFocusVisuals();
 				updateDetails();
 				panelStatus("project " + state.project_id.slice(0, 8) + " · " + state.confirmed_towers.length + " T###");
+				refreshSpans();
 				return state;
 			}).catch(function (err) {
 				panelStatus("review API: " + err.message, false);
 				return null;
 			});
+		}
+
+		function spanEndpoint(span, key) {
+			return spanEndpointViewerPosition(span, key);
+		}
+
+		function focusSpan(span) {
+			const a = spanEndpoint(span, "from_tower_geometry");
+			const b = spanEndpoint(span, "to_tower_geometry");
+			if (!a || !b) return;
+			const min = { x: Math.min(a[0], b[0]) - 10, y: Math.min(a[1], b[1]) - 10, z: Math.min(a[2], b[2]) - 3 };
+			const max = { x: Math.max(a[0], b[0]) + 10, y: Math.max(a[1], b[1]) + 10, z: Math.max(a[2], b[2]) + 35 };
+			const frame = computeFitCamera(min, max, 60);
+			const cam = viewer.instance.view.camera;
+			cam.position.set(frame.position.x, frame.position.y, frame.position.z);
+			cam.lookAt(frame.target.x, frame.target.y, frame.target.z);
+			viewer.controls.target.set(frame.target.x, frame.target.y, frame.target.z);
+			viewer.controls.update();
+			viewer.instance.notifyChange(cam);
+		}
+
+		function clearSpanFocusFilter() {
+			if (viewer.pointCloud) {
+				// null restores the native unfiltered PointCloud entity; no source or
+				// project data is reloaded or changed.
+				viewer.pointCloud.clippingPlanes = null;
+				viewer.instance.notifyChange(viewer.pointCloud);
+			}
+			activeSpanFocusEnvelope = null;
+			spanSelectionGroup.userData.focusEnvelope = null;
+			spanSelectionGroup.userData.focusFilterActive = false;
+		}
+
+		function applySpanFocusFilter(span) {
+			if (!span || !viewer.pointCloud) return;
+			const frame = window.p3aGiro3dUtil.spanSelectionFrame(span, 8, 12);
+			const envelope = window.p3aGiro3dUtil.spanFocusClipPlanes(frame, {
+				along: 15,
+				across: 12,
+				below: 6,
+				above: 18
+			});
+			if (!envelope) return;
+			viewer.pointCloud.clippingPlanes = envelope.planes.map(function (plane) {
+				return new THREE.Plane(
+					new THREE.Vector3(plane.normal[0], plane.normal[1], plane.normal[2]),
+					plane.constant
+				);
+			});
+			activeSpanFocusEnvelope = envelope;
+			spanSelectionGroup.userData.focusEnvelope = envelope;
+			spanSelectionGroup.userData.focusFilterActive = true;
+			viewer.instance.notifyChange(viewer.pointCloud);
+		}
+
+		function renderSpanFocusState() {
+			const modeEl = document.getElementById("span_focus_mode");
+			const returnBtn = document.getElementById("span_return_project");
+			const state = window.p3aGiro3dUtil.spanFocusDisplayState(selectedSpan, spanFocusMode);
+			if (modeEl) {
+				modeEl.textContent = state.mode === "SPAN_FOCUS"
+					? "Mode: 档距聚焦 / Span Focus"
+					: "Mode: 项目全景 / Project View";
+				modeEl.dataset.focusMode = state.mode;
+				modeEl.dataset.activeSpanId = state.active_span_id || "";
+			}
+			if (returnBtn) {
+				returnBtn.disabled = state.mode !== "SPAN_FOCUS";
+				returnBtn.dataset.focusMode = state.mode;
+			}
+		}
+
+		// ------------------------------------------------------------------
+		// Final reconciled Tree inspection (read-only, generic for any Span)
+		// ------------------------------------------------------------------
+		function clearTreeSelection() {
+			activeTree = null;
+			activeTreeSpanId = null;
+			while (treePreviewGroup.children.length) {
+				const child = treePreviewGroup.children[0];
+				treePreviewGroup.remove(child);
+				disposeSpanOverlayObject(child);
+			}
+			while (treeClearanceGroup.children.length) {
+				const child = treeClearanceGroup.children[0];
+				treeClearanceGroup.remove(child);
+				disposeSpanOverlayObject(child);
+			}
+			const details = document.getElementById("tree_details");
+			if (details) details.textContent = "—";
+			const list = document.getElementById("tree_list");
+			if (list) {
+				Array.prototype.forEach.call(list.querySelectorAll(".sel"), function (node) {
+					node.classList.remove("sel");
+				});
+			}
+			viewer.instance.notifyChange(viewer.instance.view.camera);
+		}
+
+		function renderTreePreview(points, tree) {
+			while (treePreviewGroup.children.length) {
+				const child = treePreviewGroup.children[0];
+				treePreviewGroup.remove(child);
+				disposeSpanOverlayObject(child);
+			}
+			if (!points || !points.length) {
+				return;
+			}
+			const positions = new Float32Array(points.length * 3);
+			for (let i = 0; i < points.length; i++) {
+				positions[i * 3] = points[i][0];
+				positions[i * 3 + 1] = points[i][1];
+				positions[i * 3 + 2] = points[i][2];
+			}
+			const geo = new THREE.BufferGeometry();
+			geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+			const material = new THREE.PointsMaterial({
+				color: (tree && tree.instance_color) || 0xff3d81,
+				size: 0.55,
+				sizeAttenuation: true,
+				transparent: true,
+				opacity: 0.95,
+				depthTest: true
+			});
+			const pointsObj = new THREE.Points(geo, material);
+			pointsObj.userData.treePreview = true;
+			treePreviewGroup.add(pointsObj);
+		}
+
+		function renderTreeClearance(tree) {
+			while (treeClearanceGroup.children.length) {
+				const child = treeClearanceGroup.children[0];
+				treeClearanceGroup.remove(child);
+				disposeSpanOverlayObject(child);
+			}
+			const pair = tree && tree.clearance;
+			if (!pair || !pair.tree_xyz_absolute_m || !pair.wire_xyz_absolute_m) {
+				return;
+			}
+			const tp = pair.tree_xyz_absolute_m;
+			const wp = pair.wire_xyz_absolute_m;
+			const treeMark = new THREE.Mesh(
+				new THREE.SphereGeometry(0.55, 12, 8),
+				new THREE.MeshBasicMaterial({ color: 0xff3d81, depthTest: false })
+			);
+			treeMark.position.set(tp[0], tp[1], tp[2]);
+			treeMark.userData.clearanceMarker = true;
+			treeClearanceGroup.add(treeMark);
+			const wireMark = new THREE.Mesh(
+				new THREE.SphereGeometry(0.55, 12, 8),
+				new THREE.MeshBasicMaterial({ color: 0x00e5ff, depthTest: false })
+			);
+			wireMark.position.set(wp[0], wp[1], wp[2]);
+			wireMark.userData.clearanceMarker = true;
+			treeClearanceGroup.add(wireMark);
+			const lineGeo = new THREE.BufferGeometry();
+			lineGeo.setAttribute(
+				"position",
+				new THREE.BufferAttribute(new Float32Array([tp[0], tp[1], tp[2], wp[0], wp[1], wp[2]]), 3)
+			);
+			treeClearanceGroup.add(new THREE.Line(
+				lineGeo,
+				new THREE.LineBasicMaterial({ color: 0xffd54f })
+			));
+			const label = makeLabelSprite(
+				pair.minimum_clearance_m != null ? pair.minimum_clearance_m.toFixed(3) + " m" : "—",
+				"#3e2723", "#ffe082", "candidate", { labelPx: 22 }
+			);
+			label.position.set((tp[0] + wp[0]) / 2, (tp[1] + wp[1]) / 2, (tp[2] + wp[2]) / 2 + 2);
+			label.userData.clearanceLabel = true;
+			treeClearanceGroup.add(label);
+			scaleLabelSprite(label, viewer.instance.view.camera);
+		}
+
+		function focusTree(preview, tree) {
+			let target = null;
+			let box = null;
+			if (preview && preview.centroid_xyz_absolute_m) {
+				target = preview.centroid_xyz_absolute_m;
+				const mn = preview.bounds_absolute_m && preview.bounds_absolute_m.min_xyz_absolute_m;
+				const mx = preview.bounds_absolute_m && preview.bounds_absolute_m.max_xyz_absolute_m;
+				if (mn && mx) {
+					box = {
+						min: { x: mn[0] - 4, y: mn[1] - 4, z: mn[2] - 3 },
+						max: { x: mx[0] + 4, y: mx[1] + 4, z: mx[2] + 6 }
+					};
+				}
+			}
+			if (!box && tree && tree.apex_xyz_absolute_m) {
+				const a = tree.apex_xyz_absolute_m;
+				box = { min: { x: a[0] - 5, y: a[1] - 5, z: a[2] - 5 }, max: { x: a[0] + 5, y: a[1] + 5, z: a[2] + 8 } };
+				target = a;
+			}
+			if (!box) {
+				return;
+			}
+			const frame = computeFitCamera(box.min, box.max, 60);
+			const cam = viewer.instance.view.camera;
+			cam.position.set(frame.position.x, frame.position.y, frame.position.z);
+			cam.lookAt(frame.target.x, frame.target.y, frame.target.z);
+			viewer.controls.target.set(frame.target.x, frame.target.y, frame.target.z);
+			viewer.controls.update();
+			viewer.instance.notifyChange(cam);
+		}
+
+		function fetchTreeList(span) {
+			if (!span || !span.span_id) {
+				return;
+			}
+			const spanId = span.span_id;
+			api("/api/spans/" + encodeURIComponent(spanId) + "/trees", { cache: "no-store" }).then(function (payload) {
+				if (!matchesActiveSpanRun(payload)) {
+					return; // stale response from a previous Span focus
+				}
+				treeListState = payload;
+				renderTreeList(payload);
+			}).catch(function () {});
+		}
+
+		function renderTreeList(payload) {
+			const panel = document.getElementById("tree_panel");
+			const header = document.getElementById("tree_header");
+			const list = document.getElementById("tree_list");
+			if (!panel || !header || !list) {
+				return;
+			}
+			if (!payload || !payload.trees) {
+				panel.style.display = "none";
+				return;
+			}
+			panel.style.display = "block";
+			header.textContent = "Trees: " + payload.tree_count +
+				" · Core: " + payload.core_count +
+				" · Halo/Review: " + payload.halo_review_count;
+			const rows = payload.trees.map(function (t) {
+				const sel = activeTree && activeTree.global_tree_id === t.global_tree_id ? " class='sel'" : "";
+				const clear = t.minimum_clearance_m == null
+					? "N/A"
+					: Number(t.minimum_clearance_m).toFixed(2) + " m";
+				const order = t.span_order_index == null ? "—" : String(t.span_order_index).padStart(2, "0");
+				return "<div data-tree='" + t.global_tree_id + "'" + sel + ">" +
+					"<span class='tswatch' style='background:" + t.instance_color + "'></span>" +
+					"<span class='tcat'>" + (t.category === "CORE" ? "CORE" : "REVIEW") + "</span>" +
+					"<span class='tname'>" + t.display_id + "</span>" +
+					"<span class='tmeta'>" + payload.span_id + " · " + order + "</span>" +
+					"<span class='tclear'>" + clear + (t.dangerous ? " · RISK" : "") + "</span></div>";
+			}).join("");
+			list.innerHTML = rows || "<div>无树 / no trees</div>";
+			Array.prototype.forEach.call(list.querySelectorAll("[data-tree]"), function (node) {
+				node.addEventListener("click", function () {
+					const gid = Number(node.getAttribute("data-tree"));
+					const tree = (payload.trees || []).find(function (t) { return t.global_tree_id === gid; });
+					if (tree) {
+						selectTree(tree);
+					}
+				});
+			});
+			const details = document.getElementById("tree_details");
+			if (details) details.textContent = "—";
+		}
+
+		function selectTree(tree) {
+			if (!tree || !treeListState || activeSpanId !== treeListState.span_id) {
+				return;
+			}
+			activeTree = tree;
+			activeTreeSpanId = treeListState.span_id;
+			const list = document.getElementById("tree_list");
+			if (list) {
+				Array.prototype.forEach.call(list.querySelectorAll(".sel"), function (node) {
+					node.classList.remove("sel");
+				});
+				const row = list.querySelector("[data-tree='" + tree.global_tree_id + "']");
+				if (row) row.classList.add("sel");
+			}
+			const details = document.getElementById("tree_details");
+			if (details) {
+				details.textContent = "Tree: " + tree.display_id + "\n" +
+					"Span: " + treeListState.span_id + " · order " + (tree.span_order_index == null ? "—" : tree.span_order_index) + "\n" +
+					"global_tree_id: " + tree.global_tree_id + "\n" +
+					"Category: " + tree.category + "\n" +
+					"Height: " + (tree.apex_height_m == null ? "—" : tree.apex_height_m.toFixed(2) + " m") + "\n" +
+					"Points: " + (tree.full_resolution_point_count == null ? "—" : Number(tree.full_resolution_point_count).toLocaleString()) + "\n" +
+					"Clearance: " + (tree.minimum_clearance_m == null ? "N/A" : tree.minimum_clearance_m.toFixed(3) + " m");
+			}
+			// Bounded authoritative member preview (display-only sample).
+			api("/api/spans/" + encodeURIComponent(treeListState.span_id) +
+				"/trees/" + tree.global_tree_id + "/preview", { cache: "no-store" }).then(function (payload) {
+				if (activeTree !== tree || activeSpanId !== treeListState.span_id) {
+					return; // stale async preview after switching Span/Tree
+				}
+				renderTreePreview(payload.sampled_xyz_absolute_m || [], tree);
+				renderTreeClearance(tree);
+				focusTree(payload, tree);
+			}).catch(function () {});
+		}
+
+		function applyActiveSpan(span, requestGeneration) {
+			if (!span || !span.span_id || requestGeneration !== activeSpanRequestGeneration) return;
+			selectedSpan = span;
+			spanFocusMode = "SPAN_FOCUS";
+			activeSpanId = span.span_id;
+			activeSpanGroupId = span.group_id || activeSpanGroupId;
+			clearTreeSelection();
+			clearSpanAnalysisLayers();
+			rebuildSpanSelectionOverlay();
+			applySpanFocusFilter(span);
+			applySpanFocusVisuals();
+			renderSpanSummary();
+			renderSpanFocusState();
+			focusSpan(span);
+			fetchSpanAnalysisLayers(span.span_id);
+			window.dispatchEvent(new CustomEvent("p3a-active-span-changed", {
+				detail: { group_id: activeSpanGroupId, span_id: span.span_id, run_id: span.active_run_id }
+			}));
+			if (spanState) renderSpans(spanState);
+		}
+
+		function setActiveSpan(spanId, suppliedSpan) {
+			if (!spanId) return Promise.resolve(null);
+			const requestGeneration = ++activeSpanRequestGeneration;
+			const known = suppliedSpan || (spanState && (spanState.spans || []).find(function (span) {
+				return span.span_id === spanId;
+			}));
+			if (known) {
+				applyActiveSpan(known, requestGeneration);
+				return Promise.resolve(known);
+			}
+			return api("/api/spans/" + encodeURIComponent(spanId), { cache: "no-store" }).then(function (payload) {
+				const span = payload && payload.span;
+				applyActiveSpan(span, requestGeneration);
+				return requestGeneration === activeSpanRequestGeneration ? span : null;
+			}).catch(function (error) {
+				if (requestGeneration === activeSpanRequestGeneration) {
+					panelStatus("active Span unavailable: " + error.message, false);
+				}
+				return null;
+			});
+		}
+
+		function enterSpanFocus(span) {
+			return setActiveSpan(span && span.span_id, span);
+		}
+
+		function returnToProjectView() {
+			activeSpanRequestGeneration += 1;
+			selectedSpan = null;
+			spanFocusMode = "PROJECT_VIEW";
+			activeSpanId = null;
+			clearSpanFocusFilter();
+			clearSpanSelectionOverlay();
+			clearTreeSelection();
+			clearSpanAnalysisLayers();
+			treeListState = null;
+			const treePanel = document.getElementById("tree_panel");
+			if (treePanel) {
+				treePanel.style.display = "none";
+			}
+			const wirePanel = document.getElementById("confirmed_wire_inspector");
+			if (wirePanel) wirePanel.style.display = "none";
+			applySpanFocusVisuals();
+			renderSpanSummary();
+			renderSpanFocusState();
+			// Re-render the Span list so no row keeps the stale selected highlight.
+			if (spanState && typeof spanState === "object") {
+				renderSpans(spanState);
+			}
+			if (typeof viewer.fitProjectView === "function") {
+				viewer.fitProjectView();
+			}
+		}
+
+		function disposeSpanOverlayObject(object) {
+			if (!object || typeof object.traverse !== "function") {
+				return;
+			}
+			object.traverse(function (child) {
+				if (child.geometry && typeof child.geometry.dispose === "function") {
+					child.geometry.dispose();
+				}
+				const materials = child.material ? (Array.isArray(child.material) ? child.material : [child.material]) : [];
+				materials.forEach(function (material) {
+					if (material.map && typeof material.map.dispose === "function") material.map.dispose();
+					if (typeof material.dispose === "function") material.dispose();
+				});
+			});
+		}
+
+		function clearSpanSelectionOverlay() {
+			while (spanSelectionGroup.children.length) {
+				const child = spanSelectionGroup.children[0];
+				spanSelectionGroup.remove(child);
+				disposeSpanOverlayObject(child);
+			}
+			spanSelectionGroup.userData.activeSpanId = null;
+			spanSelectionGroup.userData.visualizationOnly = false;
+			spanSelectionGroup.userData.focusFilterActive = false;
+		}
+
+		function spanEndpointMarker(position, towerId) {
+			const marker = new THREE.Group();
+			marker.name = "selected-span-endpoint-" + towerId;
+			marker.userData.selectedSpanEndpoint = towerId;
+			const sphere = new THREE.Mesh(
+				new THREE.SphereGeometry(1.15, 16, 10),
+				new THREE.MeshBasicMaterial({ color: 0x80deea, transparent: true, opacity: 0.95, depthTest: false })
+			);
+			sphere.position.set(position[0], position[1], position[2] + 1.15);
+			marker.add(sphere);
+			const ring = makeCircleLoop(position[0], position[1], position[2] + 0.15, 2.2, 0x00e5ff, 1.0);
+			if (ring.material) ring.material.depthTest = false;
+			marker.add(ring);
+			const label = makeLabelSprite(towerId, "#006064", "#ffffff", "tower", { labelPx: 34 });
+			label.position.set(position[0], position[1], position[2] + 3.2);
+			label.userData.selectedSpanEndpointLabel = towerId;
+			marker.add(label);
+			scaleLabelSprite(label, viewer.instance.view.camera);
+			return marker;
+		}
+
+		function rebuildSpanSelectionOverlay() {
+			clearSpanSelectionOverlay();
+			if (!selectedSpan) {
+				viewer.instance.notifyChange(viewer.instance.view.camera);
+				return;
+			}
+			const frame = window.p3aGiro3dUtil.spanSelectionFrame(selectedSpan, 8, 12);
+			if (!frame) {
+				return;
+			}
+			spanSelectionGroup.userData.activeSpanId = frame.span_id;
+			spanSelectionGroup.userData.visualizationOnly = true;
+
+			const endpointFrom = spanEndpointMarker(frame.from, frame.from_tower_id);
+			const endpointTo = spanEndpointMarker(frame.to, frame.to_tower_id);
+			spanSelectionGroup.add(endpointFrom);
+			spanSelectionGroup.add(endpointTo);
+
+			const corridorGeometry = new THREE.BufferGeometry();
+			corridorGeometry.setAttribute(
+				"position",
+				new THREE.BufferAttribute(new Float32Array(window.p3aGiro3dUtil.spanCorridorVertices(frame)), 3)
+			);
+			const corridor = new THREE.LineSegments(
+				corridorGeometry,
+				new THREE.LineBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.9, depthTest: false })
+			);
+			corridor.name = "selected-span-corridor-frame";
+			corridor.userData.selectedSpanCorridor = frame.span_id;
+			spanSelectionGroup.add(corridor);
+
+			const label = makeLabelSprite(
+				frame.label + (frame.group_id ? "  " + frame.group_id : ""),
+				"#0277bd",
+				"#ffffff",
+				"span",
+				{ labelPx: 40 }
+			);
+			label.position.set(frame.midpoint[0], frame.midpoint[1], frame.topZ + 2.0);
+			label.userData.selectedSpanLabel = frame.span_id;
+			spanSelectionGroup.add(label);
+			scaleLabelSprite(label, viewer.instance.view.camera);
+
+			const leaderGeometry = new THREE.BufferGeometry();
+			leaderGeometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array([
+				frame.midpoint[0], frame.midpoint[1], frame.topZ,
+				frame.midpoint[0], frame.midpoint[1], frame.topZ + 1.8
+			]), 3));
+			const leader = new THREE.Line(
+				leaderGeometry,
+				new THREE.LineBasicMaterial({ color: 0x80deea, transparent: true, opacity: 0.9, depthTest: false })
+			);
+			leader.userData.selectedSpanLabelLeader = frame.span_id;
+			spanSelectionGroup.add(leader);
+			viewer.instance.notifyChange(viewer.instance.view.camera);
+		}
+
+		function clearSelectedSpan() {
+			activeSpanRequestGeneration += 1;
+			selectedSpan = null;
+			spanFocusMode = "PROJECT_VIEW";
+			activeSpanId = null;
+			clearSpanFocusFilter();
+			clearSpanSelectionOverlay();
+			applySpanFocusVisuals();
+			renderSpanSummary();
+			renderSpanFocusState();
+			viewer.instance.notifyChange(viewer.instance.view.camera);
+		}
+		function selectSpanAnalysisGroup(groupId) {
+			if (!spanState || !groupId || activeSpanGroupId === groupId) return;
+			activeSpanGroupId = groupId;
+			if (selectedSpan && selectedSpan.group_id !== groupId) {
+				clearTreeSelection(); clearSpanAnalysisLayers(); clearSelectedSpan();
+			}
+			renderSpans(spanState);
+		}
+
+		function renderSpans(payload) {
+			spanState = payload;
+			if (selectedSpan && Array.isArray(payload.spans)) {
+				const refreshed = payload.spans.find(function (item) { return item.span_id === selectedSpan.span_id; });
+				if (refreshed) {
+					selectedSpan = refreshed;
+					activeSpanId = refreshed.span_id;
+					if (spanFocusMode === "SPAN_FOCUS") {
+						rebuildSpanSelectionOverlay();
+						applySpanFocusFilter(refreshed);
+					}
+				}
+			}
+			const groups = {};
+			(payload.spans || []).forEach(function (span) { (groups[span.group_id || "UNGROUPED"] || (groups[span.group_id || "UNGROUPED"] = [])).push(span); });
+			const groupSelect = document.getElementById("span_group_select");
+			const list = document.getElementById("span_list");
+			if (!groupSelect || !list) return;
+			const ids = Object.keys(groups);
+			groupSelect.innerHTML = ids.map(function (id) { return "<option value='" + id + "'>" + id + "</option>"; }).join("");
+			const active = activeSpanGroupId && groups[activeSpanGroupId]
+				? activeSpanGroupId : ids[0];
+			activeSpanGroupId = active || null;
+			if (active) groupSelect.value = active;
+			const rows = (groups[active] || []).sort(function (a, b) { return (a.within_group_order || 0) - (b.within_group_order || 0); });
+			list.innerHTML = rows.length ? rows.map(function (span) {
+				return "<div data-span='" + span.span_id + "' class='" + (selectedSpan && selectedSpan.span_id === span.span_id ? "sel" : "") + "'><b>" + span.span_id + "</b> " + span.from_tower_id + " → " + span.to_tower_id + " <span>" + span.status + "</span></div>";
+			}).join("") : "<div>暂无档距 / no Spans</div>";
+			Array.prototype.forEach.call(list.querySelectorAll("[data-span]"), function (node) {
+				node.addEventListener("click", function () {
+					const span = (payload.spans || []).find(function (item) { return item.span_id === node.getAttribute("data-span"); });
+					enterSpanFocus(span);
+					renderSpans(payload);
+				});
+			});
+			if (!selectedSpan && spanSelectionGroup.userData.activeSpanId) {
+				clearSpanSelectionOverlay();
+			}
+			renderSpanSummary();
+			renderSpanFocusState();
+		}
+
+		function renderSpanSummary() {
+			const el = document.getElementById("span_summary");
+			if (!el || !selectedSpan) {
+				if (el) el.textContent = "当前档距 / Active Span: —\nMode: 项目全景 / Project View";
+				return;
+			}
+			const s = selectedSpan;
+			const summary = s.summary || {};
+			const riskCounts = (summary.risk_counts && typeof summary.risk_counts === "object") ? summary.risk_counts : {};
+			const num = function (v) { return v == null ? "—" : (typeof v === "number" ? v : v); };
+			const lines = [
+				"当前档距 / Active Span: " + s.span_id,
+				"Endpoints: " + (s.from_tower_id || "unavailable") + " → " + (s.to_tower_id || "unavailable"),
+				"Group: " + (s.group_id || "G—"),
+				"Mode: 档距聚焦 / Span Focus",
+				"Status: " + (s.status || "unavailable"),
+				"Run: " + (s.active_run_id || "N/A"),
+				"Wires: " + num(summary.wire_count),
+				"Trees: " + num(summary.tree_count),
+				"Minimum clearance: " + (summary.minimum_clearance_m == null ? "—" : summary.minimum_clearance_m + " m"),
+				"Risk threshold: " + (summary.risk_threshold_m == null ? "—" : summary.risk_threshold_m + " m"),
+				"Below threshold: " + num(riskCounts.below_threshold),
+				"Danger trees: " + num(riskCounts.below_threshold),
+				"Danger points: " + num(summary.danger_point_count)
+			];
+			el.textContent = lines.join("\n");
+		}
+
+		function refreshSpans() {
+			return api("/api/spans", { cache: "no-store" }).then(function (payload) {
+				if (selectedSpan) {
+					selectedSpan = (payload.spans || []).find(function (item) { return item.span_id === selectedSpan.span_id; }) || null;
+					if (!selectedSpan) {
+						spanFocusMode = "PROJECT_VIEW";
+						activeSpanId = null;
+						clearSpanFocusFilter();
+						clearSpanSelectionOverlay();
+					} else {
+						activeSpanId = selectedSpan.span_id;
+						rebuildSpanSelectionOverlay();
+						if (spanFocusMode === "SPAN_FOCUS") applySpanFocusFilter(selectedSpan);
+					}
+				}
+				renderSpans(payload);
+				return payload;
+			}).catch(function () { return null; });
 		}
 
 		function refreshAfter(label, promise) {
@@ -1096,7 +1978,7 @@
 			if (!towerRow) {
 				return;
 			}
-			const p = towerRow.display_xyz_absolute_m || [];
+			const p = towerViewerPosition(towerRow) || [];
 			if (p.length === 3) {
 				const height = Math.max(towerRow.height_m || 10, 8);
 				const box = {
@@ -1507,6 +2389,31 @@
 			const groupCreateBtn = document.getElementById("trp_group_create");
 			const groupNameOk = document.getElementById("trp_group_name_ok");
 			const groupNameCancel = document.getElementById("trp_group_name_cancel");
+			const spanSyncBtn = document.getElementById("span_sync");
+			const spanAnalyzeBtn = document.getElementById("span_analyze");
+			const spanPendingBtn = document.getElementById("span_pending");
+			const spanRetryBtn = document.getElementById("span_retry");
+			const spanGroupSelect = document.getElementById("span_group_select");
+			const spanReturnProjectBtn = document.getElementById("span_return_project");
+			if (spanGroupSelect) spanGroupSelect.addEventListener("change", function () { selectSpanAnalysisGroup(spanGroupSelect.value); });
+			if (spanReturnProjectBtn) spanReturnProjectBtn.addEventListener("click", returnToProjectView);
+			if (spanSyncBtn) spanSyncBtn.addEventListener("click", function () {
+				panelStatus("同步档距…");
+				postJson("/api/spans/synchronize", {}).then(function (payload) { renderSpans(payload); panelStatus("档距同步完成"); }).catch(function (err) { panelStatus("同步失败: " + err.message, false); });
+			});
+			if (spanAnalyzeBtn) spanAnalyzeBtn.addEventListener("click", function () {
+				if (!selectedSpan) { panelStatus("请先选择档距 / select a Span", false); return; }
+				panelStatus("分析 " + selectedSpan.span_id + "…");
+				postJson("/api/spans/" + encodeURIComponent(selectedSpan.span_id) + "/analyze", {}).then(function (payload) { renderSpans(payload); panelStatus("分析完成: " + selectedSpan.span_id); }).catch(function (err) { panelStatus("分析失败: " + err.message, false); });
+			});
+			if (spanPendingBtn) spanPendingBtn.addEventListener("click", function () {
+				panelStatus("分析全部未完成档距…");
+				postJson("/api/spans/analyze-pending", {}).then(function (payload) { renderSpans(payload); panelStatus("未完成档距处理完成"); }).catch(function (err) { panelStatus("批量分析失败: " + err.message, false); });
+			});
+			if (spanRetryBtn) spanRetryBtn.addEventListener("click", function () {
+				panelStatus("重新分析失败档距…");
+				postJson("/api/spans/retry-failed", {}).then(function (payload) { renderSpans(payload); panelStatus("失败档距重试完成"); }).catch(function (err) { panelStatus("重试失败: " + err.message, false); });
+			});
 			if (groupCreateBtn) {
 				groupCreateBtn.addEventListener("click", beginCreateGroup);
 			}
@@ -1577,6 +2484,15 @@
 			selectionGroup: selectionGroup,
 			previewPointsGroup: previewPointsGroup,
 			confirmedPointsGroup: confirmedPointsGroup,
+			spanSelectionGroup: spanSelectionGroup,
+			treePreviewGroup: treePreviewGroup,
+			treeClearanceGroup: treeClearanceGroup,
+			activeTreeKey: function () { return activeTree ? activeTree.global_tree_id : null; },
+			treeListState: function () { return treeListState; },
+			spanFocusMode: function () { return spanFocusMode; },
+			activeSpanId: function () { return activeSpanId; },
+			setActiveSpan: setActiveSpan,
+			spanFocusEnvelope: function () { return activeSpanFocusEnvelope; },
 			mode: function () { return mode; },
 			orderedMode: function () { return orderedMode; },
 			previewToken: function () { return previewToken; },
@@ -1593,6 +2509,8 @@
 			switchGroup: switchGroup,
 			createGroup: submitCreateGroup,
 			locateConfirmedTower: locateConfirmedTower,
+			clearSelectedSpan: clearSelectedSpan,
+			returnToProjectView: returnToProjectView,
 			init: function () {
 				wirePanel();
 				setMode("navigate", "");
@@ -1620,7 +2538,8 @@
 			lastCameraPos: null,
 			lastTarget: null,
 			lastPick: null,
-			review: null
+			review: null,
+			fitProjectView: null
 		};
 
 		// Occupied bounds come straight from the COPC LAS header (range fetch).
@@ -1694,6 +2613,7 @@
 			viewer.controls.update();
 			viewer.instance.notifyChange(viewer.instance.view.camera);
 		};
+		viewer.fitProjectView = fit;
 		fitBtn.addEventListener("click", fit);
 		fit();
 

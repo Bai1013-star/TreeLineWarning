@@ -127,6 +127,22 @@ def test_state_get(review_server):
     assert state["source"]["coordinate_frame"] == "SOURCE_LAS_ABSOLUTE"
 
 
+def test_spans_api_is_well_formed_and_read_only(review_server):
+    """The Span API payload is well-formed and the GET is non-mutating."""
+    base_url, root = review_server
+    status, payload = _http_get(base_url + "api/spans")
+    assert status == 200
+    assert payload["ok"] is True
+    assert payload["project_id"]
+    assert "generation_id" in payload
+    assert isinstance(payload["spans"], list)
+    # The synthetic project has no spans; the GET must not create any.
+    from core.project import open_project_read_only
+
+    with open_project_read_only(root) as session:
+        assert session.span_registry.records == ()
+
+
 def test_detect_post_persists_candidate_set(review_server):
     base_url, _ = review_server
     status, payload = _http_post(
@@ -523,6 +539,54 @@ Object.keys(candidates).forEach(function (id) {
 
 if (failed > 0) { console.log('FAILURES=' + failed); process.exit(1); }
 console.log('tower-review P011/P015/P016 compact Z-up marker PASS');
+""".replace("__VIEWER_JS__", str(viewer_js).replace("\\", "/"))
+    result = subprocess.run(
+        ["node", "-e", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=str(_REPO_ROOT),
+    )
+    assert result.returncode == 0, f"node failed:\n{result.stdout}\n{result.stderr}"
+    assert "PASS" in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_span_focus_display_state_pure() -> None:
+    """The Span focus/project-view state projection is deterministic and read-only."""
+    viewer_js = _REPO_ROOT / "viewer_poc" / "giro3d" / "viewer.js"
+    script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync("__VIEWER_JS__", 'utf8');
+const sandbox = {
+  window: {}, document: { getElementById: () => null },
+  fetch: () => Promise.reject(new Error('no fetch')),
+  console: console, setTimeout: setTimeout, clearTimeout: clearTimeout, setInterval: () => 0
+};
+sandbox.window = sandbox;
+vm.createContext(sandbox);
+vm.runInContext(src, sandbox, { filename: 'viewer.js' });
+const u = sandbox.p3aGiro3dUtil;
+let failed = 0;
+function check(cond, msg) { if (!cond) { failed += 1; console.log('FAIL: ' + msg); } }
+
+const span = { span_id: 'S002', group_id: 'G001', from_tower_id: 'T002', to_tower_id: 'T003' };
+const focused = u.spanFocusDisplayState(span, 'SPAN_FOCUS');
+check(focused.mode === 'SPAN_FOCUS', 'SPAN_FOCUS mode, got ' + focused.mode);
+check(focused.active_span_id === 'S002', 'active span id is S002');
+check(focused.from_tower_id === 'T002' && focused.to_tower_id === 'T003', 'endpoints projected');
+const project = u.spanFocusDisplayState(span, 'PROJECT_VIEW');
+check(project.mode === 'PROJECT_VIEW', 'PROJECT_VIEW mode');
+check(project.active_span_id === null, 'project view has no active span');
+
+// A focus-mode state must never leak into project view.
+check(u.spanFocusDisplayState(null, 'SPAN_FOCUS').active_span_id === null,
+  'null span -> no active id');
+
+if (failed > 0) { console.log('FAILURES=' + failed); process.exit(1); }
+console.log('span focus display state PASS');
 """.replace("__VIEWER_JS__", str(viewer_js).replace("\\", "/"))
     result = subprocess.run(
         ["node", "-e", script],

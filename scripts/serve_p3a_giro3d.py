@@ -42,6 +42,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import mimetypes
 import re
@@ -72,6 +73,11 @@ _CONFIG_FILE = "poc_config.json"
 
 # The single canonical P3A binding.  Loopback-only; never broaden.
 P3A_BIND_HOST = "127.0.0.1"
+
+# Bounded Viewer-only preview of authoritative tree-member points.  Science is
+# always based on the complete FULL_RESOLUTION_RAW membership; the Viewer never
+# sends/renders every member (S005 spans hold tens of millions).
+TREE_PREVIEW_SAMPLE_CAP = 40_000
 
 # Confirmed-tower membership reinspection uses a lighter deterministic display
 # cap than the pending-preview cap, keeping the response small and responsive.
@@ -157,6 +163,11 @@ class TowerReviewApi(TreeViewerApiMixin):
         from algorithms.towers.ordered import OrderedPreviewStore
 
         self.ordered_store = OrderedPreviewStore()
+        from algorithms.spans.project_orchestrator import ProjectSpanOrchestrator
+
+        # One shared orchestrator is used by synchronize/current/pending/retry
+        # actions; HTTP handlers never contain science logic.
+        self.span_orchestrator = ProjectSpanOrchestrator()
 
     def _opened(self):
         from core.project.session import open_project_read_only
@@ -190,6 +201,525 @@ class TowerReviewApi(TreeViewerApiMixin):
 
         with self._opened() as session:
             return ordered_review_state(session)
+
+    # ------------------------------------------------------------- project Spans
+    def _span_projection(self, session, span) -> dict[str, Any]:
+        from core.contracts.project import AnalysisStatus
+
+        state = "READY" if span.analysis.state is AnalysisStatus.NOT_STARTED else span.analysis.state.value
+        towers = {entry.tower_id: entry.current for entry in session.tower_registry.records}
+        projection = {
+            "span_id": span.span_id,
+            "display_name": span.display_name,
+            "group_id": span.group_id,
+            "within_group_order": span.within_group_order,
+            "from_tower_id": span.from_tower_id,
+            "to_tower_id": span.to_tower_id,
+            "from_tower_revision": span.from_tower_revision,
+            "to_tower_revision": span.to_tower_revision,
+            "from_tower_geometry": towers[span.from_tower_id].refined_geometry.to_dict(),
+            "to_tower_geometry": towers[span.to_tower_id].refined_geometry.to_dict(),
+            "status": state,
+            "active_run_id": span.analysis.active_run_id,
+            "historical_run_ids": list(span.analysis.historical_run_ids),
+            "geometry": span.geometry.to_dict(),
+            "artifact_index_reference": (
+                span.artifact_index_reference.to_dict()
+                if span.artifact_index_reference is not None else None
+            ),
+        }
+        try:
+            artifact, run_dir = self._read_span_run_index(session, span)
+            projection["active_run_id"] = run_dir.name
+            projection["registry_active_run_id"] = span.analysis.active_run_id
+            projection["summary"] = dict(artifact.get("summary") or {})
+            diagnostics = artifact.get("diagnostics") or {}
+            clearance = diagnostics.get("clearance") if isinstance(diagnostics, dict) else None
+            if isinstance(clearance, dict):
+                for key in ("total_wires", "danger_threshold_m", "danger_point_count"):
+                    if key in clearance:
+                        projection["summary"][{"total_wires": "wire_count"}.get(key, key)] = clearance[key]
+        except _ApiError:
+            projection["summary"] = {}
+        return projection
+
+    def _spans_payload(self, session) -> dict[str, Any]:
+        spans = sorted(session.span_registry.records, key=lambda item: int(item.span_id[1:]))
+        return {
+            "project_id": session.project.project_id,
+            "generation_id": session.generation_id,
+            "spans": [self._span_projection(session, span) for span in spans],
+        }
+
+    def spans_list(self) -> dict[str, Any]:
+        with self._opened() as session:
+            return self._spans_payload(session)
+
+    def spans_get(self, span_id: str) -> dict[str, Any]:
+        with self._opened() as session:
+            try:
+                span = next(item for item in session.span_registry.records if item.span_id == span_id)
+            except StopIteration as exc:
+                raise _ApiError(HTTPStatus.NOT_FOUND, "SPAN_NOT_FOUND", f"unknown Span {span_id}") from exc
+            return {"span": self._span_projection(session, span)}
+
+    # ------------------------------------------------------------------ trees
+    def _resolve_span_record(self, session, span_id: str):
+        try:
+            return next(
+                item for item in session.span_registry.records if item.span_id == span_id
+            )
+        except StopIteration as exc:
+            raise _ApiError(
+                HTTPStatus.NOT_FOUND, "SPAN_NOT_FOUND", f"unknown Span {span_id}"
+            ) from exc
+
+    def _read_span_run_index(self, session, span):
+        """Resolve the latest complete, digest-checked run for one span.
+
+        The registry can legitimately point at a newer in-progress/stale run while
+        a prior completed run remains the last renderable result.  The Viewer must
+        never mix those artifacts: it selects one terminal index only when all
+        three scientific artifacts validate, and returns its single run directory
+        to every Tree/Wire/Clearance/Danger endpoint.
+        """
+        reference = span.artifact_index_reference
+        candidates: list[Path] = []
+        if reference is not None:
+            candidates.append(session.project_root / Path(reference.relative_path))
+        runs_root = session.project_root / "artifacts" / "project-runs" / "groups" / span.group_id / span.span_id
+        if runs_root.is_dir():
+            candidates.extend(runs_root.glob("*/terminal-artifact-index.json"))
+        valid: list[tuple[float, dict[str, Any], Path]] = []
+        for path in {item.resolve() for item in candidates if item.is_file()}:
+            try:
+                data = path.read_bytes()
+                index = json.loads(data.decode("utf-8"))
+                artifacts = index.get("artifacts") if isinstance(index, dict) else None
+                if not isinstance(artifacts, dict) or not all(key in artifacts for key in ("tree", "wire", "clearance")):
+                    continue
+                for key in ("tree", "wire", "clearance"):
+                    artifact_ref = artifacts[key]
+                    artifact_path = session.project_root / Path(artifact_ref["relative_path"])
+                    artifact_data = artifact_path.read_bytes()
+                    if len(artifact_data) != artifact_ref["byte_size"] or hashlib.sha256(artifact_data).hexdigest() != artifact_ref["sha256"]:
+                        raise ValueError("artifact digest mismatch")
+                summary = index.get("summary") or {}
+                if not isinstance(summary.get("tree_count"), int):
+                    continue
+                valid.append((path.stat().st_mtime, index, path.parent))
+            except (OSError, KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+                continue
+        if not valid:
+            raise _ApiError(HTTPStatus.CONFLICT, "SPAN_HAS_NO_COMPLETE_RUN", f"{span.span_id} has no complete verified run")
+        _mtime, index, run_dir = max(valid, key=lambda item: item[0])
+        return index, run_dir
+
+    @staticmethod
+    def _read_index_artifact(session, index: dict[str, Any], key: str) -> dict[str, Any]:
+        reference = (index.get("artifacts") or {}).get(key)
+        if not isinstance(reference, dict):
+            raise _ApiError(HTTPStatus.CONFLICT, "SPAN_ARTIFACT_MISSING", f"{key} artifact is unavailable")
+        try:
+            data = (session.project_root / Path(reference["relative_path"])).read_bytes()
+            if len(data) != reference["byte_size"] or hashlib.sha256(data).hexdigest() != reference["sha256"]:
+                raise ValueError("digest mismatch")
+            payload = json.loads(data.decode("utf-8"))
+        except (OSError, KeyError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise _ApiError(HTTPStatus.CONFLICT, "SPAN_ARTIFACT_INVALID", f"{key} artifact is invalid") from exc
+        if not isinstance(payload, dict):
+            raise _ApiError(HTTPStatus.CONFLICT, "SPAN_ARTIFACT_INVALID", f"{key} artifact is invalid")
+        return payload
+
+    def spans_wire(self, span_id: str) -> dict[str, Any]:
+        with self._opened() as session:
+            span = self._resolve_span_record(session, span_id)
+            index, run_dir = self._read_span_run_index(session, span)
+            wire = self._read_index_artifact(session, index, "wire")
+            if wire.get("schema") != "fast-baseline-span-wire-v1":
+                raise _ApiError(HTTPStatus.CONFLICT, "WIRE_ARTIFACT_INVALID", "unsupported confirmed wire artifact")
+            strands = [item for item in wire.get("strands") or [] if item.get("status") == "CONFIRMED"]
+            return {
+                "span_id": span_id,
+                "run_id": run_dir.name,
+                "authoritative": True,
+                "strand_count": len(strands),
+                "strands": strands,
+            }
+
+    def spans_wire_preview(self, span_id: str, wire_id: str) -> dict[str, Any]:
+        import numpy as np
+
+        target_id = int(wire_id)
+        with self._opened() as session:
+            span = self._resolve_span_record(session, span_id)
+            index, run_dir = self._read_span_run_index(session, span)
+            origin = self._span_tree_origin(session, index)
+            wire = self._read_index_artifact(session, index, "wire")
+        strand = next((item for item in wire.get("strands") or [] if int(item.get("wire_id", -1)) == target_id and item.get("status") == "CONFIRMED"), None)
+        if strand is None:
+            raise _ApiError(HTTPStatus.NOT_FOUND, "CONFIRMED_WIRE_NOT_FOUND", "unknown confirmed wire")
+        arrays_path = run_dir / "wire" / "w1_arrays.npz"
+        try:
+            with np.load(arrays_path, allow_pickle=False) as arrays:
+                ids = np.asarray(arrays["wire_id"], dtype=np.int32)
+                position = int(np.flatnonzero(ids == target_id)[0])
+                offsets = np.asarray(arrays["sampled_curve_offsets"], dtype=np.int64)
+                points = np.asarray(arrays["sampled_curve_xyz"], dtype=np.float32)[offsets[position]:offsets[position + 1]]
+        except (OSError, KeyError, IndexError, ValueError) as exc:
+            raise _ApiError(HTTPStatus.CONFLICT, "CONFIRMED_WIRE_GEOMETRY_MISSING", "confirmed wire geometry is unavailable") from exc
+        points += np.asarray(origin, dtype=np.float32)
+        return {"span_id": span_id, "run_id": run_dir.name, "wire_id": target_id, "authoritative": True, "strand": strand, "sampled_xyz_absolute_m": points.tolist()}
+
+    def spans_danger_points(self, span_id: str) -> dict[str, Any]:
+        with self._opened() as session:
+            span = self._resolve_span_record(session, span_id)
+            index, run_dir = self._read_span_run_index(session, span)
+            origin = self._span_tree_origin(session, index)
+            clearance = self._read_index_artifact(session, index, "clearance")
+        if clearance.get("schema") != "treeline-span-clearance-result-v1":
+            raise _ApiError(HTTPStatus.CONFLICT, "DANGER_ARTIFACT_INVALID", "unsupported clearance artifact")
+        points = clearance.get("danger_points") or []
+        absolute = []
+        for point in points:
+            xyz = self._local_to_absolute(point.get("xyz_local_m"), origin)
+            if xyz is not None:
+                absolute.append(xyz)
+        diagnostics = index.get("diagnostics") or {}
+        details = diagnostics.get("clearance") if isinstance(diagnostics, dict) else {}
+        return {
+            "span_id": span_id,
+            "run_id": run_dir.name,
+            "authoritative": True,
+            "risk_threshold_m": details.get("danger_threshold_m"),
+            "danger_point_count": len(absolute),
+            "danger_tree_count": (index.get("summary") or {}).get("risk_counts", {}).get("below_threshold"),
+            "points_xyz_absolute_m": absolute,
+        }
+
+    def _span_tree_origin(self, session, index: dict):
+        """The tree-local frame origin (local -> absolute offset) from source prep."""
+        provenance = index.get("provenance") or {}
+        prep_ref = provenance.get("source_preparation", {}).get("manifest_reference")
+        if isinstance(prep_ref, str):
+            prep_path = session.project_root / Path(prep_ref)
+            try:
+                prep = json.loads(prep_path.read_bytes())
+                origin = prep.get("origin_xyz")
+                if isinstance(origin, (list, tuple)) and len(origin) == 3:
+                    return tuple(float(value) for value in origin)
+            except (OSError, ValueError, TypeError):
+                pass
+        # A deterministic safe fallback: the source absolute frame (local == absolute).
+        return (0.0, 0.0, 0.0)
+
+    @staticmethod
+    def _tree_category(record: dict) -> str:
+        core_fraction = record.get("core_fraction", 0.0) or 0.0
+        review = bool(record.get("review", False))
+        if core_fraction > 0.0 and not review:
+            return "CORE"
+        return "HALO / REVIEW"
+
+    def _local_to_absolute(self, local, origin):
+        if not isinstance(local, (list, tuple)) or len(local) != 3:
+            return None
+        return [
+            float(local[0]) + origin[0],
+            float(local[1]) + origin[1],
+            float(local[2]) + origin[2],
+        ]
+
+    @staticmethod
+    def _tree_instance_color(color_key: str) -> str:
+        """Stable high-contrast color derived from an identity presentation key."""
+
+        palette = (
+            "#00bcd4", "#ff7043", "#ab47bc", "#66bb6a", "#ffa726", "#42a5f5",
+            "#ec407a", "#8d6e63", "#d4e157", "#26a69a", "#7e57c2", "#ef5350",
+            "#29b6f6", "#9ccc65", "#ffca28", "#26c6da", "#5c6bc0", "#f06292",
+            "#8bc34a", "#ff8a65", "#7cb342", "#00897b", "#ffb300", "#7986cb",
+        )
+        digest = hashlib.sha256(color_key.encode("utf-8")).digest()
+        return palette[int.from_bytes(digest[:4], "big") % len(palette)]
+
+    @staticmethod
+    def _tree_identity_presentation(record: dict[str, Any]) -> dict[str, Any]:
+        """Read-only display/prediction policy for resolved, review, and legacy rows."""
+
+        persistent_id = record.get("persistent_tree_id")
+        if isinstance(persistent_id, str) and persistent_id.strip():
+            persistent_id = persistent_id.strip()
+            return {
+                "display_id": persistent_id,
+                "presentation": "PERSISTENT",
+                "color_key": f"persistent:{persistent_id}",
+                "persistent_tree_id": persistent_id,
+                "candidate_persistent_tree_ids": [],
+                "prediction_eligible": True,
+                "needs_review": False,
+            }
+        candidates = sorted({
+            item.strip()
+            for item in record.get("candidate_persistent_tree_ids") or []
+            if isinstance(item, str) and item.strip()
+        })
+        identity_state = record.get("identity_state", "LEGACY_RUN_LOCAL")
+        if identity_state == "MERGE_AMBIGUOUS_REVIEW":
+            return {
+                "display_id": "未绑定实体",
+                "presentation": "MERGE REVIEW",
+                "color_key": "merge-review:" + "|".join(candidates),
+                "persistent_tree_id": None,
+                "candidate_persistent_tree_ids": candidates,
+                "prediction_eligible": False,
+                "needs_review": True,
+            }
+        return {
+            "display_id": f"Legacy Tree {record.get('global_tree_id')}",
+            "presentation": "LEGACY",
+            "color_key": f"legacy:{record.get('global_tree_id')}",
+            "persistent_tree_id": None,
+            "candidate_persistent_tree_ids": candidates,
+            "prediction_eligible": False,
+            "needs_review": False,
+        }
+
+    def tree_spans_list(self) -> dict[str, Any]:
+        """Minimal read-only Span selector projection for the Tree Viewer."""
+
+        with self._opened() as session:
+            spans = sorted(session.span_registry.records, key=lambda item: item.span_id)
+            return {
+                "spans": [
+                    {"span_id": span.span_id, "display_name": span.display_name}
+                    for span in spans
+                ]
+            }
+
+    def spans_trees(self, span_id: str) -> dict[str, Any]:
+        """Read-only final reconciled Tree list for the current Span run."""
+        with self._opened() as session:
+            span = self._resolve_span_record(session, span_id)
+            index, run_dir = self._read_span_run_index(session, span)
+            origin = self._span_tree_origin(session, index)
+            reconc_path = run_dir / "reconciliation.json"
+            try:
+                reconciliation = json.loads(reconc_path.read_bytes())
+            except OSError as exc:
+                raise _ApiError(
+                    HTTPStatus.CONFLICT, "SPAN_RECONCILIATION_MISSING",
+                    "reconciliation artifact missing",
+                ) from exc
+            final_trees = reconciliation.get("global_tree_records") or []
+            clearance_by_tree = {}
+            clearance_path = run_dir / "clearance.json"
+            if clearance_path.is_file():
+                try:
+                    clearance = json.loads(clearance_path.read_bytes())
+                    for rec in clearance.get("records") or []:
+                        clearance_by_tree[rec.get("global_tree_id")] = rec
+                except (OSError, ValueError):
+                    clearance_by_tree = {}
+            tree_rows = []
+            for record in sorted(final_trees, key=lambda item: (
+                int(item["span_order_index"])
+                if item.get("span_order_index") is not None else 2**31 - 1,
+                int(item.get("global_tree_id", -1)),
+            )):
+                gid = record.get("global_tree_id")
+                clearance_rec = clearance_by_tree.get(gid)
+                apex_local = record.get("apex_xy_local_m")
+                identity = self._tree_identity_presentation(record)
+                row = {
+                    "global_tree_id": gid,
+                    "persistent_tree_id": identity["persistent_tree_id"],
+                    "display_id": identity["display_id"],
+                    "external_name": record.get("external_name"),
+                    "identity_state": record.get("identity_state", "LEGACY_RUN_LOCAL"),
+                    "identity_presentation": identity["presentation"],
+                    "candidate_persistent_tree_ids": identity["candidate_persistent_tree_ids"],
+                    "instance_color": self._tree_instance_color(identity["color_key"]),
+                    "prediction_identity": {
+                        "persistent_tree_id": identity["persistent_tree_id"],
+                        "global_tree_id": gid,
+                        "needs_review": identity["needs_review"],
+                        "eligible_for_long_term_history": identity["prediction_eligible"],
+                    },
+                    "span_id": span_id,
+                    "span_name": record.get("span_name"),
+                    "primary_span_tree_id": record.get("primary_span_tree_id"),
+                    "span_order_index": record.get("span_order_index"),
+                    "longitudinal_s_m": record.get("longitudinal_s_m"),
+                    "lateral_n_m": record.get("lateral_n_m"),
+                    "merged_span_tree_keys": record.get("merged_span_tree_keys", []),
+                    "full_resolution_point_count": record.get("full_resolution_point_count"),
+                    "apex_height_m": record.get("apex_height_m"),
+                    "apex_xyz_local_m": list(apex_local) if apex_local else None,
+                    "apex_xyz_absolute_m": self._local_to_absolute(apex_local, origin),
+                    "core_fraction": record.get("core_fraction", 0.0),
+                    "core_point_count": record.get("core_point_count", 0),
+                    "halo_point_count": record.get("halo_point_count", 0),
+                    "review": bool(record.get("review", False)),
+                    "category": self._tree_category(record),
+                    "minimum_clearance_m": (
+                        clearance_rec.get("minimum_clearance_m") if clearance_rec else None
+                    ),
+                    "danger_point_count": (
+                        clearance_rec.get("danger_point_count", 0) if clearance_rec else None
+                    ),
+                    "dangerous": bool(clearance_rec and clearance_rec.get("danger_point_count", 0)),
+                    "clearance": (
+                        {
+                            "minimum_clearance_m": clearance_rec.get("minimum_clearance_m"),
+                            "status": clearance_rec.get("status"),
+                            "nearest_tree_original_index": (
+                            clearance_rec.get("nearest_tree_original_index")
+                        ),
+                            "nearest_wire_id": clearance_rec.get("nearest_wire_id"),
+                            "tree_xyz_local_m": clearance_rec.get("nearest_tree_xyz_local_m"),
+                            "wire_xyz_local_m": clearance_rec.get("nearest_wire_xyz_local_m"),
+                            "tree_xyz_absolute_m": self._local_to_absolute(
+                                clearance_rec.get("nearest_tree_xyz_local_m"), origin
+                            ),
+                            "wire_xyz_absolute_m": self._local_to_absolute(
+                                clearance_rec.get("nearest_wire_xyz_local_m"), origin
+                            ),
+                        }
+                        if clearance_rec else None
+                    ),
+                }
+                tree_rows.append(row)
+            core_count = sum(1 for row in tree_rows if row["category"] == "CORE")
+            halo_review_count = len(tree_rows) - core_count
+            return {
+                "span_id": span_id,
+                "run_id": run_dir.name,
+                "origin_xyz": list(origin),
+                "tree_count": len(tree_rows),
+                "core_count": core_count,
+                "halo_review_count": halo_review_count,
+                "trees": tree_rows,
+            }
+
+    def spans_tree_preview(self, span_id: str, tree_id: str) -> dict[str, Any]:
+        """Read-only bounded authoritative member preview for one final Tree."""
+        import numpy as np
+
+        with self._opened() as session:
+            span = self._resolve_span_record(session, span_id)
+            index, run_dir = self._read_span_run_index(session, span)
+            origin = self._span_tree_origin(session, index)
+            reconc_path = run_dir / "reconciliation.json"
+            try:
+                reconciliation = json.loads(reconc_path.read_bytes())
+            except OSError as exc:
+                raise _ApiError(
+                    HTTPStatus.CONFLICT, "SPAN_RECONCILIATION_MISSING",
+                    "reconciliation artifact missing",
+                ) from exc
+            records = reconciliation.get("global_tree_records") or []
+            target = next(
+                (record for record in records
+                if int(record.get("global_tree_id", -1)) == int(tree_id)),
+                None,
+            )
+            if target is None:
+                raise _ApiError(
+                    HTTPStatus.NOT_FOUND, "TREE_NOT_FOUND",
+                    f"Tree {tree_id} not in {span_id} reconciliation",
+                )
+            identity = self._tree_identity_presentation(target)
+            span_tree_ids = [
+                int(key[1])
+                for key in target.get("merged_span_tree_keys") or []
+                if isinstance(key, (list, tuple)) and len(key) >= 2
+            ]
+            if not span_tree_ids:
+                primary = target.get("primary_span_tree_id")
+                span_tree_ids = [int(primary)] if primary is not None else []
+            members_path = run_dir / "tree" / "tree_members.npz"
+            if not members_path.is_file():
+                raise _ApiError(
+                    HTTPStatus.CONFLICT, "TREE_MEMBERS_MISSING", "tree member artifact missing",
+                )
+            members = np.load(str(members_path), mmap_mode="r", allow_pickle=True)
+            tree_ids = np.asarray(members["tree_id"], dtype=np.int32)
+            mask = np.isin(tree_ids, span_tree_ids)
+            rows = np.flatnonzero(mask)
+            full_count = int(len(rows))
+            if full_count:
+                sample = np.asarray(members["xyz_local_m"], dtype=np.float64)[rows]
+            else:
+                sample = np.empty((0, 3), dtype=np.float64)
+            cap = TREE_PREVIEW_SAMPLE_CAP
+            if full_count > cap:
+                chosen = np.linspace(0, full_count - 1, cap, dtype=np.int64)
+                sample = sample[chosen]
+            sample_absolute = sample + np.asarray(origin, dtype=np.float64)
+            bounds = None
+            centroid = None
+            if full_count:
+                local_min = np.min(sample, axis=0)
+                local_max = np.max(sample, axis=0)
+                bounds = {
+                    "min_xyz_absolute_m": list(local_min + np.asarray(origin)),
+                    "max_xyz_absolute_m": list(local_max + np.asarray(origin)),
+                }
+                centroid = list(np.mean(sample_absolute, axis=0))
+            return {
+                "span_id": span_id,
+                "run_id": run_dir.name,
+                "global_tree_id": target.get("global_tree_id"),
+                "persistent_tree_id": identity["persistent_tree_id"],
+                "external_name": target.get("external_name"),
+                "identity_state": target.get("identity_state", "LEGACY_RUN_LOCAL"),
+                "candidate_persistent_tree_ids": identity["candidate_persistent_tree_ids"],
+                "prediction_identity": {
+                    "persistent_tree_id": identity["persistent_tree_id"],
+                    "global_tree_id": target.get("global_tree_id"),
+                    "needs_review": identity["needs_review"],
+                    "eligible_for_long_term_history": identity["prediction_eligible"],
+                },
+                "origin_xyz": list(origin),
+                "full_member_count": full_count,
+                "sample_count": int(len(sample)),
+                "sampled_xyz_absolute_m": sample_absolute.tolist(),
+                "bounds_absolute_m": bounds,
+                "centroid_xyz_absolute_m": centroid,
+            }
+
+    def spans_synchronize(self) -> dict[str, Any]:
+        with self._opened_writable() as session:
+            result = self.span_orchestrator.synchronize(session)
+            return {
+                "created_span_ids": list(result.created_span_ids),
+                "preserved_span_ids": list(result.preserved_span_ids),
+                "migrated_span_ids": list(result.migrated_span_ids),
+                **self._spans_payload(session),
+            }
+
+    def spans_analyze(self, span_id: str) -> dict[str, Any]:
+        with self._opened_writable() as session:
+            outcome = self.span_orchestrator.analyze_span(session, span_id)
+            return {"outcome": {
+                "span_id": outcome.span_id,
+                "status": outcome.status,
+                "run_id": outcome.run_id,
+                "reused": outcome.reused,
+                "error": outcome.error,
+                "summary": outcome.summary,
+            }, **self._spans_payload(session)}
+
+    def spans_analyze_pending(self) -> dict[str, Any]:
+        with self._opened_writable() as session:
+            outcomes = self.span_orchestrator.analyze_pending(session)
+            return {"outcomes": [_outcome_dict(item) for item in outcomes], **self._spans_payload(session)}
+
+    def spans_retry_failed(self) -> dict[str, Any]:
+        with self._opened_writable() as session:
+            outcomes = self.span_orchestrator.retry_failed(session)
+            return {"outcomes": [_outcome_dict(item) for item in outcomes], **self._spans_payload(session)}
 
     def detect(self, body: dict[str, Any]) -> dict[str, Any]:
         import time as _time
@@ -599,6 +1129,17 @@ def _utc_timestamp() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _outcome_dict(outcome: Any) -> dict[str, Any]:
+    return {
+        "span_id": outcome.span_id,
+        "status": outcome.status,
+        "run_id": outcome.run_id,
+        "reused": outcome.reused,
+        "error": outcome.error,
+        "summary": outcome.summary,
+    }
+
+
 class _P3aHandler(BaseHTTPRequestHandler):
     server_version = "P3aGiro3dPOC/0.1"
     tower_review_api: TowerReviewApi | None = None
@@ -712,10 +1253,7 @@ class _P3aHandler(BaseHTTPRequestHandler):
         if api is None:
             self._json_response(
                 HTTPStatus.NOT_FOUND,
-                {
-                    "ok": False,
-                    "error": {"code": "API_DISABLED", "message": "Tree API is not enabled"},
-                },
+                {"ok": False, "error": {"code": "API_DISABLED", "message": "Tree API is not enabled"}},
             )
             return
         path = self.path.split("?")[0].rstrip("/")
@@ -729,11 +1267,13 @@ class _P3aHandler(BaseHTTPRequestHandler):
             elif trees:
                 result = api.spans_trees(trees.group(1))
             else:
-                raise _ApiError(HTTPStatus.NOT_FOUND, "NOT_FOUND", "unknown Tree API route")
+                self._json_response(
+                    HTTPStatus.NOT_FOUND,
+                    {"ok": False, "error": {"code": "NOT_FOUND", "message": "unknown Tree API route"}},
+                )
+                return
         except _ApiError as exc:
-            self._json_response(
-                exc.status, {"ok": False, "error": {"code": exc.code, "message": exc.message}}
-            )
+            self._json_response(exc.status, {"ok": False, "error": {"code": exc.code, "message": exc.message}})
             return
         self._json_response(HTTPStatus.OK, {"ok": True, **result})
 
@@ -800,6 +1340,81 @@ class _P3aHandler(BaseHTTPRequestHandler):
         ):
             return ("tower-membership-preview", parts[1], "")
         return None
+
+    def _span_api_route(self) -> tuple[str, str, str] | None:
+        path = self.path.split("?")[0].split("#")[0].rstrip("/")
+        if path == "/api/spans":
+            return ("list", "", "")
+        if path == "/api/spans/synchronize":
+            return ("synchronize", "", "")
+        if path == "/api/spans/analyze-pending":
+            return ("analyze-pending", "", "")
+        if path == "/api/spans/retry-failed":
+            return ("retry-failed", "", "")
+        wire_preview = re.fullmatch(r"/api/spans/(S[0-9]{3,})/wire/([0-9]+)/preview", path)
+        if wire_preview:
+            return ("wire-preview", wire_preview.group(1), wire_preview.group(2))
+        wire = re.fullmatch(r"/api/spans/(S[0-9]{3,})/wire", path)
+        if wire:
+            return ("wire", wire.group(1), "")
+        danger = re.fullmatch(r"/api/spans/(S[0-9]{3,})/danger-points", path)
+        if danger:
+            return ("danger-points", danger.group(1), "")
+        tree_preview = re.fullmatch(r"/api/spans/(S[0-9]{3,})/trees/([0-9]+)/preview", path)
+        if tree_preview:
+            return ("tree-preview", tree_preview.group(1), tree_preview.group(2))
+        trees = re.fullmatch(r"/api/spans/(S[0-9]{3,})/trees", path)
+        if trees:
+            return ("trees", trees.group(1), "")
+        match = re.fullmatch(r"/api/spans/(S[0-9]{3,})(?:/analyze)?", path)
+        if match:
+            return ("analyze" if path.endswith("/analyze") else "get", match.group(1), "")
+        return None
+
+    def _handle_span_api(self) -> None:
+        api = self.tower_review_api
+        route = self._span_api_route()
+        if api is None or route is None:
+            self._json_response(
+                HTTPStatus.NOT_FOUND,
+                {"ok": False, "error": {"code": "API_DISABLED", "message": "Span API is not enabled"}},
+            )
+            return
+        action, span_id, tree_id = route
+        try:
+            if self.command == "GET" and action == "list":
+                result = api.spans_list()
+            elif self.command == "GET" and action == "get":
+                result = api.spans_get(span_id)
+            elif self.command == "GET" and action == "trees":
+                result = api.spans_trees(span_id)
+            elif self.command == "GET" and action == "tree-preview":
+                result = api.spans_tree_preview(span_id, tree_id)
+            elif self.command == "GET" and action == "wire":
+                result = api.spans_wire(span_id)
+            elif self.command == "GET" and action == "wire-preview":
+                result = api.spans_wire_preview(span_id, tree_id)
+            elif self.command == "GET" and action == "danger-points":
+                result = api.spans_danger_points(span_id)
+            elif self.command == "POST" and action == "synchronize":
+                result = api.spans_synchronize()
+            elif self.command == "POST" and action == "analyze":
+                result = api.spans_analyze(span_id)
+            elif self.command == "POST" and action == "analyze-pending":
+                result = api.spans_analyze_pending()
+            elif self.command == "POST" and action == "retry-failed":
+                result = api.spans_retry_failed()
+            else:
+                raise _ApiError(HTTPStatus.NOT_FOUND, "NOT_FOUND", "unsupported Span route")
+        except _ApiError as exc:
+            self._json_response(exc.status, {"ok": False, "error": {"code": exc.code, "message": exc.message}})
+            return
+        except Exception as exc:
+            code = getattr(exc, "code", "INTERNAL_ERROR")
+            status = HTTPStatus.CONFLICT if code in {"TOPOLOGY_DRIFT", "MISSING_TOWER_ENDPOINT"} else HTTPStatus.INTERNAL_SERVER_ERROR
+            self._json_response(status, {"ok": False, "error": {"code": code, "message": f"{type(exc).__name__}: {exc}"}})
+            return
+        self._json_response(HTTPStatus.OK, {"ok": True, **result})
 
     def _handle_tower_api(self) -> None:
         api = self.tower_review_api
@@ -898,12 +1513,13 @@ class _P3aHandler(BaseHTTPRequestHandler):
         if path == "/p3a_giro3d_healthz":
             self._serve_healthz()
             return
-        if path == "/api/spans" or re.fullmatch(
-            r"/api/spans/S[0-9]{3,}/trees(?:/[0-9]+/preview)?", path
-        ):
+        if re.fullmatch(r"/api/spans/S[0-9]{3,}/trees(?:/[0-9]+/preview)?", path):
             self._handle_tree_viewer_api()
             return
         if path.startswith("/api/"):
+            if path.startswith("/api/spans"):
+                self._handle_span_api()
+                return
             self._handle_tower_api()
             return
         target = self._resolve(self.path)
@@ -914,6 +1530,9 @@ class _P3aHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - http.server API
         if self.path.split("?")[0].startswith("/api/"):
+            if self.path.split("?")[0].startswith("/api/spans"):
+                self._handle_span_api()
+                return
             self._handle_tower_api()
             return
         self.send_error(HTTPStatus.NOT_FOUND, "not found")

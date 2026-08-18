@@ -30,7 +30,7 @@
 		#trp_panel { position: absolute; left: 12px; top: 56px; z-index: 9996; width: 300px; max-height: 62vh;
 			display: flex; flex-direction: column; font: 12px/1.45 sans-serif; color: #e8eaf6;
 			background: rgba(10,13,20,0.86); border: 1px solid rgba(255,255,255,0.22); border-radius: 6px;
-			overflow: hidden; }
+			overflow-x: hidden; overflow-y: auto; }
 		#trp_panel .trp-head { display: flex; justify-content: space-between; align-items: center;
 			padding: 6px 10px; font-weight: 600; background: rgba(255,255,255,0.06); }
 		#trp_panel .trp-buttons { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 10px; }
@@ -85,7 +85,23 @@
 		#trp_group_list .gtower .tid { font-weight: 700; color: #80cbc4; }
 		#trp_group_list .gtower button { font: 11px sans-serif; padding: 1px 6px; }
 		#trp_group_list .empty { color: #78909c; cursor: default; }
-		/* Persistent Tree identity panel (Tree Viewer D) */
+		#trp_group_status { padding: 4px 10px; font: 11px/1.6 Consolas, Menlo, monospace; color: #a5d6a7; white-space: pre-line; }
+		#trp_confirmed_membership { padding: 4px 10px; font: 11px/1.6 Consolas, Menlo, monospace; color: #81d4fa; white-space: pre-line; min-height: 1em; }
+		#span_panel { border-top: 1px solid rgba(255,255,255,0.15); padding-top: 5px; }
+		#span_panel .span-actions { display: flex; flex-wrap: wrap; gap: 4px; padding: 5px 10px; }
+		#span_panel select { margin: 0 10px 4px; max-width: 120px; background: #263238; color: #ffd54f; }
+		#span_list { overflow-y: auto; max-height: 18vh; padding: 2px 6px 6px; font: 11px/1.4 Consolas, Menlo, monospace; }
+		#span_list div { padding: 3px 5px; cursor: pointer; }
+		#span_list div:hover, #span_list div.sel { background: rgba(255,200,80,0.18); }
+		#span_summary { padding: 4px 10px; white-space: pre-line; color: #b3e5fc; }
+		#span_focus_mode { padding: 2px 10px 4px; color: #80deea; font-weight: 700; }
+		#span_return_project { margin: 0 10px 5px; }
+		/* The active-Span footer (summary + mode + Return button) is pinned to the
+		   bottom of the scrollable panel so it can never be clipped out of view by
+		   the content above it (candidate/group/span lists). */
+		#span_focus_footer { position: sticky; bottom: 0; z-index: 3;
+			background: rgba(13,19,32,0.98); border-top: 1px solid rgba(255,255,255,0.12); }
+		/* Final reconciled Tree list for the focused Span (read-only inspection) */
 		#tree_panel { border-top: 1px solid rgba(255,255,255,0.12); }
 		#tree_panel label { display: block; padding: 4px 10px; color: #b3e5fc; }
 		#tree_span_select { width: calc(100% - 20px); margin: 0 10px 4px; background: #263238; color: #ffd54f; }
@@ -101,8 +117,6 @@
 		#tree_details { padding: 4px 10px; white-space: pre-line; color: #ffe082; font: 11px/1.6 Consolas, Menlo, monospace;
 			background: rgba(255,61,129,0.08); min-height: 1em; }
 		#tree_empty { color: #78909c; padding: 4px 10px; }
-		#trp_group_status { padding: 4px 10px; font: 11px/1.6 Consolas, Menlo, monospace; color: #a5d6a7; white-space: pre-line; }
-		#trp_confirmed_membership { padding: 4px 10px; font: 11px/1.6 Consolas, Menlo, monospace; color: #81d4fa; white-space: pre-line; min-height: 1em; }
 	</style>
 </head>
 <body>
@@ -136,13 +150,28 @@
 		<div id="trp_ordered_preview">待确认杆塔 / Tower Preview: —</div>
 		<div id="trp_group_status"></div>
 		<div id="trp_confirmed_membership">已确认杆塔成员 / Confirmed Tower Membership: —</div>
+		<div id="trp_group_list"></div>
 		<div id="tree_panel">
 			<label>Tree Span: <select id="tree_span_select" aria-label="Tree Span"></select></label>
 			<div id="tree_header">Trees: —</div>
 			<div id="tree_list"></div>
 			<div id="tree_details">—</div>
 		</div>
-		<div id="trp_group_list"></div>
+		<div id="span_panel">
+			<div class="span-actions"><button id="span_sync" type="button">同步档距</button><button id="span_analyze" type="button">分析当前档距</button><button id="span_pending" type="button">分析全部未完成档距</button><button id="span_retry" type="button">重新分析失败档距</button></div>
+			<label style="padding:0 10px">区域: <select id="span_group_select"></select></label>
+			<div id="span_list"><div>暂无档距 / no Spans</div></div>
+			<details id="confirmed_wire_inspector" style="display:none" class="wire-v2-inspector" open>
+				<summary>Confirmed Wire &amp; Danger Overlay <span>AUTHORITATIVE RUN ARTIFACTS</span></summary>
+				<div id="confirmed_wire_list">未分析 / no available result</div>
+				<pre id="confirmed_wire_details">—</pre>
+			</details>
+			<div id="span_focus_footer">
+				<div id="span_summary">Span: —</div>
+				<div id="span_focus_mode">Mode: 项目全景 / Project View</div>
+				<button id="span_return_project" type="button" disabled>返回全景 / Return to Project View</button>
+			</div>
+		</div>
 		<div id="trp_mode">mode: NAVIGATE</div>
 		<div id="trp_details">—</div>
 		<div id="trp_auto_toggle">自动候选辅助 / Automatic Suggestions ▸</div>

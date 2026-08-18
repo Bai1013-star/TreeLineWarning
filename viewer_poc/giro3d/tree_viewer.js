@@ -105,6 +105,7 @@
 		attach(host.instance, markerGroup);
 		attach(host.instance, previewGroup);
 		let activeSpanId = null;
+		let activeRunId = null;
 		let payload = null;
 		let activeTree = null;
 
@@ -204,16 +205,18 @@
 			renderList();
 			renderDetails(tree);
 			api("/api/spans/" + encodeURIComponent(activeSpanId) + "/trees/" + tree.global_tree_id + "/preview")
-				.then(function (preview) { if (activeTree === tree) { renderPreview(preview.sampled_xyz_absolute_m || [], tree); focus(preview, tree); } })
+				.then(function (preview) { if (activeTree === tree && preview.span_id === activeSpanId && preview.run_id === activeRunId) { renderPreview(preview.sampled_xyz_absolute_m || [], tree); focus(preview, tree); } })
 				.catch(function () {});
 		}
 
-		function loadTrees(spanId) {
+		function loadTrees(spanId, runId) {
 			activeSpanId = spanId;
+			activeRunId = runId || activeRunId;
 			activeTree = null;
 			disposeGroup(previewGroup);
 			api("/api/spans/" + encodeURIComponent(spanId) + "/trees").then(function (next) {
-				if (activeSpanId !== spanId) return;
+				if (activeSpanId !== spanId || !next.run_id || (activeRunId && next.run_id !== activeRunId)) return;
+				activeRunId = next.run_id;
 				payload = next;
 				renderList();
 				details.textContent = "—";
@@ -226,13 +229,27 @@
 			});
 		}
 
-		spanSelect.addEventListener("change", function () { loadTrees(spanSelect.value); });
+		function requestActiveSpan(spanId) {
+			if (host.review && typeof host.review.setActiveSpan === "function") {
+				host.review.setActiveSpan(spanId);
+				return;
+			}
+			loadTrees(spanId, null);
+		}
+
+		spanSelect.addEventListener("change", function () { requestActiveSpan(spanSelect.value); });
+		window.addEventListener("p3a-active-span-changed", function (event) {
+			const detail = event && event.detail;
+			if (!detail || !detail.span_id) return;
+			spanSelect.value = detail.span_id;
+			if (activeSpanId !== detail.span_id || activeRunId !== detail.run_id) loadTrees(detail.span_id, detail.run_id);
+		});
 		api("/api/spans").then(function (spansPayload) {
 			const spans = spansPayload.spans || [];
 			spanSelect.innerHTML = spans.map(function (span) {
 				return "<option value='" + span.span_id + "'>" + (span.display_name || span.span_id) + "</option>";
 			}).join("");
-			if (spans.length) loadTrees(spans[0].span_id);
+			if (spans.length) requestActiveSpan(spans[0].span_id);
 		}).catch(function (error) {
 			spanSelect.innerHTML = "<option>Tree API unavailable</option>";
 			details.textContent = error.message;

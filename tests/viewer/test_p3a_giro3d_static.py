@@ -264,6 +264,149 @@ def test_pure_decision_helpers() -> None:
     assert "PASS" in result.stdout
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_selected_span_visibility_hotfix_contract() -> None:
+    """Selection owns one viewer-only endpoint/corridor/label overlay."""
+
+    source = _viewer_src()
+    for token in (
+        'name = "selected-span-overlay"',
+        "selectedSpanEndpoint",
+        "selected-span-corridor-frame",
+        "selectedSpanLabel",
+        "clearSpanSelectionOverlay",
+        "clearSelectedSpan",
+        "visualizationOnly",
+        "towerViewerPosition",
+        "spanCorridorVertices",
+        "new THREE.BufferGeometry()",
+    ):
+        assert token in source, f"missing selected-Span visualization token: {token}"
+    assert 'postJson("/api/spans/synchronize"' in source
+
+    script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync("__VIEWER_JS__", 'utf8');
+const sandbox = { window: {}, document: { getElementById: () => null }, console: console };
+sandbox.window = sandbox;
+vm.createContext(sandbox);
+vm.runInContext(src, sandbox, { filename: 'viewer.js' });
+const frame = sandbox.p3aGiro3dUtil.spanSelectionFrame({
+  span_id: 'S001', group_id: 'G001', from_tower_id: 'T001', to_tower_id: 'T002',
+  from_tower_geometry: { base_xyz_absolute_m: [10, 20, 1] },
+  to_tower_geometry: { base_xyz_absolute_m: [40, 60, 3] }
+}, 8, 12);
+let failed = 0;
+function check(value, message) { if (!value) { failed += 1; console.log('FAIL: ' + message); } }
+check(frame && frame.span_id === 'S001', 'span id preserved');
+check(frame.from_tower_id === 'T001' && frame.to_tower_id === 'T002', 'endpoint ids preserved');
+check(Math.abs(frame.length - 50) < 1e-9, 'XY corridor length');
+check(frame.width === 8 && frame.height === 12, 'viewer envelope dimensions');
+check(frame.midpoint[0] === 25 && frame.midpoint[1] === 40, 'midpoint computed');
+const transformedFrom = sandbox.p3aGiro3dUtil.towerViewerPosition({ display_xyz_absolute_m: [10, 20, 1] });
+const transformedTo = sandbox.p3aGiro3dUtil.towerViewerPosition({ display_xyz_absolute_m: [40, 60, 3] });
+check(JSON.stringify(frame.from) === JSON.stringify(transformedFrom), 'from endpoint reuses Tower transform');
+check(JSON.stringify(frame.to) === JSON.stringify(transformedTo), 'to endpoint reuses Tower transform');
+const vertices = sandbox.p3aGiro3dUtil.spanCorridorVertices(frame);
+check(vertices.length === 72, 'explicit corridor has 12 line segments');
+check(vertices[2] === 1 && vertices[5] === 1, 'corridor starts Z-up at from base');
+check(vertices[20] === 13 && vertices[23] === 1, 'from frame edge is Z-up');
+check(vertices[32] === 3 && vertices[35] === 15, 'to frame edge is Z-up');
+if (failed > 0) process.exit(1);
+console.log('selected-Span visibility helper PASS');
+""".replace("__VIEWER_JS__", str(VIEWER_JS).replace("\\", "/"))
+    result = subprocess.run(
+        ["node", "-e", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=str(VIEWER_JS.parents[2]),
+    )
+    assert result.returncode == 0, f"node failed:\n{result.stdout}\n{result.stderr}"
+    assert "selected-Span visibility helper PASS" in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_span_focus_mode_viewer_hotfix_contract() -> None:
+    """Span focus is explicit viewer state and never a science/API mutation."""
+
+    source = _viewer_src()
+    html = INDEX.read_text(encoding="utf-8")
+    for token in (
+        '"SPAN_FOCUS"',
+        '"PROJECT_VIEW"',
+        "spanFocusDisplayState",
+        "spanFocusMode",
+        "activeSpanId",
+        "enterSpanFocus",
+        "returnToProjectView",
+        "applySpanFocusVisuals",
+        "spanFocusClipPlanes",
+        "clearSpanFocusFilter",
+        "clippingPlanes",
+        "focusFilterActive",
+        "fitProjectView",
+        "selected-span-overlay",
+        "selected-span-endpoint-",
+        "selected-span-corridor-frame",
+        "confirmedPointsGroup",
+    ):
+        assert token in source, f"missing Span focus token: {token}"
+    for token in ('id="span_focus_mode"', 'id="span_return_project"', "返回全景 / Return to Project View"):
+        assert token in html, f"missing visible Span focus DOM token: {token}"
+
+    focus_start = source.index("function enterSpanFocus")
+    return_start = source.index("function returnToProjectView")
+    return_end = source.index("function disposeSpanOverlayObject", return_start)
+    assert "postJson" not in source[focus_start:return_end]
+    assert "fetch(" not in source[focus_start:return_end]
+
+    script = r'''
+const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync("__VIEWER_JS__", 'utf8');
+const sandbox = { window: {}, document: { getElementById: () => null }, console: console };
+sandbox.window = sandbox;
+vm.createContext(sandbox);
+vm.runInContext(src, sandbox, { filename: 'viewer.js' });
+const s2 = { span_id: 'S002', group_id: 'G001', from_tower_id: 'T002', to_tower_id: 'T003' };
+const s3 = { span_id: 'S003', group_id: 'G001', from_tower_id: 'T003', to_tower_id: 'T004' };
+const f2 = sandbox.p3aGiro3dUtil.spanFocusDisplayState(s2, 'SPAN_FOCUS');
+const f3 = sandbox.p3aGiro3dUtil.spanFocusDisplayState(s3, 'SPAN_FOCUS');
+const project = sandbox.p3aGiro3dUtil.spanFocusDisplayState(null, 'PROJECT_VIEW');
+let failed = 0;
+function check(value, message) { if (!value) { failed += 1; console.log('FAIL: ' + message); } }
+check(f2.mode === 'SPAN_FOCUS' && f2.active_span_id === 'S002', 'S002 enters focus mode');
+check(f2.from_tower_id === 'T002' && f2.to_tower_id === 'T003' && f2.group_id === 'G001', 'S002 display identity');
+check(f3.mode === 'SPAN_FOCUS' && f3.active_span_id === 'S003', 'S002 -> S003 replaces active focus');
+check(project.mode === 'PROJECT_VIEW' && project.active_span_id === null, 'return restores project view');
+check(JSON.stringify(s2) === JSON.stringify({ span_id: 'S002', group_id: 'G001', from_tower_id: 'T002', to_tower_id: 'T003' }), 'focus helper does not mutate project span data');
+const frame = sandbox.p3aGiro3dUtil.spanSelectionFrame({
+  span_id: 'S002', group_id: 'G001', from_tower_id: 'T002', to_tower_id: 'T003',
+  from_tower_geometry: { base_xyz_absolute_m: [0, 0, 1] },
+  to_tower_geometry: { base_xyz_absolute_m: [30, 0, 2] }
+}, 8, 12);
+const envelope = sandbox.p3aGiro3dUtil.spanFocusClipPlanes(frame, { along: 15, across: 12, below: 6, above: 18 });
+check(envelope && envelope.kind === 'viewer-span-focus-envelope', 'viewer focus envelope exists');
+check(envelope.planes.length === 6 && envelope.along_margin === 15 && envelope.across_margin === 12, 'six-plane viewer filter with explicit margin');
+function inside(point) { return envelope.planes.every((plane) => plane.normal[0] * point[0] + plane.normal[1] * point[1] + plane.normal[2] * point[2] + plane.constant >= -1e-9); }
+check(inside([15, 0, 5]), 'span midpoint is retained by viewer filter');
+check(!inside([100, 100, 100]), 'unrelated point is outside viewer filter');
+if (failed > 0) process.exit(1);
+console.log('Span focus mode helper PASS');
+'''.replace("__VIEWER_JS__", str(VIEWER_JS).replace("\\", "/"))
+    result = subprocess.run(
+        ["node", "-e", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=str(VIEWER_JS.parents[2]),
+    )
+    assert result.returncode == 0, f"node failed:\n{result.stdout}\n{result.stderr}"
+    assert "Span focus mode helper PASS" in result.stdout
+
+
 # ---------------------------------------------------------------------------
 # No automatic scientific pipeline
 # ---------------------------------------------------------------------------
@@ -378,6 +521,87 @@ def test_viewer_no_large_filled_candidate_cylinder() -> None:
     assert "opacity: 0.22" not in js
     assert "selectionMarkerSpec" in js
     assert "new THREE.BoxGeometry(spec.width, spec.depth, spec.height)" in js
+
+
+def test_span_focus_footer_pinned_and_reachable() -> None:
+    """The Span Focus footer (summary + Return button) can never be clipped away.
+
+    The Owner reproduced the Return button and result panel disappearing after
+    clicking a Span: the panel used ``overflow: hidden`` so the bottom section was
+    clipped out of the max-height panel.  The footer is now pinned to the bottom of
+    a scrollable panel.
+    """
+    html = INDEX.read_text(encoding="utf-8")
+    style = html[html.find("<style>"): html.find("</style>")]
+    assert "overflow-y: auto" in style, "trp_panel must be vertically scrollable"
+    assert "overflow-x: hidden" in style
+    assert "position: sticky" in style and "bottom: 0" in style, "span focus footer must be sticky"
+    assert 'id="span_focus_footer"' in html
+    # The footer must contain the summary, the focus mode and the Return button.
+    footer_start = html.find('id="span_focus_footer"')
+    footer_block = html[footer_start: footer_start + 400]
+    assert 'id="span_summary"' in footer_block
+    assert 'id="span_focus_mode"' in footer_block
+    assert 'id="span_return_project"' in footer_block
+
+
+def test_span_summary_renders_result_fields() -> None:
+    """The COMPLETE Span result panel renders the required science fields."""
+    js = _viewer_src()
+    for token in (
+        "Endpoints:",
+        "Wires:",
+        "Trees:",
+        "Minimum clearance:",
+        "Risk threshold:",
+        "Below threshold:",
+        "wire_count",
+        "below_threshold",
+        "risk_threshold_m",
+    ):
+        assert token in js, f"missing Span result field in viewer: {token}"
+
+
+def test_return_to_project_rerenders_span_list() -> None:
+    """Return to Project View clears the stale Span-row selection highlight."""
+    js = _viewer_src()
+    assert "renderSpans(spanState)" in js
+    assert 'spanFocusMode = "PROJECT_VIEW"' in js
+
+
+def test_viewer_has_span_tree_inspection() -> None:
+    """The final-reconciled Tree list + locate/highlight feature is present."""
+    js = _viewer_src()
+    html = INDEX.read_text(encoding="utf-8")
+    for token in (
+        "fetchTreeList",
+        "renderTreeList",
+        "selectTree",
+        "clearTreeSelection",
+        "renderTreePreview",
+        "renderTreeClearance",
+        "focusTree",
+        "treePreviewGroup",
+        "treeClearanceGroup",
+        "global_tree_id",
+        "Trees: ",
+        "Core: ",
+        "Halo/Review: ",
+        "/trees/",
+        "activeSpanId",
+    ):
+        assert token in js, f"missing Span Tree inspection viewer feature: {token}"
+    for token in ("tree_panel", "tree_header", "tree_list", "tree_details"):
+        assert token in html, f"missing Span Tree panel element: {token}"
+
+
+def test_viewer_tree_code_has_no_hardcoded_span() -> None:
+    """The Tree inspection is driven by the selected Span id — never S002."""
+    js = _viewer_src()
+    for token in ("G001-Span002", "S002"):
+        assert token not in js, f"hard-coded Span id in viewer Tree code: {token}"
+    assert "encodeURIComponent(span.span_id)" in js or "encodeURIComponent(spanId)" in js
+    assert "encodeURIComponent(treeListState.span_id)" in js
 
 
 def test_viewer_attaches_overlays_via_instance_not_view() -> None:
