@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import threading
+import urllib.request
 from pathlib import Path
 
 
@@ -101,10 +103,50 @@ def launch(project_root: Path | None) -> int:
         backend.stop()
 
 
+def prediction_smoke(project_root: Path | None) -> int:
+    """Run packaged Formula and AI prediction without opening a GUI window."""
+    project = project_root or default_project_root()
+    if project is None or not (project / "project.json").is_file():
+        print("Prediction smoke requires a prepared project.", file=sys.stderr)
+        return 2
+    backend = BackendProcess(project.resolve(), resource_root())
+    try:
+        url = backend.start()
+        results = {}
+        for mode in ("formula", "ai"):
+            request = urllib.request.Request(
+                url + "api/spans/S005/prediction",
+                data=json.dumps({"prediction_mode": mode}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=60) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            result = payload["result"]
+            if result["status"] != "COMPLETE" or payload["output_tree_count"] != 22:
+                raise RuntimeError(f"{mode} prediction smoke failed: {result.get('diagnostic')}")
+            results[mode] = {
+                "trees": payload["output_tree_count"],
+                "uses_temporal_model": bool(
+                    payload["result"]["entries"][0].get("uses_temporal_model")
+                ),
+            }
+        print(json.dumps(results, ensure_ascii=False))
+        return 0
+    except (OSError, KeyError, RuntimeError, ValueError) as exc:
+        print(f"Prediction smoke failed: {exc}", file=sys.stderr)
+        return 5
+    finally:
+        backend.stop()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="TreeLineWarning desktop viewer")
     parser.add_argument("--project-root", type=Path, default=None)
+    parser.add_argument("--prediction-smoke", action="store_true")
     args = parser.parse_args(argv)
+    if args.prediction_smoke:
+        return prediction_smoke(args.project_root)
     return launch(args.project_root)
 
 

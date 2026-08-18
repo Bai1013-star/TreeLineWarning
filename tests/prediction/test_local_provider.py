@@ -29,7 +29,7 @@ def test_local_provider_runs_shipped_rule_based_baseline():
     assert result.horizons == ("current-baseline",)
     assert result.entries[0]["persistent_tree_id"] == "G002-T001"
     assert result.entries[0]["science_run_id"] == "s005-run"
-    assert result.entries[0]["model_label"] == "Baseline / Rule-based"
+    assert result.entries[0]["model_label"] == "当前规则风险"
     assert result.entries[0]["current_science"]["minimum_clearance_m"] == 0.05
     assert result.entries[0]["horizons"][0]["future_clearance_m"] is None
     assert "species:未知" in result.entries[0]["core_default_flags"]

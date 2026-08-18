@@ -711,7 +711,7 @@ class TowerReviewApi(TreeViewerApiMixin):
                 "summary": outcome.summary,
             }, **self._spans_payload(session)}
 
-    def spans_prediction(self, span_id: str) -> dict[str, Any]:
+    def spans_prediction(self, span_id: str, request: dict[str, Any] | None = None) -> dict[str, Any]:
         """Build a strict downstream package and invoke the shipped local core.
 
         This endpoint intentionally reads only terminal science projections.  It
@@ -723,17 +723,30 @@ class TowerReviewApi(TreeViewerApiMixin):
             build_prediction_input,
         )
 
+        request = request or {}
+        mode = str(request.get("prediction_mode", "baseline")).strip().lower()
+        if mode not in {"baseline", "formula", "ai"}:
+            raise _ApiError(
+                HTTPStatus.BAD_REQUEST,
+                "PREDICTION_MODE_INVALID",
+                "prediction_mode must be baseline, formula, or ai",
+            )
         trees = self.spans_trees(span_id)
         with self._opened() as session:
             span = self._resolve_span_record(session, span_id)
+            geometry = span.geometry.to_dict()
             package = build_prediction_input(
                 project_id=session.project.project_id,
                 group_id=span.group_id,
                 span_id=span_id,
                 run_id=trees["run_id"],
                 trees=trees["trees"],
+                span_context={
+                    "tower_pair": f"{span.from_tower_id}-{span.to_tower_id}",
+                    "span_length_m": geometry.get("length_m"),
+                },
             )
-        result = LocalPredictionProvider().run(package)
+        result = LocalPredictionProvider().run(package, prediction_mode=mode)
         artifact = {
             "artifact_type": "treeline_prediction_result",
             "source_science_run_id": package.source_science_run_id,
@@ -748,7 +761,11 @@ class TowerReviewApi(TreeViewerApiMixin):
             / package.group_id
             / package.span_id
             / package.source_science_run_id
-            / "baseline-rule-based.json"
+            / {
+                "baseline": "baseline-rule-based.json",
+                "formula": "formula-long-horizon.json",
+                "ai": "temporal-ai-long-horizon.json",
+            }[mode]
         )
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = artifact_path.with_suffix(".tmp")
@@ -762,6 +779,8 @@ class TowerReviewApi(TreeViewerApiMixin):
             "result": result.to_dict(),
             "input_tree_count": len(package.observations),
             "output_tree_count": len(result.entries),
+            "failed_tree_count": len(result.failed_tree_ids),
+            "prediction_mode": mode,
             "prediction_artifact": str(artifact_path.relative_to(self.config.project_root)),
         }
 
@@ -1462,7 +1481,7 @@ class _P3aHandler(BaseHTTPRequestHandler):
             elif self.command == "POST" and action == "retry-failed":
                 result = api.spans_retry_failed()
             elif self.command == "POST" and action == "prediction":
-                result = api.spans_prediction(span_id)
+                result = api.spans_prediction(span_id, self._read_json_body())
             else:
                 raise _ApiError(HTTPStatus.NOT_FOUND, "NOT_FOUND", "unsupported Span route")
         except _ApiError as exc:

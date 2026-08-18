@@ -6,7 +6,12 @@ hiddenimports = (
     + collect_submodules("core")
     + ["scripts", "scripts.serve_p3a_giro3d", "scripts.tree_viewer_api"]
 )
-datas = [("viewer_poc", "viewer_poc"), ("scripts/serve_p3a_giro3d.py", "scripts")]
+datas = [
+    ("viewer_poc", "viewer_poc"),
+    ("scripts/serve_p3a_giro3d.py", "scripts"),
+    ("models/species_growth.json", "models"),
+    ("models/temporal_attention.npz", "models"),
+]
 
 a = Analysis(
     ["desktop/app.py"], pathex=["."], binaries=[], datas=datas, hiddenimports=hiddenimports,

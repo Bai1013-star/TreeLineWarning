@@ -51,7 +51,7 @@
       <aside class="right">
         <section class="section"><h3>当前档距</h3><div id="spanInfo" class="muted">等待选择档距…</div><button class="action" id="analyze">开始分析</button><div class="notice">仅对当前档距调用既有 canonical science pipeline。</div></section>
         <section class="section"><h3>对象属性</h3><div id="object">选择单木、导线或杆塔以查看属性。</div></section>
-        <section class="section"><h3>预测</h3><div id="prediction" class="muted">未计算 / 无预测结果</div><button class="action" id="predict">风险预测</button><div class="notice">仅发送现有 terminal science 字段；缺失模型字段会明确报告，不会补默认值。</div></section>
+        <section class="section"><h3>预测</h3><label class="muted">模式 <select id="predictionMode"><option value="baseline">当前规则风险</option><option value="formula">机理/规则生长预测</option><option value="ai" selected>时序注意力预测（合成数据基线）</option></select></label><div id="prediction" class="muted">未计算 / 无预测结果</div><div id="predictionHorizons" class="notice"></div><button class="action" id="predict">风险预测</button><div class="notice">树种：未识别 / 其他（模型回退）。未提供的输入仅使用历史 ForecastService 的可见回退。</div></section>
         <section class="section"><h3>工作流</h3><ol class="workflow"><li>导入点云 <span class="state complete">完成</span></li><li>选杆建档 <span class="state complete">完成</span></li><li>一键分析 <span class="state" id="analysisState">未开始</span></li><li>风险预测 <span class="state" id="predictionState">未计算</span></li><li>导出报告 <span class="state">未配置</span></li></ol></section>
       </aside>
     </main>
@@ -87,12 +87,17 @@
       $('analysisState').className = 'state ' + (s.status === 'COMPLETE' ? 'complete' : '');
     }
     function selectSpan(id) { const target = state.spans.find(s => s.span_id === id); if (!target) return; state.active = target; renderSpan(); sendViewer({type:'treeline:select-span',span_id:id}); }
+    function renderPredictionHorizons(p) {
+      const holder = $('predictionHorizons'); if (!p || !p.horizons) { holder.textContent=''; return; }
+      holder.innerHTML = p.horizons.map(h => '<button type="button" data-horizon="' + h.horizon + '">' + h.horizon + '</button>').join(' ');
+      holder.querySelectorAll('[data-horizon]').forEach(button => button.addEventListener('click', () => { state.selectedHorizon = button.dataset.horizon; renderObject(); }));
+    }
     function renderObject() {
       const t = state.selectedTree; if (!t) return;
-      const p = state.predictions.get(t.persistent_tree_id); const h = p && p.horizons && p.horizons[0];
+      const p = state.predictions.get(t.persistent_tree_id); const h = p && p.horizons && (p.horizons.find(item => item.horizon === state.selectedHorizon) || p.horizons.find(item => item.horizon === '12个月') || p.horizons[0]);
       let text = '单木：' + (t.display_id || ('Tree ' + t.global_tree_id)) + '\nPermanent ID：' + (t.persistent_tree_id || '未绑定') + '\n质量：' + (t.category || '—') + '\n树种：待识别\n高度：' + (t.apex_height_m ?? '—') + ' m\n当前最小净空：' + fmt(t.minimum_clearance_m) + '\n当前风险：' + (t.dangerous ? '危险' : '未触发危险') + '\n危险点：' + (t.danger_point_count ?? '—');
       if (!p) { $('object').textContent = text + '\n预测：未计算 / 无预测结果'; return; }
-      text += '\n预测模型：' + p.model_label + '\n预测期：' + (h ? h.horizon : '未计算') + '\n未来净空：' + optionalMetric(h && h.future_clearance_m) + '\n未来生长：' + optionalMetric(h && h.future_growth_m) + '\n预测风险：' + (h && h.predicted_risk_level ? h.predicted_risk_level : '未提供') + '\n置信度：' + (h && h.confidence != null ? h.confidence : '未提供') + '\n输入质量：' + (p.input_quality || '未提供');
+      text += '\n预测模型：' + p.model_label + '\n预测期：' + (h ? h.horizon : '未计算') + '\n目标日期：' + (h && h.target_date ? h.target_date : '未提供') + '\n预测树高：' + optionalMetric(h && h.future_height_m) + '\n预测冠幅：' + optionalMetric(h && h.future_crown_width_m) + '\n未来净空：' + optionalMetric(h && h.future_clearance_m) + '\n预测风险：' + (h && h.predicted_risk_level ? h.predicted_risk_level : '未提供') + '\n置信度：' + (h && h.confidence != null ? h.confidence : '未提供') + '\n输入质量：' + (p.input_quality || '未提供');
       if (p.core_default_flags && p.core_default_flags.length) text += '\n模型默认项：' + p.core_default_flags.join(', ');
       $('object').textContent = text;
     }
@@ -101,7 +106,7 @@
     document.querySelectorAll('[data-layer]').forEach(box => box.addEventListener('change', () => { state.layers[box.dataset.layer] = box.checked; sendViewer({type:'treeline:layers',layers:state.layers}); }));
     $('help').addEventListener('click', () => alert('TreeLineWarning Desktop Demo v0.1\n\n使用左侧档距切换当前分析对象；在 3D 场景中旋转、平移、缩放并选择对象。未实现功能已禁用。'));
     $('analyze').addEventListener('click', () => { if (!state.active) return; $('analyze').disabled=true; $('analyze').textContent='分析中…'; api('/api/spans/' + encodeURIComponent(state.active.span_id) + '/analyze', {method:'POST'}).then(() => load()).catch(error => alert('分析未完成：' + error.message)).finally(() => { $('analyze').disabled=false; $('analyze').textContent='开始分析'; }); });
-    $('predict').addEventListener('click', () => { if (!state.active) return; $('predict').disabled=true; $('prediction').textContent='正在构建 PredictionInputPackage…'; api('/api/spans/' + encodeURIComponent(state.active.span_id) + '/prediction', {method:'POST'}).then(payload => { const r=payload.result; if (r.status === 'COMPLETE') { (r.entries || []).forEach(entry => state.predictions.set(entry.persistent_tree_id, entry)); const first=(r.entries||[])[0]||{}; $('prediction').textContent='已计算\n模型：' + (first.model_label || '未提供') + '\n结果树：' + payload.output_tree_count + '\n预测期：' + r.horizons.join(', ') + '\n' + (r.diagnostic || ''); renderObject(); } else { $('prediction').textContent='未计算 / 无预测结果\n' + (r.diagnostic || 'Prediction Core unavailable') + (r.missing_fields.length ? '\n缺少字段：' + r.missing_fields.join(', ') : ''); } $('predictionState').textContent = r.status === 'COMPLETE' ? '完成' : '未配置'; $('predictionState').className='state ' + (r.status === 'COMPLETE' ? 'complete':'blocked'); }).catch(error => { $('prediction').textContent='未计算 / 无预测结果\n' + error.message; }).finally(() => $('predict').disabled=false); });
+    $('predict').addEventListener('click', () => { if (!state.active) return; const mode=$('predictionMode').value; $('predict').disabled=true; $('prediction').textContent='正在构建 PredictionInputPackage…'; api('/api/spans/' + encodeURIComponent(state.active.span_id) + '/prediction', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prediction_mode:mode})}).then(payload => { const r=payload.result; if (r.status === 'COMPLETE' || r.status === 'PARTIAL') { (r.entries || []).forEach(entry => state.predictions.set(entry.persistent_tree_id, entry)); const first=(r.entries||[])[0]||{}; state.selectedHorizon=null; $('prediction').textContent='已计算\n模型：' + (first.model_label || '未提供') + '\n结果树：' + payload.output_tree_count + '\n失败：' + payload.failed_tree_count + '\n预测期：' + r.horizons.join(', ') + '\n' + (r.diagnostic || ''); renderPredictionHorizons(first); renderObject(); } else { $('prediction').textContent='未计算 / 无预测结果\n' + (r.diagnostic || 'Prediction Core unavailable') + (r.missing_fields.length ? '\n缺少字段：' + r.missing_fields.join(', ') : ''); } $('predictionState').textContent = (r.status === 'COMPLETE' || r.status === 'PARTIAL') ? '完成' : '未配置'; $('predictionState').className='state ' + ((r.status === 'COMPLETE' || r.status === 'PARTIAL') ? 'complete':'blocked'); }).catch(error => { $('prediction').textContent='未计算 / 无预测结果\n' + error.message; }).finally(() => $('predict').disabled=false); });
     load();
   })();
   </script>
