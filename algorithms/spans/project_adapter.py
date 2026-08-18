@@ -26,8 +26,11 @@ class ScienceAdapterError(RuntimeError):
     """Honest failure from prerequisite validation or the bound science runner."""
 
 
-PROJECT_SPAN_CORE_HALF_WIDTH_M = 20.0
-PROJECT_SPAN_LONGITUDINAL_HALO_M = 30.0
+# The project adapter must not maintain a second, hidden corridor geometry.
+# These are the existing authoritative FAST span corridor and halo values.
+_TRACKED_SPAN_REGION_CONFIG = FastBaselineConfig()
+PROJECT_SPAN_CORE_HALF_WIDTH_M = _TRACKED_SPAN_REGION_CONFIG.span_half_width_m
+PROJECT_SPAN_LONGITUDINAL_HALO_M = _TRACKED_SPAN_REGION_CONFIG.span_halo_m
 PROJECT_SPAN_GEOMETRY_CONFIGURATION_DIGEST = canonical_digest(
     {
         "adapter": "project-span-geometry-v1",
@@ -44,8 +47,8 @@ PROJECT_SPAN_GEOMETRY_CONFIGURATION_DIGEST = canonical_digest(
 # fail closed under the corrected admission semantics.
 PROJECT_SPAN_VEGETATION_ROLE_CONFIGURATION_DIGEST = canonical_digest(
     {
-        "adapter": "project-span-vegetation-role-v2",
-        "geometry": PROJECT_SPAN_GEOMETRY_CONFIGURATION_DIGEST,
+        "adapter": "project-source-vegetation-role-v3",
+        "source_index_schema": "treeline-span-role-tile-index-v1",
         "admission": "HIGH_RECALL_NO_BROAD_WIRE_EXCLUSION",
     }
 )
@@ -54,6 +57,33 @@ RISK_THRESHOLD_M = 2.0
 RISK_CONFIGURATION_DIGEST = canonical_digest(
     {"risk_threshold_m": RISK_THRESHOLD_M, "policy": RISK_POLICY}
 )
+
+
+def wire_role_index_configuration_digest(
+    config: FastBaselineConfig | None = None,
+) -> str:
+    """Digest only dependencies that can alter source-wide wire-role contents.
+
+    The role index is a spatial representation of the already-admitted wire
+    source rows.  It must not inherit tree, clearance, viewer or per-span
+    geometry settings through the monolithic FAST configuration digest.
+    """
+
+    tracked = config or FastBaselineConfig()
+    values = tracked.to_digest_dict()
+    wire_values = {
+        name: value
+        for name, value in values.items()
+        if name.startswith("wire_") or name == "non_certified_marker"
+    }
+    return canonical_digest(
+        {
+            "schema": "treeline-source-wire-role-index-dependencies-v1",
+            "role_index_schema": "treeline-span-role-tile-index-v1",
+            "role": "wire",
+            "wire_configuration": wire_values,
+        }
+    )
 
 
 def span_region_configuration() -> dict[str, Any]:
@@ -70,7 +100,7 @@ def span_region_configuration() -> dict[str, Any]:
         "vegetation_search_region": {
             "half_width_m": PROJECT_SPAN_CORE_HALF_WIDTH_M,
             "longitudinal_halo_m": PROJECT_SPAN_LONGITUDINAL_HALO_M,
-            "source": "explicit project Span geometry",
+            "source": "tracked FastBaselineConfig span corridor",
             "configuration_digest": PROJECT_SPAN_GEOMETRY_CONFIGURATION_DIGEST,
         },
         "risk": {
@@ -112,8 +142,10 @@ class SpanAnalysisInput:
             ("science_configuration_digest", self.science_configuration_digest),
             ("risk_configuration_digest", self.risk_configuration_digest),
         ):
-            if type(value) is not str or len(value) != 64 or any(
-                c not in "0123456789abcdef" for c in value
+            if (
+                type(value) is not str
+                or len(value) != 64
+                or any(c not in "0123456789abcdef" for c in value)
             ):
                 raise ValueError(f"{name} must be a lowercase SHA-256 digest")
         object.__setattr__(self, "source_identity", dict(self.source_identity))
@@ -223,11 +255,7 @@ def prepare_source_shared(
     source_digest = canonical_digest(dict(input_data.source_identity))
     configuration_digest = input_data.science_configuration_digest
     relative = (
-        Path("artifacts")
-        / "project-runs"
-        / "source-shared"
-        / source_digest
-        / "preparation.json"
+        Path("artifacts") / "project-runs" / "source-shared" / source_digest / "preparation.json"
     )
     path = project_root / relative
     if path.is_file():
@@ -402,6 +430,7 @@ __all__ = [
     "SpanAnalysisInput",
     "SpanScienceResult",
     "span_region_configuration",
+    "wire_role_index_configuration_digest",
     "prepare_source_shared",
     "publish_terminal_artifact_index",
     "run_canonical_span_science",

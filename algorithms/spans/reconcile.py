@@ -60,14 +60,15 @@ def _apply_span_order(records: list[GlobalTreeRecord]) -> list[GlobalTreeRecord]
     ordered: list[GlobalTreeRecord] = []
     for span_id in sorted({record.span_id for record in records}):
         group = [record for record in records if record.span_id == span_id]
-        group.sort(key=lambda record: (
-            float("inf") if record.longitudinal_s_m is None else record.longitudinal_s_m,
-            float("inf") if record.lateral_n_m is None else record.lateral_n_m,
-            record.global_tree_id,
-        ))
+        group.sort(
+            key=lambda record: (
+                float("inf") if record.longitudinal_s_m is None else record.longitudinal_s_m,
+                float("inf") if record.lateral_n_m is None else record.lateral_n_m,
+                record.global_tree_id,
+            )
+        )
         ordered.extend(
-            replace(record, span_order_index=index)
-            for index, record in enumerate(group, start=1)
+            replace(record, span_order_index=index) for index, record in enumerate(group, start=1)
         )
     return sorted(ordered, key=lambda record: record.global_tree_id)
 
@@ -112,9 +113,7 @@ class GlobalTreeRecord:
             "halo_point_count": self.halo_point_count,
             "core_fraction": self.core_fraction,
             "review": self.review,
-            "merged_span_tree_keys": [
-                [int(a), int(b)] for a, b in self.merged_span_tree_keys
-            ],
+            "merged_span_tree_keys": [[int(a), int(b)] for a, b in self.merged_span_tree_keys],
             "persistent_tree_id": self.persistent_tree_id,
             "identity_state": self.identity_state,
             "candidate_persistent_tree_ids": list(self.candidate_persistent_tree_ids),
@@ -170,9 +169,7 @@ def _span_tree_members(
     return members
 
 
-def _overlap_iou(
-    left: np.ndarray, right: np.ndarray
-) -> float:
+def _overlap_iou(left: np.ndarray, right: np.ndarray) -> float:
     if not len(left) or not len(right):
         return 0.0
     intersection = float(np.intersect1d(left, right, assume_unique=True).size)
@@ -202,7 +199,33 @@ def _reconcile_single_span(
     """Reconcile one span without the general cross-span raw-row loop."""
 
     raw_tree = np.asarray(outcome.raw_tree_id, dtype=np.int32)
-    valid = raw_tree >= 0
+    # A one-span execution sees neighbouring crowns in its halo, but those
+    # observations are context only.  The stable tree-top anchor determines
+    # whether this Span owns the entity; a halo-only tree may never allocate a
+    # persistent identity merely because its points were needed for continuity.
+    owned_tree_ids: set[int] = set()
+    if all(
+        hasattr(outcome.span, name)
+        for name in ("start_xyz_absolute_m", "end_xyz_absolute_m", "length_m", "half_width_m")
+    ):
+        for record in outcome.tree_records:
+            tree_id = int(record["tree_id"])
+            apex = record.get("apex_xy_local_m")
+            if apex is None:
+                continue
+            longitudinal, lateral = _span_coordinates(outcome.span, tuple(apex), origin_xyz)
+            if (
+                longitudinal is not None
+                and lateral is not None
+                and 0.0 <= longitudinal <= float(outcome.span.length_m)
+                and abs(lateral) <= float(outcome.span.half_width_m)
+            ):
+                owned_tree_ids.add(tree_id)
+    else:
+        # Compatibility boundary for minimal legacy adapters that never had
+        # enough geometry to distinguish a core from a halo.
+        owned_tree_ids = {int(record["tree_id"]) for record in outcome.tree_records}
+    valid = (raw_tree >= 0) & np.isin(raw_tree, np.asarray(sorted(owned_tree_ids), dtype=np.int32))
     raw_original = np.asarray(outcome.raw_original_index, dtype=np.int64)[valid]
     raw_xyz = np.asarray(outcome.raw_xyz_local_m, dtype=np.float64)[valid]
     raw_tree = raw_tree[valid]
@@ -453,20 +476,14 @@ def reconcile_trees(
             if primary_record and primary_record.get("apex_xy_local_m")
             else (0.0, 0.0, 0.0)
         )
-        height = (
-            float(primary_record["apex_height_m"])
-            if primary_record
-            else 0.0
-        )
+        height = float(primary_record["apex_height_m"]) if primary_record else 0.0
         core_fraction = core_points / total if total else 0.0
         longitudinal_s_m, lateral_n_m = _span_coordinates(span, apex_xy, origin_xyz)
         review = core_fraction < 0.15 or total < config.tree_min_final_members
         if review:
             review_ids.append(new_id)
         external_name = f"{span.line_name}-Span{span.span_id + 1:03d}-Tree{new_id + 1:03d}"
-        merged_keys = tuple(
-            key for key, value in remapped_span_tree.items() if value == new_id
-        )
+        merged_keys = tuple(key for key, value in remapped_span_tree.items() if value == new_id)
         records.append(
             GlobalTreeRecord(
                 global_tree_id=new_id,

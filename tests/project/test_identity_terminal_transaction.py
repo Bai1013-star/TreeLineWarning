@@ -7,7 +7,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 from algorithms.spans import project_orchestrator
-from algorithms.spans.project_adapter import SourceSharedPreparation, SpanScienceResult
+from algorithms.spans.clearance import ClearanceCancelled
+from algorithms.spans.project_adapter import (
+    SourceSharedPreparation,
+    SpanScienceResult,
+    run_canonical_span_science,
+)
 from algorithms.spans.reconcile import GlobalTreeRecord, TreeReconciliationResult
 from algorithms.spans.tree_identity import prepare_tree_identity
 from core.config.fast_baseline import default_fast_baseline_config
@@ -135,9 +140,7 @@ def test_terminal_stage_failure_does_not_commit_persistent_registry(
     try:
         outcome = project_orchestrator.ProjectSpanOrchestrator().analyze_span(session, "S001")
         assert outcome.status == "FAILED"
-        entry = next(
-            item for item in session.run_index.entries if item.run_id == outcome.run_id
-        )
+        entry = next(item for item in session.run_index.entries if item.run_id == outcome.run_id)
         assert entry.status is AnalysisStatus.FAILED
         assert not (root / "tree_identity_registry.json").exists()
         assert not (root / "tree_identity_registry.json.pending.json").exists()
@@ -156,5 +159,54 @@ def test_terminal_completion_commits_matching_registry(
         assert outcome.status == "COMPLETE"
         assert (root / "tree_identity_registry.json").is_file()
         assert not (root / "tree_identity_registry.json.pending.json").exists()
+    finally:
+        session.close()
+
+
+def test_clearance_cancellation_interrupts_run_without_identity_or_terminal_artifacts(
+    tmp_path: Path, tiny_las_project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, session = _temporary_project(tmp_path, tiny_las_project)
+    _install_terminal_executor(monkeypatch)
+    try:
+        good = project_orchestrator.ProjectSpanOrchestrator().analyze_span(session, "S001")
+        assert good.status == "COMPLETE"
+        registry_before = (root / "tree_identity_registry.json").read_bytes()
+        # Use the real adapter wrapper so the custom science function follows
+        # exactly the cancellation route used by the tracked executor.
+        monkeypatch.setattr(
+            project_orchestrator, "run_canonical_span_science", run_canonical_span_science
+        )
+
+        def cancelled(_input, _preparation, _output_root):
+            raise ClearanceCancelled("CLEARANCE_CANCELLED")
+
+        interrupted = project_orchestrator.ProjectSpanOrchestrator(
+            science_executor=cancelled
+        ).analyze_span(
+            session,
+            "S001",
+            force_new_run=True,
+            cancellation_requested=lambda: True,
+        )
+
+        assert interrupted.status == "INTERRUPTED"
+        entry = next(
+            item for item in session.run_index.entries if item.run_id == interrupted.run_id
+        )
+        assert entry.status is AnalysisStatus.INTERRUPTED
+        assert (root / "tree_identity_registry.json").read_bytes() == registry_before
+        assert not (root / "tree_identity_registry.json.pending.json").exists()
+        assert not (
+            root
+            / "artifacts"
+            / "project-runs"
+            / "groups"
+            / "G001"
+            / "S001"
+            / interrupted.run_id
+            / "clearance.json"
+        ).exists()
+        assert good.run_id != interrupted.run_id
     finally:
         session.close()

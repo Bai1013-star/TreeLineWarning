@@ -7,6 +7,7 @@ import html
 import json
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ from core.project.session import WritableProjectSession
 from core.project.span_sync import SpanSynchronizationResult, synchronize_group_spans
 
 from algorithms.spans.canonical_executor import run_tracked_canonical_span_science
+from algorithms.spans.clearance import ClearanceCancelled
 from algorithms.spans.project_adapter import (
     ScienceAdapterError,
     ScienceExecutor,
@@ -112,6 +114,7 @@ class ProjectSpanOrchestrator:
         span_id: str,
         *,
         force_new_run: bool = False,
+        cancellation_requested: Callable[[], bool] | None = None,
     ) -> SpanRunOutcome:
         lock = _span_lock(session.project_root, span_id)
         if not lock.acquire(blocking=False):
@@ -122,8 +125,7 @@ class ProjectSpanOrchestrator:
 
             def _run_complete(candidate_run_id: str) -> bool:
                 return any(
-                    entry.run_id == candidate_run_id
-                    and entry.status is AnalysisStatus.COMPLETE
+                    entry.run_id == candidate_run_id and entry.status is AnalysisStatus.COMPLETE
                     for entry in session.run_index.entries
                 )
 
@@ -138,9 +140,7 @@ class ProjectSpanOrchestrator:
             if (
                 not force_new_run
                 and span.analysis.state is AnalysisStatus.COMPLETE
-                and _artifact_reference_valid(
-                    session.project_root, span.artifact_index_reference
-                )
+                and _artifact_reference_valid(session.project_root, span.artifact_index_reference)
             ):
                 return SpanRunOutcome(span_id, "COMPLETE", span.analysis.active_run_id, reused=True)
             if span.group_id is None:
@@ -161,12 +161,7 @@ class ProjectSpanOrchestrator:
                     interrupt_run(session, span.analysis.active_run_id)
                 run_id = _run_id(span_id)
             relative_root = (
-                Path("artifacts")
-                / "project-runs"
-                / "groups"
-                / span.group_id
-                / span_id
-                / run_id
+                Path("artifacts") / "project-runs" / "groups" / span.group_id / span_id / run_id
             )
             output_root = session.project_root / relative_root
             output_root.mkdir(parents=True, exist_ok=True)
@@ -180,10 +175,7 @@ class ProjectSpanOrchestrator:
                 start_run(session, run_id)
             try:
                 span = self._span(session, span_id)
-                towers = {
-                    entry.tower_id: entry.current
-                    for entry in session.tower_registry.records
-                }
+                towers = {entry.tower_id: entry.current for entry in session.tower_registry.records}
                 input_data = SpanAnalysisInput.from_project(
                     session.project.project_id, span, towers
                 )
@@ -204,9 +196,34 @@ class ProjectSpanOrchestrator:
                         ),
                     }
                 )
-                result = run_canonical_span_science(
-                    input_data, preparation, output_root, executor=self.science_executor
-                )
+                if cancellation_requested is None:
+                    result = run_canonical_span_science(
+                        input_data, preparation, output_root, executor=self.science_executor
+                    )
+                else:
+
+                    def _execute_with_cancellation(
+                        execution_input: SpanAnalysisInput,
+                        execution_preparation,
+                        execution_output_root: Path,
+                    ):
+                        if self.science_executor is run_tracked_canonical_span_science:
+                            return self.science_executor(
+                                execution_input,
+                                execution_preparation,
+                                execution_output_root,
+                                cancellation_requested=cancellation_requested,
+                            )
+                        return self.science_executor(
+                            execution_input, execution_preparation, execution_output_root
+                        )
+
+                    result = run_canonical_span_science(
+                        input_data,
+                        preparation,
+                        output_root,
+                        executor=_execute_with_cancellation,
+                    )
                 if result.identity_terminal_preparation is not None:
                     if result.identity_terminal_publish is None:
                         raise ScienceAdapterError("TREE_IDENTITY_TERMINAL_HANDOFF_INVALID")
@@ -250,6 +267,11 @@ class ProjectSpanOrchestrator:
                         "risk_counts": dict(result.risk_counts),
                     },
                 )
+            except ClearanceCancelled as exc:
+                if not _run_complete(run_id):
+                    interrupt_run(session, run_id)
+                self.rebuild_project_result_index(session)
+                return SpanRunOutcome(span_id, "INTERRUPTED", run_id, error=str(exc))
             except Exception as exc:  # terminal state must truthfully remain FAILED
                 if _run_complete(run_id):
                     # A journal remains available for deterministic recovery;
@@ -292,9 +314,7 @@ class ProjectSpanOrchestrator:
         root.mkdir(parents=True, exist_ok=True)
         groups: dict[str, list[dict[str, Any]]] = {}
         runs = {entry.run_id: entry for entry in session.run_index.entries}
-        for span in sorted(
-            session.span_registry.records, key=lambda item: int(item.span_id[1:])
-        ):
+        for span in sorted(session.span_registry.records, key=lambda item: int(item.span_id[1:])):
             group_id = span.group_id or "UNGROUPED"
             summary: dict[str, Any] = {
                 "span_id": span.span_id,
@@ -315,8 +335,7 @@ class ProjectSpanOrchestrator:
                 try:
                     artifact = json.loads(
                         (
-                            session.project_root
-                            / span.artifact_index_reference.relative_path
+                            session.project_root / span.artifact_index_reference.relative_path
                         ).read_text(encoding="utf-8")
                     )
                     summary.update(artifact.get("summary", {}))
@@ -361,16 +380,14 @@ class ProjectSpanOrchestrator:
                         **{
                             key: html.escape(str(value))
                             for key, value in span.items()
-                            if key
-                            in {"span_id", "from_tower_id", "to_tower_id", "status"}
+                            if key in {"span_id", "from_tower_id", "to_tower_id", "status"}
                         }
                     )
                 )
             rows.append("</ul>")
         html_body = (
             "<!doctype html><meta charset='utf-8'>"
-            "<title>TreeLineWarning results</title>"
-            + "".join(rows)
+            "<title>TreeLineWarning results</title>" + "".join(rows)
         )
         _write_text(root / "project-result-index.html", html_body)
         return payload

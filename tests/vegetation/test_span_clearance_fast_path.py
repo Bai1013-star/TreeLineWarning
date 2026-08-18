@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from algorithms.spans.clearance import (
     _direct_nearest_edges,
     run_span_tree_wire_clearance,
 )
+from algorithms.spans.project_adapter import wire_role_index_configuration_digest
 from algorithms.spans.region import (
     SpanLocalFrame,
     SpanRegionSpec,
@@ -25,6 +27,7 @@ from algorithms.spans.role_tiles import (
     RoleSpecificTileCache,
     RoleTileCacheError,
     _canonical_source_index_chunk,
+    migrate_role_tile_configuration_digest,
     role_tile_configuration_digest,
 )
 from algorithms.spans.wire import SpanWireResult
@@ -78,9 +81,7 @@ def _w1() -> SpanWireResult:
 
 def test_direct_backend_matches_reference_bvh_including_ties_and_degenerate_edges():
     edges = _edges()
-    points = np.asarray(
-        ((1.0, 1.0, 0.0), (5.0, 0.0, 0.0), (10.0, 2.0, 0.0)), dtype=np.float64
-    )
+    points = np.asarray(((1.0, 1.0, 0.0), (5.0, 0.0, 0.0), (10.0, 2.0, 0.0)), dtype=np.float64)
     direct = _direct_nearest_edges(points, edges, 1e-9, chunk_size=2)
     bvh = SegmentEdgeBvh(edges, leaf_cap=1)
     reference = [bvh.nearest_edge(point, 1e-9) for point in points]
@@ -266,9 +267,7 @@ def test_role_specific_wire_and_vegetation_indexes_preserve_attrs_and_tile_telem
             config_digest=f"{role}-config",
             source_point_count=24,
         )
-        result = subset_raw_tile_cache_oriented(
-            loaded, frame, spec, tmp_path / f"{role}-region"
-        )
+        result = subset_raw_tile_cache_oriented(loaded, frame, spec, tmp_path / f"{role}-region")
         assert result.total_tiles == len(cache.index)
         assert result.intersecting_aabb_tiles == result.opened_tiles == 1
         assert result.points_read == 2
@@ -387,6 +386,64 @@ def test_canonical_role_tile_configuration_is_five_metres_and_digest_bound():
     assert role_tile_configuration_digest(5.0) != role_tile_configuration_digest(40.0)
 
 
+def test_wire_role_index_digest_is_independent_and_migration_rebinds_only_metadata(
+    tmp_path: Path,
+):
+    configuration = FastBaselineConfig()
+    old_digest = wire_role_index_configuration_digest(configuration)
+    changed_wire_digest = wire_role_index_configuration_digest(
+        replace(configuration, wire_min_hag_m=configuration.wire_min_hag_m + 0.25)
+    )
+    # Tree, viewer, and danger consumers do not participate in the wire role
+    # index identity; only source identity, role/index schema, and wire knobs do.
+    assert old_digest != changed_wire_digest
+    region = _role_region(tmp_path, "wire-role", ((0.0, 0.0, 1.0),), (1,))
+    cache = RoleSpecificTileCache.prepare_from_raw_region(
+        region,
+        tmp_path / "wire-role-index",
+        role="wire",
+        source_identity=_role_identity(),
+        config_digest=old_digest,
+        source_point_count=24,
+    )
+    migrated = migrate_role_tile_configuration_digest(
+        cache.root,
+        role="wire",
+        source_identity=_role_identity(),
+        previous_config_digest=old_digest,
+        configuration_digest=changed_wire_digest,
+        source_point_count=24,
+        expected_cell_size_m=ROLE_TILE_CELL_SIZE_M,
+    )
+    assert migrated.metadata["role_configuration_digest"] == changed_wire_digest
+    with pytest.raises(RoleTileCacheError, match="ROLE_TILE_CACHE_CONFIGURATION_MISMATCH"):
+        RoleSpecificTileCache.load(
+            cache.root,
+            role="wire",
+            source_identity=_role_identity(),
+            config_digest=old_digest,
+            source_point_count=24,
+        )
+    with pytest.raises(RoleTileCacheError, match="ROLE_TILE_CACHE_CONFIGURATION_MISMATCH"):
+        RoleSpecificTileCache.load(
+            cache.root,
+            role="wire",
+            source_identity=_role_identity(),
+            config_digest=wire_role_index_configuration_digest(
+                replace(configuration, wire_min_hag_m=configuration.wire_min_hag_m + 0.5)
+            ),
+            source_point_count=24,
+        )
+    with pytest.raises(RoleTileCacheError, match="ROLE_TILE_CACHE_SOURCE_MISMATCH"):
+        RoleSpecificTileCache.load(
+            cache.root,
+            role="wire",
+            source_identity={**_role_identity(), "source_identity_record_digest": "c" * 64},
+            config_digest=changed_wire_digest,
+            source_point_count=24,
+        )
+
+
 def test_five_metre_index_binds_and_historical_forty_metre_index_is_rejected(tmp_path: Path):
     region = _role_region(tmp_path, "source", ((0.0, 0.0, 1.0),), (1,))
     five = RoleSpecificTileCache.prepare_from_raw_region(
@@ -497,7 +554,8 @@ def test_unique_source_indices_conserve_records_and_preserve_half_open_boundary(
     [(-1,), (105,), (106,), (105_000_000,), (-1, 0), (104, 105)],
 )
 def test_source_index_range_rejects_invalid_values_before_publication(
-    tmp_path: Path, source_indices,
+    tmp_path: Path,
+    source_indices,
 ):
     points = tuple((float(index), 0.0, 1.0) for index in range(len(source_indices)))
     region = _role_region(tmp_path, "invalid-range", points, source_indices)
@@ -718,7 +776,8 @@ def test_load_rejects_invalid_actual_persisted_identity(tmp_path: Path, source_i
 
 
 def test_load_memoizes_actual_identity_validation_and_invalidates_on_content_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     import algorithms.spans.role_tiles as role_tiles
 
@@ -852,9 +911,7 @@ def test_long_line_role_indexes_route_wire_and_vegetation_locally(tmp_path: Path
         "source_content_identity_digest": "e" * 64,
         "source_identity_record_digest": "f" * 64,
     }
-    frame = SpanLocalFrame.from_endpoints(
-        (0.0, 0.0, 0.0), (1000.0, 1000.0, 0.0), (0.0, 0.0, 0.0)
-    )
+    frame = SpanLocalFrame.from_endpoints((0.0, 0.0, 0.0), (1000.0, 1000.0, 0.0), (0.0, 0.0, 0.0))
     spec = SpanRegionSpec("role", 2.0, 10.0, 10.0, 0.0, 5.0)
     for role in ("wire", "vegetation"):
         cache = RoleSpecificTileCache.prepare_from_raw_region(

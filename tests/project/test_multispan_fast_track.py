@@ -96,7 +96,9 @@ def test_analysis_input_serializes_explicit_endpoint_and_source_authority():
         span_geometry={"length_m": 10},
         science_configuration_digest=digest,
         risk_configuration_digest=digest,
-        validated_source_preparation_references=("artifacts/project-runs/source-shared/preparation.json",),
+        validated_source_preparation_references=(
+            "artifacts/project-runs/source-shared/preparation.json",
+        ),
     )
 
     dumped = value.to_dict()
@@ -105,12 +107,13 @@ def test_analysis_input_serializes_explicit_endpoint_and_source_authority():
     assert dumped["validated_source_preparation_references"]
 
 
-def test_span_region_configuration_preserves_project_and_tracked_provenance():
+def test_span_region_configuration_uses_one_authoritative_span_corridor():
     configuration = span_region_configuration()
-    assert configuration["vegetation_search_region"]["half_width_m"] == 20.0
-    assert configuration["vegetation_search_region"]["longitudinal_halo_m"] == 30.0
-    assert configuration["vegetation_search_region"]["configuration_digest"] == (
-        "79d6e9a201e0f195e7e90ef138f26e57289198f04fe6712dd65c90f41469c0c2"
+    assert configuration["vegetation_search_region"]["half_width_m"] == 9.0
+    assert configuration["vegetation_search_region"]["longitudinal_halo_m"] == 6.0
+    assert (
+        configuration["vegetation_search_region"]["source"]
+        == "tracked FastBaselineConfig span corridor"
     )
     assert configuration["wire_region"]["half_width_m"] == 9.0
     assert configuration["wire_region"]["longitudinal_halo_m"] == 6.0
@@ -162,10 +165,105 @@ def test_reconciliation_uses_span_list_position_not_authoritative_span_id():
         ),
     )
 
-    result = reconcile_trees(
-        [outcome], FastBaselineConfig(), origin_xyz=(0.0, 0.0, 0.0)
-    )
+    result = reconcile_trees([outcome], FastBaselineConfig(), origin_xyz=(0.0, 0.0, 0.0))
 
     assert result.final_tree_count == 1
     assert result.global_tree_records[0].span_id == 1
     assert result.diagnostics["single_span_fast_path"] is True
+
+
+def _cross_span_outcome(span, tree_records, original_index, xyz, tree_id, in_core):
+    return SimpleNamespace(
+        span=span,
+        tree_records=tuple(tree_records),
+        raw_original_index=np.asarray(original_index, dtype=np.int64),
+        raw_xyz_local_m=np.asarray(xyz, dtype=np.float64),
+        raw_tree_id=np.asarray(tree_id, dtype=np.int32),
+        in_core=np.asarray(in_core, dtype=bool),
+    )
+
+
+def _cross_span_record(span_id, start_x, end_x):
+    return SimpleNamespace(
+        line_id=0,
+        line_name="TowerLine",
+        span_id=span_id,
+        span_name=f"S{span_id + 1:03d}",
+        start_xyz_absolute_m=(start_x, 0.0, 0.0),
+        end_xyz_absolute_m=(end_x, 0.0, 0.0),
+        length_m=end_x - start_x,
+        half_width_m=9.0,
+    )
+
+
+def test_cross_span_tree_has_one_stable_owner_and_halo_is_context_only():
+    """Tower A--S005--B--S006--C keeps one physical crown as one entity."""
+    s005 = _cross_span_record(4, 0.0, 10.0)
+    s006 = _cross_span_record(5, 10.0, 20.0)
+    s005_outcome = _cross_span_outcome(
+        s005,
+        (
+            {"tree_id": 0, "apex_xy_local_m": [3.0, 0.0, 12.0], "apex_height_m": 12.0},
+            {"tree_id": 1, "apex_xy_local_m": [9.5, 0.0, 13.0], "apex_height_m": 13.0},
+        ),
+        (100, 101, 102, 200, 201, 202),
+        (
+            (3.0, 0.0, 9.0),
+            (3.1, 0.0, 10.0),
+            (2.9, 0.0, 12.0),
+            (9.5, 0.0, 10.0),
+            (9.7, 0.0, 11.0),
+            (9.4, 0.0, 13.0),
+        ),
+        (0, 0, 0, 1, 1, 1),
+        (True, True, True, True, True, True),
+    )
+    s006_outcome = _cross_span_outcome(
+        s006,
+        (
+            # This is the S005 crown seen only through S006's backward halo.
+            {"tree_id": 0, "apex_xy_local_m": [9.5, 0.0, 13.0], "apex_height_m": 13.0},
+            {"tree_id": 1, "apex_xy_local_m": [15.0, 0.0, 11.0], "apex_height_m": 11.0},
+        ),
+        (200, 201, 202, 300, 301, 302),
+        (
+            (9.5, 0.0, 10.0),
+            (9.7, 0.0, 11.0),
+            (9.4, 0.0, 13.0),
+            (15.0, 0.0, 8.0),
+            (15.2, 0.0, 9.0),
+            (14.9, 0.0, 11.0),
+        ),
+        (0, 0, 0, 1, 1, 1),
+        (False, False, False, True, True, True),
+    )
+
+    forward = reconcile_trees(
+        [s005_outcome, s006_outcome], FastBaselineConfig(), origin_xyz=(0.0, 0.0, 0.0)
+    )
+    reverse = reconcile_trees(
+        [s006_outcome, s005_outcome], FastBaselineConfig(), origin_xyz=(0.0, 0.0, 0.0)
+    )
+
+    assert forward.final_tree_count == 3
+    shared = next(
+        record for record in forward.global_tree_records if record.apex_xy_local_m[0] == 9.5
+    )
+    assert shared.span_id == 4
+    assert shared.full_resolution_point_count == 3
+    assert shared.core_point_count == 3
+    assert len(shared.merged_span_tree_keys) == 2
+    # A selected S006 run observes the old crown as context but cannot allocate it.
+    assert (
+        reconcile_trees(
+            [s006_outcome], FastBaselineConfig(), origin_xyz=(0.0, 0.0, 0.0)
+        ).final_tree_count
+        == 1
+    )
+    assert [
+        (record.span_id, record.apex_xy_local_m, record.full_resolution_point_count)
+        for record in forward.global_tree_records
+    ] == [
+        (record.span_id, record.apex_xy_local_m, record.full_resolution_point_count)
+        for record in reverse.global_tree_records
+    ]

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -20,15 +21,14 @@ from core.config.fast_baseline import FastBaselineConfig, canonical_digest
 from algorithms.poles.topology import SpanRecord
 from algorithms.spans.clearance import run_span_tree_wire_clearance
 from algorithms.spans.project_adapter import (
-    PROJECT_SPAN_CORE_HALF_WIDTH_M,
     PROJECT_SPAN_GEOMETRY_CONFIGURATION_DIGEST,
-    PROJECT_SPAN_LONGITUDINAL_HALO_M,
     PROJECT_SPAN_VEGETATION_ROLE_CONFIGURATION_DIGEST,
     RISK_THRESHOLD_M,
     ScienceAdapterError,
     SourceSharedPreparation,
     SpanAnalysisInput,
     SpanScienceResult,
+    wire_role_index_configuration_digest,
 )
 from algorithms.spans.reconcile import reconcile_trees, reconciliation_to_dict
 from algorithms.spans.region import (
@@ -187,7 +187,7 @@ def _tile_cache_from_preparation(
     root = _resolve_directory_reference(project_root, reference)
     try:
         if role == "wire":
-            config_digest = FastBaselineConfig().computed_digest()
+            config_digest = wire_role_index_configuration_digest()
         elif role == "vegetation":
             # HIGH-RECALL vegetation admission: no broad wire-role exclusion is
             # bound at the source-shared role-index level.
@@ -211,6 +211,8 @@ def run_tracked_canonical_span_science(
     input_data: SpanAnalysisInput,
     preparation: SourceSharedPreparation,
     output_root: Path,
+    *,
+    cancellation_requested: Callable[[], bool] | None = None,
 ) -> SpanScienceResult:
     """Run one project Span through the existing tracked science modules."""
 
@@ -223,9 +225,7 @@ def run_tracked_canonical_span_science(
         raise ScienceAdapterError("SOURCE_SHARED_PREPARATION_NOT_READY")
 
     role_index_started = time.perf_counter()
-    wire_tile_cache = _tile_cache_from_preparation(
-        project_root, payload, input_data, "wire"
-    )
+    wire_tile_cache = _tile_cache_from_preparation(project_root, payload, input_data, "wire")
     # Vegetation is HIGH RECALL: the source-shared vegetation role index is
     # built WITHOUT any wire-role source exclusion.  Broad wire candidate /
     # search points may overlap vegetation candidates.  Only the EXACT final
@@ -264,9 +264,9 @@ def run_tracked_canonical_span_science(
     )
     vegetation_spec = SpanRegionSpec(
         role="vegetation-search",
-        half_width_m=PROJECT_SPAN_CORE_HALF_WIDTH_M,
-        longitudinal_before_m=PROJECT_SPAN_LONGITUDINAL_HALO_M,
-        longitudinal_after_m=PROJECT_SPAN_LONGITUDINAL_HALO_M,
+        half_width_m=config.span_half_width_m,
+        longitudinal_before_m=config.span_halo_m,
+        longitudinal_after_m=config.span_halo_m,
         z_min_m=float(span.halo_bounds_min_xyz[2]),
         z_max_m=float(span.halo_bounds_max_xyz[2]),
     )
@@ -300,9 +300,7 @@ def run_tracked_canonical_span_science(
     # Subtract ONLY the exact FINAL confirmed conductor member source indices
     # from the Span-local vegetation tree input.  Broad wire candidate / search
     # points that are not exact confirmed conductor members stay in vegetation.
-    confirmed_wire_indices = np.asarray(
-        wire_result.confirmed_member_source_index, dtype=np.int64
-    )
+    confirmed_wire_indices = np.asarray(wire_result.confirmed_member_source_index, dtype=np.int64)
     if confirmed_wire_indices.ndim != 1 or np.any(confirmed_wire_indices < 0):
         raise ScienceAdapterError("CONFIRMED_CONDUCTOR_SOURCE_IDENTITY_INVALID")
     if len(confirmed_wire_indices) != len(np.unique(confirmed_wire_indices)):
@@ -392,11 +390,23 @@ def run_tracked_canonical_span_science(
     tree_runtime = time.perf_counter() - tree_started
 
     clearance_started = time.perf_counter()
-    clearance = run_span_tree_wire_clearance(reconciled, [wire_result], config)
+    clearance = run_span_tree_wire_clearance(
+        reconciled,
+        [wire_result],
+        config,
+        danger_threshold_m=RISK_THRESHOLD_M,
+        cancellation_requested=cancellation_requested,
+    )
     clearance_runtime = time.perf_counter() - clearance_started
 
     def _publish_identity_terminal(assigned):
-        terminal_clearance = run_span_tree_wire_clearance(assigned, [wire_result], config)
+        terminal_clearance = run_span_tree_wire_clearance(
+            assigned,
+            [wire_result],
+            config,
+            danger_threshold_m=RISK_THRESHOLD_M,
+            cancellation_requested=cancellation_requested,
+        )
         _write_json(output_root / "reconciliation.json", reconciliation_to_dict(assigned))
         _write_json(
             output_root / "clearance.json",
@@ -405,6 +415,7 @@ def run_tracked_canonical_span_science(
                 "status": terminal_clearance.status,
                 "global_minimum_clearance_m": terminal_clearance.global_minimum_clearance_m,
                 "records": [record.to_dict() for record in terminal_clearance.records],
+                "danger_points": [point.to_dict() for point in terminal_clearance.danger_points],
                 "diagnostics": dict(terminal_clearance.diagnostics),
             },
         )
@@ -412,8 +423,7 @@ def run_tracked_canonical_span_science(
 
     threshold = RISK_THRESHOLD_M
     below_threshold = sum(
-        record.minimum_clearance_m is not None
-        and record.minimum_clearance_m < threshold
+        record.minimum_clearance_m is not None and record.minimum_clearance_m < threshold
         for record in clearance.records
     )
     risk_counts = {
@@ -472,9 +482,7 @@ def run_tracked_canonical_span_science(
                     "points_after_mask": int(vegetation_query.oriented_region_points),
                 },
                 "wire_region_points": int(wire_query.oriented_region_points),
-                "vegetation_search_region_points": int(
-                    vegetation_query.oriented_region_points
-                ),
+                "vegetation_search_region_points": int(vegetation_query.oriented_region_points),
                 "vegetation_before_confirmed_wire_exclusion": int(
                     vegetation_before_confirmed_wire_exclusion
                 ),
@@ -484,9 +492,7 @@ def run_tracked_canonical_span_science(
                     vegetation_after_confirmed_wire_exclusion
                 ),
                 "vegetation_candidates": int(tree_outcome.fine_representative_count),
-                "full_resolution_vegetation_points": int(
-                    vegetation_query.oriented_region_points
-                ),
+                "full_resolution_vegetation_points": int(vegetation_query.oriented_region_points),
                 "tree_instances": int(reconciled.final_tree_count),
                 "tree_associated_raw_points": int(tree_outcome.assigned_raw_point_count),
                 "wire_vegetation_source_overlap_in_tree_input": (

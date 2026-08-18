@@ -11,11 +11,13 @@ NON_CERTIFIED and never claims Formal approval.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 from core.config.fast_baseline import FastBaselineConfig
+from scipy.spatial import cKDTree
 
 from algorithms.spans.reconcile import TreeReconciliationResult
 from algorithms.spans.wire import SpanWireResult
@@ -38,10 +40,19 @@ SPAN_CLEARANCE_SCHEMA = "fast-baseline-span-clearance-v1"
 # larger/future bundles until another benchmark justifies extending it.
 DIRECT_EDGE_CAP = 256
 DIRECT_CHUNK_SIZE = 65_536
+# This is deliberately a point chunk, not a point-by-edge matrix size.  The
+# candidate backend only holds ``chunk_size * candidate_count`` temporaries.
+CLEARANCE_CHUNK_SIZE = 32_768
+CANDIDATE_INITIAL_K = 16
+CANDIDATE_FALLBACK_CAP = 64
 
 VALID = "VALID"
 BLOCKED = "BLOCKED"
 NO_DISTANCE_READY_EDGE = "NO_DISTANCE_READY_EDGE"
+
+
+class ClearanceCancelled(RuntimeError):
+    """Raised at a clearance chunk boundary when the owner cancels a run."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +73,7 @@ class SpanTreeWireRecord:
     evaluated_edge_count: int
     status: str
     persistent_tree_id: str | None = None
+    danger_point_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -87,6 +99,25 @@ class SpanTreeWireRecord:
             "tree_point_count": self.tree_point_count,
             "evaluated_edge_count": self.evaluated_edge_count,
             "status": self.status,
+            "danger_point_count": self.danger_point_count,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SpanDangerPoint:
+    """A single exact-danger observation; no scene-wide distance array is kept."""
+
+    global_tree_id: int
+    persistent_tree_id: str | None
+    original_index: int
+    xyz_local_m: tuple[float, float, float]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "global_tree_id": self.global_tree_id,
+            "persistent_tree_id": self.persistent_tree_id,
+            "original_index": self.original_index,
+            "xyz_local_m": list(self.xyz_local_m),
         }
 
 
@@ -99,6 +130,7 @@ class SpanClearanceResult:
     global_minimum_clearance_m: float | None
     edge_count: int
     diagnostics: dict[str, Any]
+    danger_points: tuple[SpanDangerPoint, ...] = ()
 
 
 def _concatenate_span_wire_edges(
@@ -119,9 +151,7 @@ def _concatenate_span_wire_edges(
         wire_offsets.append(total_wires)
         total_wires += int(result.w1_arrays.get("wire_id", np.empty(0)).shape[0])
         sample_offsets.append(total_samples)
-        total_samples += int(
-            result.w1_arrays.get("sampled_curve_xyz", np.empty((0, 3))).shape[0]
-        )
+        total_samples += int(result.w1_arrays.get("sampled_curve_xyz", np.empty((0, 3))).shape[0])
     keys = (
         "wire_id",
         "wire_status",
@@ -177,13 +207,9 @@ def _concatenate_span_wire_edges(
         for wire_position in range(local_wires):
             new_wire_id.append(offset + wire_position)
         base_wo = result.w1_arrays.get("wire_segment_offsets", np.zeros(1, dtype=np.int64))
-        new_wire_segment_offsets.extend(
-            int(value) + wire_cursor for value in np.asarray(base_wo)
-        )
+        new_wire_segment_offsets.extend(int(value) + wire_cursor for value in np.asarray(base_wo))
         base_so = result.w1_arrays.get("sampled_curve_offsets", np.zeros(1, dtype=np.int64))
-        new_sampled_offsets.extend(
-            int(value) + sample_cursor for value in np.asarray(base_so)
-        )
+        new_sampled_offsets.extend(int(value) + sample_cursor for value in np.asarray(base_so))
         segment_cursor += local_segments
         wire_cursor += local_wires
         sample_cursor += local_samples
@@ -262,9 +288,10 @@ def _direct_nearest_edges(
             if edge_denom[edge_position] == 0.0:
                 t = np.zeros(len(p), dtype=np.float64)
             else:
-                t = np.einsum("ij,j->i", p - a_xyz[edge_position], d) / edge_denom_safe[
-                    edge_position
-                ]
+                t = (
+                    np.einsum("ij,j->i", p - a_xyz[edge_position], d)
+                    / edge_denom_safe[edge_position]
+                )
                 np.clip(t, 0.0, 1.0, out=t)
             q = a_xyz[edge_position] + t[:, None] * d
             delta = p - q
@@ -287,6 +314,152 @@ def _direct_nearest_edges(
     return selected_edge, selected_distance, selected_q, selected_t, len(xyz) * edge_count
 
 
+def _candidate_exact_nearest_edges(
+    points: np.ndarray,
+    bvh: SegmentEdgeBvh,
+    edge_bundle: Any,
+    tolerance: float,
+    *,
+    initial_k: int = CANDIDATE_INITIAL_K,
+    fallback_cap: int = CANDIDATE_FALLBACK_CAP,
+    workers: int = 1,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, dict[str, int]]:
+    """Batch exact nearest-edge search with a conservative midpoint certificate.
+
+    A midpoint KD-tree is used only to *order* exact segment candidates.  For a
+    segment midpoint ``M`` and half length ``h``, ``dist(P, segment)`` is at
+    least ``max(0, dist(P, M) - h)``.  The next unvisited midpoint distance and
+    the largest segment half-length therefore provide a conservative bound for
+    every unvisited segment.  Equality never prunes, preserving the frozen
+    tolerance/tie rule.  Points that cannot be certified within a bounded
+    candidate set fall back to the existing reference BVH.
+    """
+
+    xyz = np.asarray(points, dtype=np.float64)
+    if xyz.ndim != 2 or xyz.shape[1] != 3:
+        raise ValueError("points must have shape (N, 3)")
+    edge_count = int(edge_bundle.edge_count)
+    if edge_count <= 0:
+        raise ValueError("at least one edge is required")
+    if type(initial_k) is not int or initial_k <= 0:
+        raise ValueError("initial_k must be a positive integer")
+    if type(fallback_cap) is not int or fallback_cap <= 0:
+        raise ValueError("fallback_cap must be a positive integer")
+    if type(workers) is not int or workers == 0:
+        raise ValueError("workers must be a non-zero integer")
+
+    a_xyz = np.asarray(edge_bundle.a_xyz, dtype=np.float64)
+    b_xyz = np.asarray(edge_bundle.b_xyz, dtype=np.float64)
+    edge_d = b_xyz - a_xyz
+    denominator = np.einsum("ij,ij->i", edge_d, edge_d)
+    denominator_safe = np.where(denominator == 0.0, 1.0, denominator)
+    midpoint = 0.5 * (a_xyz + b_xyz)
+    half_length = 0.5 * np.sqrt(denominator)
+    maximum_half_length = float(np.max(half_length))
+    tree = cKDTree(midpoint)
+    canonical_rank = np.empty(edge_count, dtype=np.int64)
+    canonical_rank[_edge_order_by_key(edge_bundle)] = np.arange(edge_count, dtype=np.int64)
+
+    selected_edge = np.empty(len(xyz), dtype=np.int64)
+    selected_distance = np.empty(len(xyz), dtype=np.float64)
+    selected_q = np.empty((len(xyz), 3), dtype=np.float64)
+    selected_t = np.empty(len(xyz), dtype=np.float64)
+    unresolved = np.arange(len(xyz), dtype=np.int64)
+    k = min(edge_count, initial_k)
+    evaluated_total = 0
+    certificate_success = 0
+    fallback_points = 0
+    expansion_rounds = 0
+
+    while len(unresolved):
+        active = xyz[unresolved]
+        midpoint_distance, candidate_edge = tree.query(active, k=k, workers=workers)
+        if k == 1:
+            midpoint_distance = np.asarray(midpoint_distance, dtype=np.float64)[:, None]
+            candidate_edge = np.asarray(candidate_edge, dtype=np.int64)[:, None]
+        else:
+            midpoint_distance = np.asarray(midpoint_distance, dtype=np.float64)
+            candidate_edge = np.asarray(candidate_edge, dtype=np.int64)
+        if candidate_edge.ndim != 2 or candidate_edge.shape != (len(active), k):
+            raise ValueError("midpoint candidate query returned an invalid shape")
+        candidate_a = a_xyz[candidate_edge]
+        candidate_d = edge_d[candidate_edge]
+        candidate_denominator = denominator[candidate_edge]
+        t = np.einsum("nkj,nkj->nk", active[:, None, :] - candidate_a, candidate_d)
+        t /= denominator_safe[candidate_edge]
+        t[candidate_denominator == 0.0] = 0.0
+        np.clip(t, 0.0, 1.0, out=t)
+        q = candidate_a + t[:, :, None] * candidate_d
+        delta = active[:, None, :] - q
+        distance = np.sqrt(np.einsum("nkj,nkj->nk", delta, delta))
+        best_column = np.zeros(len(active), dtype=np.int64)
+        best_distance = distance[:, 0].copy()
+        best_rank = canonical_rank[candidate_edge[:, 0]].copy()
+        for column in range(1, k):
+            current_distance = distance[:, column]
+            current_rank = canonical_rank[candidate_edge[:, column]]
+            within_tie = np.abs(current_distance - best_distance) <= tolerance
+            better = current_distance < best_distance - tolerance
+            better |= within_tie & (current_rank < best_rank)
+            if np.any(better):
+                best_column[better] = column
+                best_distance[better] = current_distance[better]
+                best_rank[better] = current_rank[better]
+        rows = np.arange(len(active), dtype=np.int64)
+        best_edge = candidate_edge[rows, best_column]
+        best_q = q[rows, best_column]
+        best_t = t[rows, best_column]
+        evaluated_total += int(len(active) * k)
+
+        # If all edges have been refined the result is exact without a BVH.
+        if k == edge_count:
+            certified = np.ones(len(active), dtype=bool)
+        else:
+            lower_bound_unvisited = np.maximum(0.0, midpoint_distance[:, -1] - maximum_half_length)
+            # Strictly greater is required: an equal lower bound can still
+            # produce a tolerance tie whose canonical edge key wins.
+            certified = lower_bound_unvisited > best_distance + tolerance
+        if np.any(certified):
+            target = unresolved[certified]
+            selected_edge[target] = best_edge[certified]
+            selected_distance[target] = best_distance[certified]
+            selected_q[target] = best_q[certified]
+            selected_t[target] = best_t[certified]
+            certificate_success += int(np.count_nonzero(certified))
+        unresolved = unresolved[~certified]
+        if not len(unresolved):
+            break
+        if k < min(edge_count, fallback_cap):
+            k = min(edge_count, max(k + 1, k * 2), fallback_cap)
+            expansion_rounds += 1
+            continue
+        # Keep the existing deterministic segment-AABB implementation as the
+        # reference/fallback for the geometries a midpoint certificate cannot
+        # prove cheaply.
+        for target in unresolved:
+            edge, value, nearest, parameter, evaluated = bvh.nearest_edge(xyz[target], tolerance)
+            selected_edge[target] = edge
+            selected_distance[target] = value
+            selected_q[target] = nearest
+            selected_t[target] = parameter
+            evaluated_total += evaluated
+            fallback_points += 1
+        unresolved = np.empty(0, dtype=np.int64)
+
+    return (
+        selected_edge,
+        selected_distance,
+        selected_q,
+        selected_t,
+        evaluated_total,
+        {
+            "certificate_success_points": certificate_success,
+            "fallback_points": fallback_points,
+            "candidate_expansion_rounds": expansion_rounds,
+        },
+    )
+
+
 def _nearest_edges(
     points: np.ndarray,
     bvh: SegmentEdgeBvh,
@@ -294,11 +467,19 @@ def _nearest_edges(
     tolerance: float,
     *,
     backend: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
+    candidate_workers: int = 1,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, dict[str, int]]:
     """Dispatch one tree's exact distance search to the selected backend."""
 
     if backend == "NUMPY_DIRECT":
-        return _direct_nearest_edges(points, edge_bundle, tolerance)
+        edge, distance, nearest, parameter, evaluated = _direct_nearest_edges(
+            points, edge_bundle, tolerance
+        )
+        return edge, distance, nearest, parameter, evaluated, {}
+    if backend == "SCIPY_CANDIDATE_EXACT":
+        return _candidate_exact_nearest_edges(
+            points, bvh, edge_bundle, tolerance, workers=candidate_workers
+        )
     if backend != "PYTHON_BVH":
         raise ValueError(f"unknown clearance backend: {backend}")
     edge_positions = np.empty(len(points), dtype=np.int64)
@@ -313,7 +494,7 @@ def _nearest_edges(
         nearest[position] = q
         parameters[position] = t
         evaluated_total += evaluated
-    return edge_positions, distances, nearest, parameters, evaluated_total
+    return edge_positions, distances, nearest, parameters, evaluated_total, {}
 
 
 def run_span_tree_wire_clearance(
@@ -322,18 +503,29 @@ def run_span_tree_wire_clearance(
     config: FastBaselineConfig,
     *,
     backend: str | None = None,
+    danger_threshold_m: float | None = None,
+    chunk_size: int = CLEARANCE_CHUNK_SIZE,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    cancellation_requested: Callable[[], bool] | None = None,
+    candidate_workers: int = 1,
 ) -> SpanClearanceResult:
     """Compute full-resolution tree-wire clearance per span, fail closed.
 
-    Wire curves come from the FAST span wire pipeline; trees are the
-    reconciled full-resolution raw memberships.  The exact BVH /
-    point-to-segment engine is reused unchanged.
+    Wire curves come from the FAST span wire pipeline; trees are reconciled
+    full-resolution raw memberships.  The default backend is batched exact
+    candidate search; the original BVH is retained as an explicit reference
+    backend and as a candidate fallback.  Only per-tree minima and exact
+    danger observations survive the streaming pass.
     """
 
     started = time.perf_counter()
-    arrays, distance_ready_segments, total_wires = _concatenate_span_wire_edges(
-        wire_results
-    )
+    if type(chunk_size) is not int or chunk_size <= 0:
+        raise ValueError("chunk_size must be a positive integer")
+    if danger_threshold_m is not None and (
+        not np.isfinite(danger_threshold_m) or danger_threshold_m <= 0.0
+    ):
+        raise ValueError("danger_threshold_m must be a finite positive number or None")
+    arrays, distance_ready_segments, total_wires = _concatenate_span_wire_edges(wire_results)
     edge_bundle = build_wire_edge_bundle(arrays)
     edge_count = edge_bundle.edge_count
     records: list[SpanTreeWireRecord] = []
@@ -387,19 +579,23 @@ def run_span_tree_wire_clearance(
         )
 
     bvh = SegmentEdgeBvh(edge_bundle, config.clearance_bvh_leaf_cap)
-    selected_backend = backend or (
-        "NUMPY_DIRECT" if edge_count <= DIRECT_EDGE_CAP else "PYTHON_BVH"
-    )
-    if selected_backend not in {"NUMPY_DIRECT", "PYTHON_BVH"}:
+    selected_backend = backend or "SCIPY_CANDIDATE_EXACT"
+    if selected_backend not in {"NUMPY_DIRECT", "PYTHON_BVH", "SCIPY_CANDIDATE_EXACT"}:
         raise ValueError(f"unknown clearance backend: {selected_backend}")
     # Group final members by global tree id (deterministic).
     final_tree = np.asarray(reconciled.final_tree_id, dtype=np.int32)
     final_xyz = np.asarray(reconciled.final_xyz_local_m, dtype=np.float64)
     final_original = np.asarray(reconciled.final_original_index, dtype=np.int64)
-    tree_ids_to_process = sorted(
-        set(int(value) for value in final_tree if value >= 0)
-    )
-    for tree_id in tree_ids_to_process:
+    tree_ids_to_process = sorted(set(int(value) for value in final_tree if value >= 0))
+    total_points = int(len(final_xyz))
+    processed_points = 0
+    danger_points: list[SpanDangerPoint] = []
+    candidate_diagnostics = {
+        "certificate_success_points": 0,
+        "fallback_points": 0,
+        "candidate_expansion_rounds": 0,
+    }
+    for tree_ordinal, tree_id in enumerate(tree_ids_to_process, start=1):
         rows = np.flatnonzero(final_tree == tree_id)
         point_count = int(len(rows))
         best_distance: float | None = None
@@ -408,34 +604,109 @@ def run_span_tree_wire_clearance(
         best_original = -1
         best_point: np.ndarray | None = None
         evaluated_total = 0
-        points = final_xyz[rows]
-        edge_positions, distances, nearest_xyz, _parameters, evaluated_total = _nearest_edges(
-            points,
-            bvh,
-            edge_bundle,
-            config.clearance_tie_tolerance_m,
-            backend=selected_backend,
-        )
-        for local_position, position in enumerate(rows):
+        danger_count = 0
+        for local_start in range(0, point_count, chunk_size):
+            if cancellation_requested is not None and cancellation_requested():
+                raise ClearanceCancelled("CLEARANCE_CANCELLED_AT_CHUNK_BOUNDARY")
+            local_stop = min(local_start + chunk_size, point_count)
+            chunk_rows = rows[local_start:local_stop]
+            (
+                edge_positions,
+                distances,
+                nearest_xyz,
+                _parameters,
+                evaluated,
+                backend_diagnostics,
+            ) = _nearest_edges(
+                final_xyz[chunk_rows],
+                bvh,
+                edge_bundle,
+                config.clearance_tie_tolerance_m,
+                backend=selected_backend,
+                candidate_workers=candidate_workers,
+            )
+            evaluated_total += evaluated
+            for name, value in backend_diagnostics.items():
+                candidate_diagnostics[name] = candidate_diagnostics.get(name, 0) + int(value)
+            # A chunk contributes one deterministic minimum candidate.  This
+            # avoids another 29M-row Python reduction loop while retaining the
+            # frozen tolerance then canonical wire/segment/edge/source key.
+            local_minimum = float(np.min(distances))
+            local_candidates = np.flatnonzero(
+                distances <= local_minimum + config.clearance_tie_tolerance_m
+            )
+            if len(local_candidates) > 1:
+                candidate_edges = edge_positions[local_candidates]
+                candidate_original = final_original[chunk_rows[local_candidates]]
+                candidate_order = np.lexsort(
+                    (
+                        candidate_original,
+                        edge_bundle.polyline_edge_index[candidate_edges],
+                        edge_bundle.segment_index[candidate_edges],
+                        edge_bundle.wire_id[candidate_edges],
+                    )
+                )
+                local_position = int(local_candidates[candidate_order[0]])
+            else:
+                local_position = int(local_candidates[0])
+            position = int(chunk_rows[local_position])
             edge_position = int(edge_positions[local_position])
             distance = float(distances[local_position])
-            q = nearest_xyz[local_position]
-            point = final_xyz[position]
-            original_index = int(final_original[position])
             key = (
                 int(edge_bundle.wire_id[edge_position]),
                 int(edge_bundle.segment_index[edge_position]),
                 int(edge_bundle.polyline_edge_index[edge_position]),
-                original_index,
+                int(final_original[position]),
             )
             if candidate_better(
                 distance, key, best_distance, best_key, config.clearance_tie_tolerance_m
             ):
                 best_distance = distance
                 best_key = key
-                best_q = q
-                best_original = original_index
-                best_point = point
+                best_q = nearest_xyz[local_position]
+                best_original = int(final_original[position])
+                best_point = final_xyz[position]
+            if danger_threshold_m is not None:
+                danger_positions = np.flatnonzero(distances <= danger_threshold_m)
+                danger_count += int(len(danger_positions))
+                persistent_tree_id = record_by_tree.get(tree_id, {}).get("persistent_tree_id")
+                danger_points.extend(
+                    SpanDangerPoint(
+                        global_tree_id=tree_id,
+                        persistent_tree_id=persistent_tree_id,
+                        original_index=int(final_original[int(chunk_rows[local_position])]),
+                        xyz_local_m=tuple(
+                            float(value) for value in final_xyz[int(chunk_rows[local_position])]
+                        ),
+                    )
+                    for local_position in danger_positions
+                )
+            processed_points += len(chunk_rows)
+            if progress_callback is not None:
+                elapsed = time.perf_counter() - started
+                throughput = processed_points / elapsed if elapsed > 0.0 else None
+                eta = (
+                    (total_points - processed_points) / throughput
+                    if throughput and processed_points < total_points
+                    else 0.0
+                )
+                progress_callback(
+                    {
+                        "stage": "clearance",
+                        "processed_points": processed_points,
+                        "total_points": total_points,
+                        "percent": (
+                            100.0 * processed_points / total_points if total_points else 100.0
+                        ),
+                        "current_tree_id": tree_id,
+                        "current_tree_ordinal": tree_ordinal,
+                        "tree_count": len(tree_ids_to_process),
+                        "current_chunk": local_start // chunk_size + 1,
+                        "elapsed_seconds": elapsed,
+                        "recent_throughput_points_per_second": throughput,
+                        "eta_seconds": eta,
+                    }
+                )
         tree_context = record_by_tree.get(tree_id, {})
         records.append(
             SpanTreeWireRecord(
@@ -448,9 +719,7 @@ def run_span_tree_wire_clearance(
                 minimum_clearance_m=best_distance,
                 nearest_tree_original_index=best_original,
                 nearest_tree_xyz_local_m=(
-                    None
-                    if best_point is None
-                    else tuple(float(value) for value in best_point)
+                    None if best_point is None else tuple(float(value) for value in best_point)
                 ),
                 nearest_wire_xyz_local_m=(
                     None if best_q is None else tuple(float(value) for value in best_q)
@@ -459,6 +728,7 @@ def run_span_tree_wire_clearance(
                 evaluated_edge_count=evaluated_total,
                 status=VALID,
                 persistent_tree_id=tree_context.get("persistent_tree_id"),
+                danger_point_count=danger_count,
             )
         )
     valid_values = [
@@ -480,17 +750,27 @@ def run_span_tree_wire_clearance(
             "tree_count": len(records),
             "evaluated_edge_total": sum(record.evaluated_edge_count for record in records),
             "backend": selected_backend,
-            "chunk_size": DIRECT_CHUNK_SIZE if selected_backend == "NUMPY_DIRECT" else None,
+            "chunk_size": chunk_size,
+            "candidate_workers": (
+                candidate_workers if selected_backend == "SCIPY_CANDIDATE_EXACT" else None
+            ),
+            "danger_threshold_m": danger_threshold_m,
+            "danger_point_count": len(danger_points),
+            "full_per_point_clearance_stored": False,
+            **candidate_diagnostics,
             "clearance_broad_phase_points": int(len(final_xyz)),
             "clearance_exact_points": int(len(final_xyz)),
             "runtime_seconds": time.perf_counter() - started,
         },
+        danger_points=tuple(danger_points),
     )
 
 
 __all__ = [
     "SPAN_CLEARANCE_SCHEMA",
+    "ClearanceCancelled",
     "SpanTreeWireRecord",
+    "SpanDangerPoint",
     "SpanClearanceResult",
     "run_span_tree_wire_clearance",
 ]

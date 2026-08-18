@@ -25,6 +25,7 @@ from algorithms.spans.region import (
     SpanLocalFrame,
     SpanRegionQueryResult,
     SpanRegionSpec,
+    oriented_span_mask_absolute,
     subset_raw_region_oriented,
 )
 from algorithms.spans.tree import (
@@ -94,11 +95,30 @@ class SpanTreeOutcome:
 def _row_in_span_core(
     xyz_local_m: np.ndarray, span: SpanRecord, origin_xyz: tuple[float, float, float]
 ) -> np.ndarray:
-    core_min, core_max = _span_bounds_in_scene_local_frame(
-        span.core_bounds_min_xyz, span.core_bounds_max_xyz, origin_xyz
+    """Return ownership only for the exact oriented span core, never its AABB."""
+
+    # Narrow legacy/test adapter: callers that provide only bounds cannot
+    # express an oriented core, so retain their documented AABB conversion.
+    if not hasattr(span, "start_xyz_absolute_m") or not hasattr(span, "end_xyz_absolute_m"):
+        core_min, core_max = _span_bounds_in_scene_local_frame(
+            span.core_bounds_min_xyz, span.core_bounds_max_xyz, origin_xyz
+        )
+        return np.all(xyz_local_m >= core_min, axis=1) & np.all(xyz_local_m <= core_max, axis=1)
+    frame = SpanLocalFrame.from_endpoints(
+        span.start_xyz_absolute_m, span.end_xyz_absolute_m, origin_xyz
     )
-    return np.all(xyz_local_m >= core_min, axis=1) & np.all(
-        xyz_local_m <= core_max, axis=1
+    core = SpanRegionSpec(
+        role="span-core-ownership",
+        half_width_m=float(span.half_width_m),
+        longitudinal_before_m=0.0,
+        longitudinal_after_m=0.0,
+        z_min_m=float(span.core_bounds_min_xyz[2]),
+        z_max_m=float(span.core_bounds_max_xyz[2]),
+    )
+    return oriented_span_mask_absolute(
+        np.asarray(xyz_local_m, dtype=np.float64) + np.asarray(origin_xyz, dtype=np.float64),
+        frame,
+        core,
     )
 
 
@@ -245,7 +265,7 @@ def run_span_tree_pipeline(
         chm_occupied=chm.occupied,
         chm_origin_xy=np.asarray(chm.origin_xy, dtype=np.float64),
         chm_cell_size_m=np.asarray(chm.cell_size_m, dtype=np.float64),
-        crown_label= crowns.region_label_by_cell,
+        crown_label=crowns.region_label_by_cell,
         marker_seed_mask=crowns.marker_seed_mask,
         accepted_tops_xy=np.asarray(
             [list(top.xy_local_m) for top in tops.accepted], dtype=np.float64
@@ -281,9 +301,7 @@ def run_span_tree_pipeline(
     return outcome
 
 
-def load_span_tree_outcome(
-    span: SpanRecord, artifact_root: Any
-) -> SpanTreeOutcome:
+def load_span_tree_outcome(span: SpanRecord, artifact_root: Any) -> SpanTreeOutcome:
     """Reload a persisted per-span tree outcome from its artifact directory."""
 
     root = Path(artifact_root)
@@ -333,9 +351,7 @@ def _write_json(path: Any, payload: dict[str, Any]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), "utf-8"
-    )
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), "utf-8")
     temporary.replace(path)
 
 

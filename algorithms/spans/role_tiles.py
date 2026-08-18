@@ -104,9 +104,7 @@ def _validate_unique_source_indices(
         minimum_index = chunk_min if minimum_index is None else min(minimum_index, chunk_min)
         maximum_index = chunk_max if maximum_index is None else max(maximum_index, chunk_max)
         ordered = np.sort(indices)
-        if np.any(ordered[1:] == ordered[:-1]) or np.any(
-            seen[indices]
-        ):
+        if np.any(ordered[1:] == ordered[:-1]) or np.any(seen[indices]):
             raise RoleTileCacheError("ROLE_TILE_SOURCE_INDEX_DUPLICATE")
         seen[indices] = True
         unique_count += len(indices)
@@ -203,9 +201,7 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     temporary.replace(path)
 
 
-_ROLE_TILE_VALIDATION_CACHE: dict[
-    tuple[Any, ...], tuple[int, int, int | None, int | None]
-] = {}
+_ROLE_TILE_VALIDATION_CACHE: dict[tuple[Any, ...], tuple[int, int, int | None, int | None]] = {}
 
 
 def _validate_persisted_source_indices(
@@ -249,14 +245,10 @@ def _validate_persisted_source_indices(
                 block_min = int(np.min(indices))
                 block_max = int(np.max(indices))
                 minimum_index = (
-                    block_min
-                    if minimum_index is None
-                    else min(minimum_index, block_min)
+                    block_min if minimum_index is None else min(minimum_index, block_min)
                 )
                 maximum_index = (
-                    block_max
-                    if maximum_index is None
-                    else max(maximum_index, block_max)
+                    block_max if maximum_index is None else max(maximum_index, block_max)
                 )
         del records
         if records_seen != point_count:
@@ -350,9 +342,7 @@ class RoleSpecificTileCache:
         # region may be excluded at the source-shared role-index level.  Only the
         # exact final confirmed conductor members are subtracted later, per Span.
         if role == "vegetation" and excluded_source_indices is not None:
-            raise ValueError(
-                "vegetation role index must not carry a broad wire source exclusion"
-            )
+            raise ValueError("vegetation role index must not carry a broad wire source exclusion")
         if excluded_source_indices is None:
             if exclusion_role is not None or exclusion_source_index_digest is not None:
                 raise ValueError("exclusion metadata requires excluded source indices")
@@ -566,11 +556,11 @@ class RoleSpecificTileCache:
         if expected_source_index_exclusion is not None:
             if not isinstance(source_exclusion, dict):
                 raise RoleTileCacheError("ROLE_TILE_CACHE_EXCLUSION_MISMATCH")
-            if (
-                source_exclusion.get("role") != expected_source_index_exclusion.get("role")
-                or source_exclusion.get("reference_source_index_digest")
-                != expected_source_index_exclusion.get("source_index_digest")
-            ):
+            if source_exclusion.get("role") != expected_source_index_exclusion.get(
+                "role"
+            ) or source_exclusion.get(
+                "reference_source_index_digest"
+            ) != expected_source_index_exclusion.get("source_index_digest"):
                 raise RoleTileCacheError("ROLE_TILE_CACHE_EXCLUSION_MISMATCH")
         tile_grid = metadata.get("tile_grid")
         if (
@@ -587,10 +577,9 @@ class RoleSpecificTileCache:
             if float(tile_grid["cell_size_m"]) != float(expected_cell_size_m):
                 raise RoleTileCacheError("ROLE_TILE_CACHE_EXPECTED_TILE_SIZE_MISMATCH")
         expected_binding = role_source_binding_digest(source_identity)
-        if (
-            metadata.get("source_binding_digest") != expected_binding
-            or metadata.get("source_identity") != dict(source_identity)
-        ):
+        if metadata.get("source_binding_digest") != expected_binding or metadata.get(
+            "source_identity"
+        ) != dict(source_identity):
             raise RoleTileCacheError("ROLE_TILE_CACHE_SOURCE_MISMATCH")
         if (
             source_point_count is not None
@@ -598,9 +587,8 @@ class RoleSpecificTileCache:
         ):
             raise RoleTileCacheError("ROLE_TILE_CACHE_SOURCE_COUNT_MISMATCH")
         refs = metadata.get("artifact_references")
-        if (
-            not isinstance(refs, dict)
-            or refs.get("tile_index", {}).get("sha256") != _sha256_file(index_path)
+        if not isinstance(refs, dict) or refs.get("tile_index", {}).get("sha256") != _sha256_file(
+            index_path
         ):
             raise RoleTileCacheError("ROLE_TILE_CACHE_INDEX_INTEGRITY_INVALID")
         tiles = index_payload.get("tiles")
@@ -687,8 +675,7 @@ class RoleSpecificTileCache:
                 or type(unique_source_index_count) is not int
                 or role_record_count != total_points
                 or unique_source_index_count != role_record_count
-                or metadata.get("source_index_validation")
-                != "UNIQUE_SOURCE_INDEXES_V1"
+                or metadata.get("source_index_validation") != "UNIQUE_SOURCE_INDEXES_V1"
             ):
                 raise RoleTileCacheError("ROLE_TILE_CACHE_SOURCE_INDEX_VALIDATION_INVALID")
         return cls(
@@ -800,11 +787,16 @@ class RoleSpecificTileCache:
 
         unit = np.asarray(frame.axis_xy, dtype=np.float64)
         perpendicular = np.asarray((-unit[1], unit[0]), dtype=np.float64)
-        center = np.asarray(frame.start_xyz_absolute_m[:2], dtype=np.float64) + unit * (
-            -float(spec.longitudinal_before_m)
-            + float(frame.length_m)
-            + float(spec.longitudinal_after_m)
-        ) / 2.0
+        center = (
+            np.asarray(frame.start_xyz_absolute_m[:2], dtype=np.float64)
+            + unit
+            * (
+                -float(spec.longitudinal_before_m)
+                + float(frame.length_m)
+                + float(spec.longitudinal_after_m)
+            )
+            / 2.0
+        )
         half_longitudinal = (
             float(spec.longitudinal_before_m)
             + float(frame.length_m)
@@ -830,8 +822,7 @@ class RoleSpecificTileCache:
                     perpendicular,
                     half_width,
                     float(
-                        tile_half[0] * abs(perpendicular[0])
-                        + tile_half[1] * abs(perpendicular[1])
+                        tile_half[0] * abs(perpendicular[0]) + tile_half[1] * abs(perpendicular[1])
                     ),
                 ),
                 (
@@ -846,8 +837,7 @@ class RoleSpecificTileCache:
                 ),
             )
             if all(
-                abs(float(np.dot(delta, axis))) <= half_a + half_b
-                for axis, half_a, half_b in axes
+                abs(float(np.dot(delta, axis))) <= half_a + half_b for axis, half_a, half_b in axes
             ):
                 selected.append(tile_id)
         return len(self.index), tuple(selected)
@@ -879,6 +869,41 @@ class RoleSpecificTileCache:
                 yield tile_id, block
 
 
+def migrate_role_tile_configuration_digest(
+    cache_root: str | Path,
+    *,
+    role: str,
+    source_identity: Mapping[str, Any],
+    previous_config_digest: str,
+    configuration_digest: str,
+    source_point_count: int | None = None,
+    expected_source_index_exclusion: Mapping[str, Any] | None = None,
+    expected_cell_size_m: float | None = None,
+) -> RoleSpecificTileCache:
+    """Rebind validated role-index metadata without rebuilding its tile content."""
+    cache = RoleSpecificTileCache.load(
+        cache_root,
+        role=role,
+        source_identity=source_identity,
+        config_digest=previous_config_digest,
+        source_point_count=source_point_count,
+        expected_source_index_exclusion=expected_source_index_exclusion,
+        expected_cell_size_m=expected_cell_size_m,
+    )
+    metadata = dict(cache.metadata)
+    metadata["role_configuration_digest"] = configuration_digest
+    _write_json(cache.root / "role-tile-cache.json", metadata)
+    return RoleSpecificTileCache.load(
+        cache.root,
+        role=role,
+        source_identity=source_identity,
+        config_digest=configuration_digest,
+        source_point_count=source_point_count,
+        expected_source_index_exclusion=expected_source_index_exclusion,
+        expected_cell_size_m=expected_cell_size_m,
+    )
+
+
 __all__ = [
     "ROLE_TILE_CACHE_SCHEMA",
     "ROLE_TILE_BOUNDARY_SEMANTICS",
@@ -887,6 +912,7 @@ __all__ = [
     "RoleSpecificTileCache",
     "RoleTileCacheError",
     "RoleTileQueryResult",
+    "migrate_role_tile_configuration_digest",
     "role_tile_configuration_digest",
     "role_source_binding_digest",
 ]
