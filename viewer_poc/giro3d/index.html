@@ -26,6 +26,11 @@
 		#p3a_giro3d_fit { position: absolute; top: 12px; left: 12px; z-index: 10000; padding: 8px 12px;
 			font: 13px sans-serif; border: 1px solid rgba(255,255,255,0.4); border-radius: 4px;
 			background: rgba(0,0,0,0.55); color: #fff; cursor: pointer; }
+		/* The desktop shell owns product controls.  These remain available only
+		   when the standalone viewer is used for diagnostics. */
+		body.desktop-embedded #p3a_giro3d_status,
+		body.desktop-embedded #p3a_giro3d_lod,
+		body.desktop-embedded #p3a_giro3d_fit { display:none; }
 		/* V5A2/V5A3 tower-review panel */
 		#trp_panel { position: absolute; left: 12px; top: 56px; z-index: 9996; width: 300px; max-height: 62vh;
 			display: flex; flex-direction: column; font: 12px/1.45 sans-serif; color: #e8eaf6;

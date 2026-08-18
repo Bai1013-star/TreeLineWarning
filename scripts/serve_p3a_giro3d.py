@@ -50,6 +50,7 @@ import secrets
 import socket
 import sys
 import urllib.parse
+from datetime import datetime
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -201,6 +202,12 @@ class TowerReviewApi(TreeViewerApiMixin):
 
         with self._opened() as session:
             return ordered_review_state(session)
+
+    def desktop_project(self) -> dict[str, Any]:
+        """Desktop lifecycle projection, including deliberately empty projects."""
+        from desktop.project_management import describe_project
+
+        return describe_project(self.config.project_root)
 
     # ------------------------------------------------------------- project Spans
     def _span_projection(self, session, span) -> dict[str, Any]:
@@ -783,6 +790,46 @@ class TowerReviewApi(TreeViewerApiMixin):
             "prediction_mode": mode,
             "prediction_artifact": str(artifact_path.relative_to(self.config.project_root)),
         }
+
+    def spans_work_order(self, span_id: str, request: dict[str, Any]) -> dict[str, Any]:
+        """Render one selected, already-predicted Tree as printable A4 HTML."""
+        from desktop.project_management import describe_project
+        from desktop.work_order import render_work_order
+
+        persistent_id = request.get("persistent_tree_id")
+        mode = str(request.get("prediction_mode", "")).strip().lower()
+        if not isinstance(persistent_id, str) or not persistent_id.strip():
+            raise _ApiError(HTTPStatus.BAD_REQUEST, "TREE_SELECTION_REQUIRED", "请先选择一棵树。")
+        if mode not in {"baseline", "formula", "ai"}:
+            raise _ApiError(HTTPStatus.BAD_REQUEST, "PREDICTION_REQUIRED", "请先完成该树风险预测。")
+        trees = self.spans_trees(span_id)
+        tree = next((item for item in trees["trees"] if item.get("persistent_tree_id") == persistent_id), None)
+        if tree is None:
+            raise _ApiError(HTTPStatus.NOT_FOUND, "TREE_NOT_FOUND", "所选树不属于当前档距。")
+        names = {"baseline": "baseline-rule-based.json", "formula": "formula-long-horizon.json", "ai": "temporal-ai-long-horizon.json"}
+        artifact_path = (
+            self.config.project_root / "artifacts" / "prediction-runs" / "groups"
+            / next(item["group_id"] for item in self.spans_list()["spans"] if item["span_id"] == span_id)
+            / span_id / trees["run_id"] / names[mode]
+        )
+        try:
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            result = artifact["result"]
+            entry = next(item for item in result["entries"] if item.get("persistent_tree_id") == persistent_id)
+        except (OSError, KeyError, StopIteration, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise _ApiError(HTTPStatus.CONFLICT, "PREDICTION_REQUIRED", "请先完成该树风险预测。") from exc
+        with self._opened() as session:
+            span = self._resolve_span_record(session, span_id)
+            span_projection = self._span_projection(session, span)
+        today = datetime.now().strftime("%Y%m%d")
+        safe_id = "".join(char if char.isalnum() or char in "-_" else "_" for char in persistent_id)
+        filename = f"TreeLineWarning_风险工单_{safe_id}_{today}.pdf"
+        document = {
+            "project": describe_project(self.config.project_root), "span": span_projection,
+            "tree": tree, "entry": entry,
+            "work_order_id": f"TLW-{today}-{safe_id}",
+        }
+        return {"html": render_work_order(document), "suggested_filename": filename, "work_order": document}
 
     def spans_analyze_pending(self) -> dict[str, Any]:
         with self._opened_writable() as session:
@@ -1427,6 +1474,9 @@ class _P3aHandler(BaseHTTPRequestHandler):
         prediction = re.fullmatch(r"/api/spans/(S[0-9]{3,})/prediction", path)
         if prediction:
             return ("prediction", prediction.group(1), "")
+        work_order = re.fullmatch(r"/api/spans/(S[0-9]{3,})/work-order", path)
+        if work_order:
+            return ("work-order", work_order.group(1), "")
         wire_preview = re.fullmatch(r"/api/spans/(S[0-9]{3,})/wire/([0-9]+)/preview", path)
         if wire_preview:
             return ("wire-preview", wire_preview.group(1), wire_preview.group(2))
@@ -1482,6 +1532,8 @@ class _P3aHandler(BaseHTTPRequestHandler):
                 result = api.spans_retry_failed()
             elif self.command == "POST" and action == "prediction":
                 result = api.spans_prediction(span_id, self._read_json_body())
+            elif self.command == "POST" and action == "work-order":
+                result = api.spans_work_order(span_id, self._read_json_body())
             else:
                 raise _ApiError(HTTPStatus.NOT_FOUND, "NOT_FOUND", "unsupported Span route")
         except _ApiError as exc:
@@ -1593,6 +1645,16 @@ class _P3aHandler(BaseHTTPRequestHandler):
             return
         if re.fullmatch(r"/api/spans/S[0-9]{3,}/trees(?:/[0-9]+/preview)?", path):
             self._handle_tree_viewer_api()
+            return
+        if path == "/api/desktop/project":
+            api = self.tower_review_api
+            if api is None:
+                self._json_response(HTTPStatus.NOT_FOUND, {"ok": False, "error": {"code": "API_DISABLED", "message": "Desktop API is disabled"}})
+                return
+            try:
+                self._json_response(HTTPStatus.OK, {"ok": True, "project": api.desktop_project()})
+            except ValueError as exc:
+                self._json_response(HTTPStatus.CONFLICT, {"ok": False, "error": {"code": "PROJECT_INVALID", "message": str(exc)}})
             return
         if path.startswith("/api/"):
             if path.startswith("/api/spans"):

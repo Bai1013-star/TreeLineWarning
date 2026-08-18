@@ -278,6 +278,15 @@ def _run_forecast(
         "uses_temporal_model": bool(method.get("uses_temporal_model")),
         "current_science": dict(observation["current_safety"]),
         "current_assessment": forecast.get("current_assessment"), "horizons": horizons,
+        # These are verbatim ForecastService report projections, retained for
+        # the desktop work-order renderer.  They do not participate in any
+        # model calculation and keep the historical report semantics intact.
+        "work_order": forecast.get("work_order"),
+        "short_term_forecast": forecast.get("short_term_forecast"),
+        "long_term_forecast": forecast.get("long_term_forecast"),
+        "risk_timeline_analysis": forecast.get("risk_timeline_analysis"),
+        "maintenance_decision": forecast.get("maintenance_decision"),
+        "treatment_advice": forecast.get("treatment_advice"),
         "input_quality": (forecast.get("data_quality") or {}).get("status", "未提供"),
         "input_availability": forecast.get("input_availability"),
         "data_quality": forecast.get("data_quality"),

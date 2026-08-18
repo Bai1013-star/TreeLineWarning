@@ -9,6 +9,8 @@ import threading
 import urllib.request
 from pathlib import Path
 
+from desktop.project_management import create_empty_project, describe_project, import_pointcloud
+
 
 def resource_root() -> Path:
     """Resolve source/PyInstaller resources without machine-specific paths."""
@@ -30,27 +32,44 @@ class BackendProcess:
         self.httpd = None
         self.thread: threading.Thread | None = None
 
-    def start(self, timeout_seconds: float = 25.0) -> str:
+    def _viewer_cache_paths(self) -> tuple[Path, Path]:
         # Runtime caches deliberately remain external to the EXE.  A prepared
         # project is normally under ``<workspace>/cache/tower_ordered_project``.
         # Deriving siblings from that selected project keeps packaged builds
         # portable across drives, Chinese paths, and workspace locations.
-        cache_root = self.project_root.parent
-        tile_cache = cache_root / "tower_raw_tiles"
-        dataset = cache_root / "giro3d_full_source" / "dataset"
-        if not tile_cache.is_dir() or not dataset.is_dir():
+        candidates = (
+            self.project_root.parent,
+            Path.cwd() / "cache",
+            resource_root() / "cache",
+        )
+        cache_root = next(
+            (item for item in candidates if (item / "tower_raw_tiles").is_dir()), None
+        )
+        if cache_root is None:
             raise RuntimeError(
-                "Required local viewer cache is unavailable. "
-                "Select a prepared project workspace."
+                "Required local viewer cache is unavailable. Select a prepared project workspace."
             )
+        return cache_root / "tower_raw_tiles", cache_root / "giro3d_full_source" / "dataset"
+
+    def configure_project(self, project_root: Path) -> dict:
+        """Switch the local API to a verified project without carrying UI state."""
+        self.project_root = project_root.resolve()
+        from scripts import serve_p3a_giro3d as server
+
+        tile_cache, _dataset = self._viewer_cache_paths()
+        server._P3aHandler.tower_review_api = server.TowerReviewApi(
+            server.TowerReviewConfig(project_root=self.project_root, tile_cache=tile_cache)
+        )
+        return describe_project(self.project_root)
+
+    def start(self, timeout_seconds: float = 25.0) -> str:
         try:
             from scripts import serve_p3a_giro3d as server
 
+            tile_cache, dataset = self._viewer_cache_paths()
             server.DATASET_ROOT = dataset
             server._CONFIG_FILE = "poc_config_full.json"
-            server._P3aHandler.tower_review_api = server.TowerReviewApi(
-                server.TowerReviewConfig(project_root=self.project_root, tile_cache=tile_cache)
-            )
+            self.configure_project(self.project_root)
             self.httpd = server._ExclusiveBindServer((server.P3A_BIND_HOST, 0), server._P3aHandler)
             self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
             self.thread.start()
@@ -65,6 +84,53 @@ class BackendProcess:
             self.httpd.server_close()
         self.httpd = None
         self.thread = None
+
+
+class DesktopApi:
+    """Native file dialogs plus narrow project lifecycle operations for the UI."""
+
+    def __init__(self, backend: BackendProcess) -> None:
+        self.backend = backend
+        self.window = None
+
+    def _folder(self, title: str) -> str | None:
+        if self.window is None:
+            return None
+        import webview
+
+        selected = self.window.create_file_dialog(
+            webview.FOLDER_DIALOG, directory="", allow_multiple=False
+        )
+        return str(selected[0]) if selected else None
+
+    def choose_project_location(self) -> str | None:
+        return self._folder("选择项目保存位置")
+
+    def choose_existing_project(self) -> dict | None:
+        selected = self._folder("打开 TreeLineWarning 项目")
+        if not selected:
+            return None
+        return self.backend.configure_project(Path(selected))
+
+    def create_project(self, parent: str, project_name: str) -> dict:
+        descriptor = create_empty_project(Path(parent), project_name)
+        return self.backend.configure_project(Path(descriptor["root"]))
+
+    def import_point_cloud(self) -> dict | None:
+        if self.window is None:
+            return None
+        import webview
+
+        selected = self.window.create_file_dialog(
+            webview.OPEN_DIALOG,
+            directory="",
+            allow_multiple=False,
+            file_types=("Point cloud (*.las;*.laz)", "All files (*.*)"),
+        )
+        if not selected:
+            return None
+        descriptor = import_pointcloud(self.backend.project_root, Path(selected[0]))
+        return self.backend.configure_project(Path(descriptor["root"]))
 
 
 def launch(project_root: Path | None) -> int:
@@ -91,9 +157,16 @@ def launch(project_root: Path | None) -> int:
         print(str(exc), file=sys.stderr)
         return 3
     try:
-        webview.create_window(
-            "TreeLineWarning", url + "desktop.html", width=1600, height=980, min_size=(1100, 700),
+        desktop_api = DesktopApi(backend)
+        window = webview.create_window(
+            "TreeLineWarning",
+            url + "desktop.html",
+            width=1600,
+            height=980,
+            min_size=(1100, 700),
+            js_api=desktop_api,
         )
+        desktop_api.window = window
         webview.start(gui="edgechromium", debug=False)
         return 0
     except Exception as exc:  # pywebview backend exceptions are implementation-specific.
@@ -131,6 +204,20 @@ def prediction_smoke(project_root: Path | None) -> int:
                     payload["result"]["entries"][0].get("uses_temporal_model")
                 ),
             }
+        selected_id = payload["result"]["entries"][0]["persistent_tree_id"]
+        work_order_request = urllib.request.Request(
+            url + "api/spans/S005/work-order",
+            data=json.dumps(
+                {"persistent_tree_id": selected_id, "prediction_mode": "ai"}
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(work_order_request, timeout=60) as response:
+            work_order = json.loads(response.read().decode("utf-8"))
+        if "打印 / 保存为 PDF" not in work_order.get("html", ""):
+            raise RuntimeError("work-order smoke failed")
+        results["work_order"] = {"persistent_tree_id": selected_id, "printable": True}
         print(json.dumps(results, ensure_ascii=False))
         return 0
     except (OSError, KeyError, RuntimeError, ValueError) as exc:
