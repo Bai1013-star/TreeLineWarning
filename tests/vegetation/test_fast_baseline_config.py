@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 from core.config.fast_baseline import (
+    TREE_BACKEND_CROWN_STEM_HYBRID,
+    TREE_BACKEND_LEGACY_WATERSHED,
     FastBaselineConfig,
     default_fast_baseline_config,
     height_to_suppression_radius_m,
@@ -15,6 +17,7 @@ def test_default_config_is_frozen_and_deterministic() -> None:
     assert isinstance(cfg, FastBaselineConfig)
     assert len(cfg.computed_digest()) == 64
     assert cfg.computed_digest() == default_fast_baseline_config().computed_digest()
+    assert cfg.tree_backend == TREE_BACKEND_CROWN_STEM_HYBRID
     with pytest.raises(AttributeError):
         cfg.chm_resolution_m = 1.0
 
@@ -43,6 +46,13 @@ def test_invalid_configuration_is_rejected() -> None:
         FastBaselineConfig(topology_direction_tolerance_rad=-0.5)
     with pytest.raises(ValueError):
         FastBaselineConfig(tree_top_min_prominence_fraction=1.5)
+    with pytest.raises(ValueError):
+        FastBaselineConfig(tree_backend="unknown")
+
+
+def test_legacy_tree_backend_remains_explicitly_selectable() -> None:
+    cfg = default_fast_baseline_config(tree_backend=TREE_BACKEND_LEGACY_WATERSHED)
+    assert cfg.tree_backend == TREE_BACKEND_LEGACY_WATERSHED
 
 
 def test_round_trip_preserves_all_fields() -> None:

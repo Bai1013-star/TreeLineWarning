@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Per-span tree pipeline driver (vegetation region -> full-resolution trees).
 
 Given one span, a scene-wide recovered vegetation ``RawRegion`` and the coarse
@@ -11,13 +12,18 @@ review, reconciliation and clearance.
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from core.config.fast_baseline import FastBaselineConfig
+from core.config.fast_baseline import (
+    TREE_BACKEND_CROWN_STEM_HYBRID,
+    TREE_BACKEND_LEGACY_WATERSHED,
+    FastBaselineConfig,
+)
 
 from algorithms.poles.evidence import PoleEvidenceError
 from algorithms.poles.topology import SpanRecord
@@ -27,6 +33,10 @@ from algorithms.spans.region import (
     SpanRegionSpec,
     oriented_span_mask_absolute,
     subset_raw_region_oriented,
+)
+from algorithms.spans.stem_guided_hybrid import (
+    StemGuidedHybridConfig,
+    segment_stem_guided_hybrid,
 )
 from algorithms.spans.tree import (
     assign_span_tree_membership,
@@ -136,7 +146,7 @@ def _span_bounds_in_scene_local_frame(
     )
 
 
-def run_span_tree_pipeline(
+def _run_span_tree_pipeline_legacy(
     span: SpanRecord,
     vegetation_region: Any,
     coarse_ground_xyz_absolute: np.ndarray,
@@ -301,6 +311,116 @@ def run_span_tree_pipeline(
     return outcome
 
 
+def run_span_tree_pipeline(
+    span: SpanRecord,
+    vegetation_region: Any,
+    coarse_ground_xyz_absolute: np.ndarray,
+    config: FastBaselineConfig,
+    *,
+    output_dir: Any,
+    origin_xyz: tuple[float, float, float],
+    vegetation_query: SpanRegionQueryResult | None = None,
+) -> SpanTreeOutcome:
+    """Run the configured canonical tree backend.
+
+    The promoted route uses the legacy CHM/watershed result solely to generate
+    crown candidates, then replaces membership with crown-stem refinement. The
+    legacy artifacts remain in ``legacy_reference`` for audit/fallback.
+    """
+
+    if config.tree_backend == TREE_BACKEND_LEGACY_WATERSHED:
+        return _run_span_tree_pipeline_legacy(
+            span, vegetation_region, coarse_ground_xyz_absolute, config,
+            output_dir=output_dir, origin_xyz=origin_xyz, vegetation_query=vegetation_query,
+        )
+    if config.tree_backend != TREE_BACKEND_CROWN_STEM_HYBRID:
+        raise PoleEvidenceError("TREE_BACKEND_INVALID")
+    root = Path(output_dir)
+    if vegetation_query is None:
+        frame = SpanLocalFrame.from_endpoints(
+            span.start_xyz_absolute_m, span.end_xyz_absolute_m, origin_xyz
+        )
+        vegetation_query = subset_raw_region_oriented(
+            vegetation_region,
+            frame,
+            SpanRegionSpec(
+                role="vegetation-search",
+                half_width_m=float(span.half_width_m),
+                longitudinal_before_m=float(span.halo_m),
+                longitudinal_after_m=float(span.halo_m),
+                z_min_m=float(span.halo_bounds_min_xyz[2]),
+                z_max_m=float(span.halo_bounds_max_xyz[2]),
+            ),
+            root / "recovered_region",
+        )
+    legacy_root = root / "legacy_reference"
+    legacy = _run_span_tree_pipeline_legacy(
+        span, vegetation_region, coarse_ground_xyz_absolute, config,
+        output_dir=legacy_root, origin_xyz=origin_xyz, vegetation_query=vegetation_query,
+    )
+    from algorithms.vegetation.coarse_to_fine import map_region_rows_to_tree
+
+    with np.load(legacy_root / "tree_fine.npz", allow_pickle=False) as stream:
+        fine_xyz = np.asarray(stream["fine_xyz_local_m"], dtype=np.float64)
+        fine_original = np.asarray(stream["fine_original_index"], dtype=np.int64)
+        fine_hag = np.asarray(stream["fine_hag_m"], dtype=np.float32)
+        baseline_id = np.asarray(stream["fine_tree_id"], dtype=np.int32)
+    with np.load(legacy_root / "fine_representatives.npz", allow_pickle=False) as stream:
+        raw_count = np.asarray(stream["raw_count"], dtype=np.uint32)
+    hybrid = segment_stem_guided_hybrid(
+        fine_xyz, fine_hag, baseline_id, raw_count=raw_count
+    )
+    raw_tree = map_region_rows_to_tree(
+        vegetation_query.region,
+        legacy_root / "fine_representatives.npz",
+        fine_original,
+        hybrid.fine_tree_id,
+    )
+    raw_xyz = np.asarray(vegetation_query.region.xyz(), dtype=np.float64)
+    raw_original_all = np.asarray(vegetation_query.region.original_index(), dtype=np.int64)
+    assigned = np.flatnonzero(raw_tree >= 0)
+    assigned_original = raw_original_all[assigned]
+    if len(assigned_original) != len(np.unique(assigned_original)):
+        raise PoleEvidenceError("CROWN_STEM_ORIGINAL_INDEX_DUPLICATE")
+    records = []
+    for candidate in hybrid.candidates:
+        if candidate.quality_state.value != "CONFIRMED_TREE":
+            continue
+        records.append({
+            "tree_id": candidate.tree_id,
+            "tree_top_id": candidate.source_crown_ids[0],
+            "apex_xy_local_m": list(candidate.apex_xy_local_m),
+            "apex_height_m": float(np.max(fine_hag[candidate.member_rows])),
+            "quality_state": candidate.quality_state.value,
+            "structural_evidence": dict(candidate.structural_metrics or {}),
+            "quality_reasons": list(candidate.quality_reasons),
+            "fine_representative_count": int(len(candidate.member_rows)),
+            "raw_point_count": int(np.count_nonzero(raw_tree == candidate.tree_id)),
+        })
+    root.mkdir(parents=True, exist_ok=True)
+    _write_npz(root / "tree_members.npz", original_index=assigned_original, xyz_local_m=raw_xyz[assigned], tree_id=raw_tree[assigned], in_core=_row_in_span_core(raw_xyz, span, origin_xyz)[assigned])
+    _write_npz(root / "tree_fine.npz", fine_xyz_local_m=fine_xyz, fine_original_index=fine_original, fine_hag_m=fine_hag, fine_tree_id=hybrid.fine_tree_id)
+    for filename in ("fine_representatives.npz", "chm_review.npz"):
+        source = legacy_root / filename
+        if source.is_file():
+            shutil.copy2(source, root / filename)
+    outcome = SpanTreeOutcome(
+        span=span, tree_records=tuple(records), raw_original_index=assigned_original,
+        raw_xyz_local_m=raw_xyz[assigned], raw_tree_id=raw_tree[assigned],
+        in_core=_row_in_span_core(raw_xyz, span, origin_xyz)[assigned],
+        raw_local_maxima=legacy.raw_local_maxima, accepted_tree_tops=legacy.accepted_tree_tops,
+        assigned_raw_point_count=int(len(assigned)), artifact_root=root,
+        tree_top_diagnostics={**(legacy.tree_top_diagnostics or {}), "tree_backend": config.tree_backend},
+        membership_diagnostics=dict(hybrid.diagnostics), fine_representative_count=legacy.fine_representative_count,
+        aabb_query_points=legacy.aabb_query_points, oriented_region_points=legacy.oriented_region_points,
+        source_tiles=legacy.source_tiles, source_total_tiles=legacy.source_total_tiles,
+        source_intersecting_aabb_tiles=legacy.source_intersecting_aabb_tiles,
+        source_opened_tiles=legacy.source_opened_tiles, source_points_read=legacy.source_points_read,
+    )
+    _write_json(root / "span_tree_manifest.json", outcome.to_manifest())
+    return outcome
+
+
 def load_span_tree_outcome(span: SpanRecord, artifact_root: Any) -> SpanTreeOutcome:
     """Reload a persisted per-span tree outcome from its artifact directory."""
 
@@ -339,6 +459,95 @@ def load_span_tree_outcome(span: SpanRecord, artifact_root: Any) -> SpanTreeOutc
     )
 
 
+def run_span_stem_guided_hybrid_candidate(
+    span: SpanRecord,
+    vegetation_region: Any,
+    coarse_ground_xyz_absolute: np.ndarray,
+    config: FastBaselineConfig,
+    *,
+    output_dir: Any,
+    origin_xyz: tuple[float, float, float],
+    stem_config: StemGuidedHybridConfig | None = None,
+    vegetation_query: SpanRegionQueryResult | None = None,
+) -> dict[str, Any]:
+    """Run the non-authoritative stem-guided candidate beside the baseline.
+
+    The function deliberately does not call reconciliation or identity code.
+    It writes a separate result directory and keeps the existing span route as
+    the baseline/reference implementation.  Mapping back to raw rows uses the
+    exact same ``original_index`` map as the canonical tree runner.
+    """
+
+    output_root = Path(output_dir)
+    output_root.mkdir(parents=True, exist_ok=True)
+    if vegetation_query is None:
+        frame = SpanLocalFrame.from_endpoints(
+            span.start_xyz_absolute_m, span.end_xyz_absolute_m, origin_xyz
+        )
+        vegetation_query = subset_raw_region_oriented(
+            vegetation_region,
+            frame,
+            SpanRegionSpec(
+                role="vegetation-search",
+                half_width_m=float(span.half_width_m),
+                longitudinal_before_m=float(span.halo_m),
+                longitudinal_after_m=float(span.halo_m),
+                z_min_m=float(span.halo_bounds_min_xyz[2]),
+                z_max_m=float(span.halo_bounds_max_xyz[2]),
+            ),
+            output_root / "recovered_region",
+        )
+    subset = vegetation_query.region
+    fine_path = output_root / "fine_representatives.npz"
+    fine = build_fine_representatives(
+        subset, fine_path, voxel_size_m=config.vegetation_fine_voxel_size_m
+    )
+    xyz = np.asarray(fine["xyz_local_m"], dtype=np.float64)
+    original = np.asarray(fine["original_index"], dtype=np.int64)
+    hag = estimate_fine_vegetation_hag(xyz, origin_xyz, coarse_ground_xyz_absolute)
+    chm = build_span_chm(xyz, hag, config)
+    smoothed = smooth_span_chm(chm, config)
+    tops = detect_span_tree_tops(chm, smoothed, config)
+    crowns = segment_span_crowns(chm, smoothed, tops, config)
+    baseline_ids = assign_span_tree_membership(xyz, hag, chm, smoothed, crowns, config)
+    hybrid = segment_stem_guided_hybrid(
+        xyz, hag, baseline_ids, raw_count=np.asarray(fine["raw_count"]), config=stem_config
+    )
+    from algorithms.vegetation.coarse_to_fine import map_region_rows_to_tree
+
+    raw_tree = map_region_rows_to_tree(subset, fine_path, original, hybrid.fine_tree_id)
+    assigned = np.flatnonzero(raw_tree >= 0)
+    raw_original = np.asarray(subset.original_index(), dtype=np.int64)[assigned]
+    if len(raw_original) != len(np.unique(raw_original)):
+        raise PoleEvidenceError("STEM_GUIDED_ORIGINAL_INDEX_NOT_UNIQUE")
+    _write_npz(
+        output_root / "stem_guided_members.npz",
+        original_index=raw_original,
+        xyz_local_m=np.asarray(subset.xyz(), dtype=np.float64)[assigned],
+        tree_id=raw_tree[assigned],
+    )
+    _write_npz(
+        output_root / "stem_guided_fine.npz",
+        fine_xyz_local_m=xyz,
+        fine_original_index=original,
+        fine_hag_m=hag,
+        baseline_tree_id=baseline_ids,
+        hybrid_tree_id=hybrid.fine_tree_id,
+    )
+    payload = {
+        "schema": "stem-guided-hybrid-span-runner-v1",
+        "span_name": span.span_name,
+        "candidate_only": True,
+        "trees": [candidate.to_dict() for candidate in hybrid.candidates],
+        "validated_stems": [stem.to_dict() for stem in hybrid.validated_stems],
+        "diagnostics": hybrid.diagnostics,
+        "full_resolution_original_index_unique": True,
+        "assigned_raw_point_count": int(len(raw_original)),
+    }
+    _write_json(output_root / "stem_guided_manifest.json", payload)
+    return payload
+
+
 def _write_npz(path: Any, **arrays: np.ndarray) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -359,4 +568,5 @@ __all__ = [
     "SPAN_TREE_RUNNER_SCHEMA",
     "SpanTreeOutcome",
     "run_span_tree_pipeline",
+    "run_span_stem_guided_hybrid_candidate",
 ]

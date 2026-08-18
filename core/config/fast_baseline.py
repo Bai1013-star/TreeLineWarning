@@ -23,6 +23,8 @@ NON_CERTIFIED_MARKER = "NON_CERTIFIED_RESEARCH_DEMONSTRATION"
 
 _ROUTE_MODE_POLE_SPAN = "POLE_SPAN_MATURE_BASELINE"
 _ROUTE_MODE_EXPERIMENTAL_V4 = "EXPERIMENTAL_V4"
+TREE_BACKEND_CROWN_STEM_HYBRID = "crown_stem_hybrid"
+TREE_BACKEND_LEGACY_WATERSHED = "legacy_watershed"
 
 
 def canonical_digest(payload: dict[str, Any]) -> str:
@@ -75,6 +77,9 @@ class FastBaselineConfig:
     # --- shared representation scales --------------------------------------
     vegetation_fine_voxel_size_m: float = 0.10
     wire_fine_voxel_size_m: float = 0.10
+    # Crown candidates remain primary.  The legacy CHM/watershed-only route is
+    # retained as an explicit fallback/reference, never deleted.
+    tree_backend: str = TREE_BACKEND_CROWN_STEM_HYBRID
 
     # --- pole candidate detection ------------------------------------------
     pole_minimum_height_m: float = 5.0
@@ -207,6 +212,8 @@ class FastBaselineConfig:
     clearance_tie_tolerance_m: float = 1e-9
 
     def __post_init__(self) -> None:
+        if self.tree_backend not in {TREE_BACKEND_CROWN_STEM_HYBRID, TREE_BACKEND_LEGACY_WATERSHED}:
+            raise ValueError("tree_backend must be crown_stem_hybrid or legacy_watershed")
         for field in fields(self):
             value = getattr(self, field.name)
             if field.name.endswith("_m") and field.name not in {
@@ -355,6 +362,8 @@ __all__ = [
     "NON_CERTIFIED_MARKER",
     "_ROUTE_MODE_POLE_SPAN",
     "_ROUTE_MODE_EXPERIMENTAL_V4",
+    "TREE_BACKEND_CROWN_STEM_HYBRID",
+    "TREE_BACKEND_LEGACY_WATERSHED",
     "canonical_digest",
     "FastBaselineConfig",
     "default_fast_baseline_config",
