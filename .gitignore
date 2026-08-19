@@ -4,8 +4,14 @@ data/processed/
 outputs/
 artifacts/fast_research/
 artifacts/one_click_runs/
+artifacts/manual_single_span_runs/
+artifacts/manual_span_pole_analysis.png
+artifacts/manual_span_wire_clusters.png
+artifacts/manual_last_run.json
+.pytest_tmp/
 cache/
 projects/
+workspace/
 models/weights/
 *.las
 *.laz
