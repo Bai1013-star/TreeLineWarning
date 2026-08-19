@@ -185,7 +185,8 @@ def test_plotly_is_fallback_route(tmp_path: Path) -> None:
     assert "plotly" in html or "Plotly" in html
 
 
-def _serve(cache_info) -> tuple[ThreadingHTTPServer, str, FolderServer]:
+def _serve(cache_info, bounds=None) -> tuple[ThreadingHTTPServer, str, FolderServer]:
+    bounds = bounds or ((100.0, 200.0, 5.0), (120.0, 220.0, 15.0))
     server = FolderServer.__new__(FolderServer)
     server.workspace = SimpleNamespace(
         source_cache_dir=cache_info.cache_dir.parents[2],
@@ -195,9 +196,7 @@ def _serve(cache_info) -> tuple[ThreadingHTTPServer, str, FolderServer]:
     server._viewer_cache = cache_info
     server._science_thread = None
     server.headless_poles = None
-    server.orchestrator = SimpleNamespace(
-        source_bounds=lambda: ((100.0, 200.0, 5.0), (120.0, 220.0, 15.0)),
-    )
+    server.orchestrator = SimpleNamespace(source_bounds=lambda: bounds)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.handler_factory())
     url = f"http://127.0.0.1:{httpd.server_address[1]}"
     thread = threading.Thread(
@@ -209,25 +208,53 @@ def _serve(cache_info) -> tuple[ThreadingHTTPServer, str, FolderServer]:
     return httpd, url, server
 
 
-def test_potree_pick_transforms_to_source_absolute_and_no_original_index(tmp_path: Path) -> None:
+def _pick(url, xyz):
+    req = urllib.request.Request(
+        url + "/api/pick",
+        data=json.dumps({"x": xyz[0], "y": xyz[1], "z": xyz[2], "cache_id": "test-cache"}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read().decode("utf-8"))
 
+
+def test_potree_pick_is_world_source_absolute_no_offset_added(tmp_path: Path) -> None:
+    """Potree 1.8.2 pick location is already world/source-absolute (matrixWorld
+    applies the octree offset in pick()); /api/pick must NOT add the offset again.
+    """
     cache = _fake_cache(_ws(tmp_path))
     httpd, url, _server = _serve(cache)
     try:
-        req = urllib.request.Request(
-            url + "/api/pick",
-            data=json.dumps({"x": 10.0, "y": 20.0, "z": 0.0, "cache_id": "test-cache"}).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as r:
-            resp = json.loads(r.read().decode("utf-8"))
-        # source_absolute = local + offset (110, 220, 5).
+        resp = _pick(url, (110.0, 220.0, 5.0))  # world pick inside bounds
+        # NO double offset: source_absolute == the world pick.
         assert resp["source_xyz"] == [110.0, 220.0, 5.0]
-        assert resp["viewer_xyz_local_m"] == [10.0, 20.0, 0.0]
+        assert resp["viewer_world_xyz_m"] == [110.0, 220.0, 5.0]
+        assert resp["pick_frame"] == "POTREE_WORLD_SOURCE_ABSOLUTE"
         # A Potree pick is an approximate seed only: NO original_index is invented.
         assert "original_index" not in resp
-        # The /api/pick response never contains source rows.
         assert "xyz_absolute" not in resp
+    finally:
+        httpd.shutdown()
+
+
+def test_genuine_potree_world_pick_maps_inside_source_bounds(tmp_path: Path) -> None:
+    """Regression for the double-offset bug: a genuine Potree world pick near the
+    real Pole A vicinity must map INSIDE the source bounds (previously the bridge
+    added the cache offset again -> out of bounds)."""
+    cache = _fake_cache(_ws(tmp_path))
+    # Real-like source bounds for the 105M scene (cache offset (-197,-148,-1.3)).
+    real_bounds = ((-200.0, -150.0, -2.0), (120.0, 170.0, 45.0))
+    httpd, url, _server = _serve(cache, bounds=real_bounds)
+    try:
+        # Genuine Potree world pick near real Pole A (source-absolute).
+        resp = _pick(url, (-66.34, 2.23, 0.8))
+        assert resp["ok"] is True
+        assert resp["source_xyz"] == [-66.34, 2.23, 0.8]
+        assert resp["pick_frame"] == "POTREE_WORLD_SOURCE_ABSOLUTE"
+        # It is inside the source bounds (the bug previously rejected it).
+        bmin, bmax = resp["source_bounds_min"], resp["source_bounds_max"]
+        assert bmin[0] <= resp["source_xyz"][0] <= bmax[0]
+        assert bmin[1] <= resp["source_xyz"][1] <= bmax[1]
     finally:
         httpd.shutdown()
 

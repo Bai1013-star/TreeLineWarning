@@ -163,13 +163,14 @@ def potree_step1_html(
     $status("Potree 加载失败");
   }}
 
-  // ---- coordinate bridge: viewer-LOCAL -> source-ABSOLUTE -----------------
-  // Potree renders at local = source - offset; a picked location is LOCAL.
-  // source_absolute = local + offset  (explicit, auditable bridge).
-  function toSourceAbsolute(local) {{
-    const off = CACHE.offset_xyz;
-    return [local.x + off[0], local.y + off[1], local.z + off[2]];
-  }}
+  // ---- coordinate bridge: Potree pick is ALREADY world/source-absolute -----
+  // Pinned Potree 1.8.2 fact: PointCloudOctree constructor sets
+  // `this.position.copy(geometry.offset)` and pick() applies
+  // `position.applyMatrix4(pc.matrixWorld)`, so
+  // Potree.Utils.getMousePointCloudIntersection(...).location is WORLD =
+  // source-absolute.  The backend /api/pick treats it as source-absolute and
+  // does NOT add the cache offset again (that would double-offset and push the
+  // pick outside the source bounds).
 
   async function post(path, payload) {{
     const r = await fetch(path, {{method: "POST", headers: {{"Content-Type": "application/json"}}, body: JSON.stringify(payload || {{}})}});
@@ -214,10 +215,22 @@ def potree_step1_html(
   }}
 
   // ---- pick + refine ------------------------------------------------------
-  async function handlePick(pole, localXyz) {{
+  async function handlePick(pole, worldXyz) {{
     try {{
-      const source = await post("/api/pick", {{x: localXyz.x, y: localXyz.y, z: localXyz.z, cache_id: CACHE.cache_id}});
+      // Diagnostic (owner real-click audit): log every coordinate in the
+      // Potree -> source bridge so a real click is fully inspectable.
+      if (pointcloud && pointcloud.pcoGeometry) {{
+        const mw = pointcloud.matrixWorld;
+        console.log("[step1] pick world (I.location)      =", [worldXyz.x, worldXyz.y, worldXyz.z]);
+        console.log("[step1] pointcloud.position          =", pointcloud.position.toArray());
+        console.log("[step1] pointcloud.pcoGeometry.offset=", pointcloud.pcoGeometry.offset.toArray());
+        console.log("[step1] matrixWorld.position         =", [mw.elements[12], mw.elements[13], mw.elements[14]]);
+      }}
+      console.log("[step1] cache offset                  =", CACHE.offset_xyz);
+      console.log("[step1] cache source bounds min/max   =", CACHE.source_bounds_min, CACHE.source_bounds_max);
+      const source = await post("/api/pick", {{x: worldXyz.x, y: worldXyz.y, z: worldXyz.z, cache_id: CACHE.cache_id}});
       const sx = source.source_xyz;
+      console.log("[step1] backend source_absolute_xyz   =", sx);
       $msg("杆塔 " + pole + " 近似坐标: " + sx.map(v => v.toFixed(2)).join(", "));
       await post("/click", {{pole: pole, x: sx[0], y: sx[1], z: sx[2]}});
       const refined = await post("/refine", {{pole: pole}});

@@ -437,9 +437,16 @@ class FolderServer:
                     z = float(payload["z"])
                 except (KeyError, TypeError, ValueError):
                     return self._send_error("拾取坐标无效")
-                local = (x, y, z)
+                world = (x, y, z)
                 offset = cache.offset_xyz
-                source = (x + offset[0], y + offset[1], z + offset[2])
+                # Potree 1.8.2 fact (pinned bundle): PointCloudOctree.pick()
+                # applies `position.applyMatrix4(pc.matrixWorld)` and the octree
+                # constructor sets `this.position.copy(geometry.offset)`, so
+                # Potree.Utils.getMousePointCloudIntersection(...).location is
+                # ALREADY world-transformed = source-absolute.  Adding the offset
+                # here would DOUBLE-offset and push the pick out of the source
+                # bounds.  source_absolute = world pick (no offset addition).
+                source = (x, y, z)
                 bounds = folder_server.orchestrator.source_bounds()
                 bmin, bmax = bounds
                 if not (
@@ -450,9 +457,10 @@ class FolderServer:
                 return self._send_json(
                     {
                         "ok": True,
-                        "viewer_xyz_local_m": list(local),
+                        "viewer_world_xyz_m": list(world),
                         "offset_xyz": list(offset),
                         "source_xyz": list(source),
+                        "pick_frame": "POTREE_WORLD_SOURCE_ABSOLUTE",
                         "cache_id": cache.cache_id,
                         "source_bounds_min": list(bmin),
                         "source_bounds_max": list(bmax),
