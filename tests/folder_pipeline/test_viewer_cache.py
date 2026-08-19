@@ -154,6 +154,15 @@ def test_potree_page_is_primary_when_cache_ready(tmp_path: Path) -> None:
     assert "POTREE LOD" in html
     # The page does NOT embed any full-source point payload (no JSON point arrays).
     assert "xyz_absolute" not in html
+    # PROVEN-migration regression guards (78d9cd3 owner findings):
+    # 1. RGB is selected via activeAttributeName = "rgba" (not "rgb" -> purple).
+    assert 'activeAttributeName = "rgba"' in html
+    assert 'activeAttributeName = "rgb"' not in html
+    # 2. Picking uses Potree.Utils.getMousePointCloudIntersection (Potree.Picker
+    #    is undefined in Potree 1.8.2 and throws).  The executable call form ends
+    #    with "(" — the only Potree.Picker text left is an explanatory comment.
+    assert "Potree.Utils.getMousePointCloudIntersection(" in html
+    assert "Potree.Picker.getMousePointCloudIntersection(" not in html
 
 
 def test_plotly_is_fallback_route(tmp_path: Path) -> None:

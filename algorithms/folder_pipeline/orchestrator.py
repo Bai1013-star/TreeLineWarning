@@ -88,6 +88,14 @@ def _canonical_risk_threshold_m() -> float:
     return float(RISK_THRESHOLD_M)
 
 
+def _risk_config_digest() -> str:
+    """Return the canonical risk-configuration digest (authoritative, never new)."""
+
+    from algorithms.spans.project_adapter import RISK_CONFIGURATION_DIGEST
+
+    return str(RISK_CONFIGURATION_DIGEST)
+
+
 class FolderPipelineError(RuntimeError):
     """Fail-closed Folder pipeline error (Chinese message for the user)."""
 
@@ -1177,6 +1185,9 @@ def _final_run_metadata(
         "danger_point_count": int(risk.danger_point_count),
         "global_minimum_clearance_m": risk.global_minimum_clearance_m,
         "risk_threshold_m": orchestrator.threshold_m,
+        "risk_threshold_value": orchestrator.threshold_m,
+        "risk_threshold_source": "algorithms.spans.project_adapter.RISK_THRESHOLD_M",
+        "risk_config_digest": _risk_config_digest(),
         "project_id": (selection or {}).get("project_id"),
         "group_id": (selection or {}).get("group_id"),
         "span_id": (selection or {}).get("span_id"),

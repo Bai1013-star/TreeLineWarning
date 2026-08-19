@@ -71,6 +71,11 @@ def test_metadata_reports_crown_stem_hybrid_and_exact_policies() -> None:
     metadata = _final_run_metadata(orchestrator, reconciled, risk)  # type: ignore[arg-type]
     assert metadata["tree_backend"] == "crown_stem_hybrid"
     assert metadata["wire_exclusion_policy"] == "EXACT_ORIGINAL_INDEX"
+    # Risk threshold authority: canonical project_adapter source + digest, never a
+    # new Folder default.
+    assert metadata["risk_threshold_source"] == "algorithms.spans.project_adapter.RISK_THRESHOLD_M"
+    assert len(metadata["risk_config_digest"]) == 64
+    assert metadata["risk_threshold_value"] == orchestrator.threshold_m
 
 
 # ---------------------------------------------------------------------------

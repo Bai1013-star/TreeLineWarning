@@ -252,7 +252,10 @@ def potree_step1_html(
       const rect = renderArea.getBoundingClientRect();
       const mouse = {{x: ev.clientX - rect.left, y: ev.clientY - rect.top}};
       try {{
-        const hit = Potree.Picker.getMousePointCloudIntersection(
+        // PROVEN migration: Potree 1.8.2 exports the intersection helper on
+        // Potree.Utils (NOT Potree.Picker).  "Potree.Picker.getMousePointCloudIntersection"
+        // throws "Cannot read properties of undefined".
+        const hit = Potree.Utils.getMousePointCloudIntersection(
           mouse, viewer.scene.camera, viewer, viewer.scene.pointclouds
         );
         if (hit) {{
@@ -305,11 +308,17 @@ def potree_step1_html(
 
       const loaded = await Potree.loadPointCloud(CACHE.metadata_url, "source");
       pointcloud = loaded.pointcloud;
-      pointcloud.material.activeAttributeName = "rgb";
+      // PROVEN migration (viewer_poc/p3a/viewer.js + poc_config.json):
+      // Potree decodes the converter "rgb" attribute as "rgba"; setting
+      // "rgba" selects real RGB color (the "rgb" name renders the default
+      // purple).  The material is configured exactly as the proven P3A viewer
+      // (which does NOT touch Potree.PointColorType — not exported in the
+      // minified Potree 1.8.2 bundle).
+      pointcloud.material.activeAttributeName = "rgba";
       pointcloud.material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
       pointcloud.material.size = 1.0;
-      pointcloud.material.minSize = 1.0;
-      pointcloud.material.maxSize = 4.0;
+      pointcloud.material.minSize = 2.0;
+      pointcloud.material.maxSize = 5.0;
       viewer.scene.addPointCloud(pointcloud);
 
       // Tight-bounds fit so the cloud is not a tiny dot.
