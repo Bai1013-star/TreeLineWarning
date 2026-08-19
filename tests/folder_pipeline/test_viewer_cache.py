@@ -154,7 +154,7 @@ def test_potree_page_is_primary_when_cache_ready(tmp_path: Path) -> None:
     assert "POTREE LOD" in html
     # The page does NOT embed any full-source point payload (no JSON point arrays).
     assert "xyz_absolute" not in html
-    # PROVEN-migration regression guards (78d9cd3 owner findings):
+    # PROVEN-migration regression guards (78d9cd3 / 156d499 owner findings):
     # 1. RGB is selected via activeAttributeName = "rgba" (not "rgb" -> purple).
     assert 'activeAttributeName = "rgba"' in html
     assert 'activeAttributeName = "rgb"' not in html
@@ -163,6 +163,19 @@ def test_potree_page_is_primary_when_cache_ready(tmp_path: Path) -> None:
     #    with "(" — the only Potree.Picker text left is an explanatory comment.
     assert "Potree.Utils.getMousePointCloudIntersection(" in html
     assert "Potree.Picker.getMousePointCloudIntersection(" not in html
+    # 3. The ACTIVE camera is viewer.scene.getActiveCamera(); viewer.scene.camera
+    #    is undefined in Potree 1.8.2 and made THREE.Raycaster read "undefined.type".
+    assert "viewer.scene.getActiveCamera()" in html
+    assert "viewer.scene.camera.position" not in html
+    assert "viewer.scene.camera," not in html
+    # 4. Mouse coordinates are pixel-relative to the renderer canvas.
+    assert "viewer.renderer.domElement.getBoundingClientRect()" in html
+    # 5. Camera animation uses the real Potree 1.8.2 API viewer.scene.view.setView.
+    assert "viewer.scene.view.setView(" in html
+    assert "viewer.setView(" not in html
+    # 6. Controlled no-hit message + console stack logging (no uncaught JS error).
+    assert "未拾取到点，请直接点击可见点云后重试" in html
+    assert 'console.error("[step1] pick error:", e)' in html
 
 
 def test_plotly_is_fallback_route(tmp_path: Path) -> None:

@@ -249,21 +249,29 @@ def potree_step1_html(
         $msg("请先按「选择杆塔 A」或「选择杆塔 B」");
         return;
       }}
-      const rect = renderArea.getBoundingClientRect();
-      const mouse = {{x: ev.clientX - rect.left, y: ev.clientY - rect.top}};
       try {{
-        // PROVEN migration: Potree 1.8.2 exports the intersection helper on
-        // Potree.Utils (NOT Potree.Picker).  "Potree.Picker.getMousePointCloudIntersection"
-        // throws "Cannot read properties of undefined".
+        // Pixel coordinates relative to the Potree renderer canvas (pinned
+        // 1.8.2 expects this, NOT container-relative / NDC / event objects).
+        const rect = viewer.renderer.domElement.getBoundingClientRect();
+        const mouse = {{x: ev.clientX - rect.left, y: ev.clientY - rect.top}};
+        // Canonical 1.8.2 call (matches Potree's own drag tool at the pinned
+        // bundle): the ACTIVE camera is viewer.scene.getActiveCamera().
+        // viewer.scene.camera is undefined in Potree 1.8.2 and makes
+        // THREE.Raycaster.setFromCamera read "undefined.type".
+        const camera = viewer.scene.getActiveCamera();
+        const pointclouds = viewer.scene.pointclouds;
         const hit = Potree.Utils.getMousePointCloudIntersection(
-          mouse, viewer.scene.camera, viewer, viewer.scene.pointclouds
+          mouse, camera, viewer, pointclouds, {{pickClipped: false}}
         );
         if (hit) {{
           handlePick(mode === "SELECT_A" ? "A" : "B", hit.location);
         }} else {{
-          $msg("未命中点云，请点按点云上的杆塔位置");
+          $msg("未拾取到点，请直接点击可见点云后重试");
         }}
-      }} catch (e) {{ $msg("拾取失败：" + e.message); }}
+      }} catch (e) {{
+        console.error("[step1] pick error:", e);
+        $msg("拾取失败：" + (e && e.message ? e.message : String(e)));
+      }}
     }});
   }}
 
@@ -272,13 +280,33 @@ def potree_step1_html(
     if (pointcloud && pointcloud.pcoGeometry) viewer.fitToScreen();
   }}
   function topView() {{
-    const cam = viewer.scene.camera;
-    cam.position.set(cam.position.x, cam.position.y, cam.position.z + 200);
-    viewer.scene.cameraControl.target.set(0, 0, 0);
-    viewer.setView(0, -Math.PI / 2);
+    try {{
+      // Potree 1.8.2 camera animation is on viewer.scene.view.setView(position,
+      // target, duration) — the viewer-level yaw/pitch setView is NOT the API.
+      const view = viewer.scene.view;
+      const bmin = CACHE.source_bounds_min || [0, 0, 0];
+      const bmax = CACHE.source_bounds_max || [0, 0, 0];
+      const cx = (bmin[0] + bmax[0]) / 2, cy = (bmin[1] + bmax[1]) / 2;
+      const zTop = bmax[2] + Math.max(bmax[0] - bmin[0], bmax[1] - bmin[1]);
+      view.setView([cx, cy, zTop], [cx, cy, bmin[2]], 400);
+    }} catch (e) {{
+      console.error("[step1] top view error:", e);
+      $msg("俯视失败：" + (e && e.message ? e.message : String(e)));
+    }}
   }}
   function sideView() {{
-    viewer.setView(-Math.PI / 2, 0);
+    try {{
+      const view = viewer.scene.view;
+      const bmin = CACHE.source_bounds_min || [0, 0, 0];
+      const bmax = CACHE.source_bounds_max || [0, 0, 0];
+      const cx = (bmin[0] + bmax[0]) / 2, cy = (bmin[1] + bmax[1]) / 2;
+      const cz = (bmin[2] + bmax[2]) / 2;
+      const dx = Math.max(bmax[0] - bmin[0], bmax[1] - bmin[1]);
+      view.setView([cx - dx, cy, cz], [cx, cy, cz], 400);
+    }} catch (e) {{
+      console.error("[step1] side view error:", e);
+      $msg("侧视失败：" + (e && e.message ? e.message : String(e)));
+    }}
   }}
 
   // ---- LOD diagnostics ----------------------------------------------------
