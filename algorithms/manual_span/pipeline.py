@@ -200,9 +200,13 @@ def _sample_source_cloud(
                 z_range = float(sorted_z[ends[group] - 1] - sorted_z[starts[group]])
                 top_pos = int(order[ends[group] - 1])
                 base_pos = int(order[starts[group]])
+                # NOTE: the kept rows are COPIED, never stored as numpy views.
+                # A view keeps the whole per-chunk XYZ/RGB array alive for the
+                # life of the dict, so a multi-chunk source (e.g. 105M points)
+                # would retain tens of GB and exhaust memory.
                 top_data = {
-                    "xyz": xyz_abs[top_pos],
-                    "rgb16": rgb[top_pos] if rgb is not None else None,
+                    "xyz": xyz_abs[top_pos].copy(),
+                    "rgb16": rgb[top_pos].copy() if rgb is not None else None,
                     "index": offset + top_pos,
                 }
                 if key not in cell_top:
@@ -213,8 +217,8 @@ def _sample_source_cloud(
                     cell_zrange[key] = z_range
                 if z_range > _TALL_Z_RANGE_M and key not in cell_base:
                     cell_base[key] = {
-                        "xyz": xyz_abs[base_pos],
-                        "rgb16": rgb[base_pos] if rgb is not None else None,
+                        "xyz": xyz_abs[base_pos].copy(),
+                        "rgb16": rgb[base_pos].copy() if rgb is not None else None,
                         "index": offset + base_pos,
                     }
             if len(cell_top) >= maximum_points:

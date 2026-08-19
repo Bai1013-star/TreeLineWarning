@@ -66,6 +66,15 @@ _FOLDER_RUN_SCHEMA = "folder-to-excel-run-v1"
 _TREE_INPUT_CLEANING_SCHEMA = "folder-to-excel-tree-input-cleaning-v1"
 
 
+def _brief(exc: Exception) -> str:
+    """Short, safe exception text for a user-facing error message."""
+
+    text = str(exc)
+    if len(text) > 300:
+        return text[:300] + "..."
+    return text
+
+
 def _canonical_risk_threshold_m() -> float:
     """Return the existing authoritative project risk threshold (never a new default).
 
@@ -155,6 +164,19 @@ def _find_prior_ground_cache(
                 and (candidate / "02_ground" / "ground_hag_result.json").is_file()
             ):
                 return candidate / "02_ground"
+    # The workspace's OWN science run_root is the authoritative cache from a
+    # prior real run (source_cache/science/02_ground).  It is source-identity
+    # validated against source_inspection.json and must never be invalidated.
+    local_root = workspace.science_run_root
+    local_inspection = local_root / "00_input" / "source_inspection.json"
+    local_ground = local_root / "02_ground" / "ground_hag_result.json"
+    if local_inspection.is_file() and local_ground.is_file():
+        try:
+            payload = json.loads(local_inspection.read_text("utf-8"))
+        except Exception:  # noqa: BLE001 - best effort
+            payload = {}
+        if payload.get("input_sha256") == source_sha:
+            return local_root / "02_ground"
     return None
 
 
@@ -193,6 +215,29 @@ class FolderOrchestrator:
         """Create and initialize the authoritative manual-span run."""
 
         from algorithms.folder_pipeline.state import _make_progress_callback
+
+        if self.run is not None:
+            return {"RUN_STATUS": "INITIALIZED"}
+        self._create_run(progress=_make_progress_callback(self.state))
+        # Ground preflight: fail with a clear Chinese error BEFORE expensive
+        # science when neither PDAL nor a matching ground cache is available.
+        # The run already exists (cheap constructor) so STEP-1 display still
+        # works even when the ground preflight blocks science.
+        self._preflight_ground()
+        self.state.set_step(STEP_SELECTING_SPAN, "[1/3] 正在准备点云...")
+        reuse = self.ground_reuse_dir or _find_prior_ground_cache(self.workspace)
+        result = self.run.initialize()
+        if reuse is not None:
+            self.run_metadata["ground_cache_reused"] = str(reuse)
+        return result
+
+    def _create_run(self, progress: Any = None) -> Any:
+        """Create the authoritative ManualSpan run (constructor only, no science).
+
+        Cheap: only binds the source, run_root, config and ground-reuse cache.
+        Neither preprocess nor ground nor display is run here.
+        """
+
         from algorithms.manual_span.config import (
             default_manual_span_config,
             manual_route_config,
@@ -200,25 +245,34 @@ class FolderOrchestrator:
         from algorithms.manual_span.pipeline import ManualSingleSpanRun
 
         if self.run is not None:
-            return {"RUN_STATUS": "INITIALIZED"}
+            return self.run
         self.workspace.ensure_dirs()
-        # Ground preflight: fail with a clear Chinese error BEFORE expensive
-        # science when neither PDAL nor a same-source ground cache is available.
-        self._preflight_ground()
         reuse = self.ground_reuse_dir or _find_prior_ground_cache(self.workspace)
         self.run = ManualSingleSpanRun(
             self.workspace.source,
             self.workspace.science_run_root,
             cfg=manual_route_config(),
             manual=default_manual_span_config(),
-            progress=_make_progress_callback(self.state),
+            progress=progress,
             ground_reuse_dir=reuse,
         )
-        self.state.set_step(STEP_SELECTING_SPAN, "[1/3] 正在准备点云...")
-        result = self.run.initialize()
-        if reuse is not None:
-            self.run_metadata["ground_cache_reused"] = str(reuse)
-        return result
+        return self.run
+
+    def _ensure_display_run(self) -> Any:
+        """Return a run hydrated with the cheap source facts needed by STEP 1.
+
+        Runs the FULL science initialize only when already available; otherwise
+        populates the lightweight header facts (source identity + bounds) so the
+        display and pole-selection UI work even when ground science is blocked.
+        """
+
+        run = self._create_run()
+        if not run.inspection:
+            run.source_sha256 = self.workspace.source_sha256
+            run.source_id = self.workspace.source_id
+            run.inspection = run._inspect_source()
+            run.origin_xyz = tuple(float(value) for value in run.inspection["bounds_min_xyz"])
+        return run
 
     def _preflight_ground(self) -> None:
         """Fail before expensive science when ground input is unavailable.
@@ -234,21 +288,38 @@ class FolderOrchestrator:
 
         pdal_available = importlib.util.find_spec("pdal") is not None
         cache = self.ground_reuse_dir or _find_prior_ground_cache(self.workspace)
+        # A ground cache may match the source LAS but belong to a DIFFERENT
+        # coarse working set (e.g. copied from a one-click run).  The cache is
+        # only reusable when it also matches the workspace's own preprocess
+        # working set — otherwise recomputation is genuinely required.
+        workset_match = _ground_cache_matches_working_set(self.workspace, cache)
         self.run_metadata["GROUND_BACKEND"] = (
             "PDAL_AVAILABLE" if pdal_available else "PDAL_UNAVAILABLE"
         )
-        self.run_metadata["GROUND_CACHE"] = (
-            "REUSED_CANONICAL_CACHE" if cache is not None else "NONE"
-        )
-        if cache is not None:
+        if cache is None:
+            self.run_metadata["GROUND_CACHE"] = "NONE"
+        elif workset_match:
+            self.run_metadata["GROUND_CACHE"] = "REUSED_CANONICAL_CACHE"
             self.run_metadata["GROUND_SOURCE"] = "REUSED_CANONICAL_CACHE"
             self.run_metadata["ground_cache_source_identity_check"] = "PASS"
+        else:
+            self.run_metadata["GROUND_CACHE"] = "MISMATCHED_WORKING_SET"
+        self.run_metadata["ground_cache_working_set_match"] = (
+            "PASS" if workset_match else "MISMATCH"
+        )
         if not pdal_available and cache is None:
             raise FolderPipelineError(
                 "点云地面准备不可用：本机缺少 PDAL 地面后端，且未找到该源点云的"
                 "同源地面缓存。请先在具备 PDAL 的机器上生成地面缓存，"
                 "或在 artifacts/one_click_runs 或 artifacts/manual_single_span_runs 中"
                 "保留同源（相同 SHA256）的有效地面缓存后再运行。"
+            )
+        if not pdal_available and not workset_match:
+            raise FolderPipelineError(
+                "点云地面缓存与当前预处理工作集不匹配（GROUND_CACHE 来自另一套"
+                "粗工作集，无法复用）。本机又缺少 PDAL 地面后端，无法重新计算地面。"
+                "请先在具备 PDAL 的机器上针对当前工作集重新生成地面缓存，"
+                "或保留与本工作集一致的同源地面缓存后再运行。"
             )
 
     def _require_run(self) -> Any:
@@ -336,14 +407,39 @@ class FolderOrchestrator:
             "original_index": raw["original_index"],
         }
 
+    def _ensure_display_sample(self) -> dict[str, Any]:
+        """Hydrate the STEP-1 display sample exactly once (authoritative builder).
+
+        The Folder pipeline reuses the normal ManualSpan display lifecycle:
+        ``run._stage_display_sample()`` (a display-only bounded sample, cached at
+        ``00_input/display_sample_v4.npz``).  It never triggers downstream
+        science — no preprocess / ground / wire / tree / clearance.  If the
+        sample already exists it is returned as-is.
+        """
+
+        run = self._ensure_display_run()
+        existing = getattr(run, "display_sample", None)
+        if existing is not None:
+            return existing
+        try:
+            sample = run._stage_display_sample()
+        except Exception as exc:  # noqa: BLE001 - controlled failure for the UI
+            raise FolderPipelineError(f"点云显示采样准备失败: {_brief(exc)}") from exc
+        run.display_sample = sample
+        return sample
+
     def display_points(self) -> dict[str, Any]:
+        """Return the bounded STEP-1 display sample (never the full source)."""
+
         run = self._require_run()
+        sample = self._ensure_display_sample()
+        inspection = getattr(run, "inspection", None) or {}
         return {
-            "xyz": run.display_sample["xyz_absolute"],
-            "rgb": run.display_sample["rgb"],
-            "source_bounds": run.inspection["bounds_min_xyz"],
-            "source_bounds_max": run.inspection["bounds_max_xyz"],
-            "origin_xyz": run.origin_xyz,
+            "xyz": sample["xyz_absolute"],
+            "rgb": sample["rgb"],
+            "source_bounds": inspection.get("bounds_min_xyz", [0.0, 0.0, 0.0]),
+            "source_bounds_max": inspection.get("bounds_max_xyz", [0.0, 0.0, 0.0]),
+            "origin_xyz": tuple(getattr(run, "origin_xyz", (0.0, 0.0, 0.0))),
         }
 
     # ----------------------------------------------------------------- science
@@ -1084,6 +1180,41 @@ def _final_run_metadata(
     }
 
 
+def _ground_cache_matches_working_set(
+    workspace: FolderWorkspace, cache_dir: Path | None
+) -> bool:
+    """A ground cache is reusable only when it matches the workspace working set.
+
+    The coarse ground is computed on the PREPROCESS working set (the
+    representative LAS), not the original source.  A cache that matches the
+    source LAS but belongs to a different working set (e.g. copied from a
+    one-click run) cannot be reused without recomputation.  When there is no
+    workspace working set yet (first run) there is nothing to cross-check.
+    """
+
+    if cache_dir is None:
+        return False
+    work_las = workspace.science_run_root / "01_preprocess" / "working_set_representatives.las"
+    result_json = Path(cache_dir) / "ground_hag_result.json"
+    if not work_las.is_file() or not result_json.is_file():
+        return True  # nothing to cross-check yet (first run / partial cache)
+    import hashlib
+
+    digest = hashlib.sha256()
+    with work_las.open("rb") as stream:
+        for block in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(block)
+    current_sha = digest.hexdigest()
+    try:
+        payload = json.loads(result_json.read_text("utf-8"))
+        recorded = payload.get("source_las_sha256")
+    except Exception:  # noqa: BLE001 - best effort
+        return False
+    if not recorded:
+        return False
+    return str(recorded) == current_sha
+
+
 def _authoritative_tower_membership(workspace: FolderWorkspace) -> np.ndarray | None:
     """Return the exact original_index union of authoritative tower memberships.
 
@@ -1136,4 +1267,5 @@ __all__ = [
     "FolderOrchestrator",
     "_canonical_risk_threshold_m",
     "_authoritative_tower_membership",
+    "_ground_cache_matches_working_set",
 ]

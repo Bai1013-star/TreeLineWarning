@@ -180,31 +180,38 @@ class FolderServer:
             def do_GET(self) -> None:
                 parsed = urllib.parse.urlparse(self.path)
                 path = parsed.path
-                if path in ("/", "/step1"):
-                    return self._send_text(step1_html())
-                if path == "/step2":
-                    return self._send_text(step2_html())
-                if path == "/step3":
-                    return self._send_text(step3_html())
-                if path == "/state":
-                    return self._send_json(state_ref.state.snapshot())
-                if path == "/points":
-                    return self._points()
-                if path == "/plotly.js":
-                    try:
-                        import plotly
+                try:
+                    if path in ("/", "/step1"):
+                        return self._send_text(step1_html())
+                    if path == "/step2":
+                        return self._send_text(step2_html())
+                    if path == "/step3":
+                        return self._send_text(step3_html())
+                    if path == "/state":
+                        return self._send_json(state_ref.state.snapshot())
+                    if path == "/points":
+                        return self._points()
+                    if path == "/plotly.js":
+                        try:
+                            import plotly
 
-                        js = plotly.offline.get_plotlyjs()
-                        return self._send_text(js, "application/javascript; charset=utf-8")
-                    except Exception:  # noqa: BLE001
-                        return self._send_error("plotly.js 不可用")
-                if path == "/api/editor_data":
-                    return self._editor_data()
-                if path == "/api/final":
-                    return self._final_data()
-                if path == "/download_excel":
-                    return self._download_excel()
-                return self._send_error(f"未知路径 {path}", status=404)
+                            js = plotly.offline.get_plotlyjs()
+                            return self._send_text(js, "application/javascript; charset=utf-8")
+                        except Exception:  # noqa: BLE001
+                            return self._send_error("plotly.js 不可用")
+                    if path == "/api/editor_data":
+                        return self._editor_data()
+                    if path == "/api/final":
+                        return self._final_data()
+                    if path == "/download_excel":
+                        return self._download_excel()
+                    return self._send_error(f"未知路径 {path}", status=404)
+                except FolderPipelineError as exc:
+                    state_ref.state.set_error("STEP 1 点云预览失败", str(exc))
+                    return self._send_error(str(exc), status=500)
+                except Exception as exc:  # noqa: BLE001 - never expose a raw traceback
+                    state_ref.state.set_error("服务器处理失败", _brief(exc))
+                    return self._send_error(f"服务器处理失败: {_brief(exc)}", status=500)
 
             # -- POST ---------------------------------------------------------
             def do_POST(self) -> None:
