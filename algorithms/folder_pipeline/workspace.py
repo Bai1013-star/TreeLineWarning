@@ -22,6 +22,7 @@ repository default.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -186,7 +187,12 @@ def discover_workspace(
         raise FolderWorkspaceError(f"工作区目录不存在: {root}")
     input_dir = root / POINTCLOUD_DIR_NAME / POINTCLOUD_SUBDIR_NAME
     source = _single_pointcloud(input_dir)
-    source_sha256 = _sha256_file(source)
+    # A completed workspace has already hashed the (possibly 105M-point) source
+    # and persisted the identity in source_inspection.json.  Reusing it makes a
+    # Step-2 restart quick instead of re-traversing the whole LAS.  The reuse is
+    # guarded by the recorded absolute source path: only the exact same source
+    # file is accepted, otherwise the source is hashed again.
+    source_sha256 = _reused_or_recomputed_source_sha256(root, source)
     source_id = f"folder_source_{source_sha256[:16]}"
     workspace = FolderWorkspace(
         root=root,
@@ -196,6 +202,29 @@ def discover_workspace(
     )
     workspace.ensure_dirs()
     return workspace
+
+
+def _reused_or_recomputed_source_sha256(root: Path, source: Path) -> str:
+    """Return the persisted source SHA-256 when safe, else recompute it.
+
+    The authoritative science source inspection is written by the manual-span
+    run under ``source_cache/science/00_input/source_inspection.json`` and
+    records both the hashed source path and its SHA-256.  Reuse it only when
+    the recorded input path resolves to the exact same source file; otherwise
+    the source is hashed (fresh / moved / changed workspace).
+    """
+
+    inspection = root / SOURCE_CACHE_DIR / SCIENCE_SUBDIR / "00_input" / "source_inspection.json"
+    try:
+        payload = json.loads(inspection.read_text("utf-8"))
+        recorded = payload.get("input_file")
+        if recorded and Path(recorded).resolve() == source.resolve():
+            recorded_sha = payload.get("input_sha256")
+            if isinstance(recorded_sha, str) and len(recorded_sha) == 64:
+                return recorded_sha
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return _sha256_file(source)
 
 
 def resolve_sources(workspace_root: Path | None = None) -> Iterable[Path]:

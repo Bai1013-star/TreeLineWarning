@@ -219,8 +219,13 @@ class FolderOrchestrator:
         self._science_lazy_lock: Any = None
 
     # ------------------------------------------------------------------ setup
-    def initialize(self) -> dict[str, Any]:
-        """Create and initialize the authoritative manual-span run."""
+    def initialize(self, *, load_evidence: bool = True) -> dict[str, Any]:
+        """Create and initialize the authoritative manual-span run.
+
+        ``load_evidence`` — passed to the run.  A completed Step-2 workspace
+        restart skips the heavy coarse-representative evidence load (the editor
+        does not need it); science stages load it on demand.
+        """
 
         from algorithms.folder_pipeline.state import _make_progress_callback
 
@@ -234,7 +239,10 @@ class FolderOrchestrator:
         self._preflight_ground()
         self.state.set_step(STEP_SELECTING_SPAN, "[1/3] 正在准备点云...")
         reuse = self.ground_reuse_dir or _find_prior_ground_cache(self.workspace)
-        result = self.run.initialize()
+        result = self.run.initialize(
+            load_evidence=load_evidence,
+            source_sha256=self.workspace.source_sha256,
+        )
         if reuse is not None:
             self.run_metadata["ground_cache_reused"] = str(reuse)
         return result
@@ -363,7 +371,19 @@ class FolderOrchestrator:
         )
         run.span_digest = _selection_digest(payload)
         run.selection_payload = payload
-        self.state.update(selection=payload)
+        # Restore the raw-click session state so the app does not behave as if
+        # the owner must select Pole A/B again: the persisted payload records
+        # the original clicked absolute coordinates for both poles.
+        restored_clicks: dict[str, dict[str, float]] = {"A": {}, "B": {}}
+        for label in ("A", "B"):
+            clicked = payload.get(f"pole_{label.lower()}") or {}
+            clicked_xyz = clicked.get("clicked_xyz_absolute_m")
+            if clicked_xyz:
+                restored_clicks[label] = {
+                    "x": float(clicked_xyz[0]),
+                    "y": float(clicked_xyz[1]),
+                }
+        self.state.update(selection=payload, clicks=restored_clicks)
         self.state.set_step(STEP_SELECTING_SPAN)
         return payload
 
@@ -639,6 +659,61 @@ class FolderOrchestrator:
         self.state.set_step(STEP_TREE_EDITING, "等待人工审核单木...")
         return self.edit_session
 
+    def hydrate_completed_workspace(self) -> None:
+        """Restore a completed Step-2 workspace from persisted artifacts only.
+
+        This is the restart path for a workspace whose science already finished:
+        it never re-runs preprocess / Ground / Wire / Tree, never re-hashes the
+        105M-point LAS, and never loads the heavy coarse-representative evidence.
+        Everything the Step-2 editor needs (background sample, selection, wire
+        runtime, region dirs, original trees) is loaded from the persisted
+        artifacts/checkpoints.
+        """
+
+        run = self._ensure_display_run()
+        # The run's source identity must match the science checkpoints' key so a
+        # later (owner-initiated) science re-run still reuses them.
+        run.source_sha256 = self.workspace.source_sha256
+        run.source_id = f"manual_span_{self.workspace.source_sha256[:16]}"
+        if run.inspection:
+            run.origin_xyz = tuple(
+                float(value) for value in run.inspection["bounds_min_xyz"]
+            )
+        self._ensure_display_sample()
+        self.load_selection()
+        self.hydrate_wire_runtime()
+        self.build_editor()
+
+    def hydrate_wire_runtime(self) -> None:
+        """Load the persisted 05_wire result + region dirs into the runtime model.
+
+        A Folder server restart builds the run from checkpoints but never
+        re-runs science, so ``run.wire_outcome`` stays None.  This restores the
+        authoritative Wire V2 result (strands + exact confirmed member source
+        indices) and the region dirs from the persisted artifacts so Step-2
+        display can show the confirmed conductors without recomputation.
+        """
+
+        run = self.run
+        if run is None:
+            return
+        if run.wire_outcome is None:
+            span_dir = run.run_root / "05_wire" / "span_001"
+            if (span_dir / "w1_arrays.npz").is_file() and (
+                span_dir / "span_wire_result.json"
+            ).is_file():
+                from algorithms.spans.wire import load_span_wire_result
+
+                run.wire_outcome = load_span_wire_result(span_dir)
+        if run.wire_region_dir is None:
+            wire_dir = run.run_root / "04_regions" / "wire_region"
+            if (wire_dir / "region_sidecar.json").is_file():
+                run.wire_region_dir = wire_dir
+        if run.vegetation_region_dir is None:
+            veg_dir = run.run_root / "04_regions" / "vegetation_region"
+            if (veg_dir / "region_sidecar.json").is_file():
+                run.vegetation_region_dir = veg_dir
+
     def editor_snapshot(self) -> dict[str, Any]:
         session = self.build_editor()
         return session.snapshot()
@@ -790,18 +865,34 @@ class FolderOrchestrator:
             }
             for record in reconciled.global_tree_records
         ]
+        original_index = np.asarray(reconciled.final_original_index, dtype=np.int64)
+        tree_id = np.asarray(reconciled.final_tree_id, dtype=np.int32)
+        xyz_local_m = np.asarray(reconciled.final_xyz_local_m, dtype=np.float64)
         _write_npz(
             self.workspace.original_tree_npz,
-            original_index=np.asarray(reconciled.final_original_index, dtype=np.int64),
-            tree_id=np.asarray(reconciled.final_tree_id, dtype=np.int32),
-            xyz_local_m=np.asarray(reconciled.final_xyz_local_m, dtype=np.float64),
+            original_index=original_index,
+            tree_id=tree_id,
+            xyz_local_m=xyz_local_m,
         )
+        # Memmap-compatible editor store (npz members cannot be memory-mapped in
+        # NumPy 2.x): lets a Step-2 restart read the 16M-row editor arrays from
+        # disk instead of materializing ~585 MB of ordinary RAM for display.
+        _write_editor_store(self.workspace, original_index, tree_id, xyz_local_m)
         _write_json(
             self.workspace.original_tree_manifest,
             {
                 "schema": "folder-to-excel-tree-segmentation-original-v1",
                 "tree_backend": "crown_stem_hybrid",
+                # algorithm_tree_count = EDITOR-ELIGIBLE trees (span-owned after
+                # reconcile); source_algorithm_tree_count = the full algorithm
+                # CONFIRMED_TREE records including halo-context trees that the
+                # reconcile ownership rule does not promote to the editor.
                 "algorithm_tree_count": len(reconciled.global_tree_records),
+                "source_algorithm_tree_count": (
+                    len(self.run.tree_outcome.tree_records)
+                    if self.run.tree_outcome is not None
+                    else len(reconciled.global_tree_records)
+                ),
                 "trees": records,
                 "run_metadata": self.run_metadata,
             },
@@ -817,10 +908,19 @@ class FolderOrchestrator:
         manifest = json.loads(self.workspace.original_tree_manifest.read_text("utf-8"))
         records = manifest.get("trees", [])
         self.run_metadata.update(manifest.get("run_metadata", {}))
-        with np.load(self.workspace.original_tree_npz, allow_pickle=False) as stream:
-            original_index = np.asarray(stream["original_index"], dtype=np.int64)
-            tree_id = np.asarray(stream["tree_id"], dtype=np.int32)
-            xyz_local_m = np.asarray(stream["xyz_local_m"], dtype=np.float64)
+        # Load the original-tree arrays as disk-backed memmaps when the editor
+        # store is present (preferred): the editor only relabels membership (XYZ
+        # unchanged), so tens of millions of rows never need to sit in ordinary
+        # RAM just for Step-2 display.  Falls back to the npz for older
+        # workspaces that predate the store.
+        store_arrays = _load_editor_store(self.workspace)
+        if store_arrays is not None:
+            original_index, tree_id, xyz_local_m = store_arrays
+        else:
+            with np.load(self.workspace.original_tree_npz, allow_pickle=False) as stream:
+                original_index = np.asarray(stream["original_index"], dtype=np.int64)
+                tree_id = np.asarray(stream["tree_id"], dtype=np.int32)
+                xyz_local_m = np.asarray(stream["xyz_local_m"], dtype=np.float64)
         from algorithms.folder_pipeline.tree_editor import OriginalTree
 
         built = [
@@ -970,6 +1070,69 @@ def _region_overlap_count(region: Any, candidate: np.ndarray) -> int:
         positions = np.minimum(positions, len(candidate) - 1)
         count += int(np.count_nonzero(candidate[positions] == chunk))
     return count
+
+
+def _editor_store_dir(workspace: Any) -> Path:
+    """Directory holding memmap-compatible copies of the editor input arrays."""
+    return Path(workspace.tree_analysis_dir) / "tree_editor_store"
+
+
+def _write_editor_store(
+    workspace: Any,
+    original_index: np.ndarray,
+    tree_id: np.ndarray,
+    xyz_local_m: np.ndarray,
+) -> Path:
+    """Persist the Step-2 editor arrays as standalone .npy memmap files.
+
+    npz members cannot be memory-mapped in NumPy 2.x, so a completed workspace
+    would otherwise reload ~585 MB of editor arrays into RAM on every restart.
+    The .npy files are loaded with ``open_memmap(mode="r")`` and keep the editor
+    display disk-backed.
+    """
+
+    store = _editor_store_dir(workspace)
+    store.mkdir(parents=True, exist_ok=True)
+    _write_editor_array(store / "original_index.npy", original_index)
+    _write_editor_array(store / "tree_id.npy", tree_id)
+    _write_editor_array(store / "xyz_local_m.npy", xyz_local_m)
+    (store / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema": "tree-editor-store-v1",
+                "count": int(len(original_index)),
+                "xyz_dtype": "float64",
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return store
+
+
+def _write_editor_array(path: Path, array: np.ndarray) -> None:
+    """Atomic ``np.save`` of a .npy file (memmap-compatible for later reads)."""
+    # np.save appends ".npy" unless the target already ends with it.
+    temporary = path.with_name(path.stem + ".tmp.npy")
+    np.save(temporary, array)
+    temporary.replace(path)
+
+
+def _load_editor_store(workspace: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Return memmap views (original_index, tree_id, xyz_local_m) of the editor input.
+
+    ``None`` when the store is absent (older workspace) so the caller falls back
+    to loading the npz.
+    """
+
+    store = _editor_store_dir(workspace)
+    names = ("original_index.npy", "tree_id.npy", "xyz_local_m.npy")
+    if not all((store / name).is_file() for name in names):
+        return None
+    return tuple(
+        np.lib.format.open_memmap(store / name, mode="r")
+        for name in names
+    )  # type: ignore[return-value]
 
 
 def _tree_input_audit(

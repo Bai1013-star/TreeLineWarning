@@ -117,6 +117,21 @@ class FolderServer:
     def _prepare(self) -> None:
         """Resume persisted checkpoints or start fresh."""
 
+        # A completed Step-2 workspace must restart by RESTORING persisted
+        # artifacts — never by re-running science or loading the heavy coarse
+        # representative evidence (not needed for the editor display).
+        completed = (
+            self.workspace.original_tree_npz.is_file()
+            and self.workspace.original_tree_manifest.is_file()
+        )
+        if completed:
+            try:
+                self.orchestrator.hydrate_completed_workspace()
+            except Exception as exc:  # noqa: BLE001 - surface a clear error
+                self.state.set_error("恢复 Step 2 失败", _brief(exc))
+                return
+            self.state.set_step(STEP_TREE_EDITING, "等待人工审核单木...")
+            return
         try:
             self.orchestrator.initialize()
         except Exception as exc:  # noqa: BLE001 - surface a clear Chinese error
@@ -133,10 +148,6 @@ class FolderServer:
         selection = self.orchestrator.load_selection()
         if selection is None:
             self.state.set_step(STEP_SELECTING_SPAN, "[1/3] 等待人工选择档距...")
-            return
-        if self.workspace.original_tree_npz.is_file():
-            self.orchestrator.build_editor()
-            self.state.set_step(STEP_TREE_EDITING, "等待人工审核单木...")
             return
         # Selection confirmed but science not finished -> (re)start science.
         self.state.set_step(STEP_SCIENCE_RUNNING, "[2/3] 正在执行科学分析...")
@@ -522,7 +533,10 @@ class FolderServer:
             for tree in snap["trees"]:
                 color_map[tree["tree_id"]] = _tree_color(tree)
             rows = _even_rows(len(original.xyz_local_m), _MAX_TREE_DISPLAY)
-            xyz = np.asarray(original.xyz_local_m, dtype=np.float64)[rows] + origin
+            # Sample FIRST, then add the origin only on the sampled rows: the
+            # editor xyz is a large (possibly memmap-backed) array, and this
+            # avoids materializing the full array just for display.
+            xyz = original.xyz_local_m[rows] + origin
             tids = np.asarray(original.tree_id, dtype=np.int32)[rows]
             colors: list[str] = []
             for tid in tids:
@@ -638,6 +652,7 @@ class FolderServer:
 
     def _wire_member_display(self, maximum: int) -> dict[str, Any]:
         run = self.orchestrator.run
+        self.orchestrator.hydrate_wire_runtime()
         try:
             from algorithms.vegetation.coarse_to_fine import load_raw_region
 
@@ -659,6 +674,7 @@ class FolderServer:
 
     def _wire_curves_display(self) -> dict[str, Any]:
         run = self.orchestrator.run
+        self.orchestrator.hydrate_wire_runtime()
         origin = np.asarray(run.origin_xyz, dtype=np.float64)
         curves: list[list[float]] = []
         for strand in run.wire_outcome.strands:

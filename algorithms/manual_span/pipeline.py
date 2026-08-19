@@ -563,11 +563,24 @@ class ManualSingleSpanRun:
         self._run_started = time.perf_counter()
 
     # ------------------------------------------------------------------ init
-    def initialize(self) -> dict[str, Any]:
+    def initialize(
+        self,
+        *,
+        load_evidence: bool = True,
+        source_sha256: str | None = None,
+    ) -> dict[str, Any]:
         """Inspect the source, build the coarse working set and Ground/HAG.
 
         All three are checkpointed and cached so a resumed run never re-reads
         the 105M-point source or re-runs ground.
+
+        ``load_evidence`` — when False, the coarse-representative covariance
+        evidence (the heaviest in-memory initialization cost) is left unloaded.
+        A completed Step-2 workspace does not need it for the editor; science
+        stages that do need it load it on demand.
+
+        ``source_sha256`` — an already-known source identity (from the Folder
+        workspace) avoids re-hashing the 105M-point LAS on every restart.
         """
 
         started = time.perf_counter()
@@ -580,7 +593,9 @@ class ManualSingleSpanRun:
                       "08_metrics", "09_risk", "10_visuals", "11_report"):
             (self.run_root / stage).mkdir(parents=True, exist_ok=True)
 
-        self.source_sha256 = sha256_file(self.source)
+        self.source_sha256 = (
+            str(source_sha256) if source_sha256 is not None else sha256_file(self.source)
+        )
         self.source_id = f"manual_span_{self.source_sha256[:16]}"
         self.inspection = self._inspect_source()
         self.origin_xyz = tuple(float(value) for value in self.inspection["bounds_min_xyz"])
@@ -608,7 +623,10 @@ class ManualSingleSpanRun:
         )
         _report(self.progress, 2, STAGE_LABELS[2], True, time.perf_counter() - started_stage)
         self.coarse_ground_xyz_absolute = load_coarse_ground_representatives(self.ground)
-        self.evidence = self._load_evidence()
+        if load_evidence:
+            self.evidence = self._load_evidence()
+        else:
+            self.evidence = None
         self.display_sample = self._stage_display_sample()
         elapsed = time.perf_counter() - started
         self.timings["init"] = elapsed
@@ -817,6 +835,19 @@ class ManualSingleSpanRun:
             origin_xyz=self.origin_xyz,
         )
 
+    def _ensure_evidence(self) -> GroundEvidence:
+        """Lazily load the coarse-representative evidence when a stage needs it.
+
+        A completed Step-2 workspace restarts without the evidence in memory;
+        science/refinement stages that genuinely need it load it on demand here.
+        """
+
+        if self.evidence is None:
+            if self.ground is None:
+                raise RuntimeError("MANUAL_SPAN_GROUND_NOT_READY")
+            self.evidence = self._load_evidence()
+        return self.evidence
+
     def _stage_display_sample(self) -> dict[str, np.ndarray]:
         """Deterministic RAW / pre-denoise / pre-ground display sample.
 
@@ -916,8 +947,7 @@ class ManualSingleSpanRun:
         can ask for a re-click of exactly that pole.
         """
 
-        if self.evidence is None:
-            raise RuntimeError("MANUAL_SPAN_NOT_INITIALIZED")
+        self._ensure_evidence()
         pole_a = self._refine_pole("A", tuple(float(value) for value in click_a_xyz))
         pole_b = self._refine_pole("B", tuple(float(value) for value in click_b_xyz))
         if not pole_a.defensible:
@@ -1067,8 +1097,9 @@ class ManualSingleSpanRun:
         # Coarse wire evidence restricted to the span halo.  Dual-path router:
         # PATH A (strict component gates, unchanged) union PATH B (span-aligned
         # representative rescue of components PATH A rejected).
+        evidence = self._ensure_evidence()
         wire_evidence = detect_coarse_wire_evidence_with_rescue(
-            self.evidence,
+            evidence,
             self.cfg,
             self.span,
             origin_xyz=self.origin_xyz,
@@ -1076,14 +1107,14 @@ class ManualSingleSpanRun:
         origin = np.asarray(self.origin_xyz, dtype=np.float64)
         halo_min = np.asarray(self.span.halo_bounds_min_xyz, dtype=np.float64)
         halo_max = np.asarray(self.span.halo_bounds_max_xyz, dtype=np.float64)
-        inside = np.all(self.evidence.xyz_local_m >= halo_min, axis=1) & np.all(
-            self.evidence.xyz_local_m <= halo_max, axis=1
+        inside = np.all(evidence.xyz_local_m >= halo_min, axis=1) & np.all(
+            evidence.xyz_local_m <= halo_max, axis=1
         )
         strict_mask = np.asarray(wire_evidence.candidate_mask, dtype=bool) & inside
         rescued_mask = np.asarray(wire_evidence.rescued_mask, dtype=bool) & inside
         wire_routed_mask = strict_mask | rescued_mask
         wire_candidate_ids = np.unique(
-            self.evidence.representative_id[wire_routed_mask]
+            evidence.representative_id[wire_routed_mask]
         ).astype(np.uint32)
         strict_routed_count = int(np.count_nonzero(strict_mask))
         rescued_routed_count = int(np.count_nonzero(rescued_mask))
