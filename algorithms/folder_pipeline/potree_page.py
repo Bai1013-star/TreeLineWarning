@@ -147,7 +147,6 @@ def potree_step1_html(
   let mode = "IDLE"; // IDLE | SELECT_A | SELECT_B
   let poles = {{A: null, B: null}};
   let markers = {{A: null, B: null}};
-  let spanLine = null;
   const renderArea = document.getElementById("render_area");
   const $status = (t) => (document.getElementById("status").textContent = t);
   const $msg = (t) => (document.getElementById("msg").textContent = t);
@@ -179,39 +178,36 @@ def potree_step1_html(
     return body;
   }}
 
-  // ---- markers (THREE sprites over the RGB cloud) -------------------------
+  // ---- markers: Potree's OWN TextSprite (internal THREE, no global THREE) --
+  // Potree 1.8.2 does NOT expose a global THREE; its official examples create
+  // markers with Potree.TextSprite (uses the bundled THREE).  Custom page code
+  // must never reference the global THREE (that throws "THREE is not defined").
   function makeMarker(color, label) {{
-    const canvas = document.createElement("canvas");
-    canvas.width = 48; canvas.height = 48;
-    const ctx = canvas.getContext("2d");
-    ctx.beginPath(); ctx.arc(24, 24, 18, 0, Math.PI * 2);
-    ctx.fillStyle = color; ctx.fill();
-    ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.stroke();
-    ctx.fillStyle = "#fff"; ctx.font = "bold 16px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText(label, 24, 24);
-    const texture = new THREE.CanvasTexture(canvas);
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({{map: texture, depthTest: false}}));
-    sprite.scale.set(3.0, 3.0, 1.0);
+    const sprite = new Potree.TextSprite(label);
+    sprite.setTextColor({{r: 255, g: 255, b: 255, a: 1.0}});
+    sprite.setBorderColor({{r: 0, g: 0, b: 0, a: 1.0}});
+    sprite.setBackgroundColor(color);
+    sprite.fontsize = 24;
+    sprite.material.depthTest = false;
+    sprite.scale.set(2.0, 2.0, 1.0);
     return sprite;
   }}
 
   function setMarker(pole, xyz) {{
-    if (markers[pole]) {{ viewer.scene.remove(markers[pole]); }}
-    const m = makeMarker(pole === "A" ? "#ff5252" : "#40c4ff", pole);
+    if (markers[pole]) {{ viewer.scene.scene.remove(markers[pole]); }}
+    const m = makeMarker(pole === "A" ? {{r: 255, g: 82, b: 82, a: 1.0}} : {{r: 64, g: 196, b: 255, a: 1.0}}, pole);
     m.position.set(xyz[0], xyz[1], xyz[2]);
-    viewer.scene.add(m);
+    viewer.scene.scene.add(m);
     markers[pole] = m;
-    drawSpan();
+    showSpanInfo();
   }}
 
-  function drawSpan() {{
-    if (spanLine) {{ viewer.scene.remove(spanLine); spanLine = null; }}
-    if (!poles.A || !poles.B) return;
-    const pts = [new THREE.Vector3(...poles.A), new THREE.Vector3(...poles.B)];
-    const geo = new THREE.BufferGeometry().setFromPoints(pts);
-    const line = new THREE.Line(geo, new THREE.LineBasicMaterial({{color: 0x00e676, linewidth: 2}}));
-    viewer.scene.add(line);
-    spanLine = line;
+  function showSpanInfo() {{
+    if (poles.A && poles.B) {{
+      const dx = poles.A[0] - poles.B[0], dy = poles.A[1] - poles.B[1], dz = poles.A[2] - poles.B[2];
+      const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      $status("已选择杆塔 A 与 B，档距长度 " + len.toFixed(2) + " m");
+    }}
   }}
 
   // ---- pick + refine ------------------------------------------------------
@@ -270,7 +266,7 @@ def potree_step1_html(
         // Canonical 1.8.2 call (matches Potree's own drag tool at the pinned
         // bundle): the ACTIVE camera is viewer.scene.getActiveCamera().
         // viewer.scene.camera is undefined in Potree 1.8.2 and makes
-        // THREE.Raycaster.setFromCamera read "undefined.type".
+        // (the internal THREE raycaster setFromCamera then reads "undefined.type").
         const camera = viewer.scene.getActiveCamera();
         const pointclouds = viewer.scene.pointclouds;
         const hit = Potree.Utils.getMousePointCloudIntersection(
@@ -397,8 +393,7 @@ def potree_step1_html(
     document.getElementById("a_x").textContent = document.getElementById("a_y").textContent = document.getElementById("a_z").textContent = "—";
     document.getElementById("b_x").textContent = document.getElementById("b_y").textContent = document.getElementById("b_z").textContent = "—";
     document.getElementById("a_s").textContent = document.getElementById("b_s").textContent = "—";
-    for (const p of ["A", "B"]) {{ if (markers[p]) {{ viewer.scene.remove(markers[p]); markers[p] = null; }} }}
-    if (spanLine) {{ viewer.scene.remove(spanLine); spanLine = null; }}
+    for (const p of ["A", "B"]) {{ if (markers[p]) {{ viewer.scene.scene.remove(markers[p]); markers[p] = null; }} }}
     await post("/reselect", {{}});
   }};
   document.getElementById("btn-fit").onclick = fitView;

@@ -176,6 +176,15 @@ def test_potree_page_is_primary_when_cache_ready(tmp_path: Path) -> None:
     # 6. Controlled no-hit message + console stack logging (no uncaught JS error).
     assert "未拾取到点，请直接点击可见点云后重试" in html
     assert 'console.error("[step1] pick error:", e)' in html
+    # 7. NO global THREE in the page's executable JS: Potree 1.8.2 does not
+    #    expose a global THREE (the real browser threw "THREE is not defined");
+    #    markers use Potree.TextSprite (the bundled THREE).
+    assert "new Potree.TextSprite(" in html
+    assert "viewer.scene.scene.add(" in html
+    js = html[html.index("(function () {"):]
+    import re as _re
+
+    assert not _re.search(r"(?<![A-Za-z0-9_])THREE\.", js)  # comment-only, never executed
 
 
 def test_plotly_is_fallback_route(tmp_path: Path) -> None:
