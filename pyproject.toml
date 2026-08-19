@@ -11,6 +11,7 @@ dependencies = [
     "Pillow>=12.3",
     "laspy==2.7.0",
     "numpy>=1.26,<3",
+    "openpyxl>=3.1",
     "scipy>=1.12,<2",
     "plotly>=6.9",
 ]

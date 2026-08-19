@@ -550,6 +550,12 @@ class FolderOrchestrator:
         )
         self.run_metadata["excel_path"] = str(excel_path)
 
+        # 9. persist the STEP 3 final result page (offline copy of /step3).
+        from algorithms.folder_pipeline.html import step3_html
+
+        self.workspace.final_html_path.write_text(step3_html(), encoding="utf-8")
+        self.run_metadata["final_html_path"] = str(self.workspace.final_html_path)
+
         summary = {
             "RUN_STATUS": "PASS",
             "OUTPUT_DIRECTORY": str(self.workspace.export_dir),
@@ -709,6 +715,12 @@ def _build_selection_payload(workspace: FolderWorkspace, run: Any) -> dict[str, 
     payload["project_id"] = f"folder_{workspace.source_sha256[:8]}"
     payload["group_id"] = "G001"
     payload["span_id"] = "S001"
+    payload["start_tower_id"] = "T001"  # pole A, deterministic allocation
+    payload["end_tower_id"] = "T002"  # pole B
+    payload["tower_membership_references"] = {
+        "pole_a": "MANUAL_POLE_REFINEMENT_SHAFT_CORE",
+        "pole_b": "MANUAL_POLE_REFINEMENT_SHAFT_CORE",
+    }
     payload["created_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     return payload
 
@@ -992,8 +1004,8 @@ def _final_run_metadata(
         "project_id": (selection or {}).get("project_id"),
         "group_id": (selection or {}).get("group_id"),
         "span_id": (selection or {}).get("span_id"),
-        "start_tower_id": "T001",  # pole A, deterministic allocation
-        "end_tower_id": "T002",  # pole B
+        "start_tower_id": (selection or {}).get("start_tower_id", "T001"),
+        "end_tower_id": (selection or {}).get("end_tower_id", "T002"),
         "start_tower_xyz": (
             (selection or {}).get("pole_a", {}).get("base_xyz_absolute_m")
         ),
