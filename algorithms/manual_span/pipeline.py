@@ -483,6 +483,30 @@ def _remove_tree(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
+def _pole_shaft_source_indices(run: Any, pole: Any) -> np.ndarray:
+    """Exact full-res original_index of a confirmed pole shaft core.
+
+    Mirrors the Folder orchestrator's tower exclusion: a tight 0.6 m shaft
+    cylinder around the refined base centre, from just below base to just above
+    top.  Reuses the cached pole-local raw recovery (never a large buffer).
+    """
+
+    base = np.asarray(pole.base_xyz_absolute_m, dtype=np.float64)
+    top = np.asarray(pole.top_xyz_absolute_m, dtype=np.float64)
+    local = run.local_raw_for_xy(float(base[0]), float(base[1]))
+    xyz = np.asarray(local["xyz_absolute"], dtype=np.float64)
+    idx = np.asarray(local["original_index"], dtype=np.int64)
+    if len(xyz) == 0:
+        return np.empty(0, dtype=np.int64)
+    xy_dist = np.linalg.norm(xyz[:, :2] - base[:2][None, :], axis=1)
+    mask = (
+        (xy_dist <= 0.6)
+        & (xyz[:, 2] >= float(base[2]) - 0.5)
+        & (xyz[:, 2] <= float(top[2]) + 1.0)
+    )
+    return np.unique(idx[mask])
+
+
 class ManualSingleSpanRun:
     """One manual single-span run: init -> selection -> analysis -> finalize."""
 
@@ -1252,25 +1276,31 @@ class ManualSingleSpanRun:
     def _tree_input_excluding_confirmed_wire(
         self, veg_region: Any, span_dir: Path
     ) -> Any:
-        """Subtract exact FINAL confirmed conductor members from tree input.
+        """Subtract exact FINAL confirmed conductor + tower members from tree input.
 
         ``FINAL_TREE_INPUT = VEGETATION - CONFIRMED_WIRE - CONFIRMED_TOWER``.
-        Only ``wire_outcome.confirmed_member_source_index`` — the exact
-        FULL_RESOLUTION source rows of FINAL confirmed conductors — is removed
-        here; broad (unconfirmed) coarse wire candidates never exclude
-        vegetation/tree membership.
+        Only the exact FULL_RESOLUTION source rows of FINAL confirmed conductors
+        and the confirmed pole shaft cores are removed here; broad (unconfirmed)
+        coarse wire candidates never exclude vegetation/tree membership.
         """
 
+        parts: list[np.ndarray] = []
         confirmed = np.asarray(
             self.wire_outcome.confirmed_member_source_index, dtype=np.int64
         )
-        if len(confirmed) == 0:
+        parts.append(confirmed)
+        for pole in (self.pole_a, self.pole_b):
+            if pole is None:
+                continue
+            parts.append(_pole_shaft_source_indices(self, pole))
+        excluded = np.unique(np.concatenate(parts))
+        if len(excluded) == 0:
             return veg_region
         from algorithms.spans.region import subset_raw_region_excluding_source_indices
 
         return subset_raw_region_excluding_source_indices(
             veg_region,
-            confirmed,
+            excluded,
             span_dir / "tree_input",
         )
 

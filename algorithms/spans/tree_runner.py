@@ -146,6 +146,127 @@ def _span_bounds_in_scene_local_frame(
     )
 
 
+# Bounded full-resolution output assembly.  The frozen CROWN_STEM_HYBRID
+# geometry runs on ~434k fine representatives (~120 MB); the only memory hotspot
+# was the FULL-RESOLUTION membership output assembly (full float64 XYZ copies,
+# a global int64 flatnonzero, two redundant 26.8M np.unique validations and the
+# span-core temporaries).  These helpers assemble the same output with bounded
+# memory: a two-pass chunked scan writing exact-size disk-backed memmaps.
+_TREE_MEMBERS_CHUNK_ROWS = 500_000  # engineering-only bounded default, not science
+
+
+def _validate_region_original_index_unique(
+    region: Any, *, chunk_size: int = _TREE_MEMBERS_CHUNK_ROWS
+) -> None:
+    """Bounded ascending + duplicate validation of a RawRegion's source rows.
+
+    RawRegion rows are streamed in ascending source-row order and never
+    duplicate source rows, so a bounded per-chunk scan with a single window
+    detects any violation without a global sort/hash or a full index copy.
+    This replaces the two redundant 26.8M ``np.unique`` validations.
+    """
+
+    if region.count == 0:
+        return
+    original = region.original_index()
+    previous = -1
+    for start in range(0, region.count, chunk_size):
+        stop = min(region.count, start + chunk_size)
+        chunk = np.asarray(original[start:stop], dtype=np.int64)
+        if np.any(chunk[1:] <= chunk[:-1]):
+            raise PoleEvidenceError("TREE_MEMBERS_SOURCE_INDEX_NOT_UNIQUE")
+        if start > 0 and chunk[0] <= previous:
+            raise PoleEvidenceError("TREE_MEMBERS_SOURCE_INDEX_NOT_UNIQUE")
+        previous = int(chunk[-1])
+
+
+def _assemble_tree_members_store(
+    region: Any,
+    raw_tree: np.ndarray,
+    span: SpanRecord,
+    origin_xyz: tuple[float, float, float],
+    output_root: Any,
+    *,
+    chunk_size: int = _TREE_MEMBERS_CHUNK_ROWS,
+) -> tuple[np.memmap, np.memmap, np.memmap, np.memmap, int, Path]:
+    """Two-pass disk-backed full-resolution tree membership assembly.
+
+    PASS 1 counts assigned rows (``tree_id >= 0``) in bounded chunks.
+    ALLOCATE exact-size disk-backed memmaps (float32 XYZ, int64 source rows,
+    int32 tree id, bool in-core).
+    PASS 2 recomputes the same chunk masks and fills the memmaps, advancing an
+    output cursor; the final cursor must equal PASS 1's count.
+
+    The span-core (``in_core``) flag is a per-row COLUMN, not a filter — exactly
+    matching the legacy contract (assigned core AND halo rows are both kept).
+    The chunked span-core uses the SAME canonical span math as ``_row_in_span_core``
+    on each bounded chunk, so it is bit-identical to the legacy full-array mask.
+    """
+
+    _validate_region_original_index_unique(region, chunk_size=chunk_size)
+    raw_tree = np.asarray(raw_tree, dtype=np.int32)
+    if raw_tree.shape != (region.count,):
+        raise PoleEvidenceError("TREE_MEMBERS_RAW_TREE_ALIGNMENT")
+
+    # PASS 1 — count assigned rows (tree members) only.
+    final_count = 0
+    for start in range(0, region.count, chunk_size):
+        stop = min(region.count, start + chunk_size)
+        final_count += int(np.count_nonzero(raw_tree[start:stop] >= 0))
+
+    store_root = Path(output_root) / "tree_members_store"
+    store_root.mkdir(parents=True, exist_ok=True)
+    xyz_path = store_root / "xyz.npy"
+    original_path = store_root / "original_index.npy"
+    tree_path = store_root / "tree_id.npy"
+    core_path = store_root / "in_core.npy"
+    xyz_out = np.lib.format.open_memmap(xyz_path, mode="w+", dtype="<f4", shape=(final_count, 3))
+    original_out = np.lib.format.open_memmap(original_path, mode="w+", dtype="<i8", shape=(final_count,))
+    tree_out = np.lib.format.open_memmap(tree_path, mode="w+", dtype="<i4", shape=(final_count,))
+    core_out = np.lib.format.open_memmap(core_path, mode="w+", dtype=bool, shape=(final_count,))
+
+    # PASS 2 — fill the memmaps chunk by chunk (bounded temporaries).
+    xyz_mem = region.xyz()
+    original_mem = region.original_index()
+    cursor = 0
+    for start in range(0, region.count, chunk_size):
+        stop = min(region.count, start + chunk_size)
+        xyz_chunk = np.asarray(xyz_mem[start:stop], dtype=np.float32)
+        tree_chunk = raw_tree[start:stop]
+        assigned = tree_chunk >= 0
+        count = int(np.count_nonzero(assigned))
+        if count == 0:
+            continue
+        # Same canonical span-core math as the legacy full-array mask, per chunk.
+        core_mask = _row_in_span_core(xyz_chunk, span, origin_xyz)
+        end = cursor + count
+        xyz_out[cursor:end] = xyz_chunk[assigned]
+        original_out[cursor:end] = np.asarray(original_mem[start:stop], dtype=np.int64)[assigned]
+        tree_out[cursor:end] = tree_chunk[assigned]
+        core_out[cursor:end] = core_mask[assigned]
+        cursor = end
+        del xyz_chunk, tree_chunk, assigned, core_mask
+    if cursor != final_count:
+        raise PoleEvidenceError("TREE_MEMBERS_COUNT_MISMATCH")
+    xyz_out.flush()
+    original_out.flush()
+    tree_out.flush()
+    core_out.flush()
+    _write_json(
+        store_root / "manifest.json",
+        {
+            "schema": "tree-members-store-v1",
+            "count": int(final_count),
+            "xyz_dtype": "<f4",
+            "original_index_dtype": "<i8",
+            "tree_id_dtype": "<i4",
+            "in_core_dtype": "bool",
+            "chunk_rows": int(chunk_size),
+        },
+    )
+    return xyz_out, original_out, tree_out, core_out, int(final_count), store_root
+
+
 def _run_span_tree_pipeline_legacy(
     span: SpanRecord,
     vegetation_region: Any,
@@ -244,21 +365,20 @@ def _run_span_tree_pipeline_legacy(
         config,
     )
     raw_tree = np.asarray(result["raw_tree_id"], dtype=np.int32)
-    raw_xyz_all = subset.xyz().astype(np.float64, copy=False)
-    assigned_rows = np.flatnonzero(raw_tree >= 0)
-    in_core = _row_in_span_core(raw_xyz_all, span, origin_xyz)
-    assigned_original = np.asarray(subset.original_index(), dtype=np.int64)[assigned_rows]
-    assigned_xyz = raw_xyz_all[assigned_rows]
-    assigned_tree = raw_tree[assigned_rows]
-    assigned_in_core = in_core[assigned_rows]
+    # Bounded two-pass full-resolution output assembly (disk-backed memmaps).
+    # Replaces the full float64 XYZ copy + global flatnonzero + full span-core
+    # mask that previously peaked at ~3 GB RSS and OOM'd on the 16 GB machine.
+    xyz_out, original_out, tree_out, core_out, member_count, _store_root = (
+        _assemble_tree_members_store(subset, raw_tree, span, origin_xyz, output_root)
+    )
 
     # Persist full-resolution tree members (scene-local XYZ + source rows).
     _write_npz(
         output_root / "tree_members.npz",
-        original_index=assigned_original,
-        xyz_local_m=assigned_xyz,
-        tree_id=assigned_tree,
-        in_core=assigned_in_core,
+        original_index=original_out,
+        xyz_local_m=xyz_out,
+        tree_id=tree_out,
+        in_core=core_out,
     )
     _write_npz(
         output_root / "tree_fine.npz",
@@ -286,13 +406,13 @@ def _run_span_tree_pipeline_legacy(
     outcome = SpanTreeOutcome(
         span=span,
         tree_records=tuple(result["trees"]),
-        raw_original_index=assigned_original,
-        raw_xyz_local_m=assigned_xyz,
-        raw_tree_id=assigned_tree,
-        in_core=assigned_in_core,
+        raw_original_index=original_out,
+        raw_xyz_local_m=xyz_out,
+        raw_tree_id=tree_out,
+        in_core=core_out,
         raw_local_maxima=tops.raw_local_maxima_count,
         accepted_tree_tops=tops.accepted_count,
-        assigned_raw_point_count=int(len(assigned_rows)),
+        assigned_raw_point_count=int(member_count),
         artifact_root=output_root,
         tree_top_diagnostics=dict(tops.diagnostics),
         membership_diagnostics=membership_diagnostics,
@@ -376,12 +496,14 @@ def run_span_tree_pipeline(
         fine_original,
         hybrid.fine_tree_id,
     )
-    raw_xyz = np.asarray(vegetation_query.region.xyz(), dtype=np.float64)
-    raw_original_all = np.asarray(vegetation_query.region.original_index(), dtype=np.int64)
-    assigned = np.flatnonzero(raw_tree >= 0)
-    assigned_original = raw_original_all[assigned]
-    if len(assigned_original) != len(np.unique(assigned_original)):
-        raise PoleEvidenceError("CROWN_STEM_ORIGINAL_INDEX_DUPLICATE")
+    # Per-tree full-resolution raw point counts in one O(N) pass (never
+    # O(tree_count x N) full-array rescans).
+    assigned_tree_ids = raw_tree[raw_tree >= 0]
+    per_tree_raw_count = (
+        np.bincount(assigned_tree_ids, minlength=int(assigned_tree_ids.max()) + 1)
+        if assigned_tree_ids.size
+        else np.zeros(0, dtype=np.int64)
+    )
     records = []
     for candidate in hybrid.candidates:
         if candidate.quality_state.value != "CONFIRMED_TREE":
@@ -395,21 +517,28 @@ def run_span_tree_pipeline(
             "structural_evidence": dict(candidate.structural_metrics or {}),
             "quality_reasons": list(candidate.quality_reasons),
             "fine_representative_count": int(len(candidate.member_rows)),
-            "raw_point_count": int(np.count_nonzero(raw_tree == candidate.tree_id)),
+            "raw_point_count": int(per_tree_raw_count[candidate.tree_id]),
         })
+    del assigned_tree_ids, per_tree_raw_count
+    # Bounded two-pass full-resolution output assembly (disk-backed memmaps).
+    xyz_out, original_out, tree_out, core_out, member_count, _store_root = (
+        _assemble_tree_members_store(
+            vegetation_query.region, raw_tree, span, origin_xyz, root
+        )
+    )
+    del raw_tree
     root.mkdir(parents=True, exist_ok=True)
-    _write_npz(root / "tree_members.npz", original_index=assigned_original, xyz_local_m=raw_xyz[assigned], tree_id=raw_tree[assigned], in_core=_row_in_span_core(raw_xyz, span, origin_xyz)[assigned])
+    _write_npz(root / "tree_members.npz", original_index=original_out, xyz_local_m=xyz_out, tree_id=tree_out, in_core=core_out)
     _write_npz(root / "tree_fine.npz", fine_xyz_local_m=fine_xyz, fine_original_index=fine_original, fine_hag_m=fine_hag, fine_tree_id=hybrid.fine_tree_id)
     for filename in ("fine_representatives.npz", "chm_review.npz"):
         source = legacy_root / filename
         if source.is_file():
             shutil.copy2(source, root / filename)
     outcome = SpanTreeOutcome(
-        span=span, tree_records=tuple(records), raw_original_index=assigned_original,
-        raw_xyz_local_m=raw_xyz[assigned], raw_tree_id=raw_tree[assigned],
-        in_core=_row_in_span_core(raw_xyz, span, origin_xyz)[assigned],
+        span=span, tree_records=tuple(records), raw_original_index=original_out,
+        raw_xyz_local_m=xyz_out, raw_tree_id=tree_out, in_core=core_out,
         raw_local_maxima=legacy.raw_local_maxima, accepted_tree_tops=legacy.accepted_tree_tops,
-        assigned_raw_point_count=int(len(assigned)), artifact_root=root,
+        assigned_raw_point_count=int(member_count), artifact_root=root,
         tree_top_diagnostics={**(legacy.tree_top_diagnostics or {}), "tree_backend": config.tree_backend},
         membership_diagnostics=dict(hybrid.diagnostics), fine_representative_count=legacy.fine_representative_count,
         aabb_query_points=legacy.aabb_query_points, oriented_region_points=legacy.oriented_region_points,
@@ -431,7 +560,9 @@ def load_span_tree_outcome(span: SpanRecord, artifact_root: Any) -> SpanTreeOutc
         raise PoleEvidenceError("SPAN_TREE_ARTIFACT_MISSING")
     with np.load(members_path, allow_pickle=False) as stream:
         original_index = np.asarray(stream["original_index"], dtype=np.int64)
-        xyz_local_m = np.asarray(stream["xyz_local_m"], dtype=np.float64)
+        # tree_members.npz xyz is stored at the source float32 precision to keep
+        # the bounded-output contract; never upcast the full array on reload.
+        xyz_local_m = np.asarray(stream["xyz_local_m"], dtype=np.float32)
         tree_id = np.asarray(stream["tree_id"], dtype=np.int32)
         in_core = np.asarray(stream["in_core"], dtype=bool)
     manifest = json.loads(manifest_path.read_text("utf-8"))
@@ -516,15 +647,17 @@ def run_span_stem_guided_hybrid_candidate(
     from algorithms.vegetation.coarse_to_fine import map_region_rows_to_tree
 
     raw_tree = map_region_rows_to_tree(subset, fine_path, original, hybrid.fine_tree_id)
-    assigned = np.flatnonzero(raw_tree >= 0)
-    raw_original = np.asarray(subset.original_index(), dtype=np.int64)[assigned]
-    if len(raw_original) != len(np.unique(raw_original)):
-        raise PoleEvidenceError("STEM_GUIDED_ORIGINAL_INDEX_NOT_UNIQUE")
+    # Bounded two-pass assembly (same store as the canonical runner); the
+    # candidate artifact omits the in_core column.
+    xyz_out, original_out, tree_out, _core_out, member_count, _store = (
+        _assemble_tree_members_store(subset, raw_tree, span, origin_xyz, output_root)
+    )
+    del raw_tree
     _write_npz(
         output_root / "stem_guided_members.npz",
-        original_index=raw_original,
-        xyz_local_m=np.asarray(subset.xyz(), dtype=np.float64)[assigned],
-        tree_id=raw_tree[assigned],
+        original_index=original_out,
+        xyz_local_m=xyz_out,
+        tree_id=tree_out,
     )
     _write_npz(
         output_root / "stem_guided_fine.npz",
@@ -542,7 +675,7 @@ def run_span_stem_guided_hybrid_candidate(
         "validated_stems": [stem.to_dict() for stem in hybrid.validated_stems],
         "diagnostics": hybrid.diagnostics,
         "full_resolution_original_index_unique": True,
-        "assigned_raw_point_count": int(len(raw_original)),
+        "assigned_raw_point_count": int(member_count),
     }
     _write_json(output_root / "stem_guided_manifest.json", payload)
     return payload

@@ -271,7 +271,9 @@ def _load_tree_members(run: ManualSingleSpanRun) -> dict[str, np.ndarray] | None
     with np.load(path, allow_pickle=False) as stream:
         return {
             "original_index": np.asarray(stream["original_index"], dtype=np.int64),
-            "xyz_local_m": np.asarray(stream["xyz_local_m"], dtype=np.float64),
+            # tree_members.npz xyz is at the source float32 precision; never
+            # upcast the full array into RAM when generating visuals.
+            "xyz_local_m": np.asarray(stream["xyz_local_m"], dtype=np.float32),
             "tree_id": np.asarray(stream["tree_id"], dtype=np.int32),
             "in_core": np.asarray(stream["in_core"], dtype=bool),
         }

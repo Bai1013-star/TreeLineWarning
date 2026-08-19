@@ -557,6 +557,10 @@ class FolderOrchestrator:
     ) -> tuple[np.ndarray, np.ndarray]:
         """Return (excluded_indices, tower_source_indices) for exact subtraction.
 
+        ``FINAL_TREE_INPUT = VEGETATION - CONFIRMED_WIRE - CONFIRMED_TOWER``.
+        Both exact sets are returned and the caller subtracts them from the
+        vegetation region.
+
         - Confirmed wire: ``run.wire_outcome.confirmed_member_source_index``
           (the ONLY authoritative wire membership; display points never enter).
         - Tower: an authoritative full ``TowerLocalMembership`` artifact bound
@@ -604,6 +608,10 @@ class FolderOrchestrator:
             self.run_metadata["tower_authoritative_membership"] = "NO"
 
         tower_excluded_in_veg = _region_overlap_count(veg_region, tower_source)
+        # FINAL_TREE_INPUT = VEGETATION - CONFIRMED_WIRE - CONFIRMED_TOWER.
+        # The exact tower source indices ARE part of the actual subtraction set
+        # (previously they were audit-only, leaving tower points in tree input).
+        parts.append(tower_source)
         excluded = np.unique(np.concatenate(parts))
         # Audit counts against the FINAL tree input (vegetation region).
         self.run_metadata["confirmed_wire_excluded_count"] = int(wire_excluded_in_veg)
