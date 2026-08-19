@@ -841,6 +841,13 @@ class ManualSingleSpanRun:
                 self.local_raw_dir,
                 cache_key=cache_key,
             )
+            # Bound the in-memory local-raw cache to the CURRENT box: a dense
+            # recovery box holds millions of full-resolution points (~100 MB+
+            # each), so retaining every Pole A / Pole B box would accumulate
+            # until a later refinement OOMs on a limited-RAM machine.  The npz
+            # disk cache (keyed identically) is the durable reuse; only the most
+            # recent box is kept resident.
+            self.local_raw_cache.clear()
             self.local_raw_cache[cache_key] = data
             return data
 

@@ -290,11 +290,28 @@ def refine_pole_from_raw_cloud(
         return _raw_failure(
             label, clicked_xyz_absolute_m, "LOCAL_POINT_CLOUD_TOO_SPARSE", {},
         )
-    local_mask = (
-        np.linalg.norm(points[:, :2] - click[:2][None, :], axis=1)
-        <= manual.refine_search_radius_m
+    # Memory-safe circular filter: the previous full-N
+    # `np.linalg.norm(points[:, :2] - click, axis=1)` materialized an (N,) and an
+    # (N,2) float64 pair (~33 MiB + 67 MiB for N=4.2M), which OOM'd on a dense
+    # real Pole-B neighborhood.  A cheap square pre-filter (boolean masks only)
+    # reduces N, then the circular distance is computed in bounded chunks so the
+    # full-N float64 distance array is never materialized.  Semantics are
+    # identical (the same circular radius refine_search_radius_m).
+    radius = float(manual.refine_search_radius_m)
+    cx, cy = float(click[0]), float(click[1])
+    inside_square = (
+        (points[:, 0] >= cx - radius)
+        & (points[:, 0] <= cx + radius)
+        & (points[:, 1] >= cy - radius)
+        & (points[:, 1] <= cy + radius)
     )
-    local = points[local_mask]
+    square_rows = np.flatnonzero(inside_square)
+    if len(square_rows) == 0:
+        local = points[inside_square]
+    else:
+        square_xy = points[square_rows, :2]
+        circle_mask = _within_radius_chunked(square_xy, cx, cy, radius)
+        local = points[square_rows][circle_mask]
     # Diagnostics always carry the evaluated vertical extent and refined XY even
     # when the structure is too weak to be accepted.
     local_extent = float(np.ptp(local[:, 2])) if len(local) else 0.0
@@ -498,6 +515,31 @@ def refine_pole_from_raw_cloud(
         reason=None,
         refinement_diagnostics=diag,
     )
+
+
+def _within_radius_chunked(
+    xy: np.ndarray,
+    cx: float,
+    cy: float,
+    radius: float,
+    chunk_size: int = 250_000,
+) -> np.ndarray:
+    """Boolean mask of *xy* points within *radius* of (cx, cy), computed in chunks.
+
+    The squared distance is built one bounded chunk at a time, so a dense
+    neighborhood (millions of points) never materializes a full-length float64
+    distance array.  Produces the exact same mask as
+    ``np.linalg.norm(xy - (cx, cy), axis=1) <= radius``.
+    """
+
+    radius2 = float(radius * radius)
+    keep = np.zeros(len(xy), dtype=bool)
+    for start in range(0, len(xy), chunk_size):
+        stop = min(len(xy), start + chunk_size)
+        block = xy[start:stop]
+        d2 = (block[:, 0] - cx) ** 2 + (block[:, 1] - cy) ** 2
+        keep[start:stop] = d2 <= radius2
+    return keep
 
 
 def _raw_failure(
