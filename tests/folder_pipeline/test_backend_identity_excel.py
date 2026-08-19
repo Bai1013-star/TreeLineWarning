@@ -141,7 +141,7 @@ def test_crown_width_is_absolute_geometry_not_growth_amount(
 
 def _base_row() -> dict:
     return {
-        "persistent_tree_id": "G001-S001-T001",
+        "persistent_tree_id": "G001-T001",
         "height_m": 12.0,
         "crown_width_m": 5.0,
         "crown_width_major_m": 6.0,
@@ -208,8 +208,8 @@ def test_nan_and_inf_are_sanitized_to_blank(tmp_path: Path) -> None:
 
 def test_excel_tree_rows_equals_final_tree_count(tmp_path: Path) -> None:
     rows = [
-        {**_base_row(), "persistent_tree_id": "G001-S001-T001"},
-        {**_base_row(), "persistent_tree_id": "G001-S001-T002", "current_risk": "DANGEROUS"},
+        {**_base_row(), "persistent_tree_id": "G001-T001"},
+        {**_base_row(), "persistent_tree_id": "G001-T002", "current_risk": "DANGEROUS"},
     ]
     path = write_prediction_input_excel(
         tmp_path / "out.xlsx", rows, {"science_run_id": "run-2"}

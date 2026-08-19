@@ -64,11 +64,13 @@ class FolderServer:
         workspace: FolderWorkspace,
         *,
         state: FolderWorkflowState | None = None,
-        threshold_m: float = 3.5,
+        threshold_m: float | None = None,
         headless_poles: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
     ) -> None:
         self.workspace = workspace
         self.state = state if state is not None else FolderWorkflowState()
+        # threshold_m=None -> the canonical project risk standard (never a new
+        # Folder-pipeline default); the orchestrator resolves it.
         self.orchestrator = FolderOrchestrator(
             workspace, state=self.state, threshold_m=threshold_m
         )
@@ -543,11 +545,12 @@ def run_folder_server(
     *,
     port: int = 0,
     open_browser: bool = True,
-    threshold_m: float = 3.5,
+    threshold_m: float | None = None,
     headless_poles: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
 ) -> tuple[ThreadingHTTPServer, str]:
     """Start the folder server and return (httpd, url)."""
 
+    # threshold_m=None -> the canonical project risk standard.
     server = FolderServer(workspace, threshold_m=threshold_m, headless_poles=headless_poles)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), server.handler_factory())
     url = f"http://127.0.0.1:{httpd.server_address[1]}/"

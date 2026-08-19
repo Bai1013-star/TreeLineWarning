@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -65,8 +65,18 @@ Progress = Callable[[int, str, bool, float | None], None]
 _FOLDER_RUN_SCHEMA = "folder-to-excel-run-v1"
 _TREE_INPUT_CLEANING_SCHEMA = "folder-to-excel-tree-input-cleaning-v1"
 
-# How risk threshold default flows through (matches the manual-span route).
-DEFAULT_RISK_THRESHOLD_M = 3.5
+
+def _canonical_risk_threshold_m() -> float:
+    """Return the existing authoritative project risk threshold (never a new default).
+
+    The Folder pipeline owns NO hard-coded science threshold: the danger /
+    clearance threshold is the canonical ``RISK_THRESHOLD_M`` from
+    ``algorithms.spans.project_adapter`` (policy ``exact-tree-wire``).
+    """
+
+    from algorithms.spans.project_adapter import RISK_THRESHOLD_M
+
+    return float(RISK_THRESHOLD_M)
 
 
 class FolderPipelineError(RuntimeError):
@@ -97,13 +107,18 @@ def _load_selection_payload(workspace: FolderWorkspace) -> dict[str, Any] | None
     return payload
 
 
-def _find_prior_ground_cache(workspace: FolderWorkspace) -> Path | None:
+def _find_prior_ground_cache(
+    workspace: FolderWorkspace,
+    roots: Iterable[Path] | None = None,
+) -> Path | None:
     """Reuse a validated PDAL SMRF ground cache for the same source.
 
     Mirrors the manual-span route: when the Python PDAL binding is unavailable
     but a prior run already executed the frozen PDAL SMRF + HAG-NN ground for
-    the SAME source (same SHA), that ground is reused verbatim.  This makes
-    repeated runs of a real source fast and PDAL-independent.
+    the SAME source (same SHA), that ground is reused verbatim.  Cache reuse is
+    STRICTLY source-identity validated: only a cache whose ``input_sha256``
+    matches the workspace source SHA-256 is ever accepted.  An unrelated cache
+    is never used.
     """
 
     import hashlib
@@ -115,14 +130,19 @@ def _find_prior_ground_cache(workspace: FolderWorkspace) -> Path | None:
                 digest.update(block)
         return digest.hexdigest()
 
+    del _sha256  # source identity is validated via the persisted input_sha256
     source_sha = workspace.source_sha256
-    for root in (
-        Path("artifacts") / "one_click_runs",
-        Path("artifacts") / "manual_single_span_runs",
-    ):
-        if not root.is_dir():
+    if roots is None:
+        roots = (
+            Path("artifacts") / "one_click_runs",
+            Path("artifacts") / "manual_single_span_runs",
+        )
+    for root in roots:
+        if not Path(root).is_dir():
             continue
-        for candidate in sorted(root.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True):
+        for candidate in sorted(
+            Path(root).glob("*"), key=lambda p: p.stat().st_mtime, reverse=True
+        ):
             inspection = candidate / "00_input" / "source_inspection.json"
             if not inspection.is_file():
                 continue
@@ -146,12 +166,18 @@ class FolderOrchestrator:
         workspace: FolderWorkspace,
         *,
         state: FolderWorkflowState | None = None,
-        threshold_m: float = DEFAULT_RISK_THRESHOLD_M,
+        threshold_m: float | None = None,
         ground_reuse_dir: Path | None = None,
     ) -> None:
         self.workspace = workspace
         self.state = state if state is not None else FolderWorkflowState()
-        self.threshold_m = float(threshold_m)
+        # Default threshold is the canonical project standard (never a new
+        # Folder-pipeline default).  An explicit caller value is respected.
+        self.threshold_m = (
+            _canonical_risk_threshold_m()
+            if threshold_m is None
+            else float(threshold_m)
+        )
         self.ground_reuse_dir = ground_reuse_dir
         self.run: Any = None  # ManualSingleSpanRun (set by initialize())
         self.edit_session: TreeEditSession | None = None
@@ -176,6 +202,9 @@ class FolderOrchestrator:
         if self.run is not None:
             return {"RUN_STATUS": "INITIALIZED"}
         self.workspace.ensure_dirs()
+        # Ground preflight: fail with a clear Chinese error BEFORE expensive
+        # science when neither PDAL nor a same-source ground cache is available.
+        self._preflight_ground()
         reuse = self.ground_reuse_dir or _find_prior_ground_cache(self.workspace)
         self.run = ManualSingleSpanRun(
             self.workspace.source,
@@ -190,6 +219,37 @@ class FolderOrchestrator:
         if reuse is not None:
             self.run_metadata["ground_cache_reused"] = str(reuse)
         return result
+
+    def _preflight_ground(self) -> None:
+        """Fail before expensive science when ground input is unavailable.
+
+        ``GROUND_BACKEND`` is ``PDAL_AVAILABLE`` when the Python PDAL binding is
+        importable; ``GROUND_CACHE`` names a same-source authoritative cache
+        (source-identity validated) when one exists.  If neither is available,
+        the run fails closed with a clear Chinese message — never a silent use
+        of an unrelated cache.
+        """
+
+        import importlib.util
+
+        pdal_available = importlib.util.find_spec("pdal") is not None
+        cache = self.ground_reuse_dir or _find_prior_ground_cache(self.workspace)
+        self.run_metadata["GROUND_BACKEND"] = (
+            "PDAL_AVAILABLE" if pdal_available else "PDAL_UNAVAILABLE"
+        )
+        self.run_metadata["GROUND_CACHE"] = (
+            "REUSED_CANONICAL_CACHE" if cache is not None else "NONE"
+        )
+        if cache is not None:
+            self.run_metadata["GROUND_SOURCE"] = "REUSED_CANONICAL_CACHE"
+            self.run_metadata["ground_cache_source_identity_check"] = "PASS"
+        if not pdal_available and cache is None:
+            raise FolderPipelineError(
+                "点云地面准备不可用：本机缺少 PDAL 地面后端，且未找到该源点云的"
+                "同源地面缓存。请先在具备 PDAL 的机器上生成地面缓存，"
+                "或在 artifacts/one_click_runs 或 artifacts/manual_single_span_runs 中"
+                "保留同源（相同 SHA256）的有效地面缓存后再运行。"
+            )
 
     def _require_run(self) -> Any:
         if self.run is None:
@@ -374,10 +434,13 @@ class FolderOrchestrator:
 
         - Confirmed wire: ``run.wire_outcome.confirmed_member_source_index``
           (the ONLY authoritative wire membership; display points never enter).
-        - Confirmed tower: the two manually-confirmed pole shaft cores (exact
-          full-res original_index inside a tight shaft radius).  No persistent
-          ``TowerLocalMembership`` artifact is fabricated; if one becomes
-          available it is used instead.
+        - Tower: an authoritative full ``TowerLocalMembership`` artifact bound
+          to this source is used FIRST when present (exact original_index).
+          Otherwise a DERIVED pole shaft core is used (exact full-res
+          original_index inside a tight 0.6 m shaft cylinder around the two
+          manually-confirmed poles).  The derived core is NEVER labelled as a
+          complete authoritative tower membership and the region is never
+          enlarged merely to remove more tower points.
         """
 
         run = self._require_run()
@@ -390,35 +453,40 @@ class FolderOrchestrator:
             veg_region.original_index(), confirmed_wire, assume_unique=False
         )
 
-        tower_parts: list[np.ndarray] = []
-        tower_limit = "AVAILABLE"
-        for pole in (run.pole_a, run.pole_b):
-            if pole is None:
-                continue
-            shaft = _pole_shaft_source_indices(run, pole)
-            tower_parts.append(shaft)
-        tower_source = (
-            np.unique(np.concatenate(tower_parts)) if tower_parts else np.empty(0, dtype=np.int64)
-        )
+        authoritative = _authoritative_tower_membership(self.workspace)
+        if authoritative is not None:
+            tower_source = authoritative
+            self.run_metadata["tower_exclusion_policy"] = "EXACT_ORIGINAL_INDEX"
+            self.run_metadata["tower_exclusion_coverage"] = "FULL"
+            self.run_metadata["tower_membership_source"] = "AUTHORITATIVE_TOWER_LOCAL_MEMBERSHIP"
+            self.run_metadata["tower_authoritative_membership"] = "YES"
+        else:
+            tower_parts: list[np.ndarray] = []
+            for pole in (run.pole_a, run.pole_b):
+                if pole is None:
+                    continue
+                tower_parts.append(_pole_shaft_source_indices(run, pole))
+            tower_source = (
+                np.unique(np.concatenate(tower_parts))
+                if tower_parts
+                else np.empty(0, dtype=np.int64)
+            )
+            # The derived shaft core covers only the two pole columns; it is
+            # partial coverage, never a full authoritative membership.
+            self.run_metadata["tower_exclusion_policy"] = "DERIVED_POLE_SHAFT_CORE_EXACT_INDICES"
+            self.run_metadata["tower_exclusion_coverage"] = (
+                "PARTIAL" if len(tower_source) > 0 else "UNAVAILABLE"
+            )
+            self.run_metadata["tower_membership_source"] = "DERIVED_GEOMETRIC_SHAFT_CORE"
+            self.run_metadata["tower_authoritative_membership"] = "NO"
+
         tower_excluded_in_veg = np.intersect1d(
             veg_region.original_index(), tower_source, assume_unique=False
-        )
-        if len(tower_source) == 0:
-            tower_limit = "UNAVAILABLE"
-        self.run_metadata["tower_exclusion_policy"] = (
-            "EXACT_ORIGINAL_INDEX_POLE_SHAFT_CORE" if tower_limit == "AVAILABLE"
-            else "PARTIAL_UNAVAILABLE"
-        )
-        self.run_metadata["tower_membership_source"] = (
-            "MANUAL_POLE_REFINEMENT_SHAFT_CORE"
-            if tower_limit == "AVAILABLE"
-            else "NONE_AVAILABLE"
         )
         excluded = np.unique(np.concatenate(parts))
         # Audit counts against the FINAL tree input (vegetation region).
         self.run_metadata["confirmed_wire_excluded_count"] = int(len(wire_excluded_in_veg))
         self.run_metadata["confirmed_tower_excluded_count"] = int(len(tower_excluded_in_veg))
-        self.run_metadata["tower_limited"] = tower_limit
         return excluded, tower_source
 
     # ----------------------------------------------------------------- editor
@@ -1016,10 +1084,56 @@ def _final_run_metadata(
     }
 
 
+def _authoritative_tower_membership(workspace: FolderWorkspace) -> np.ndarray | None:
+    """Return the exact original_index union of authoritative tower memberships.
+
+    Only artifacts whose source identity digest EXACTLY matches the folder
+    source are used (source-identity validated).  When none exists, ``None`` is
+    returned and the pipeline falls back to the derived pole shaft cores with
+    honest ``PARTIAL`` coverage.  No authoritative membership is ever invented.
+    """
+
+    try:
+        from scripts.prepare_tower_review_project import build_real_source_identity
+
+        identity = build_real_source_identity(workspace.source)
+        expected = str(identity.source_content_identity_digest)
+    except Exception:  # noqa: BLE001 - no authoritative artifacts are required
+        return None
+
+    parts: list[np.ndarray] = []
+    for root in (
+        Path("cache") / "tower_ordered_project",
+        Path("cache") / "tower_review_project",
+        Path("projects"),
+        workspace.source_cache_dir,
+    ):
+        memberships = root / "tower-memberships"
+        if not memberships.is_dir():
+            continue
+        for artifact in sorted(memberships.glob("*.npz")):
+            try:
+                with np.load(artifact, allow_pickle=False) as stream:
+                    digest_field = stream.get("meta_source_content_identity_digest")
+                    if digest_field is None or len(digest_field) == 0:
+                        continue
+                    if str(digest_field[0]) != expected:
+                        continue  # source identity mismatch -> never use
+                    source_index = np.asarray(stream["source_index"], dtype=np.int64)
+                    if len(source_index):
+                        parts.append(source_index)
+            except Exception:  # noqa: BLE001 - best effort, fail closed to derived
+                continue
+    if not parts:
+        return None
+    return np.unique(np.concatenate(parts))
+
+
 __all__ = [
     "_FOLDER_RUN_SCHEMA",
     "_TREE_INPUT_CLEANING_SCHEMA",
-    "DEFAULT_RISK_THRESHOLD_M",
     "FolderPipelineError",
     "FolderOrchestrator",
+    "_canonical_risk_threshold_m",
+    "_authoritative_tower_membership",
 ]

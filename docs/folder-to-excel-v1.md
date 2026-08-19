@@ -59,9 +59,27 @@ workspace/
 - 缺失值语义：`crown_width_m` / `diameter_cm` 缺失时写空（blank），绝不写 `0`；
   NaN / Inf 一律清洗为空。
 
+## 语义说明（科学出处诚实报告）
+
+- **危险阈值**：Folder 流水线不引入新的硬编码阈值。危险/净空阈值一律来自现有权威
+  标准 `algorithms/spans/project_adapter.RISK_THRESHOLD_M`（策略 `exact-tree-wire`，
+  当前值 2.0 m），并记录 `risk_threshold_m`。
+- **持久身份**：`persistent_tree_id = <group_id>-T<seq:03d>`（如 `G001-T001`），
+  与档距无关；`span_id` 单独导出（如 `S001`），绝不嵌入永久树身份。
+- **杆塔剔除出处**：若存在与源点云绑定的权威 `TowerLocalMembership` 构件，则按其精确
+  `original_index` 剔除；否则使用两个人工确认杆塔的紧密 0.6 m 杆身核心（精确
+  `original_index` 相减），并如实报告
+  `tower_exclusion_policy = DERIVED_POLE_SHAFT_CORE_EXACT_INDICES`、
+  `tower_exclusion_coverage = PARTIAL`，绝不把派生核心误报为完整权威杆塔成员。
+  0.6 m 区域不会为多删杆塔点而放大，绝不误删贴近杆塔的真实树木。
+
 ## 环境说明
 
+- **地面预检**：科学开始前先做地面预检。`GROUND_BACKEND`（PDAL 是否可用）与
+  `GROUND_CACHE`（是否有同源地面缓存）会被记录；缓存复用必须通过源身份校验
+  （`input_sha256 == 源点云 SHA256`）。若 PDAL 不可用且无同源缓存，在昂贵的科学
+  计算开始前即以清晰中文错误失败。
 - 地面阶段需要 PDAL SMRF。若本机缺少 PDAL，但该源点云存在历史地面缓存
   （`artifacts/one_click_runs/` 或 `artifacts/manual_single_span_runs/` 中同 SHA 的
-  `02_ground/ground_hag_result.json`），会自动复用；否则以清晰中文错误失败。
+  `02_ground/ground_hag_result.json`），会自动复用（源身份校验通过）；否则失败。
 - 服务器仅监听 `127.0.0.1`。

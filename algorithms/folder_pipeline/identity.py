@@ -7,8 +7,11 @@ the tie-break, so a refresh or re-run of the same final membership always
 produces the same ids.  Deleted trees never appear; a MERGE produces exactly
 one final entity.
 
-Format: ``<group_id>-S<span_seq:03d>-T<seq:03d>`` — e.g. ``G001-S001-T001``,
-compatible with the existing project T### / S### identity family.
+The permanent tree identity REUSES the repository's existing persistent-tree
+identity semantics: ``persistent_tree_id = <group_id>-T<seq:03d>`` (e.g.
+``G001-T001``).  The span id is stored SEPARATELY in ``span_id`` and is never
+embedded into the permanent tree identity — a tree's identity is independent of
+the currently assigned Span, exactly like the canonical identity registry.
 """
 
 from __future__ import annotations
@@ -33,7 +36,12 @@ def assign_persistent_tree_ids(
     start_tower_id: str = "T001",
     end_tower_id: str = "T002",
 ) -> list[dict[str, Any]]:
-    """Assign a unique deterministic persistent_tree_id to every final row."""
+    """Assign a unique deterministic persistent_tree_id to every final row.
+
+    ``persistent_tree_id = <group_id>-T<seq:03d>`` (span-independent).  The
+    ``span_id`` is written into each row separately and never appears in the
+    permanent id.
+    """
 
     selection = _read_selection(workspace)
     group_id = str(selection.get("group_id") or group_id)
@@ -41,7 +49,6 @@ def assign_persistent_tree_ids(
     start_tower_id = str(selection.get("start_tower_id") or start_tower_id)
     end_tower_id = str(selection.get("end_tower_id") or end_tower_id)
     project_id = selection.get("project_id")
-    span_seq = _span_sequence(span_id)
 
     def _order_key(index: int) -> tuple[float, int]:
         row = rows[index]
@@ -52,7 +59,7 @@ def assign_persistent_tree_ids(
 
     ordered_indices = sorted(range(len(rows)), key=_order_key)
     for order, row_index in enumerate(ordered_indices, start=1):
-        rows[row_index]["persistent_tree_id"] = f"{group_id}-S{span_seq:03d}-T{order:03d}"
+        rows[row_index]["persistent_tree_id"] = f"{group_id}-T{order:03d}"
         rows[row_index]["project_id"] = project_id
         rows[row_index]["group_id"] = group_id
         rows[row_index]["span_id"] = span_id
@@ -72,13 +79,6 @@ def _read_selection(workspace: Any) -> dict[str, Any]:
     if path is None or not Path(path).is_file():
         return {}
     return json.loads(Path(path).read_text("utf-8"))
-
-
-def _span_sequence(span_id: str) -> int:
-    digits = "".join(ch for ch in str(span_id) if ch.isdigit())
-    if not digits:
-        return 1
-    return int(digits)
 
 
 __all__ = [

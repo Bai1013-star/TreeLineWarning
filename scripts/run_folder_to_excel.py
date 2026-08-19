@@ -3,8 +3,12 @@
 Usage::
 
     python scripts/run_folder_to_excel.py [--workspace <workspace>]
-        [--port 0] [--no-open] [--threshold 3.5]
+        [--port 0] [--no-open] [--threshold <m>]
         [--pole-a X Y Z --pole-b X Y Z]   (headless smoke, no browser)
+
+    The danger threshold defaults to the canonical project risk standard
+    (algorithms.spans.project_adapter.RISK_THRESHOLD_M); it is never a
+    Folder-pipeline-specific hard-coded default.
 
 A workspace must contain exactly one point cloud under
 ``input/pointcloud/``; otherwise it fails closed with a clear Chinese error.
@@ -40,8 +44,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--port", type=int, default=0, help="服务器端口（0=自动）")
     parser.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
-    parser.add_argument("--threshold", type=float, default=None,
-                        help="危险净空阈值（m，默认 3.5）")
+    parser.add_argument(
+        "--threshold", type=float, default=None,
+        help="危险净空阈值（m；默认取权威标准 algorithms.spans.project_adapter.RISK_THRESHOLD_M）",
+    )
     parser.add_argument("--pole-a", type=_parse_xyz, default=None,
                         help="headless：杆塔 A 坐标（X Y Z）")
     parser.add_argument("--pole-b", type=_parse_xyz, default=None,
@@ -63,14 +69,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"提示：请把唯一的源点云放入 {default}\\input\\pointcloud\\ 目录。", file=sys.stderr)
         return 2
 
-    threshold = 3.5 if args.threshold is None else float(args.threshold)
+    # The default danger threshold is the canonical project risk standard
+    # (never a new Folder-pipeline default); None routes through it.
+    threshold = None if args.threshold is None else float(args.threshold)
     headless = args.pole_a is not None and args.pole_b is not None
+
+    from algorithms.folder_pipeline.orchestrator import _canonical_risk_threshold_m
+
+    resolved_threshold = _canonical_risk_threshold_m() if threshold is None else threshold
 
     print("FOLDER_TO_EXCEL V1")
     print(f"  工作区    : {workspace.root}")
     print(f"  源文件    : {workspace.source}")
     print(f"  源 SHA256 : {workspace.source_sha256[:16]}...")
-    print(f"  危险阈值  : {threshold} m")
+    print(f"  危险阈值  : {resolved_threshold} m（来源：canonical project risk standard）")
 
     from algorithms.folder_pipeline.server import FolderServer
 
