@@ -53,7 +53,10 @@ from algorithms.manual_span.span import (
 )
 from algorithms.poles.evidence import GroundEvidence, load_ground_evidence
 from algorithms.poles.topology import SpanRecord
-from algorithms.poles.wire_evidence import detect_coarse_wire_evidence
+from algorithms.poles.wire_evidence import (
+    COARSE_WIRE_ROUTING_SCHEMA,
+    detect_coarse_wire_evidence_with_rescue,
+)
 from algorithms.spans.checkpoint import read_checkpoint, write_checkpoint
 from algorithms.spans.clearance import SpanTreeWireRecord
 from algorithms.spans.reconcile import TreeReconciliationResult, reconcile_trees
@@ -471,6 +474,13 @@ def _write_npz(path: Path, **arrays: np.ndarray) -> None:
     temporary = path.with_name(path.name + ".tmp.npz")
     np.savez(temporary, **arrays)
     temporary.replace(path)
+
+
+def _remove_tree(path: Path) -> None:
+    """Best-effort recursive removal of a stale stage output directory."""
+    import shutil
+
+    shutil.rmtree(path, ignore_errors=True)
 
 
 class ManualSingleSpanRun:
@@ -925,9 +935,13 @@ class ManualSingleSpanRun:
 
         _report(self.progress, 4, STAGE_LABELS[4], False, None)
         started_stage = time.perf_counter()
-        wire_region, veg_region, wire_candidate_ids, veg_retained_ids = (
-            self._stage_regions()
-        )
+        (
+            wire_region,
+            veg_region,
+            wire_candidate_ids,
+            veg_retained_ids,
+            _routing_summary,
+        ) = self._stage_regions()
         _report(self.progress, 4, STAGE_LABELS[4], True, time.perf_counter() - started_stage)
         regions_digest = canonical_digest(
             {
@@ -935,6 +949,9 @@ class ManualSingleSpanRun:
                 "vegetation_region_count": veg_region.count,
                 "wire_candidate_reps": int(len(wire_candidate_ids)),
                 "vegetation_retained_reps": int(len(veg_retained_ids)),
+                "strict_routed_reps": int(_routing_summary["strict_routed_rep_count"]),
+                "rescued_routed_reps": int(_routing_summary["rescued_routed_rep_count"]),
+                "union_routed_reps": int(_routing_summary["union_routed_rep_count"]),
             }
         )
 
@@ -948,12 +965,15 @@ class ManualSingleSpanRun:
                 "wire_candidate_point_count": self.wire_outcome.diagnostics.get(
                     "wire_candidate_point_count", 0
                 ),
+                "confirmed_member_count": int(
+                    self.wire_outcome.confirmed_member_source_index.shape[0]
+                ),
             }
         )
 
         _report(self.progress, 6, STAGE_LABELS[6], False, None)
         started_stage = time.perf_counter()
-        self.tree_outcome = self._stage_tree(regions_digest)
+        self.tree_outcome = self._stage_tree(regions_digest, wire_digest)
         _report(self.progress, 6, STAGE_LABELS[6], True, time.perf_counter() - started_stage)
         tree_digest = canonical_digest({"tree_count": len(self.tree_outcome.tree_records)})
 
@@ -994,15 +1014,13 @@ class ManualSingleSpanRun:
             "analysis_runtime": analysis_runtime,
         }
 
-    def _stage_regions(self) -> tuple[Any, Any, np.ndarray, np.ndarray]:
+    def _stage_regions(self) -> tuple[Any, Any, np.ndarray, np.ndarray, dict[str, Any]]:
         stage_dir = self.run_root / "04_regions"
         cached = read_checkpoint(
             stage_dir, "regions",
             source_sha256=self.source_sha256, source_id=self.source_id,
             config_digest=self.cfg.computed_digest(),
-            upstream_digest=canonical_digest(
-                {"span_digest": self.span_digest, "ground": fast_ground_content_digest(self.ground)}
-            ),
+            upstream_digest=self._regions_upstream_digest(),
         )
         halo_dir = stage_dir / "halo_region"
         wire_sidecar = stage_dir / "wire_region" / "region_sidecar.json"
@@ -1014,28 +1032,59 @@ class ManualSingleSpanRun:
             veg_ids = np.asarray(cached[0].get("vegetation_retained_rep_ids", []), dtype=np.uint32)
             self.wire_region_dir = stage_dir / "wire_region"
             self.vegetation_region_dir = stage_dir / "vegetation_region"
-            return wire_region, veg_region, wire_ids, veg_ids
+            routing_summary = {
+                "strict_routed_rep_count": int(cached[0].get("strict_routed_rep_count", 0)),
+                "rescued_routed_rep_count": int(cached[0].get("rescued_routed_rep_count", 0)),
+                "union_routed_rep_count": int(cached[0].get("union_routed_rep_count", 0)),
+                "rescue_diagnostics": dict(cached[0].get("rescue_diagnostics", {})),
+            }
+            return wire_region, veg_region, wire_ids, veg_ids, routing_summary
 
-        # Coarse wire evidence restricted to the span halo.
-        wire_evidence = detect_coarse_wire_evidence(self.evidence, self.cfg)
+        # Coarse wire evidence restricted to the span halo.  Dual-path router:
+        # PATH A (strict component gates, unchanged) union PATH B (span-aligned
+        # representative rescue of components PATH A rejected).
+        wire_evidence = detect_coarse_wire_evidence_with_rescue(
+            self.evidence,
+            self.cfg,
+            self.span,
+            origin_xyz=self.origin_xyz,
+        )
         origin = np.asarray(self.origin_xyz, dtype=np.float64)
         halo_min = np.asarray(self.span.halo_bounds_min_xyz, dtype=np.float64)
         halo_max = np.asarray(self.span.halo_bounds_max_xyz, dtype=np.float64)
         inside = np.all(self.evidence.xyz_local_m >= halo_min, axis=1) & np.all(
             self.evidence.xyz_local_m <= halo_max, axis=1
         )
-        wire_candidate_mask = np.asarray(wire_evidence.candidate_mask, dtype=bool) & inside
+        strict_mask = np.asarray(wire_evidence.candidate_mask, dtype=bool) & inside
+        rescued_mask = np.asarray(wire_evidence.rescued_mask, dtype=bool) & inside
+        wire_routed_mask = strict_mask | rescued_mask
         wire_candidate_ids = np.unique(
-            self.evidence.representative_id[wire_candidate_mask]
+            self.evidence.representative_id[wire_routed_mask]
         ).astype(np.uint32)
+        strict_routed_count = int(np.count_nonzero(strict_mask))
+        rescued_routed_count = int(np.count_nonzero(rescued_mask))
+        union_routed_count = int(np.count_nonzero(wire_routed_mask))
 
-        # Scene-wide vegetation routing (on routing representatives only) with
-        # the halo wire candidates excluded as rigid wire-like geometry.
+        # Scene-wide vegetation routing (on routing representatives only).  The
+        # unconfirmed coarse wire candidates (PATH A or PATH B) are NEVER passed
+        # as a permanent vegetation exclusion: FINAL_TREE_INPUT = VEGETATION -
+        # CONFIRMED_WIRE - CONFIRMED_TOWER, so only the exact FULL_RESOLUTION
+        # members of a FINAL confirmed conductor may be subtracted from tree
+        # input (handled by the tree stage / orchestrator).
         veg_dir = self.run_root / "06_tree" / "coarse_routing"
         if veg_dir.exists() and any(veg_dir.iterdir()):
-            from algorithms.vegetation.fast_research import FastResearchError as _FRE
-
-            raise _FRE("MANUAL_SPAN_VEGETATION_OUTPUT_EXISTS")
+            # Reaching this point means the regions checkpoint is stale (this
+            # stage is recomputing), so the previous vegetation-router outputs
+            # belong to an outdated routing input.  Replace them in place rather
+            # than failing closed on now-stale outputs.
+            for stale in sorted(veg_dir.iterdir()):
+                try:
+                    if stale.is_file():
+                        stale.unlink()
+                    elif stale.is_dir():
+                        _remove_tree(stale)
+                except OSError:
+                    continue
         _veg_input, veg_manifest = build_weighted_fast_vegetation(
             self.working,
             {
@@ -1047,7 +1096,6 @@ class ManualSingleSpanRun:
             self.ground,
             veg_dir,
             source_id=self.source_id,
-            wire_geometry_representative_ids=wire_candidate_ids,
             artifact_stem="manual_span",
         )
         diag_npz = veg_dir / "manual_span_fast_vegetation_diagnostics.npz"
@@ -1081,14 +1129,16 @@ class ManualSingleSpanRun:
             "vegetation_region_count": veg_region.count,
             "wire_candidate_rep_ids": [int(value) for value in wire_candidate_ids],
             "vegetation_retained_rep_ids": [int(value) for value in veg_retained_ids],
+            "strict_routed_rep_count": strict_routed_count,
+            "rescued_routed_rep_count": rescued_routed_count,
+            "union_routed_rep_count": union_routed_count,
+            "rescue_diagnostics": dict(wire_evidence.rescue_diagnostics),
         }
         write_checkpoint(
             stage_dir, "regions",
             source_sha256=self.source_sha256, source_id=self.source_id,
             config_digest=self.cfg.computed_digest(),
-            upstream_digest=canonical_digest(
-                {"span_digest": self.span_digest, "ground": fast_ground_content_digest(self.ground)}
-            ),
+            upstream_digest=self._regions_upstream_digest(),
             summary=summary,
             output_digest=canonical_digest(
                 {
@@ -1096,12 +1146,38 @@ class ManualSingleSpanRun:
                     "vegetation_region_count": veg_region.count,
                     "wire_candidate_reps": int(len(wire_candidate_ids)),
                     "vegetation_retained_reps": int(len(veg_retained_ids)),
+                    "strict_routed_rep_count": strict_routed_count,
+                    "rescued_routed_rep_count": rescued_routed_count,
+                    "union_routed_rep_count": union_routed_count,
                 }
             ),
         )
         self.wire_region_dir = stage_dir / "wire_region"
         self.vegetation_region_dir = stage_dir / "vegetation_region"
-        return wire_region, veg_region, wire_candidate_ids, veg_retained_ids
+        routing_summary = {
+            "strict_routed_rep_count": strict_routed_count,
+            "rescued_routed_rep_count": rescued_routed_count,
+            "union_routed_rep_count": union_routed_count,
+            "rescue_diagnostics": dict(wire_evidence.rescue_diagnostics),
+        }
+        return wire_region, veg_region, wire_candidate_ids, veg_retained_ids, routing_summary
+
+    def _regions_upstream_digest(self) -> str:
+        """Upstream digest for the region-routing stage.
+
+        The coarse wire ROUTER semantics are part of the upstream provenance so
+        a routing change invalidates ONLY the coarse wire evidence / dependent
+        region routing (04_regions -> 05_wire -> tree), never preprocess,
+        Ground/HAG or the persisted span selection.
+        """
+
+        return canonical_digest(
+            {
+                "span_digest": self.span_digest,
+                "ground": fast_ground_content_digest(self.ground),
+                "coarse_wire_routing": COARSE_WIRE_ROUTING_SCHEMA,
+            }
+        )
 
     def _stage_wire(self, regions_digest: str) -> SpanWireResult:
         stage_dir = self.run_root / "05_wire"
@@ -1137,20 +1213,24 @@ class ManualSingleSpanRun:
         )
         return wire_result
 
-    def _stage_tree(self, regions_digest: str) -> SpanTreeOutcome:
+    def _stage_tree(self, regions_digest: str, wire_digest: str) -> SpanTreeOutcome:
         stage_dir = self.run_root / "06_tree"
         span_dir = stage_dir / "span_001"
+        upstream_digest = canonical_digest(
+            {"regions": regions_digest, "wire": wire_digest}
+        )
         cached = read_checkpoint(
             span_dir, "tree",
             source_sha256=self.source_sha256, source_id=self.source_id,
-            config_digest=self.cfg.computed_digest(), upstream_digest=regions_digest,
+            config_digest=self.cfg.computed_digest(), upstream_digest=upstream_digest,
         )
         if cached is not None and (span_dir / "tree_members.npz").is_file():
             return load_span_tree_outcome(self.span, span_dir)
         veg_region = load_raw_region(self.vegetation_region_dir / "region_sidecar.json")
+        cleaned_region = self._tree_input_excluding_confirmed_wire(veg_region, span_dir)
         outcome = run_span_tree_pipeline(
             self.span,
-            veg_region,
+            cleaned_region,
             self.coarse_ground_xyz_absolute,
             self.cfg,
             output_dir=span_dir,
@@ -1161,13 +1241,38 @@ class ManualSingleSpanRun:
         write_checkpoint(
             span_dir, "tree",
             source_sha256=self.source_sha256, source_id=self.source_id,
-            config_digest=self.cfg.computed_digest(), upstream_digest=regions_digest,
+            config_digest=self.cfg.computed_digest(), upstream_digest=upstream_digest,
             summary=payload,
             output_digest=canonical_digest(
                 {"tree_count": len(outcome.tree_records)}
             ),
         )
         return outcome
+
+    def _tree_input_excluding_confirmed_wire(
+        self, veg_region: Any, span_dir: Path
+    ) -> Any:
+        """Subtract exact FINAL confirmed conductor members from tree input.
+
+        ``FINAL_TREE_INPUT = VEGETATION - CONFIRMED_WIRE - CONFIRMED_TOWER``.
+        Only ``wire_outcome.confirmed_member_source_index`` — the exact
+        FULL_RESOLUTION source rows of FINAL confirmed conductors — is removed
+        here; broad (unconfirmed) coarse wire candidates never exclude
+        vegetation/tree membership.
+        """
+
+        confirmed = np.asarray(
+            self.wire_outcome.confirmed_member_source_index, dtype=np.int64
+        )
+        if len(confirmed) == 0:
+            return veg_region
+        from algorithms.spans.region import subset_raw_region_excluding_source_indices
+
+        return subset_raw_region_excluding_source_indices(
+            veg_region,
+            confirmed,
+            span_dir / "tree_input",
+        )
 
     def _stage_clearance(
         self, wire_digest: str, tree_digest: str

@@ -478,13 +478,22 @@ class FolderOrchestrator:
         report = progress or (lambda *_: None)
 
         report(2, "正在重构导线...", False, None)
-        wire_region, veg_region, wire_candidate_ids, veg_retained_ids = run._stage_regions()
+        (
+            wire_region,
+            veg_region,
+            wire_candidate_ids,
+            veg_retained_ids,
+            _routing_summary,
+        ) = run._stage_regions()
         regions_digest = _canonical_digest(
             {
                 "wire_region_count": wire_region.count,
                 "vegetation_region_count": veg_region.count,
                 "wire_candidate_reps": int(len(wire_candidate_ids)),
                 "vegetation_retained_reps": int(len(veg_retained_ids)),
+                "strict_routed_reps": int(_routing_summary["strict_routed_rep_count"]),
+                "rescued_routed_reps": int(_routing_summary["rescued_routed_rep_count"]),
+                "union_routed_reps": int(_routing_summary["union_routed_rep_count"]),
             }
         )
         run.wire_outcome = run._stage_wire(regions_digest)
@@ -565,9 +574,7 @@ class FolderOrchestrator:
             run.wire_outcome.confirmed_member_source_index, dtype=np.int64
         )
         parts.append(confirmed_wire)
-        wire_excluded_in_veg = np.intersect1d(
-            veg_region.original_index(), confirmed_wire, assume_unique=False
-        )
+        wire_excluded_in_veg = _region_overlap_count(veg_region, confirmed_wire)
 
         authoritative = _authoritative_tower_membership(self.workspace)
         if authoritative is not None:
@@ -596,13 +603,11 @@ class FolderOrchestrator:
             self.run_metadata["tower_membership_source"] = "DERIVED_GEOMETRIC_SHAFT_CORE"
             self.run_metadata["tower_authoritative_membership"] = "NO"
 
-        tower_excluded_in_veg = np.intersect1d(
-            veg_region.original_index(), tower_source, assume_unique=False
-        )
+        tower_excluded_in_veg = _region_overlap_count(veg_region, tower_source)
         excluded = np.unique(np.concatenate(parts))
         # Audit counts against the FINAL tree input (vegetation region).
-        self.run_metadata["confirmed_wire_excluded_count"] = int(len(wire_excluded_in_veg))
-        self.run_metadata["confirmed_tower_excluded_count"] = int(len(tower_excluded_in_veg))
+        self.run_metadata["confirmed_wire_excluded_count"] = int(wire_excluded_in_veg)
+        self.run_metadata["confirmed_tower_excluded_count"] = int(tower_excluded_in_veg)
         return excluded, tower_source
 
     # ----------------------------------------------------------------- editor
@@ -935,25 +940,43 @@ def _pole_shaft_source_indices(run: Any, pole: Any) -> np.ndarray:
         return np.empty(0, dtype=np.int64)
 
 
+def _region_overlap_count(region: Any, candidate: np.ndarray) -> int:
+    """Count exact ``original_index`` rows of *region* present in *candidate*.
+
+    Streams the region's source-index memmap in bounded chunks (1M rows) so the
+    audit never materializes the full 38M-row vegetation index at once — the
+    whole index array would otherwise be passed to ``numpy.unique`` (hash-based
+    in NumPy >= 2) and exceed the RAM of a 16 GB owner machine.
+    """
+
+    candidate = np.unique(np.asarray(candidate, dtype=np.int64))
+    if len(candidate) == 0 or region.count == 0:
+        return 0
+    original = region.original_index()
+    count = 0
+    chunk_size = 1_000_000
+    for start in range(0, region.count, chunk_size):
+        stop = min(region.count, start + chunk_size)
+        chunk = np.asarray(original[start:stop], dtype=np.int64)
+        positions = np.searchsorted(candidate, chunk)
+        positions = np.minimum(positions, len(candidate) - 1)
+        count += int(np.count_nonzero(candidate[positions] == chunk))
+    return count
+
+
 def _tree_input_audit(
     veg_region: Any,
     cleaned_region: Any,
     excluded: np.ndarray,
     tower_source_indices: np.ndarray,
 ) -> dict[str, Any]:
-    veg_idx = np.asarray(veg_region.original_index(), dtype=np.int64)
-    cleaned_idx = np.asarray(cleaned_region.original_index(), dtype=np.int64)
-    wire_left = np.intersect1d(
-        cleaned_idx, excluded, assume_unique=False
-    )
-    tower_left = np.intersect1d(
-        cleaned_idx, tower_source_indices, assume_unique=False
-    )
+    wire_left = _region_overlap_count(cleaned_region, excluded)
+    tower_left = _region_overlap_count(cleaned_region, tower_source_indices)
     return {
-        "vegetation_input_count": int(len(veg_idx)),
-        "final_tree_input_count": int(len(cleaned_idx)),
-        "wire_tree_input_intersection": int(len(wire_left)),
-        "tower_tree_input_intersection": int(len(tower_left)),
+        "vegetation_input_count": int(veg_region.count),
+        "final_tree_input_count": int(cleaned_region.count),
+        "wire_tree_input_intersection": int(wire_left),
+        "tower_tree_input_intersection": int(tower_left),
     }
 
 

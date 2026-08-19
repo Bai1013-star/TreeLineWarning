@@ -149,6 +149,10 @@ def write_track_evidence(
                 "supported_slice_count": int(track.supported_slice_count),
                 "eligible_slice_count": int(track.eligible_slice_count),
                 "supported_slice_ratio": _json_number(track.supported_slice_ratio),
+                "unique_supported_slice_count": int(track.unique_supported_slice_count),
+                "bounded_supported_slice_ratio": _json_number(
+                    track.bounded_supported_slice_ratio
+                ),
                 "supported_slice_intervals": _intervals(track.inlier_slice_ids),
                 "missing_slice_intervals": _missing_intervals(track.inlier_slice_ids),
                 "supported_s_domain_m": [

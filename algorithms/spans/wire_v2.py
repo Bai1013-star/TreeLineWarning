@@ -34,6 +34,8 @@ class SliceTrack:
     supported_s_max_m: float
     supported_slice_count: int
     supported_slice_ratio: float
+    unique_supported_slice_count: int
+    bounded_supported_slice_ratio: float
     coverage_ratio: float
     maximum_gap_m: float
     inlier_ratio: float
@@ -61,6 +63,8 @@ class SliceTrack:
             "raw_support_count": self.raw_support_count,
             "supported_slice_count": self.supported_slice_count,
             "supported_slice_ratio": self.supported_slice_ratio,
+            "unique_supported_slice_count": self.unique_supported_slice_count,
+            "bounded_supported_slice_ratio": self.bounded_supported_slice_ratio,
             "coverage_ratio": self.coverage_ratio,
             "maximum_gap_m": self.maximum_gap_m,
             "supported_s_domain_m": [self.supported_s_min_m, self.supported_s_max_m],
@@ -304,6 +308,22 @@ def reconstruct_slice_tracks(
         supported_slices = int(np.count_nonzero(inliers))
         possible_slices = max(1, int(np.floor((s_max - s_min) / width)) + 1)
         supported_ratio = supported_slices / possible_slices
+        # Diagnostic bookkeeping fix (not a science-acceptance change): the
+        # legacy supported_slices counts inlier OBSERVATIONS, so a track with
+        # several observations in one slice (e.g. parallel strands merged) can
+        # report a ratio > 1.  unique_supported_slice_count counts distinct
+        # inlier slice IDs and bounded_supported_slice_ratio divides by the
+        # number of slice bins actually spanned by those inlier IDs, so it is
+        # always in [0, 1].  The acceptance gates below keep using the legacy
+        # fields unchanged.
+        inlier_slice_ids = support_slice_ids[inliers]
+        if len(inlier_slice_ids):
+            unique_supported_slices = int(len(np.unique(inlier_slice_ids)))
+            possible_from_ids = int(np.max(inlier_slice_ids) - np.min(inlier_slice_ids)) + 1
+            bounded_ratio = unique_supported_slices / max(possible_from_ids, 1)
+        else:
+            unique_supported_slices = 0
+            bounded_ratio = 0.0
         coverage = max(0.0, s_max - s_min) / max(span_length_m, 1e-9)
         residual = np.hypot(u_residual, z_residual)
         inlier_ratio = float(np.mean(inliers)) if len(inliers) else 0.0
@@ -358,6 +378,8 @@ def reconstruct_slice_tracks(
                 supported_s_max_m=s_max,
                 supported_slice_count=supported_slices,
                 supported_slice_ratio=float(supported_ratio),
+                unique_supported_slice_count=unique_supported_slices,
+                bounded_supported_slice_ratio=float(bounded_ratio),
                 coverage_ratio=float(coverage),
                 maximum_gap_m=maximum_gap,
                 inlier_ratio=inlier_ratio,
