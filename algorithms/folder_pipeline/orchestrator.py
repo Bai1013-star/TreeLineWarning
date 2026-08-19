@@ -442,6 +442,18 @@ class FolderOrchestrator:
             "origin_xyz": tuple(getattr(run, "origin_xyz", (0.0, 0.0, 0.0))),
         }
 
+    def source_bounds(self) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+        """Return the authoritative source-LAS absolute bounds (min, max)."""
+
+        run = self._ensure_display_run()
+        inspection = getattr(run, "inspection", None) or {}
+        minimum = inspection.get("bounds_min_xyz", [0.0, 0.0, 0.0])
+        maximum = inspection.get("bounds_max_xyz", [0.0, 0.0, 0.0])
+        return (
+            (float(minimum[0]), float(minimum[1]), float(minimum[2])),
+            (float(maximum[0]), float(maximum[1]), float(maximum[2])),
+        )
+
     # ----------------------------------------------------------------- science
     def run_science(self, progress: Progress | None = None) -> dict[str, Any]:
         """Wire + Vegetation + exact Wire/Tower exclusion + CROWN_STEM_HYBRID.

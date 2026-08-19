@@ -59,6 +59,30 @@ workspace/
 - 缺失值语义：`crown_width_m` / `diameter_cm` 缺失时写空（blank），绝不写 `0`；
   NaN / Inf 一律清洗为空。
 
+## STEP 1 查看器（冻结的 Potree LOD）
+
+主选页面 `/step1` 是 **Potree 分层 LOD 查看器**（冻结的 V1 查看器决策）：
+
+```
+权威 LAS/LAZ
+   -> 可复现 viewer-cache builder
+   -> Potree 静态 hierarchy（PotreeConverter 2.1.3）
+   -> Potree WebGL 查看器（Potree 1.8.2，视点相关多分辨率 LOD）
+```
+
+- 主查看器不会一次把全部 105,055,350 点塞进浏览器/GPU：Potree 按节点
+  通过 HTTP Range 请求加载 `octree.bin`，缩放到杆塔会加载更细的 LOD 节点。
+- 视图缓存位于 `source_cache/viewer/<cache-id>/`，绑定源点云 SHA-256、
+  PotreeConverter 版本、Potree 运行时版本与转换设置；有效缓存重启即复用，
+  不每次重新转换；不同源缓存 fail closed。
+- 点击只是一个近似坐标种子（viewer-local → source-absolute 由 `/api/pick`
+  显式转换并在后端校验源范围）；随后调用既有 `local_raw_for_xy` +
+  `refine_pole_from_raw_cloud` 做全分辨率杆塔精化。渲染点不产生
+  `original_index`。
+- 旧 Plotly 固定采样选择器仅保留为 `LEGACY / DEBUG / FALLBACK`
+  （`/step1_plotly`），页面有醒目回退标识。
+- 查看器设置（点预算/LOD/相机/显示缓存）是纯展示，不影响任何科学成员。
+
 ## 语义说明（科学出处诚实报告）
 
 - **危险阈值**：Folder 流水线不引入新的硬编码阈值。危险/净空阈值一律来自现有权威

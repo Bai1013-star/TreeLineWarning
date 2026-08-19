@@ -68,6 +68,10 @@ def _page_shell(title: str, step: str, body: str, script: str) -> str:
 
 def step1_html() -> str:
     body = """
+<div style="background:#8b0000;color:#fff;padding:6px 16px;font-size:13px">
+  ⚠ LEGACY / DEBUG / FALLBACK 选择器（Plotly 固定采样）。若 WebGL 可用，请使用
+  主选页 /step1 的 Potree LOD 查看器。
+</div>
 <main>
   <div class="panel plot-panel">
     <div id="plot2d" style="height:48%"></div>

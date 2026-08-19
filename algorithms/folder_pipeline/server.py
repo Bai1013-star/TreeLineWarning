@@ -23,12 +23,18 @@ import numpy as np
 
 from algorithms.folder_pipeline.html import step1_html, step2_html, step3_html
 from algorithms.folder_pipeline.orchestrator import FolderOrchestrator, FolderPipelineError
+from algorithms.folder_pipeline.potree_page import potree_step1_html
 from algorithms.folder_pipeline.state import (
     STEP_ERROR,
     STEP_SCIENCE_RUNNING,
     STEP_SELECTING_SPAN,
     STEP_TREE_EDITING,
     FolderWorkflowState,
+)
+from algorithms.folder_pipeline.viewer_cache import (
+    POTREE_RUNTIME_DIR,
+    load_viewer_cache,
+    viewer_cache_status,
 )
 from algorithms.folder_pipeline.workspace import FolderWorkspace
 
@@ -56,6 +62,25 @@ def _even_rows(count: int, maximum: int) -> np.ndarray:
     return np.arange(0, count, step, dtype=np.int64)
 
 
+_EXTRA_MIME = {
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".json": "application/json",
+    ".wasm": "application/wasm",
+    ".bin": "application/octet-stream",
+    ".glsl": "text/plain",
+}
+
+
+def _mime_type(path: Path) -> str:
+    import mimetypes
+
+    mime = mimetypes.guess_type(str(path))[0]
+    if mime:
+        return mime
+    return _EXTRA_MIME.get(path.suffix.lower(), "application/octet-stream")
+
+
 class FolderServer:
     """Owns the workspace + orchestrator + workflow state; builds the handler."""
 
@@ -76,7 +101,18 @@ class FolderServer:
         )
         self._science_thread: threading.Thread | None = None
         self.headless_poles = headless_poles
+        self._viewer_cache: Any = None
         self._prepare()
+
+    def viewer_cache(self) -> Any:
+        """Lazily load the valid workspace Potree viewer cache (or None)."""
+
+        if self._viewer_cache is None:
+            try:
+                self._viewer_cache = load_viewer_cache(self.workspace)
+            except Exception:  # noqa: BLE001 - a missing cache is not fatal
+                self._viewer_cache = None
+        return self._viewer_cache
 
     def _prepare(self) -> None:
         """Resume persisted checkpoints or start fresh."""
@@ -182,6 +218,8 @@ class FolderServer:
                 path = parsed.path
                 try:
                     if path in ("/", "/step1"):
+                        return self._step1_page()
+                    if path == "/step1_plotly":
                         return self._send_text(step1_html())
                     if path == "/step2":
                         return self._send_text(step2_html())
@@ -191,6 +229,8 @@ class FolderServer:
                         return self._send_json(state_ref.state.snapshot())
                     if path == "/points":
                         return self._points()
+                    if path == "/viewer_cache":
+                        return self._send_json(viewer_cache_status(folder_server.workspace))
                     if path == "/plotly.js":
                         try:
                             import plotly
@@ -205,6 +245,12 @@ class FolderServer:
                         return self._final_data()
                     if path == "/download_excel":
                         return self._download_excel()
+                    if path == "/potree" or path.startswith("/potree/"):
+                        return self._serve_static_root(
+                            path, POTREE_RUNTIME_DIR, "/potree"
+                        )
+                    if path == "/pointclouds" or path.startswith("/pointclouds/"):
+                        return self._serve_pointcloud(path)
                     return self._send_error(f"未知路径 {path}", status=404)
                 except FolderPipelineError as exc:
                     state_ref.state.set_error("STEP 1 点云预览失败", str(exc))
@@ -229,6 +275,8 @@ class FolderServer:
                     if path == "/reselect":
                         folder_server.orchestrator.reset_selection()
                         return self._send_json(state_ref.state.snapshot())
+                    if path == "/api/pick":
+                        return self._pick(payload)
                     if path == "/confirm":
                         return self._confirm(payload)
                     if path == "/api/select":
@@ -364,6 +412,90 @@ class FolderServer:
                     }
                 )
 
+            # -- STEP 1 primary page (Potree LOD, Plotly fallback) -------------
+            def _step1_page(self) -> None:
+                cache = folder_server.viewer_cache()
+                if cache is not None:
+                    bounds = folder_server.orchestrator.source_bounds()
+                    return self._send_text(
+                        potree_step1_html(cache, source_bounds=bounds)
+                    )
+                # No valid viewer cache -> Plotly legacy/debug fallback (visible).
+                return self._send_text(step1_html())
+
+            # -- coordinate bridge: viewer-local -> source-absolute ------------
+            def _pick(self, payload: dict[str, Any]) -> None:
+                cache = folder_server.viewer_cache()
+                if cache is None:
+                    return self._send_error("Potree 视图缓存尚未构建，无法转换拾取坐标")
+                request_cache_id = payload.get("cache_id")
+                if request_cache_id != cache.cache_id:
+                    return self._send_error("拾取坐标来自过期的视图缓存，请刷新页面")
+                try:
+                    x = float(payload["x"])
+                    y = float(payload["y"])
+                    z = float(payload["z"])
+                except (KeyError, TypeError, ValueError):
+                    return self._send_error("拾取坐标无效")
+                local = (x, y, z)
+                offset = cache.offset_xyz
+                source = (x + offset[0], y + offset[1], z + offset[2])
+                bounds = folder_server.orchestrator.source_bounds()
+                bmin, bmax = bounds
+                if not (
+                    bmin[0] - 10 <= source[0] <= bmax[0] + 10
+                    and bmin[1] - 10 <= source[1] <= bmax[1] + 10
+                ):
+                    return self._send_error("拾取位置在源点云范围之外，请放大后重试")
+                return self._send_json(
+                    {
+                        "ok": True,
+                        "viewer_xyz_local_m": list(local),
+                        "offset_xyz": list(offset),
+                        "source_xyz": list(source),
+                        "cache_id": cache.cache_id,
+                        "source_bounds_min": list(bmin),
+                        "source_bounds_max": list(bmax),
+                    }
+                )
+
+            # -- static Potree runtime assets (with Range support) -------------
+            def _serve_static_root(self, path: str, root: Any, prefix: str) -> None:
+                relative = path[len(prefix):].lstrip("/")
+                if not relative:
+                    relative = "index.html"
+                target = (Path(root) / relative).resolve()
+                try:
+                    target.relative_to(Path(root).resolve())
+                except ValueError:
+                    return self._send_error("路径越界", status=403)
+                if not target.is_file():
+                    return self._send_error("文件不存在", status=404)
+                return folder_server._serve_static_file(self, target)
+
+            def _serve_pointcloud(self, path: str) -> None:
+                cache = folder_server.viewer_cache()
+                if cache is None:
+                    return self._send_error("Potree 视图缓存尚未构建", status=404)
+                # /pointclouds/<cache_id>/<relative>
+                parts = path.split("/")
+                if len(parts) < 3 or parts[1] != "pointclouds":
+                    return self._send_error("未知路径", status=404)
+                request_id = parts[2]
+                if request_id != cache.cache_id:
+                    return self._send_error("视图缓存不匹配", status=404)
+                relative = "/".join(parts[3:])
+                if not relative:
+                    relative = "metadata.json"
+                target = (cache.potree_dir / relative).resolve()
+                try:
+                    target.relative_to(cache.potree_dir.resolve())
+                except ValueError:
+                    return self._send_error("路径越界", status=403)
+                if not target.is_file():
+                    return self._send_error("文件不存在", status=404)
+                return folder_server._serve_static_file(self, target)
+
         return _Handler
 
     # ------------------------------------------------------- display builders
@@ -402,6 +534,59 @@ class FolderServer:
             "wires3d": self._wire_curves_display(),
             "tower": self._tower_display(),
         }
+
+    def _serve_static_file(self, handler: BaseHTTPRequestHandler, target: Path) -> None:
+        """Serve a static file with HTTP Range support (Potree octree node reads)."""
+
+        size = target.stat().st_size
+        range_header = handler.headers.get("Range", "")
+        content_type = _mime_type(target)
+        if range_header.startswith("bytes="):
+            spec = range_header[6:].split(",")[0].strip()
+            start_text, _, end_text = spec.partition("-")
+            try:
+                start = int(start_text) if start_text else 0
+                end = int(end_text) if end_text else size - 1
+            except ValueError:
+                start, end = 0, size - 1
+            end = min(end, size - 1)
+            if start < 0 or start >= size or start > end:
+                handler.send_response(416)
+                handler.send_header("Content-Range", f"bytes */{size}")
+                handler.end_headers()
+                return
+            length = end - start + 1
+            handler.send_response(206)
+            handler.send_header("Content-Type", content_type)
+            handler.send_header("Content-Length", str(length))
+            handler.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            handler.send_header("Accept-Ranges", "bytes")
+            handler.send_header("Cache-Control", "no-store")
+            handler.end_headers()
+            with target.open("rb") as stream:
+                stream.seek(start)
+                remaining = length
+                while remaining > 0:
+                    block = stream.read(min(1 << 20, remaining))
+                    if not block:
+                        break
+                    handler.wfile.write(block)
+                    handler.wfile.flush()
+                    remaining -= len(block)
+            return
+        handler.send_response(200)
+        handler.send_header("Content-Type", content_type)
+        handler.send_header("Content-Length", str(size))
+        handler.send_header("Accept-Ranges", "bytes")
+        handler.send_header("Cache-Control", "no-store")
+        handler.end_headers()
+        with target.open("rb") as stream:
+            while True:
+                block = stream.read(1 << 20)
+                if not block:
+                    break
+                handler.wfile.write(block)
+                handler.wfile.flush()
 
     def _build_final_display(self) -> dict[str, Any]:
         orch = self.orchestrator
