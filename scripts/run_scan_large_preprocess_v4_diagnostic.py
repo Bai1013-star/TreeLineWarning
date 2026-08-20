@@ -88,7 +88,7 @@ def _write_preprocessing_review(working: WeightedWorkingSet, output: Path) -> Pa
             }
         ],
     )
-    figure.write_html(output, include_plotlyjs="cdn", full_html=True)
+    figure.write_html(output, include_plotlyjs=True, full_html=True)
     return output
 
 
@@ -124,7 +124,7 @@ def _write_vegetation_review(diagnostic_npz: Path, output: Path) -> Path:
         title="scan_large ROI FAST vegetation — no native W1 is available",
         scene={"aspectmode": "data"},
     )
-    figure.write_html(output, include_plotlyjs="cdn", full_html=True)
+    figure.write_html(output, include_plotlyjs=True, full_html=True)
     return output
 
 
@@ -164,7 +164,7 @@ def _write_clean_v4_overview(v4_npz: Path, v4_json: Path, output: Path) -> Path:
         title="scan_large ROI V4 clean overview — tree IDs and apices",
         scene={"aspectmode": "data"},
     )
-    figure.write_html(output, include_plotlyjs="cdn", full_html=True)
+    figure.write_html(output, include_plotlyjs=True, full_html=True)
     return output
 
 
@@ -214,7 +214,7 @@ def _write_fullres_preview(
         title="scan_large ROI — deterministic full-resolution back-mapping preview",
         scene={"aspectmode": "data"},
     )
-    figure.write_html(output, include_plotlyjs="cdn", full_html=True)
+    figure.write_html(output, include_plotlyjs=True, full_html=True)
     return output
 
 

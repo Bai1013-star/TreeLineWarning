@@ -349,7 +349,7 @@ def generate_wire_instances_preview(
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = _temporary(output)
     try:
-        figure.write_html(temporary, include_plotlyjs="cdn", full_html=True)
+        figure.write_html(temporary, include_plotlyjs=True, full_html=True)
         os.replace(temporary, output)
     except Exception:
         temporary.unlink(missing_ok=True)

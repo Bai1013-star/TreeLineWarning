@@ -498,7 +498,7 @@ def _write_plotly_html(
         ],
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    figure.write_html(path, include_plotlyjs="cdn", full_html=True)
+    figure.write_html(path, include_plotlyjs=True, full_html=True)
 
 
 def _optional_trace_count(data: dict[str, np.ndarray]) -> int:

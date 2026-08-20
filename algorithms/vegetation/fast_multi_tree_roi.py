@@ -267,7 +267,7 @@ def write_multi_tree_candidate_preview(
         legend={"orientation": "h"},
     )
     output_html.parent.mkdir(parents=True, exist_ok=True)
-    figure.write_html(output_html, include_plotlyjs="cdn", full_html=True)
+    figure.write_html(output_html, include_plotlyjs=True, full_html=True)
     return output_html
 
 

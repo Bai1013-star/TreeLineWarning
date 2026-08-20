@@ -274,7 +274,7 @@ def generate_wire_candidate_preview(
     output_html_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = _temporary_path(output_html_path)
     try:
-        figure.write_html(temporary, include_plotlyjs="cdn", full_html=True)
+        figure.write_html(temporary, include_plotlyjs=True, full_html=True)
         os.replace(temporary, output_html_path)
     except Exception:
         temporary.unlink(missing_ok=True)

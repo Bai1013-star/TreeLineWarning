@@ -244,7 +244,7 @@ def _write_vegetation_preview(diagnostic_npz: Path, output_html: Path) -> Path:
         title="Selected multi-tree ROI — vegetation purity gate",
         scene={"aspectmode": "data"},
     )
-    figure.write_html(output_html, include_plotlyjs="cdn", full_html=True)
+    figure.write_html(output_html, include_plotlyjs=True, full_html=True)
     return output_html
 
 
@@ -283,7 +283,7 @@ def _write_clean_v4_overview(v4_root: Path, output_html: Path) -> Path:
         title="Selected multi-tree ROI — current RAW-WEIGHTED V4",
         scene={"aspectmode": "data"},
     )
-    figure.write_html(output_html, include_plotlyjs="cdn", full_html=True)
+    figure.write_html(output_html, include_plotlyjs=True, full_html=True)
     return output_html
 
 

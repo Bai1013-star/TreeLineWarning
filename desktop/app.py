@@ -9,7 +9,12 @@ import threading
 import urllib.request
 from pathlib import Path
 
-from desktop.project_management import create_empty_project, describe_project, import_pointcloud
+from desktop.project_management import (
+    create_empty_project,
+    describe_project,
+    import_gis_file,
+    import_pointcloud,
+)
 
 
 def resource_root() -> Path:
@@ -132,6 +137,22 @@ class DesktopApi:
         descriptor = import_pointcloud(self.backend.project_root, Path(selected[0]))
         return self.backend.configure_project(Path(descriptor["root"]))
 
+    def import_gis(self) -> dict | None:
+        if self.window is None:
+            return None
+        import webview
+
+        selected = self.window.create_file_dialog(
+            webview.OPEN_DIALOG,
+            directory="",
+            allow_multiple=False,
+            file_types=("GIS (*.kml;*.csv)", "All files (*.*)"),
+        )
+        if not selected:
+            return None
+        descriptor = import_gis_file(self.backend.project_root, Path(selected[0]))
+        return self.backend.configure_project(Path(descriptor["root"]))
+
 
 def launch(project_root: Path | None) -> int:
     try:
@@ -199,8 +220,7 @@ def prediction_smoke(project_root: Path | None) -> int:
             if result["status"] != "COMPLETE" or payload["output_tree_count"] != 22:
                 raise RuntimeError(f"{mode} prediction smoke failed: {result.get('diagnostic')}")
             g002_t007 = next(
-                item for item in result["entries"]
-                if item.get("persistent_tree_id") == "G002-T007"
+                item for item in result["entries"] if item.get("persistent_tree_id") == "G002-T007"
             )
             day_14 = next(item for item in g002_t007["horizons"] if item["horizon"] == "14天")
             if day_14.get("future_height_m") is None or day_14.get("future_crown_width_m") is None:
@@ -216,9 +236,9 @@ def prediction_smoke(project_root: Path | None) -> int:
         selected_id = payload["result"]["entries"][0]["persistent_tree_id"]
         work_order_request = urllib.request.Request(
             url + "api/spans/S005/work-order",
-            data=json.dumps(
-                {"persistent_tree_id": selected_id, "prediction_mode": "ai"}
-            ).encode("utf-8"),
+            data=json.dumps({"persistent_tree_id": selected_id, "prediction_mode": "ai"}).encode(
+                "utf-8"
+            ),
             headers={"Content-Type": "application/json"},
             method="POST",
         )

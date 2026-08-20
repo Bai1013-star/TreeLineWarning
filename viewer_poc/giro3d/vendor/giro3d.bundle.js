@@ -68838,7 +68838,7 @@ void main() {
     "node_modules/@giro3d/giro3d/sources/las/config.js"() {
       import_laz_perf = __toESM(require_web());
       init_Fetcher();
-      DEFAULT_LAZPERF_PATH = "https://cdn.jsdelivr.net/npm/laz-perf@0.0.7/lib";
+      DEFAULT_LAZPERF_PATH = "/laz-perf/";
       lazPerfPath = DEFAULT_LAZPERF_PATH;
       lazPerfWasmBinary = null;
       lazPerf = void 0;
