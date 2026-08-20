@@ -750,6 +750,10 @@ class FolderOrchestrator:
         payload["source_sha256"] = self.workspace.source_sha256
         payload["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         _write_json(self.workspace.tree_edits_path, payload)
+        # Keep the editor list exposed by /state in sync with the latest edit;
+        # otherwise a refresh after delete/merge flashes the stale snapshot
+        # (captured at build_editor time) back over the right-hand panel.
+        self.state.update(tree_snapshot=session.snapshot())
 
     # ----------------------------------------------------------------- final
     def confirm_trees_and_finalize(self, progress: Progress | None = None) -> dict[str, Any]:

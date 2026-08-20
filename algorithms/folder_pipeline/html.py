@@ -324,34 +324,41 @@ async function refreshTrees(){
 }
 async function loadEditorData(){
   const data=await (await fetch("/api/editor_data")).json();
-  const bg=data.background, wire=data.wire, tower=data.tower, trees=data.trees, wires3d=data.wires3d;
+  // Payload contract: each display layer is an optional dict `{xyz:[...], ...}`
+  // (background/wire/wires3d/tower) and the tree 3D cloud lives under
+  // `trees3d` `{xyz,color,tree_id_by_index}` — NOT under `trees`, which is the
+  // right-panel tree LIST.  Guard every layer independently so a missing or
+  // empty layer renders as an empty trace instead of throwing `.length` of
+  // undefined and blanking the whole viewer.
+  const bg=data.background, wire=data.wire, tower=data.tower, wires3d=data.wires3d;
+  const trees3d=data.trees3d||{};
   const traces=[];
-  if(bg && bg.xyz.length){
+  if(bg && Array.isArray(bg.xyz) && bg.xyz.length){
     const c=bg.rgb.map(v=>`rgb(${v[0]},${v[1]},${v[2]})`);
     traces.push({x:bg.xyz.map(p=>p[0]),y:bg.xyz.map(p=>p[1]),z:bg.xyz.map(p=>p[2]),
       type:"scatter3d",mode:"markers",name:"背景",
       marker:{size:1,color:c,opacity:0.4}});
   }
-  if(wire && wire.xyz.length){
+  if(wire && Array.isArray(wire.xyz) && wire.xyz.length){
     traces.push({x:wire.xyz.map(p=>p[0]),y:wire.xyz.map(p=>p[1]),z:wire.xyz.map(p=>p[2]),
       type:"scatter3d",mode:"markers",name:"导线",
       marker:{size:2,color:"#ff1744",opacity:1}});
   }
-  if(wires3d && wires3d.xyz.length){
+  if(wires3d && Array.isArray(wires3d.xyz) && wires3d.xyz.length){
     traces.push({x:wires3d.xyz.map(p=>p[0]),y:wires3d.xyz.map(p=>p[1]),z:wires3d.xyz.map(p=>p[2]),
       type:"scatter3d",mode:"lines",name:"导线曲线",
       line:{color:"#ff1744",width:3}});
   }
-  if(tower && tower.xyz.length){
+  if(tower && Array.isArray(tower.xyz) && tower.xyz.length){
     traces.push({x:tower.xyz.map(p=>p[0]),y:tower.xyz.map(p=>p[1]),z:tower.xyz.map(p=>p[2]),
       type:"scatter3d",mode:"markers+text",name:"杆塔",
       text:tower.labels||[],
       marker:{size:7,color:"#ff9800",symbol:"diamond"}});
   }
-  if(trees && trees.xyz.length){
-    traces.push({x:trees.xyz.map(p=>p[0]),y:trees.xyz.map(p=>p[1]),z:trees.xyz.map(p=>p[2]),
+  if(Array.isArray(trees3d.xyz) && trees3d.xyz.length){
+    traces.push({x:trees3d.xyz.map(p=>p[0]),y:trees3d.xyz.map(p=>p[1]),z:trees3d.xyz.map(p=>p[2]),
       type:"scatter3d",mode:"markers",name:"单木",
-      marker:{size:1.6,color:trees.color,opacity:0.95}});
+      marker:{size:1.6,color:trees3d.color,opacity:0.95}});
   }
   Plotly.newPlot("plot3d", traces,
     {title:{text:"单木审核（不同颜色=不同树）",font:{size:14}},
@@ -362,7 +369,7 @@ async function loadEditorData(){
     if(!data.points||!data.points.length) return;
     const pt=data.points[0];
     if(pt.trace.name==="单木"){
-      const tid=trees.tree_id_by_index[pt.pointNumber];
+      const tid=trees3d.tree_id_by_index[pt.pointNumber];
       if(tid!=null){
         if(selected.has(tid)) selected.delete(tid); else selected.add(tid);
         refreshTrees();
@@ -472,32 +479,36 @@ async function loadFinal(){
     if(risk==="DANGEROUS") tr.style.background="#ffe9e9";
     tbody.appendChild(tr);
   });
-  // 3d
+  // 3d — same display payload contract as Step 2: `background`/`wire3d`/`towers`
+  // are optional dicts `{xyz:[...]}` while `trees`/`danger` are plain point
+  // arrays; guard each layer so an empty layer renders as nothing instead of
+  // crashing (or silently skipping) the plot.
+  const disp=data.display||{};
   const traces=[];
-  if(data.display.background.length){
-    const c=data.display.background.map(v=>`rgb(${v[0]},${v[1]},${v[2]})`);
-    traces.push({x:data.display.background.map(p=>p[0]),y:data.display.background.map(p=>p[1]),
-      z:data.display.background.map(p=>p[2]),type:"scatter3d",mode:"markers",name:"背景",
+  if(disp.background && Array.isArray(disp.background.xyz) && disp.background.xyz.length){
+    const c=disp.background.rgb.map(v=>`rgb(${v[0]},${v[1]},${v[2]})`);
+    traces.push({x:disp.background.xyz.map(p=>p[0]),y:disp.background.xyz.map(p=>p[1]),
+      z:disp.background.xyz.map(p=>p[2]),type:"scatter3d",mode:"markers",name:"背景",
       marker:{size:1,color:c,opacity:0.4}});
   }
-  if(data.display.trees.length){
-    traces.push({x:data.display.trees.map(p=>p[0]),y:data.display.trees.map(p=>p[1]),
-      z:data.display.trees.map(p=>p[2]),type:"scatter3d",mode:"markers",name:"最终单木",
-      marker:{size:1.6,color:data.display.tree_color,opacity:0.95}});
+  if(Array.isArray(disp.trees) && disp.trees.length){
+    traces.push({x:disp.trees.map(p=>p[0]),y:disp.trees.map(p=>p[1]),
+      z:disp.trees.map(p=>p[2]),type:"scatter3d",mode:"markers",name:"最终单木",
+      marker:{size:1.6,color:disp.tree_color,opacity:0.95}});
   }
-  if(data.display.danger.length){
-    traces.push({x:data.display.danger.map(p=>p[0]),y:data.display.danger.map(p=>p[1]),
-      z:data.display.danger.map(p=>p[2]),type:"scatter3d",mode:"markers",name:"危险点",
+  if(Array.isArray(disp.danger) && disp.danger.length){
+    traces.push({x:disp.danger.map(p=>p[0]),y:disp.danger.map(p=>p[1]),
+      z:disp.danger.map(p=>p[2]),type:"scatter3d",mode:"markers",name:"危险点",
       marker:{size:2.4,color:"#ff0000",opacity:1}});
   }
-  if(data.display.wire3d.length){
-    traces.push({x:data.display.wire3d.map(p=>p[0]),y:data.display.wire3d.map(p=>p[1]),
-      z:data.display.wire3d.map(p=>p[2]),type:"scatter3d",mode:"lines",name:"导线",
+  if(disp.wire3d && Array.isArray(disp.wire3d.xyz) && disp.wire3d.xyz.length){
+    traces.push({x:disp.wire3d.xyz.map(p=>p[0]),y:disp.wire3d.xyz.map(p=>p[1]),
+      z:disp.wire3d.xyz.map(p=>p[2]),type:"scatter3d",mode:"lines",name:"导线",
       line:{color:"#ff1744",width:3}});
   }
-  if(data.display.towers.length){
-    traces.push({x:data.display.towers.map(p=>p[0]),y:data.display.towers.map(p=>p[1]),
-      z:data.display.towers.map(p=>p[2]),type:"scatter3d",mode:"markers",name:"杆塔",
+  if(disp.towers && Array.isArray(disp.towers.xyz) && disp.towers.xyz.length){
+    traces.push({x:disp.towers.xyz.map(p=>p[0]),y:disp.towers.xyz.map(p=>p[1]),
+      z:disp.towers.xyz.map(p=>p[2]),type:"scatter3d",mode:"markers",name:"杆塔",
       marker:{size:7,color:"#ff9800",symbol:"diamond"}});
   }
   Plotly.newPlot("plot3d", traces,
