@@ -66,6 +66,7 @@ def _page_shell(title: str, step: str, body: str, script: str) -> str:
 # STEP 1 — manual span selection
 # ---------------------------------------------------------------------------
 
+
 def step1_html() -> str:
     body = """
 <div style="background:#8b0000;color:#fff;padding:6px 16px;font-size:13px">
@@ -239,6 +240,7 @@ refreshTimer = setInterval(refreshState, 1500);
 # STEP 2 — tree editor (DELETE / MERGE / UNDO)
 # ---------------------------------------------------------------------------
 
+
 def step2_html() -> str:
     body = """
 <main>
@@ -360,6 +362,10 @@ async function loadEditorData(){
       type:"scatter3d",mode:"markers",name:"单木",
       marker:{size:1.6,color:trees3d.color,opacity:0.95}});
   }
+  if(!traces.length){
+    document.getElementById("plot3d").textContent="暂无可审核的 Tree display sample；完成 Batch 后刷新。";
+    return;
+  }
   Plotly.newPlot("plot3d", traces,
     {title:{text:"单木审核（不同颜色=不同树）",font:{size:14}},
      scene:{aspectmode:"data"}, margin:{l:0,r:0,t:36,b:0}},
@@ -378,12 +384,12 @@ async function loadEditorData(){
   });
 }
 document.getElementById("btn-delete").onclick=async()=>{
-  try{const s=await post("/api/delete",{});renderTrees(s);
+  try{await post("/api/select",{tree_ids:[...selected]});const s=await post("/api/delete",{});renderTrees(s);
       document.getElementById("editmsg").textContent="已删除所选单木";await loadEditorData();}
   catch(e){document.getElementById("editmsg").textContent="失败："+e.message;}
 };
 document.getElementById("btn-merge").onclick=async()=>{
-  try{const s=await post("/api/merge",{});renderTrees(s);
+  try{await post("/api/select",{tree_ids:[...selected]});const s=await post("/api/merge",{});renderTrees(s);
       document.getElementById("editmsg").textContent="已合并所选单木";await loadEditorData();}
   catch(e){document.getElementById("editmsg").textContent="失败："+e.message;}
 };
@@ -408,6 +414,7 @@ refreshTimer=setInterval(refreshTrees,1500);
 # ---------------------------------------------------------------------------
 # STEP 3 — final result + Excel
 # ---------------------------------------------------------------------------
+
 
 def step3_html() -> str:
     body = """

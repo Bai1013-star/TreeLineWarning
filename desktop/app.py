@@ -32,10 +32,11 @@ def default_project_root() -> Path | None:
 
 class BackendProcess:
     def __init__(self, project_root: Path, repository_root: Path) -> None:
-        self.project_root = project_root
+        self.project_root = project_root.resolve()
         self.repository_root = repository_root
         self.httpd = None
         self.thread: threading.Thread | None = None
+        self.local_app = None
 
     def _viewer_cache_paths(self) -> tuple[Path, Path]:
         # Runtime caches deliberately remain external to the EXE.  A prepared
@@ -59,6 +60,8 @@ class BackendProcess:
     def configure_project(self, project_root: Path) -> dict:
         """Switch the local API to a verified project without carrying UI state."""
         self.project_root = project_root.resolve()
+        if self.local_app is not None:
+            return self.local_app.configure_project(self.project_root)
         from scripts import serve_p3a_giro3d as server
 
         tile_cache, _dataset = self._viewer_cache_paths()
@@ -69,6 +72,13 @@ class BackendProcess:
 
     def start(self, timeout_seconds: float = 25.0) -> str:
         try:
+            if (self.project_root / "stage-a-project.json").is_file() or (
+                self.project_root / "desktop-project.json"
+            ).is_file():
+                from desktop.server import DesktopApplication
+
+                self.local_app = DesktopApplication(self.project_root, self.repository_root)
+                return self.local_app.start()
             from scripts import serve_p3a_giro3d as server
 
             tile_cache, dataset = self._viewer_cache_paths()
@@ -84,6 +94,9 @@ class BackendProcess:
             raise RuntimeError(f"Viewer backend failed to start: {exc}") from exc
 
     def stop(self) -> None:
+        if self.local_app is not None:
+            self.local_app.stop()
+            self.local_app = None
         if self.httpd is not None:
             self.httpd.shutdown()
             self.httpd.server_close()
@@ -164,12 +177,21 @@ def launch(project_root: Path | None) -> int:
         )
         return 2
     project = project_root or default_project_root()
-    if project is None or not (project / "project.json").is_file():
-        print(
-            "No prepared TreeLineWarning project was found. Start from a workspace containing "
-            "cache\\tower_ordered_project or use --project-root.",
-            file=sys.stderr,
-        )
+    if project is None:
+        home_parent = (Path.cwd() / "workspace").resolve()
+        home_parent.mkdir(parents=True, exist_ok=True)
+        home_root = home_parent / "TreeLineWarning Desktop Home"
+        if not (home_root / "stage-a-project.json").is_file():
+            descriptor = create_empty_project(home_parent, home_root.name)
+            project = Path(descriptor["root"])
+        else:
+            project = home_root
+    if not (
+        (project / "project.json").is_file()
+        or (project / "stage-a-project.json").is_file()
+        or (project / "desktop-project.json").is_file()
+    ):
+        print("Selected project has no supported local TreeLineWarning manifest.", file=sys.stderr)
         return 2
     backend = BackendProcess(project.resolve(), resource_root())
     try:

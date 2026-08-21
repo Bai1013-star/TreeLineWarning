@@ -87,6 +87,30 @@ def create_empty_project(parent: Path, project_name: str) -> dict:
     _manifest_path(root).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    # Stage-C metadata is a small product sidecar, separate from the Stage-A
+    # science/topology aggregate.  Keeping it here makes new projects
+    # immediately resumable without creating a parallel science project model.
+    (root / "desktop-workflow.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "treeline-desktop-workflow-v2",
+                "project_name": name,
+                "risk_policy": {
+                    "risk_policy_version": "risk-policy-v1",
+                    "warning_clearance_threshold_m": 0.5,
+                },
+                "selected_span_ids": [],
+                "acceptance_mode": None,
+                "last_batch_id": None,
+                "last_batch_status": None,
+                "last_error": None,
+                "updated_at": now,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     save_project(Project.new(name), root)
     return describe_project(root)
 

@@ -4,7 +4,17 @@ from PyInstaller.utils.hooks import collect_submodules
 hiddenimports = (
     collect_submodules("algorithms")
     + collect_submodules("core")
-    + ["scripts", "scripts.serve_p3a_giro3d", "scripts.tree_viewer_api", "desktop.project_management", "desktop.work_order"]
+    + [
+        "scripts",
+        "scripts.serve_p3a_giro3d",
+        "scripts.tree_viewer_api",
+        "desktop.project_management",
+        "desktop.workflow",
+        "desktop.server",
+        "desktop.work_order",
+        "plotly",
+        "plotly.offline",
+    ]
 )
 datas = [
     ("viewer_poc", "viewer_poc"),
