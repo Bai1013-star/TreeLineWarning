@@ -199,6 +199,8 @@ def _reconcile_single_span(
     """Reconcile one span without the general cross-span raw-row loop."""
 
     raw_tree = np.asarray(outcome.raw_tree_id, dtype=np.int32)
+    raw_original_all = np.asarray(outcome.raw_original_index, dtype=np.int64)
+    duplicate_input_count = int(len(raw_original_all) - len(np.unique(raw_original_all)))
     # A one-span execution sees neighbouring crowns in its halo, but those
     # observations are context only.  The stable tree-top anchor determines
     # whether this Span owns the entity; a halo-only tree may never allocate a
@@ -302,6 +304,10 @@ def _reconcile_single_span(
             "global_tree_count": len(records),
             "review_tree_count": len(review_ids),
             "final_raw_member_count": int(len(final_original)),
+            "duplicate_input_original_index_count": duplicate_input_count,
+            "duplicate_final_original_index": int(
+                len(final_original) - len(np.unique(final_original))
+            ),
             "runtime_seconds": time.perf_counter() - started,
             "single_span_fast_path": True,
         },
@@ -389,6 +395,7 @@ def reconcile_trees(
     all_xyz = np.concatenate(parts_xyz)
     all_span = np.concatenate(parts_span)
     all_global = np.concatenate(parts_tree)
+    duplicate_input_count = int(len(all_original) - len(np.unique(all_original)))
     order = np.argsort(all_original, kind="stable")
     sorted_original = all_original[order]
     sorted_xyz = all_xyz[order]
@@ -419,9 +426,17 @@ def reconcile_trees(
                 matches = np.flatnonzero(outcome.raw_original_index == sorted_original[position])
                 if len(matches):
                     in_core[offset] = bool(outcome.in_core[matches[0]])
-            core_members = group_globals[in_core]
-            if len(core_members):
-                chosen = int(core_members[0])
+            core_positions = np.flatnonzero(in_core)
+            if len(core_positions):
+                chosen_position = min(
+                    core_positions,
+                    key=lambda offset: (
+                        int(outcomes[int(group_spans[offset])].span.line_id),
+                        int(outcomes[int(group_spans[offset])].span.span_id),
+                        int(group_spans[offset]),
+                    ),
+                )
+                chosen = int(group_globals[int(chosen_position)])
             else:
                 chosen = int(distinct[0])
             final_global.append(chosen)
@@ -449,6 +464,11 @@ def reconcile_trees(
     final_tree_remapped = np.asarray(
         [remap.get(int(value), -1) for value in final_global_array], dtype=np.int32
     )
+    duplicate_final_count = int(
+        len(final_original_array) - len(np.unique(final_original_array))
+    )
+    if duplicate_final_count != 0:
+        raise ValueError("DUPLICATE_FINAL_ORIGINAL_INDEX")
     remapped_span_tree: dict[tuple[int, int], int] = {
         key: remap[value] for key, value in span_tree_to_global.items()
     }
@@ -518,6 +538,8 @@ def reconcile_trees(
             "global_tree_count": len(records),
             "review_tree_count": len(review_ids),
             "final_raw_member_count": int(len(final_original_array)),
+            "duplicate_input_original_index_count": duplicate_input_count,
+            "duplicate_final_original_index": duplicate_final_count,
             "runtime_seconds": time.perf_counter() - started,
         },
     )

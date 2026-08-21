@@ -33,11 +33,11 @@ PROJECT_SPAN_CORE_HALF_WIDTH_M = _TRACKED_SPAN_REGION_CONFIG.span_half_width_m
 PROJECT_SPAN_LONGITUDINAL_HALO_M = _TRACKED_SPAN_REGION_CONFIG.span_halo_m
 PROJECT_SPAN_GEOMETRY_CONFIGURATION_DIGEST = canonical_digest(
     {
-        "adapter": "project-span-geometry-v1",
+        "schema": "treeline-stage-b-span-geometry-v1",
         "core_half_width_m": PROJECT_SPAN_CORE_HALF_WIDTH_M,
         "halo_m": PROJECT_SPAN_LONGITUDINAL_HALO_M,
-        "z_ground_margin_m": 1.2,
-        "z_top_margin_m": 5.0,
+        "z_ground_margin_m": _TRACKED_SPAN_REGION_CONFIG.span_z_ground_clearance_m,
+        "z_top_margin_m": _TRACKED_SPAN_REGION_CONFIG.span_z_top_margin_m,
     }
 )
 # Vegetation role admission digest: HIGH RECALL (no broad wire-role exclusion).
@@ -128,6 +128,11 @@ class SpanAnalysisInput:
     risk_configuration_digest: str
     validated_source_preparation_references: tuple[str, ...]
     source_point_count: int | None = None
+    # Stage-B product provenance is carried beside the existing science input;
+    # the canonical executor does not persist or interpret product objects.
+    product_identity: Mapping[str, Any] = field(default_factory=dict)
+    risk_policy_snapshot: Mapping[str, Any] = field(default_factory=dict)
+    analysis_run_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.project_id or not self.group_id or not self.span_id:
@@ -152,6 +157,8 @@ class SpanAnalysisInput:
         object.__setattr__(self, "from_endpoint_geometry", dict(self.from_endpoint_geometry))
         object.__setattr__(self, "to_endpoint_geometry", dict(self.to_endpoint_geometry))
         object.__setattr__(self, "span_geometry", dict(self.span_geometry))
+        object.__setattr__(self, "product_identity", dict(self.product_identity))
+        object.__setattr__(self, "risk_policy_snapshot", dict(self.risk_policy_snapshot))
         object.__setattr__(
             self,
             "validated_source_preparation_references",
@@ -161,6 +168,10 @@ class SpanAnalysisInput:
             type(self.source_point_count) is not int or self.source_point_count < 0
         ):
             raise ValueError("source_point_count must be a non-negative integer or None")
+        if self.analysis_run_id is not None and (
+            type(self.analysis_run_id) is not str or not self.analysis_run_id.strip()
+        ):
+            raise ValueError("analysis_run_id must be a stable identity or None")
 
     @classmethod
     def from_project(
@@ -216,6 +227,9 @@ class SpanAnalysisInput:
                 self.validated_source_preparation_references
             ),
             "source_point_count": self.source_point_count,
+            "product_identity": dict(self.product_identity),
+            "risk_policy_snapshot": dict(self.risk_policy_snapshot),
+            "analysis_run_id": self.analysis_run_id,
         }
 
 
@@ -226,6 +240,8 @@ class SourceSharedPreparation:
     manifest_reference: str
     authority: str = "FULL_RESOLUTION_RAW"
     tower_membership_used_for_vegetation: bool = False
+    ground_preparation: Mapping[str, Any] = field(default_factory=dict)
+    telemetry: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -234,6 +250,8 @@ class SourceSharedPreparation:
             "manifest_reference": self.manifest_reference,
             "authority": self.authority,
             "tower_membership_used_for_vegetation": self.tower_membership_used_for_vegetation,
+            "ground_preparation": dict(self.ground_preparation),
+            "telemetry": dict(self.telemetry),
         }
 
 
@@ -247,10 +265,25 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     temporary.replace(path)
 
 
+def preparation_cache_hit(value: Mapping[str, Any] | None) -> bool:
+    """Return the persisted Ground reuse bit without trusting free-form text."""
+
+    return isinstance(value, Mapping) and value.get("cache_hit") is True
+
+
 def prepare_source_shared(
     project_root: Path, input_data: SpanAnalysisInput
 ) -> SourceSharedPreparation:
-    """Create/reuse only a digest-bound preparation manifest, never global RAW copies."""
+    """Create/reuse one digest-bound source/scan preparation.
+
+    The Stage-B bridge supplies a resolvable source path.  In that path this
+    function also binds a validated Ground/HAG artifact before any Span can
+    enter the canonical executor.  Older P1 callers that only have a digest
+    remain readable, but they cannot pass the canonical executor until their
+    source preparation is completed.
+    """
+
+    from core.stage_b.ground import ensure_ground_preparation
 
     source_digest = canonical_digest(dict(input_data.source_identity))
     configuration_digest = input_data.science_configuration_digest
@@ -284,9 +317,45 @@ def prepare_source_shared(
                     if payload.get(key) != reference:
                         payload[key] = reference
                         changed = True
+            ground_preparation = payload.get("ground_preparation")
+            source_path = (
+                input_data.source_identity.get("resolved_access_path")
+                or input_data.source_identity.get("point_cloud_source")
+                or input_data.source_identity.get("path")
+            )
+            if source_path and not payload.get("coarse_ground_reference"):
+                preparation = ensure_ground_preparation(
+                    project_root,
+                    input_data.source_identity,
+                    configuration={"science_configuration_digest": configuration_digest},
+                )
+                payload.update(
+                    {
+                        "ground_hag_reference": preparation.ground_hag_reference,
+                        "coarse_ground_reference": preparation.coarse_ground_reference,
+                        "origin_xyz": list(preparation.origin_xyz),
+                        "ground_preparation": preparation.to_dict(),
+                    }
+                )
+                ground_preparation = preparation.to_dict()
+                changed = True
             if changed:
                 _write_json_atomic(path, payload)
-            return SourceSharedPreparation(source_digest, configuration_digest, relative.as_posix())
+            return SourceSharedPreparation(
+                source_digest,
+                configuration_digest,
+                relative.as_posix(),
+                ground_preparation=dict(ground_preparation or {}),
+                telemetry={
+                    "source_prep_count": 0,
+                    "cache_hit_count": 1,
+                    "cache_miss_count": 0,
+                    "ground_prep_count": 0 if preparation_cache_hit(ground_preparation) else 1,
+                    "source_full_pass_count": int(
+                        (ground_preparation or {}).get("source_full_pass_count", 0)
+                    ),
+                },
+            )
     payload = {
         "schema": "treeline-project-source-shared-preparation-v1",
         "source_binding_digest": source_digest,
@@ -309,8 +378,43 @@ def prepare_source_shared(
             ).as_posix()
     if input_data.source_point_count is not None:
         payload["source_point_count"] = input_data.source_point_count
+    source_path = (
+        input_data.source_identity.get("resolved_access_path")
+        or input_data.source_identity.get("point_cloud_source")
+        or input_data.source_identity.get("path")
+    )
+    ground_preparation: dict[str, Any] = {}
+    if source_path:
+        preparation = ensure_ground_preparation(
+            project_root,
+            input_data.source_identity,
+            configuration={"science_configuration_digest": configuration_digest},
+        )
+        payload.update(
+            {
+                "ground_hag_reference": preparation.ground_hag_reference,
+                "coarse_ground_reference": preparation.coarse_ground_reference,
+                "origin_xyz": list(preparation.origin_xyz),
+                "ground_preparation": preparation.to_dict(),
+            }
+        )
+        ground_preparation = preparation.to_dict()
     _write_json_atomic(path, payload)
-    return SourceSharedPreparation(source_digest, configuration_digest, relative.as_posix())
+    return SourceSharedPreparation(
+        source_digest,
+        configuration_digest,
+        relative.as_posix(),
+        ground_preparation=ground_preparation,
+        telemetry={
+            "source_prep_count": 1,
+            "cache_hit_count": 0,
+            "cache_miss_count": 1,
+            "ground_prep_count": 1 if ground_preparation else 0,
+            "source_full_pass_count": int(
+                (ground_preparation or {}).get("source_full_pass_count", 0)
+            ),
+        },
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,6 +429,13 @@ class SpanScienceResult:
     # serialized artifacts so tentative IDs cannot be published as canonical.
     identity_terminal_preparation: Any | None = None
     identity_terminal_publish: Callable[[Any], SpanScienceResult] | None = None
+    # Runtime-only batch handoff.  These are the already-computed validated
+    # per-Span outputs; Stage B may reconcile them globally without rerunning
+    # Ground, Wire, Vegetation, or Tree.
+    tree_outcome: Any | None = None
+    reconciled: Any | None = None
+    wire_result: Any | None = None
+    clearance_result: Any | None = None
 
 
 ScienceExecutor = Callable[[SpanAnalysisInput, SourceSharedPreparation, Path], SpanScienceResult]

@@ -17,6 +17,7 @@ from typing import Any
 
 import numpy as np
 from core.config.fast_baseline import FastBaselineConfig, canonical_digest
+from core.stage_a.risk import RiskPolicy
 
 from algorithms.poles.topology import SpanRecord
 from algorithms.spans.clearance import run_span_tree_wire_clearance
@@ -52,7 +53,7 @@ _DISPLAY_ID_RE = re.compile(r"^[A-Z](\d+)$")
 
 def _project_root_for_output(output_root: Path) -> Path:
     for candidate in (output_root, *output_root.parents):
-        if (candidate / "project.json").is_file():
+        if (candidate / "project.json").is_file() or (candidate / "stage-a-project.json").is_file():
             return candidate
     raise ScienceAdapterError("PROJECT_ROOT_NOT_FOUND")
 
@@ -83,6 +84,21 @@ def _read_preparation(
         and payload.get("source_point_count") != input_data.source_point_count
     ):
         raise ScienceAdapterError("SOURCE_SHARED_SOURCE_COUNT_MISMATCH")
+    # A fresh Stage-B ProjectSpan is never allowed to enter science without a
+    # valid, source-bound Ground/HAG reference and local origin.
+    coarse_reference = payload.get("coarse_ground_reference")
+    if not isinstance(coarse_reference, str) or not coarse_reference:
+        raise ScienceAdapterError("SOURCE_SHARED_GROUND_REFERENCE_MISSING")
+    coarse_path = _resolve_reference(project_root, coarse_reference)
+    try:
+        coarse_ground = np.asarray(np.load(coarse_path, allow_pickle=False, mmap_mode="r"))
+    except (OSError, ValueError) as exc:
+        raise ScienceAdapterError("SOURCE_SHARED_GROUND_REFERENCE_INVALID") from exc
+    if coarse_ground.ndim != 2 or coarse_ground.shape[1] != 3 or len(coarse_ground) == 0:
+        raise ScienceAdapterError("SOURCE_SHARED_GROUND_REFERENCE_INVALID")
+    origin = payload.get("origin_xyz")
+    if not isinstance(origin, (list, tuple)) or len(origin) != 3:
+        raise ScienceAdapterError("SOURCE_SHARED_ORIGIN_MISSING")
     return payload
 
 
@@ -164,6 +180,26 @@ def _span_record(input_data: SpanAnalysisInput, config: FastBaselineConfig) -> S
     )
 
 
+def _risk_policy(input_data: SpanAnalysisInput) -> RiskPolicy:
+    """Resolve explicit Stage-B policy, retaining the old P1 default only for compatibility."""
+
+    snapshot = dict(input_data.risk_policy_snapshot)
+    if not snapshot:
+        # P1/P2 historical callers retain their reviewed compatibility
+        # threshold.  Stage-B bridge inputs always carry an explicit snapshot.
+        return RiskPolicy(
+            risk_policy_version="legacy-exact-tree-wire-v1",
+            warning_clearance_threshold_m=float(RISK_THRESHOLD_M),
+        )
+    try:
+        return RiskPolicy(
+            risk_policy_version=str(snapshot["risk_policy_version"]),
+            warning_clearance_threshold_m=float(snapshot["warning_clearance_threshold_m"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ScienceAdapterError("RISK_POLICY_SNAPSHOT_INVALID") from exc
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(
@@ -213,12 +249,14 @@ def run_tracked_canonical_span_science(
     output_root: Path,
     *,
     cancellation_requested: Callable[[], bool] | None = None,
+    config: FastBaselineConfig | None = None,
 ) -> SpanScienceResult:
     """Run one project Span through the existing tracked science modules."""
 
     total_started = time.perf_counter()
     project_root = _project_root_for_output(output_root)
     payload = _read_preparation(project_root, preparation, input_data)
+    policy = _risk_policy(input_data)
     ground_reference = _required_reference(payload, "coarse_ground_reference")
     origin_value = payload.get("origin_xyz")
     if not isinstance(origin_value, (list, tuple)) or len(origin_value) != 3:
@@ -249,7 +287,7 @@ def run_tracked_canonical_span_science(
     if coarse_ground.ndim != 2 or coarse_ground.shape[1] != 3:
         raise ScienceAdapterError("SOURCE_SHARED_GROUND_REFERENCE_INVALID")
 
-    config = FastBaselineConfig()
+    config = config or FastBaselineConfig()
     span = _span_record(input_data, config)
     frame = SpanLocalFrame.from_endpoints(
         span.start_xyz_absolute_m, span.end_xyz_absolute_m, tuple(origin_value)
@@ -394,7 +432,7 @@ def run_tracked_canonical_span_science(
         reconciled,
         [wire_result],
         config,
-        danger_threshold_m=RISK_THRESHOLD_M,
+        danger_threshold_m=policy.warning_clearance_threshold_m,
         cancellation_requested=cancellation_requested,
     )
     clearance_runtime = time.perf_counter() - clearance_started
@@ -404,7 +442,7 @@ def run_tracked_canonical_span_science(
             assigned,
             [wire_result],
             config,
-            danger_threshold_m=RISK_THRESHOLD_M,
+            danger_threshold_m=policy.warning_clearance_threshold_m,
             cancellation_requested=cancellation_requested,
         )
         _write_json(output_root / "reconciliation.json", reconciliation_to_dict(assigned))
@@ -421,7 +459,7 @@ def run_tracked_canonical_span_science(
         )
         return result
 
-    threshold = RISK_THRESHOLD_M
+    threshold = policy.warning_clearance_threshold_m
     below_threshold = sum(
         record.minimum_clearance_m is not None and record.minimum_clearance_m < threshold
         for record in clearance.records
@@ -454,8 +492,8 @@ def run_tracked_canonical_span_science(
                 "raw_restoration": wire_query_runtime + vegetation_query_runtime,
                 "wire": wire_runtime,
                 "tree": tree_runtime,
-                "clearance": clearance_runtime,
-                "total": time.perf_counter() - total_started,
+            "clearance": clearance_runtime,
+            "total": time.perf_counter() - total_started,
             },
             "wire": dict(wire_result.diagnostics),
             "tree": dict(tree_outcome.to_manifest()),
@@ -498,14 +536,24 @@ def run_tracked_canonical_span_science(
                 "wire_vegetation_source_overlap_in_tree_input": (
                     wire_vegetation_source_overlap_in_tree_input
                 ),
-                "wire_vegetation_source_overlap_validation": (
+            "wire_vegetation_source_overlap_validation": (
                     "EXACT_CONFIRMED_CONDUCTOR_SOURCE_EXCLUSION_VALIDATED"
                 ),
                 "tree_input_source_accounting": tree_input_accounting,
+                "risk_policy": policy.to_dict(),
+                "risk_policy_source": (
+                    "SURVEY_V01_RISK_POLICY"
+                    if input_data.risk_policy_snapshot
+                    else "LEGACY_P1_COMPATIBILITY"
+                ),
             },
         },
         identity_terminal_preparation=identity_preparation,
         identity_terminal_publish=_publish_identity_terminal,
+        tree_outcome=tree_outcome,
+        reconciled=reconciled,
+        wire_result=wire_result,
+        clearance_result=clearance,
     )
     return result
 

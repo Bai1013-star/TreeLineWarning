@@ -1,0 +1,280 @@
+"""Batch integration for the proven full-resolution TreeEditSession."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from algorithms.folder_pipeline.tree_editor import (
+    TreeEditSession,
+    build_original_trees,
+)
+from algorithms.spans.reconcile import GlobalTreeRecord, TreeReconciliationResult
+
+from core.config.fast_baseline import FastBaselineConfig, canonical_digest
+
+
+class BatchTreeEditorError(RuntimeError):
+    """Closed failure for invalid batch-editor state or publication."""
+
+
+class BatchTreeEditor:
+    """Expose DELETE/MERGE/UNDO without mutating raw source or other Spans."""
+
+    def __init__(
+        self,
+        project_root: Path | str,
+        result: Any,
+        *,
+        tree_ids_by_span: Mapping[str, tuple[int, ...]] | None = None,
+        config: FastBaselineConfig | None = None,
+    ) -> None:
+        reconciled = getattr(result, "global_reconciled", None)
+        if reconciled is None:
+            raise BatchTreeEditorError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
+        self.project_root = Path(project_root).expanduser().resolve()
+        self.result = result
+        self.config = config or FastBaselineConfig()
+        self.original_reconciled = reconciled
+        self.artifact_root = (
+            self.project_root
+            / "artifacts"
+            / "project-runs"
+            / "batches"
+            / result.analysis_run_id
+        )
+        self.original = build_original_trees(
+            reconciled.global_tree_records,
+            reconciled.final_original_index,
+            reconciled.final_xyz_local_m,
+            reconciled.final_tree_id,
+        )
+        self.session = TreeEditSession(self.original)
+        self.tree_ids_by_span = {
+            str(key): tuple(int(value) for value in values)
+            for key, values in (tree_ids_by_span or {}).items()
+        }
+
+    def _check_span(self, span_id: str, tree_ids: list[int]) -> None:
+        allowed = set(self.tree_ids_by_span.get(span_id, ()))
+        if not allowed:
+            raise BatchTreeEditorError(f"UNKNOWN_BATCH_SPAN:{span_id}")
+        if any(tree_id not in allowed for tree_id in tree_ids):
+            raise BatchTreeEditorError("TREE_EDIT_CROSSES_UNRELATED_SPAN")
+
+    def select(self, span_id: str, tree_ids: list[int]) -> None:
+        self._check_span(span_id, tree_ids)
+        self.session.select(tree_ids)
+
+    def delete(self, span_id: str, tree_ids: list[int]) -> list[int]:
+        self.select(span_id, tree_ids)
+        return self.session.delete_selected()
+
+    def merge(self, span_id: str, tree_ids: list[int]) -> int:
+        self.select(span_id, tree_ids)
+        return self.session.merge_selected()
+
+    def undo(self) -> dict[str, Any] | None:
+        return self.session.undo()
+
+    def snapshot(self) -> dict[str, Any]:
+        return self.session.snapshot()
+
+    def _write_json(self, path: Path, payload: Mapping[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_text(
+            json.dumps(dict(payload), ensure_ascii=False, sort_keys=True, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+
+    def _write_npz(self, path: Path, **arrays: np.ndarray) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + ".tmp.npz")
+        np.savez(temporary, **arrays)
+        temporary.replace(path)
+
+    def persist(self) -> None:
+        """Persist clean/original, edit-log, and current/final memberships."""
+
+        self.artifact_root.mkdir(parents=True, exist_ok=True)
+        self._write_npz(
+            self.artifact_root / "tree_segmentation_original.npz",
+            original_index=np.asarray(self.original.original_index, dtype=np.int64),
+            xyz_local_m=np.asarray(self.original.xyz_local_m, dtype=np.float64),
+            tree_id=np.asarray(self.original.tree_id, dtype=np.int32),
+        )
+        edits = self.session.edits_payload()
+        edits.update(
+            {
+                "analysis_run_id": self.result.analysis_run_id,
+                "span_tree_ids": {
+                    key: list(values)
+                    for key, values in sorted(self.tree_ids_by_span.items())
+                },
+            }
+        )
+        self._write_json(self.artifact_root / "tree_edits.json", edits)
+        final_index, final_tree, final_xyz, _summary = self.session.build_final()
+        self._write_npz(
+            self.artifact_root / "tree_segmentation_final.npz",
+            original_index=final_index,
+            xyz_local_m=final_xyz,
+            tree_id=final_tree,
+        )
+
+    def final_reconciled(self) -> TreeReconciliationResult:
+        """Return the post-editor, unique full-resolution publication result."""
+
+        final_index, final_tree, final_xyz, _summary = self.session.build_final()
+        if len(final_index) != len(np.unique(final_index)):
+            raise BatchTreeEditorError("DUPLICATE_FINAL_ORIGINAL_INDEX")
+        current = {
+            int(tree["tree_id"]): tuple(int(value) for value in tree["source_tree_ids"])
+            for tree in self.session.snapshot()["trees"]
+        }
+        by_id = {
+            int(record.global_tree_id): record
+            for record in self.original_reconciled.global_tree_records
+        }
+        records: list[GlobalTreeRecord] = []
+        span_tree_to_global: dict[tuple[int, int], int] = {}
+        review_ids: list[int] = []
+        for final_id in sorted(current):
+            source_ids = current[final_id]
+            source_records = [by_id[source_id] for source_id in source_ids]
+            base = min(source_records, key=lambda record: record.global_tree_id)
+            point_count = int(np.count_nonzero(final_tree == final_id))
+            merged_keys = tuple(
+                sorted(
+                    key
+                    for record in source_records
+                    for key in record.merged_span_tree_keys
+                )
+            )
+            persistent = base.persistent_tree_id
+            if len(source_records) > 1:
+                persistent = "tree-" + canonical_digest(
+                    {
+                        "source": self.result.project_id,
+                        "analysis_run_id": self.result.analysis_run_id,
+                        "source_tree_ids": [
+                            int(record.global_tree_id) for record in source_records
+                        ],
+                    }
+                )[:24]
+            review = any(record.review for record in source_records)
+            record = replace(
+                base,
+                global_tree_id=final_id,
+                external_name=(
+                    base.external_name
+                    if len(source_records) == 1
+                    else f"Merged-Tree{final_id:03d}"
+                ),
+                full_resolution_point_count=point_count,
+                core_point_count=min(base.core_point_count, point_count),
+                halo_point_count=max(0, point_count - min(base.core_point_count, point_count)),
+                core_fraction=(
+                    min(base.core_point_count, point_count) / point_count
+                    if point_count
+                    else 0.0
+                ),
+                review=review,
+                merged_span_tree_keys=merged_keys,
+                persistent_tree_id=persistent,
+                identity_state="BATCH_EDITOR_FINAL",
+            )
+            records.append(record)
+            if review:
+                review_ids.append(final_id)
+            for source_record in source_records:
+                for key in source_record.merged_span_tree_keys:
+                    span_tree_to_global[key] = final_id
+        diagnostics = dict(self.original_reconciled.diagnostics)
+        diagnostics.update(
+            {
+                "editor_schema": "treeline-stage-b-batch-editor-v1",
+                "editor_operation_count": len(self.session.operations),
+                "duplicate_final_original_index": 0,
+            }
+        )
+        return TreeReconciliationResult(
+            global_tree_records=tuple(records),
+            final_original_index=final_index,
+            final_xyz_local_m=final_xyz,
+            final_tree_id=final_tree,
+            review_tree_ids=tuple(review_ids),
+            span_tree_to_global=span_tree_to_global,
+            diagnostics=diagnostics,
+        )
+
+    def mark_reviewed(self, span_ids: list[str] | tuple[str, ...] | None = None) -> None:
+        """Advance completed Span review states without touching failed Spans."""
+
+        selected = set(span_ids or self.result.span_statuses)
+        statuses = dict(self.result.span_statuses)
+        from core.stage_b.batch import BatchSpanStatus
+
+        for span_id in selected:
+            if statuses.get(span_id) in {
+                BatchSpanStatus.AUTO_ANALYZED,
+                BatchSpanStatus.REVIEW_REQUIRED,
+            }:
+                statuses[span_id] = BatchSpanStatus.USER_REVIEWED
+        self.result = replace(self.result, span_statuses=statuses)
+
+    def finalize(self) -> Any:
+        """Persist edited memberships and return a finalized exportable result."""
+
+        from core.stage_b.batch import BatchSpanStatus
+
+        if any(status is BatchSpanStatus.FAILED for status in self.result.span_statuses.values()):
+            raise BatchTreeEditorError("FINALIZE_REQUIRES_NO_FAILED_SPANS")
+        statuses = dict(self.result.span_statuses)
+        if any(
+            status not in {BatchSpanStatus.USER_REVIEWED, BatchSpanStatus.FINALIZED}
+            for status in statuses.values()
+        ):
+            raise BatchTreeEditorError("FINALIZE_REQUIRES_USER_REVIEW")
+        self.persist()
+        final = self.final_reconciled()
+        final_clearance = self.result.final_clearance
+        wire_results = [
+            value.wire_result
+            for value in self.result.span_results.values()
+            if value.wire_result is not None
+        ]
+        if wire_results and len(wire_results) == len(self.result.span_statuses):
+            from algorithms.spans.clearance import run_span_tree_wire_clearance
+
+            final_clearance = run_span_tree_wire_clearance(
+                final,
+                wire_results,
+                self.config,
+                danger_threshold_m=float(
+                    self.result.risk_policy_snapshot["warning_clearance_threshold_m"]
+                ),
+            )
+        statuses = {span_id: BatchSpanStatus.FINALIZED for span_id in statuses}
+        self.result = replace(
+            self.result,
+            status="COMPLETE",
+            span_statuses=statuses,
+            global_reconciled=final,
+            final_clearance=final_clearance,
+        )
+        self._write_json(
+            self.artifact_root / "batch.json",
+            self.result.to_dict(),
+        )
+        return self.result
+
+
+__all__ = ["BatchTreeEditor", "BatchTreeEditorError"]

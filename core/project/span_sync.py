@@ -12,7 +12,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Any
 
-from core.config.fast_baseline import canonical_digest
+from core.config.fast_baseline import FastBaselineConfig, canonical_digest
 from core.contracts.project import (
     AnalysisStage,
     AnalysisStatus,
@@ -107,18 +107,19 @@ def _span_geometry(session: WritableProjectSession, item: DesiredSpan) -> SpanGe
         )
     axis = (dx / length, dy / length)
     perp = (-axis[1], axis[0])
-    width = 20.0
-    halo = 30.0
-    z_min = min(start[2], end[2]) - 1.2
+    tracked = FastBaselineConfig()
+    width = tracked.span_half_width_m
+    halo = tracked.span_halo_m
+    z_min = min(start[2], end[2]) - tracked.span_z_ground_clearance_m
     z_max = max(from_tower.refined_geometry.top_xyz_absolute_m[2],
-                to_tower.refined_geometry.top_xyz_absolute_m[2]) + 5.0
+                to_tower.refined_geometry.top_xyz_absolute_m[2]) + tracked.span_z_top_margin_m
     config_digest = canonical_digest(
         {
-            "adapter": "project-span-geometry-v1",
+            "schema": "treeline-stage-b-span-geometry-v1",
             "core_half_width_m": width,
             "halo_m": halo,
-            "z_ground_margin_m": 1.2,
-            "z_top_margin_m": 5.0,
+            "z_ground_margin_m": tracked.span_z_ground_clearance_m,
+            "z_top_margin_m": tracked.span_z_top_margin_m,
         }
     )
 

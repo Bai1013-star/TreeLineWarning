@@ -64,6 +64,13 @@ _TREE_COLUMNS = [
     "edit_provenance",
     "observation_date",
     "science_run_id",
+    # Appended Stage-B fields preserve the existing leading column contract.
+    "analysis_tree_id",
+    "line_id",
+    "contact_state",
+    "contact_evidence",
+    "warning_threshold_used_m",
+    "review_status",
 ]
 
 _NUMERIC_COLUMNS = {
@@ -79,6 +86,7 @@ _NUMERIC_COLUMNS = {
     "lateral_n_m",
     "minimum_clearance_m",
     "danger_point_count",
+    "warning_threshold_used_m",
 }
 
 _METADATA_ROWS = [
@@ -91,6 +99,10 @@ _METADATA_ROWS = [
     ("start_tower_id", "start_tower_id", "起始杆塔 ID"),
     ("end_tower_id", "end_tower_id", "终止杆塔 ID"),
     ("science_run_id", "science_run_id", "科学运行 ID"),
+    ("risk_policy_version", "risk_policy_version", "风险策略版本"),
+    ("warning_threshold_used_m", "warning_threshold_used_m", "预警阈值(m)"),
+    ("analysis_tree_id", "analysis_tree_id", "分析树 ID"),
+    ("batch_status", "batch_status", "批次状态"),
     ("tree_backend", "tree_backend", "单木后端"),
     ("wire_exclusion_policy", "wire_exclusion_policy", "导线剔除策略"),
     ("tower_exclusion_policy", "tower_exclusion_policy", "杆塔剔除策略"),
