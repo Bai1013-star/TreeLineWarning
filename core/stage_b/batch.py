@@ -31,6 +31,7 @@ from core.stage_a.persistence import save_project
 from core.stage_a.risk import RiskPolicy
 from core.stage_a.shared_source import SharedSourceAccess
 from core.stage_b.bridge import ProjectScienceBridge, SpanScienceBinding
+from core.stage_b.failures import structured_failure
 
 
 class BatchSpanStatus(str, Enum):
@@ -527,6 +528,7 @@ class BatchAnalysisScheduler:
             self._source_access_metrics(telemetry)
             statuses = {span_id: BatchSpanStatus.WAITING for span_id in selected}
         except Exception as exc:
+            failure = structured_failure(exc, phase="SOURCE_PREPARATION")
             for span_id in selected:
                 statuses[span_id] = BatchSpanStatus.FAILED
             for span_id in selected:
@@ -535,7 +537,7 @@ class BatchAnalysisScheduler:
                     minimum_clearance_m=None,
                     risk_threshold_m=self.risk_policy.warning_clearance_threshold_m,
                     risk_counts={},
-                    diagnostics={"failure": f"{type(exc).__name__}: {exc}"},
+                    diagnostics={"failure": failure["technical_message"], **failure},
                 )
             telemetry.total_time_seconds = time.perf_counter() - started
             result = self._finish(run_id, selected, statuses, results, telemetry)
@@ -591,12 +593,13 @@ class BatchAnalysisScheduler:
                     else BatchSpanStatus.AUTO_ANALYZED
                 )
             except Exception as exc:
+                failure = structured_failure(exc, phase="SPAN_ANALYSIS")
                 results[span_id] = SpanScienceResult(
                     tree_count=0,
                     minimum_clearance_m=None,
                     risk_threshold_m=self.risk_policy.warning_clearance_threshold_m,
                     risk_counts={},
-                    diagnostics={"failure": f"{type(exc).__name__}: {exc}"},
+                    diagnostics={"failure": failure["technical_message"], **failure},
                 )
                 statuses[span_id] = BatchSpanStatus.FAILED
             telemetry.per_span_time_seconds[span_id] = time.perf_counter() - span_started

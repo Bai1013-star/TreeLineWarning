@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,6 +28,7 @@ from core.stage_b import (
     ensure_ground_preparation,
     export_batch_prediction,
 )
+from core.stage_b.failures import structured_failure
 
 
 def _project(tmp_path: Path, *, span_count: int = 2) -> tuple[Project, str, tuple[str, ...]]:
@@ -189,6 +191,52 @@ def test_batch_scheduler_prepares_source_once_and_keeps_partial_failures_isolate
     assert result.telemetry.span_count == 2
     assert result.risk_policy_snapshot["warning_clearance_threshold_m"] == 0.5
     assert (tmp_path / "artifacts/project-runs/batches").is_dir()
+
+
+def test_batch_scheduler_persists_structured_ground_runtime_failure(tmp_path: Path) -> None:
+    project, scan_id, span_ids = _project(tmp_path, span_count=1)
+
+    def unavailable_ground(_root, _input_data):
+        raise RuntimeError("FAST_GROUND_BACKEND_UNAVAILABLE: Python PDAL binding missing")
+
+    scheduler = BatchAnalysisScheduler(
+        tmp_path,
+        project,
+        scan_id,
+        source_preparer=unavailable_ground,
+        source_access_enabled=False,
+    )
+    result = scheduler.run(span_ids, analysis_run_id="analysis-ground-runtime-failure")
+    diagnostics = result.span_results[span_ids[0]].diagnostics
+
+    assert result.status == "FAILED"
+    assert diagnostics["failure_stage"] == "GROUND"
+    assert diagnostics["failure_code"] == "FAST_GROUND_BACKEND_UNAVAILABLE"
+    assert diagnostics["user_message"] == "地面处理组件未正确安装，当前档距尚未进入科学分析。"
+    assert diagnostics["recoverable"] is True
+    assert "Python PDAL binding missing" in diagnostics["technical_message"]
+
+    manifest = json.loads(
+        (
+            tmp_path
+            / "artifacts/project-runs/batches/analysis-ground-runtime-failure/batch.json"
+        ).read_text(encoding="utf-8")
+    )
+    persisted = manifest["span_results"][span_ids[0]]["diagnostics"]
+    assert persisted["failure_stage"] == "GROUND"
+    assert persisted["recommended_action"].startswith("请安装")
+
+
+def test_ground_bad_allocation_has_an_actionable_chinese_reason() -> None:
+    failure = structured_failure(
+        RuntimeError("FAST_GROUND_FAILED: bad allocation"), phase="SOURCE_PREPARATION"
+    )
+
+    assert failure["failure_stage"] == "GROUND"
+    assert failure["failure_code"] == "FAST_GROUND_FAILED"
+    assert failure["user_message"] == "点云规模超过当前可用内存，地面处理未能完成。"
+    assert "关闭其他占用内存的程序" in failure["recommended_action"]
+    assert failure["recoverable"] is True
 
 
 def test_batch_scheduler_reuses_completed_span_on_restart(tmp_path: Path) -> None:

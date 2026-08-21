@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import sys
 from collections import deque
 from pathlib import Path
 
@@ -33,13 +34,27 @@ def _pdal_binaries() -> tuple[list[tuple[str, str]], list[tuple[str, str]], list
 
     root_value = os.environ.get("TREELINE_PDAL_RUNTIME_ENV", "").strip()
     if not root_value:
-        return [], [], []
+        raise SystemExit(
+            "TREELINE_PDAL_RUNTIME_ENV is required: a release must bundle the PDAL Ground/HAG runtime"
+        )
     root = Path(root_value).resolve()
     bin_root = root / "Library" / "bin"
     pdal_site = root / "Lib" / "site-packages" / "pdal"
     plugin_root = root / "Lib" / "site-packages" / "bin"
     if not bin_root.is_dir() or not pdal_site.is_dir():
         raise SystemExit("TREELINE_PDAL_RUNTIME_ENV does not contain a conda PDAL runtime")
+    # Let PyInstaller resolve native dependencies of all included conda
+    # extensions (for example Pillow and SciPy), not only the explicit PDAL
+    # import closure below.  The collected package remains self-contained.
+    os.environ["PATH"] = os.pathsep.join(
+        [str(bin_root), os.environ.get("PATH", "")]
+    ).rstrip(os.pathsep)
+    # PyInstaller itself runs from the lean desktop build environment.  Make
+    # the explicitly selected portable runtime visible to its module/data
+    # collectors without relying on an ambient developer PYTHONPATH.
+    pdal_site_parent = str(pdal_site.parent)
+    if pdal_site_parent not in sys.path:
+        sys.path.append(pdal_site_parent)
 
     candidates = {path.name.lower(): path for path in bin_root.glob("*.dll")}
     candidates.update({path.name.lower(): path for path in pdal_site.glob("*.pyd")})

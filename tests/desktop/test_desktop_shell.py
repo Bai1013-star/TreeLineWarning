@@ -139,3 +139,25 @@ def test_main_product_copy_is_chinese_and_tree_editor_is_state_gated():
     assert 'id="startFixture" class="small test-only hidden"' in page
     assert "if (!state.treeReviewReady && !state.finalized)" in script
     assert "loadViewer();" in script
+
+
+def test_failed_span_card_renders_structured_chinese_failure_reason():
+    root = Path(__file__).resolve().parents[2] / "viewer_poc" / "giro3d"
+    script = (root / "desktop.js").read_text(encoding="utf-8")
+    style = (root / "desktop.css").read_text(encoding="utf-8")
+
+    for text in ("分析失败", "阶段：", "原因：", "建议：", "查看详情", "故障代码："):
+        assert text in script
+    assert "failure.user_message" in script
+    assert "failure.recommended_action" in script
+    assert ".failure-reason" in style
+
+
+def test_release_build_cannot_silently_omit_pdal_runtime():
+    spec = (
+        Path(__file__).resolve().parents[2] / "desktop_build.spec"
+    ).read_text(encoding="utf-8")
+
+    assert "TREELINE_PDAL_RUNTIME_ENV is required" in spec
+    assert '[str(bin_root), os.environ.get("PATH", "")]' in spec
+    assert "return [], [], []" not in spec

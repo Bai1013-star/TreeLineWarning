@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -185,3 +186,56 @@ def test_workspace_projection_marks_home_without_creating_science_state(tmp_path
     assert projection["ui_state"] == "NO_PROJECT"
     assert projection["project"]["is_desktop_home"] is True
     assert projection["tree_review_ready"] is False
+
+
+def test_failed_span_projection_surfaces_chinese_reason_and_retry_policy(tmp_path: Path) -> None:
+    workflow = _workflow(tmp_path)
+    span_id = workflow.project_projection()["span_records"][0]["span_id"]
+    run_id = "analysis-failed-projection"
+    batch_path = (
+        workflow.project_root / "artifacts/project-runs/batches" / run_id / "batch.json"
+    )
+    batch_path.parent.mkdir(parents=True)
+    batch_path.write_text(
+        json.dumps(
+            {
+                "analysis_run_id": run_id,
+                "status": "FAILED",
+                "span_statuses": {span_id: "FAILED"},
+                "span_results": {
+                    span_id: {
+                        "diagnostics": {
+                            "failure": "FastResearchError: FAST_WIRE_EVIDENCE_INSUFFICIENT",
+                            "failure_stage": "WIRE",
+                            "failure_stage_label": "导线识别",
+                            "failure_code": "FAST_WIRE_EVIDENCE_INSUFFICIENT",
+                            "user_message": "当前档距未获得可确认的导线证据，分析保持未完成。",
+                            "technical_message": (
+                                "FastResearchError: FAST_WIRE_EVIDENCE_INSUFFICIENT"
+                            ),
+                            "recoverable": False,
+                            "recommended_action": "请返回杆塔选取重新确认。",
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    workflow._workflow.update(
+        {"last_batch_id": run_id, "last_batch_status": "FAILED", "selected_span_ids": [span_id]}
+    )
+    workflow._save_workflow()
+
+    restarted = DesktopWorkflow(workflow.project_root)
+    span = restarted.batch_projection()["spans"][0]
+    assert span["stage"] == "导线识别"
+    assert span["failure"]["user_message"].startswith("当前档距")
+    assert span["retryable"] is False
+    try:
+        restarted.retry_failed()
+    except ValueError as exc:
+        assert "返回杆塔选取" in str(exc)
+    else:
+        raise AssertionError("non-recoverable evidence failure must not retry endlessly")

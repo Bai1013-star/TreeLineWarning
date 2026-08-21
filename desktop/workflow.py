@@ -39,6 +39,7 @@ from core.stage_a import (
 from core.stage_a.models import stable_id
 from core.stage_a.risk import RiskPolicy
 from core.stage_b import BatchAnalysisResult, BatchAnalysisScheduler, BatchSpanStatus
+from core.stage_b.failures import failure_details
 
 from desktop.project_management import (
     describe_project,
@@ -704,6 +705,18 @@ class DesktopWorkflow:
                 scheduler = BatchAnalysisScheduler(self._root, project, scan.scan_id, **kwargs)
                 self._log("batch_start", mode=mode, run_id=run_id, span_ids=list(selected))
                 result = scheduler.run(selected, analysis_run_id=run_id)
+                for span_id, span_status in result.span_statuses.items():
+                    if span_status is not BatchSpanStatus.FAILED:
+                        continue
+                    failure = failure_details(result.span_results[span_id].diagnostics)
+                    self._log(
+                        "span_analysis_failure",
+                        run_id=run_id,
+                        span_id=span_id,
+                        failure_stage=(failure or {}).get("failure_stage"),
+                        failure_code=(failure or {}).get("failure_code"),
+                        technical_message=(failure or {}).get("technical_message"),
+                    )
             with self._lock:
                 self._result = result
                 self._editor = None
@@ -778,12 +791,20 @@ class DesktopWorkflow:
         manifest = self._latest_batch_manifest()
         if not manifest:
             raise ValueError("NO_BATCH_TO_RETRY")
-        selected = [
-            span_id
-            for span_id, status in (manifest.get("span_statuses") or {}).items()
-            if status == BatchSpanStatus.FAILED.value
-        ]
+        results = manifest.get("span_results") or {}
+        selected = []
+        nonrecoverable = []
+        for span_id, status in (manifest.get("span_statuses") or {}).items():
+            if status != BatchSpanStatus.FAILED.value:
+                continue
+            failure = failure_details((results.get(span_id) or {}).get("diagnostics"))
+            if failure is not None and failure.get("recoverable") is False:
+                nonrecoverable.append(span_id)
+            else:
+                selected.append(span_id)
         if not selected:
+            if nonrecoverable:
+                raise ValueError("当前失败由杆塔/档距证据不足导致，请返回杆塔选取重新确认。")
             raise ValueError("NO_FAILED_SPAN_TO_RETRY")
         mode = str(self._workflow.get("acceptance_mode") or "REAL").upper()
         with self._lock:
@@ -804,9 +825,16 @@ class DesktopWorkflow:
         statuses = dict((manifest or {}).get("span_statuses") or {})
         selected = set(self._workflow.get("selected_span_ids") or [])
         spans = []
+        source_preparation_failed = False
         for span in project.spans:
             status = statuses.get(span.span_id, BatchSpanStatus.WAITING.value)
             result = ((manifest or {}).get("span_results") or {}).get(span.span_id) or {}
+            failure = failure_details(result.get("diagnostics"))
+            source_preparation_failed = source_preparation_failed or bool(
+                status == "FAILED"
+                and failure
+                and failure.get("failure_stage") in {"POINT_CLOUD_PREPARATION", "GROUND"}
+            )
             spans.append(
                 {
                     "span_id": span.span_id,
@@ -816,10 +844,14 @@ class DesktopWorkflow:
                     "end_tower_id": span.end_tower_id,
                     "selected": span.span_id in selected,
                     "status": status,
-                    "stage": "地面 · 导线 · 植被 · 单木 · 跨档整理"
+                    "stage": failure.get("failure_stage_label", "处理失败")
+                    if status == "FAILED" and failure
+                    else "地面 · 导线 · 植被 · 单木 · 跨档整理"
                     if status not in {"WAITING", "FAILED"}
                     else ("待运行" if status == "WAITING" else "处理失败"),
-                    "retryable": status == BatchSpanStatus.FAILED.value,
+                    "retryable": status == BatchSpanStatus.FAILED.value
+                    and (failure is None or failure.get("recoverable") is not False),
+                    "failure": failure,
                     "summary": result,
                 }
             )
@@ -831,7 +863,9 @@ class DesktopWorkflow:
             or self._workflow.get("last_batch_status")
             or "NOT_STARTED",
             "acceptance_mode": self._workflow.get("acceptance_mode"),
-            "source_preparation": "DONE" if manifest else "WAITING",
+            "source_preparation": (
+                "FAILED" if source_preparation_failed else "DONE" if manifest else "WAITING"
+            ),
             "spans": spans,
             "error": self._batch_error or self._workflow.get("last_error"),
             "risk_policy": self._risk_policy().to_dict(),

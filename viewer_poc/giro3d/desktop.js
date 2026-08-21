@@ -141,7 +141,11 @@
     state.batch = batch;
     $('footerBatch').textContent = `分析任务：${statusLabel(batch.status)}`;
     const spans = batch.spans || [];
-    $('spanChecks').innerHTML = spans.length ? spans.map(span => `<label class="check-item"><input type="checkbox" data-span="${esc(span.span_id)}" ${span.selected ? 'checked' : ''} ${span.status === 'FINALIZED' ? 'disabled' : ''}><span><b>${esc(spanName(span))}</b><small>${esc(span.span_id)} · ${esc(span.stage)}</small></span><span class="state ${span.status === 'FAILED' ? 'status-bad' : (span.status === 'FINALIZED' ? 'status-good' : '')}">${esc(statusLabel(span.status))}</span></label>`).join('') : '<div class="muted padded">暂无档距</div>';
+    $('spanChecks').innerHTML = spans.length ? spans.map(span => {
+      const failure = span.failure;
+      const failureMarkup = span.status === 'FAILED' && failure ? `<div class="failure-reason"><b>分析失败</b><span>阶段：${esc(failure.failure_stage_label || span.stage)}</span><span>原因：${esc(failure.user_message)}</span><span>建议：${esc(failure.recommended_action)}</span><details><summary>查看详情</summary><span>故障代码：${esc(failure.failure_code)}</span><span>${esc(failure.technical_message)}</span></details></div>` : '';
+      return `<label class="check-item ${span.status === 'FAILED' ? 'failed' : ''}"><input type="checkbox" data-span="${esc(span.span_id)}" ${span.selected ? 'checked' : ''} ${span.status === 'FINALIZED' || (span.status === 'FAILED' && !span.retryable) ? 'disabled' : ''}><span><b>${esc(spanName(span))}</b><small>${esc(span.span_id)} · ${esc(span.stage)}</small>${failureMarkup}</span><span class="state ${span.status === 'FAILED' ? 'status-bad' : (span.status === 'FINALIZED' ? 'status-good' : '')}">${esc(statusLabel(span.status))}</span></label>`;
+    }).join('') : '<div class="muted padded">暂无档距</div>';
     const failed = spans.filter(span => span.status === 'FAILED');
     const completed = spans.filter(span => ['AUTO_ANALYZED', 'REVIEW_REQUIRED', 'USER_REVIEWED', 'FINALIZED'].includes(span.status));
     $('batchBox').className = `notice ${failed.length ? 'bad' : ''}`;
@@ -417,7 +421,7 @@
     try {
       await loadWorkspace();
       if (state.batch.status === 'RUNNING' || state.batch.spans?.some(span => ['PREPARING', 'RUNNING'].includes(span.status))) window.setTimeout(pollBatch, 600);
-      else setStatus(state.batch.status === 'FAILED' ? '分析失败，请查看本地日志' : '分析已完成，可以复核单木结果', state.batch.status === 'FAILED' ? 'bad' : 'good');
+      else setStatus(state.batch.status === 'FAILED' ? '分析未完成，请查看档距卡片中的失败原因' : '分析已完成，可以复核单木结果', state.batch.status === 'FAILED' ? 'bad' : 'good');
     } catch (error) { setStatus(userError(error, '暂时无法读取分析进度。'), 'bad'); }
   }
   async function retryBatch() {
