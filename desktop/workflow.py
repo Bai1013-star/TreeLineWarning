@@ -49,6 +49,33 @@ WORKFLOW_MANIFEST = "desktop-workflow.json"
 _MAX_DISPLAY_POINTS = 6_000
 
 
+def derive_workspace_state(
+    project: Mapping[str, Any],
+    capability: Mapping[str, Any],
+    batch: Mapping[str, Any],
+    *,
+    tree_review_ready: bool,
+    finalized: bool,
+) -> str:
+    """Derive product navigation from persisted project/science state only."""
+
+    if project.get("is_desktop_home"):
+        return "NO_PROJECT"
+    if project.get("pointcloud") == "NOT_IMPORTED":
+        return "PROJECT_CREATED"
+    if not capability.get("unit_confirmed"):
+        return "SOURCE_IMPORTED_UNIT_PENDING"
+    if batch.get("status") == "RUNNING":
+        return "ANALYSIS_RUNNING"
+    if finalized:
+        return "FINALIZED"
+    if tree_review_ready:
+        return "TREE_REVIEW_READY"
+    if int(project.get("spans") or 0) > 0:
+        return "TOPOLOGY_READY"
+    return "TOWER_SELECTION"
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -106,7 +133,13 @@ def _empty_display() -> dict[str, Any]:
 class DesktopWorkflow:
     """Persisted desktop state plus the actual Stage-B scheduler boundary."""
 
-    def __init__(self, project_root: Path, *, resource_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        project_root: Path,
+        *,
+        resource_root: Path | None = None,
+        desktop_home: bool = False,
+    ) -> None:
         self.resource_root = resource_root or project_root
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
@@ -114,6 +147,7 @@ class DesktopWorkflow:
         self._editor: Any | None = None
         self._result: BatchAnalysisResult | None = None
         self._root = project_root.resolve()
+        self._desktop_home = desktop_home
         self._logger = logging.getLogger(f"treeline.desktop.{id(self)}")
         self._logger.setLevel(logging.INFO)
         self._load_root_state()
@@ -158,6 +192,7 @@ class DesktopWorkflow:
     def configure_root(self, project_root: Path) -> dict[str, Any]:
         with self._lock:
             self._root = project_root.resolve()
+            self._desktop_home = False
             self._load_root_state()
             return self.project_projection()
 
@@ -294,6 +329,7 @@ class DesktopWorkflow:
                 )
             batch = self._latest_batch_manifest()
             descriptor["workflow"] = dict(self._workflow)
+            descriptor["is_desktop_home"] = self._desktop_home
             descriptor["last_batch"] = batch
             descriptor["last_error"] = self._batch_error or self._workflow.get("last_error")
             descriptor["resume_state"] = (
@@ -309,6 +345,34 @@ class DesktopWorkflow:
                 else "AVAILABLE_OR_PENDING"
             )
             return descriptor
+
+    def workspace_projection(self) -> dict[str, Any]:
+        """Return the single derived view state plus its authoritative inputs."""
+
+        project = self.project_projection()
+        capability = self.capability_projection()
+        batch = self.batch_projection()
+        result = self._current_result()
+        tree_review_ready = bool(result and result.global_reconciled is not None)
+        statuses = [str(item.get("status")) for item in batch.get("spans", [])]
+        finalized = bool(statuses) and all(
+            status == BatchSpanStatus.FINALIZED.value for status in statuses
+        )
+        ui_state = derive_workspace_state(
+            project,
+            capability,
+            batch,
+            tree_review_ready=tree_review_ready,
+            finalized=finalized,
+        )
+        return {
+            "project": project,
+            "capability": capability,
+            "batch": batch,
+            "ui_state": ui_state,
+            "tree_review_ready": tree_review_ready,
+            "finalized": finalized,
+        }
 
     def capability_projection(self) -> dict[str, Any]:
         project = self._stage_project()
@@ -689,7 +753,7 @@ class DesktopWorkflow:
                     "end_tower_id": span.end_tower_id,
                     "selected": span.span_id in selected,
                     "status": status,
-                    "stage": "Ground · Wire · Vegetation · Tree · Reconciliation"
+                    "stage": "地面 · 导线 · 植被 · 单木 · 跨档整理"
                     if status not in {"WAITING", "FAILED"}
                     else ("待运行" if status == "WAITING" else "处理失败"),
                     "retryable": status == BatchSpanStatus.FAILED.value,

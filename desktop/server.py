@@ -44,9 +44,21 @@ def _strict_json_value(value: Any) -> Any:
 class DesktopApplication:
     """Own the workflow and HTTP lifecycle separately from PyWebView."""
 
-    def __init__(self, project_root: Path, resource_root: Path) -> None:
+    def __init__(
+        self,
+        project_root: Path,
+        resource_root: Path,
+        *,
+        desktop_home: bool = False,
+        ui_test_mode: bool = False,
+    ) -> None:
         self.resource_root = resource_root.resolve()
-        self.workflow = DesktopWorkflow(project_root.resolve(), resource_root=self.resource_root)
+        self.ui_test_mode = ui_test_mode
+        self.workflow = DesktopWorkflow(
+            project_root.resolve(),
+            resource_root=self.resource_root,
+            desktop_home=desktop_home,
+        )
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -146,6 +158,12 @@ class _DesktopHandler(BaseHTTPRequestHandler):
         if path in {"/", "/desktop.html"}:
             self._static("viewer_poc/giro3d/desktop.html")
             return
+        if path == "/desktop.css":
+            self._static("viewer_poc/giro3d/desktop.css")
+            return
+        if path == "/desktop.js":
+            self._static("viewer_poc/giro3d/desktop.js")
+            return
         if path == "/step2":
             self._send_bytes(step2_html().encode("utf-8"), content_type="text/html; charset=utf-8")
             return
@@ -167,6 +185,15 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/desktop/project":
             self._send_json({"ok": True, "project": self.workflow.project_projection()})
+            return
+        if path == "/api/desktop/workspace":
+            self._send_json(
+                {
+                    "ok": True,
+                    **self.workflow.workspace_projection(),
+                    "test_mode": self.application.ui_test_mode,
+                }
+            )
             return
         if path == "/api/desktop/capability":
             self._send_json({"ok": True, "capability": self.workflow.capability_projection()})

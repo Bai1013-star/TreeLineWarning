@@ -293,7 +293,7 @@ function hsvToRgb(h,s,v){
 }
 async function post(path, payload){
   const r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload||{})});
-  if(!r.ok){const t=await r.json().catch(()=>({}));throw new Error(t.error||("请求失败 "+path));}
+  if(!r.ok){const t=await r.json().catch(()=>({}));throw new Error(t.error?.message||t.error||("请求失败 "+path));}
   return r.json();
 }
 function renderTrees(snap){
@@ -374,7 +374,7 @@ async function loadEditorData(){
   gd.on("plotly_click", data=>{
     if(!data.points||!data.points.length) return;
     const pt=data.points[0];
-    if(pt.trace.name==="单木"){
+    if((pt.data?.name||pt.fullData?.name)==="单木"){
       const tid=trees3d.tree_id_by_index[pt.pointNumber];
       if(tid!=null){
         if(selected.has(tid)) selected.delete(tid); else selected.add(tid);
@@ -384,17 +384,17 @@ async function loadEditorData(){
   });
 }
 document.getElementById("btn-delete").onclick=async()=>{
-  try{await post("/api/select",{tree_ids:[...selected]});const s=await post("/api/delete",{});renderTrees(s);
+  try{await post("/api/select",{tree_ids:[...selected]});const s=await post("/api/delete",{});selected.clear();renderTrees(s);
       document.getElementById("editmsg").textContent="已删除所选单木";await loadEditorData();}
   catch(e){document.getElementById("editmsg").textContent="失败："+e.message;}
 };
 document.getElementById("btn-merge").onclick=async()=>{
-  try{await post("/api/select",{tree_ids:[...selected]});const s=await post("/api/merge",{});renderTrees(s);
+  try{await post("/api/select",{tree_ids:[...selected]});const s=await post("/api/merge",{});selected.clear();renderTrees(s);
       document.getElementById("editmsg").textContent="已合并所选单木";await loadEditorData();}
   catch(e){document.getElementById("editmsg").textContent="失败："+e.message;}
 };
 document.getElementById("btn-undo").onclick=async()=>{
-  try{const s=await post("/api/undo",{});renderTrees(s);
+  try{const s=await post("/api/undo",{});selected.clear();renderTrees(s);
       document.getElementById("editmsg").textContent="已撤销上一步";await loadEditorData();}
   catch(e){document.getElementById("editmsg").textContent="失败："+e.message;}
 };

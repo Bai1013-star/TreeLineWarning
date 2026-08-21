@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
-from desktop.app import resource_root
+from desktop.app import DesktopApi, resource_root
 from desktop.server import _strict_json_value
 
 
@@ -36,15 +37,67 @@ def test_desktop_json_boundary_normalizes_non_finite_diagnostics():
 
 
 def test_desktop_page_uses_existing_local_viewer_and_product_actions():
-    page = (
-        Path(__file__).resolve().parents[2] / "viewer_poc" / "giro3d" / "desktop.html"
-    ).read_text(encoding="utf-8")
+    root = Path(__file__).resolve().parents[2] / "viewer_poc" / "giro3d"
+    page = (root / "desktop.html").read_text(encoding="utf-8")
+    script = (root / "desktop.js").read_text(encoding="utf-8")
     assert '<iframe id="viewer" src="/">' in page
+    assert '<iframe id="viewer" src="about:blank"' in page
     assert 'id="newProject"' in page
     assert 'id="openProject"' in page
     assert 'id="importPointCloud"' in page
     assert 'id="exportWorkOrder"' in page
-    assert "导出风险工单" in page
-    assert "预测胸径" in page
-    assert "预测数据质量" in page
-    assert "/prediction" in page
+    assert "导出预测输入" in page
+    assert "单木结果查看与复核" in page
+    assert "/download_prediction" in script
+
+
+def test_desktop_bridge_exports_required_methods_without_public_object_graph():
+    bridge = DesktopApi(SimpleNamespace())
+    bridge._window = object()
+
+    required = {
+        "choose_project_location",
+        "choose_existing_project",
+        "create_project",
+        "import_point_cloud",
+        "import_gis",
+    }
+    assert all(callable(getattr(bridge, name)) for name in required)
+    assert not hasattr(bridge, "window")
+    assert not hasattr(bridge, "backend")
+    assert all(
+        name.startswith("_") or callable(getattr(bridge, name))
+        for name in dir(bridge)
+    )
+
+
+def test_frontend_waits_for_required_new_project_bridge_contract():
+    script = (
+        Path(__file__).resolve().parents[2] / "viewer_poc" / "giro3d" / "desktop.js"
+    ).read_text(encoding="utf-8")
+
+    assert "pywebviewready" in script
+    assert "getNativeBridge(['choose_project_location', 'create_project'])" in script
+    assert "await bridge.choose_project_location()" in script
+    assert "await bridge.create_project(parent, name.trim())" in script
+    assert "已取消新建项目" in script
+
+
+def test_main_product_copy_is_chinese_and_tree_editor_is_state_gated():
+    root = Path(__file__).resolve().parents[2] / "viewer_poc" / "giro3d"
+    page = (root / "desktop.html").read_text(encoding="utf-8")
+    script = (root / "desktop.js").read_text(encoding="utf-8")
+
+    for legacy_copy in (
+        "Project Home",
+        "Offline Contract",
+        "Risk Policy",
+        "Start Stage-B Batch",
+        "Retry Failed",
+        "Finalize Review",
+        "Authoritative Folder Pipeline",
+    ):
+        assert legacy_copy not in page
+    assert 'id="startFixture" class="small test-only hidden"' in page
+    assert "if (!state.treeReviewReady && !state.finalized)" in script
+    assert "loadViewer();" in script

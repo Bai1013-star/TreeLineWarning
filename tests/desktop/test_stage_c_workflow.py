@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 
 from desktop.project_management import create_empty_project, import_pointcloud
-from desktop.workflow import DesktopWorkflow
+from desktop.workflow import DesktopWorkflow, derive_workspace_state
 
 
 def _workflow(tmp_path: Path) -> DesktopWorkflow:
@@ -110,3 +110,78 @@ def test_stage_b_scheduler_snapshot_binds_latest_production_science() -> None:
         in BatchAnalysisScheduler._new_analysis_run.__code__.co_consts
     )
     assert "CROWN_STEM_HYBRID" in BatchAnalysisScheduler._new_analysis_run.__code__.co_consts
+
+
+def test_workspace_state_drives_each_primary_product_view() -> None:
+    base_project = {"is_desktop_home": False, "pointcloud": "NOT_IMPORTED", "spans": 0}
+    no_capability = {"available": False, "unit_confirmed": False}
+    ready_capability = {"available": True, "unit_confirmed": True}
+    not_started = {"status": "NOT_STARTED"}
+
+    assert derive_workspace_state(
+        {**base_project, "is_desktop_home": True},
+        no_capability,
+        not_started,
+        tree_review_ready=False,
+        finalized=False,
+    ) == "NO_PROJECT"
+    assert derive_workspace_state(
+        base_project,
+        no_capability,
+        not_started,
+        tree_review_ready=False,
+        finalized=False,
+    ) == "PROJECT_CREATED"
+    assert derive_workspace_state(
+        {**base_project, "pointcloud": "IMPORTED_PENDING_TOWER_REGISTRATION"},
+        {"available": True, "unit_confirmed": False},
+        not_started,
+        tree_review_ready=False,
+        finalized=False,
+    ) == "SOURCE_IMPORTED_UNIT_PENDING"
+    assert derive_workspace_state(
+        {**base_project, "pointcloud": "IMPORTED_PENDING_TOWER_REGISTRATION"},
+        ready_capability,
+        not_started,
+        tree_review_ready=False,
+        finalized=False,
+    ) == "TOWER_SELECTION"
+    assert derive_workspace_state(
+        {**base_project, "pointcloud": "IMPORTED", "spans": 2},
+        ready_capability,
+        not_started,
+        tree_review_ready=False,
+        finalized=False,
+    ) == "TOPOLOGY_READY"
+    assert derive_workspace_state(
+        {**base_project, "pointcloud": "IMPORTED", "spans": 2},
+        ready_capability,
+        {"status": "RUNNING"},
+        tree_review_ready=False,
+        finalized=False,
+    ) == "ANALYSIS_RUNNING"
+    assert derive_workspace_state(
+        {**base_project, "pointcloud": "IMPORTED", "spans": 2},
+        ready_capability,
+        {"status": "COMPLETE"},
+        tree_review_ready=True,
+        finalized=False,
+    ) == "TREE_REVIEW_READY"
+    assert derive_workspace_state(
+        {**base_project, "pointcloud": "IMPORTED", "spans": 2},
+        ready_capability,
+        {"status": "COMPLETE"},
+        tree_review_ready=True,
+        finalized=True,
+    ) == "FINALIZED"
+
+
+def test_workspace_projection_marks_home_without_creating_science_state(tmp_path: Path) -> None:
+    project = create_empty_project(tmp_path, "Desktop Home")
+    workflow = DesktopWorkflow(Path(project["root"]), desktop_home=True)
+
+    projection = workflow.workspace_projection()
+
+    assert projection["ui_state"] == "NO_PROJECT"
+    assert projection["project"]["is_desktop_home"] is True
+    assert projection["tree_review_ready"] is False

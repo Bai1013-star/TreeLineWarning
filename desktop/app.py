@@ -32,9 +32,18 @@ def default_project_root() -> Path | None:
 
 
 class BackendProcess:
-    def __init__(self, project_root: Path, repository_root: Path) -> None:
+    def __init__(
+        self,
+        project_root: Path,
+        repository_root: Path,
+        *,
+        desktop_home: bool = False,
+        ui_test_mode: bool = False,
+    ) -> None:
         self.project_root = project_root.resolve()
         self.repository_root = repository_root
+        self.desktop_home = desktop_home
+        self.ui_test_mode = ui_test_mode
         self.httpd = None
         self.thread: threading.Thread | None = None
         self.local_app = None
@@ -61,6 +70,7 @@ class BackendProcess:
     def configure_project(self, project_root: Path) -> dict:
         """Switch the local API to a verified project without carrying UI state."""
         self.project_root = project_root.resolve()
+        self.desktop_home = False
         if self.local_app is not None:
             return self.local_app.configure_project(self.project_root)
         from scripts import serve_p3a_giro3d as server
@@ -78,7 +88,12 @@ class BackendProcess:
             ).is_file():
                 from desktop.server import DesktopApplication
 
-                self.local_app = DesktopApplication(self.project_root, self.repository_root)
+                self.local_app = DesktopApplication(
+                    self.project_root,
+                    self.repository_root,
+                    desktop_home=self.desktop_home,
+                    ui_test_mode=self.ui_test_mode,
+                )
                 return self.local_app.start()
             from scripts import serve_p3a_giro3d as server
 
@@ -109,15 +124,20 @@ class DesktopApi:
     """Native file dialogs plus narrow project lifecycle operations for the UI."""
 
     def __init__(self, backend: BackendProcess) -> None:
-        self.backend = backend
-        self.window = None
+        self._backend = backend
+        # pywebview recursively scans every public non-callable attribute on
+        # ``js_api`` objects.  Keeping the native Window public makes the scan
+        # descend into .NET objects and abort before any bridge function is
+        # installed.  The leading underscore is therefore part of the bridge
+        # contract, not merely an implementation style choice.
+        self._window = None
 
     def _folder(self, title: str) -> str | None:
-        if self.window is None:
+        if self._window is None:
             return None
         import webview
 
-        selected = self.window.create_file_dialog(
+        selected = self._window.create_file_dialog(
             webview.FOLDER_DIALOG, directory="", allow_multiple=False
         )
         return str(selected[0]) if selected else None
@@ -129,18 +149,18 @@ class DesktopApi:
         selected = self._folder("打开 TreeLineWarning 项目")
         if not selected:
             return None
-        return self.backend.configure_project(Path(selected))
+        return self._backend.configure_project(Path(selected))
 
     def create_project(self, parent: str, project_name: str) -> dict:
         descriptor = create_empty_project(Path(parent), project_name)
-        return self.backend.configure_project(Path(descriptor["root"]))
+        return self._backend.configure_project(Path(descriptor["root"]))
 
     def import_point_cloud(self) -> dict | None:
-        if self.window is None:
+        if self._window is None:
             return None
         import webview
 
-        selected = self.window.create_file_dialog(
+        selected = self._window.create_file_dialog(
             webview.OPEN_DIALOG,
             directory="",
             allow_multiple=False,
@@ -148,15 +168,15 @@ class DesktopApi:
         )
         if not selected:
             return None
-        descriptor = import_pointcloud(self.backend.project_root, Path(selected[0]))
-        return self.backend.configure_project(Path(descriptor["root"]))
+        descriptor = import_pointcloud(self._backend.project_root, Path(selected[0]))
+        return self._backend.configure_project(Path(descriptor["root"]))
 
     def import_gis(self) -> dict | None:
-        if self.window is None:
+        if self._window is None:
             return None
         import webview
 
-        selected = self.window.create_file_dialog(
+        selected = self._window.create_file_dialog(
             webview.OPEN_DIALOG,
             directory="",
             allow_multiple=False,
@@ -164,11 +184,11 @@ class DesktopApi:
         )
         if not selected:
             return None
-        descriptor = import_gis_file(self.backend.project_root, Path(selected[0]))
-        return self.backend.configure_project(Path(descriptor["root"]))
+        descriptor = import_gis_file(self._backend.project_root, Path(selected[0]))
+        return self._backend.configure_project(Path(descriptor["root"]))
 
 
-def launch(project_root: Path | None) -> int:
+def launch(project_root: Path | None, *, ui_test_mode: bool = False) -> int:
     try:
         import webview
     except ImportError:
@@ -177,8 +197,12 @@ def launch(project_root: Path | None) -> int:
             file=sys.stderr,
         )
         return 2
-    project = project_root or default_project_root()
+    # UI acceptance must start from the same empty product home as a fresh
+    # packaged install, even when the source checkout contains developer caches.
+    project = project_root or (None if ui_test_mode else default_project_root())
+    desktop_home = False
     if project is None:
+        desktop_home = True
         home_parent = (Path.cwd() / "workspace").resolve()
         home_parent.mkdir(parents=True, exist_ok=True)
         home_root = home_parent / "TreeLineWarning Desktop Home"
@@ -194,7 +218,12 @@ def launch(project_root: Path | None) -> int:
     ):
         print("Selected project has no supported local TreeLineWarning manifest.", file=sys.stderr)
         return 2
-    backend = BackendProcess(project.resolve(), resource_root())
+    backend = BackendProcess(
+        project.resolve(),
+        resource_root(),
+        desktop_home=desktop_home,
+        ui_test_mode=ui_test_mode,
+    )
     try:
         url = backend.start()
     except RuntimeError as exc:
@@ -213,7 +242,7 @@ def launch(project_root: Path | None) -> int:
             min_size=(1100, 700),
             js_api=desktop_api,
         )
-        desktop_api.window = window
+        desktop_api._window = window
         webview.start(gui="edgechromium", debug=False)
         return 0
     except Exception as exc:  # pywebview backend exceptions are implementation-specific.
@@ -295,12 +324,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project-root", type=Path, default=None)
     parser.add_argument("--prediction-smoke", action="store_true")
     parser.add_argument("--dependency-health", action="store_true")
+    parser.add_argument("--ui-test-mode", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.dependency_health:
         return dependency_health_smoke()
     if args.prediction_smoke:
         return prediction_smoke(args.project_root)
-    return launch(args.project_root)
+    return launch(args.project_root, ui_test_mode=args.ui_test_mode)
 
 
 if __name__ == "__main__":

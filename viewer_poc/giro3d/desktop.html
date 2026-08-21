@@ -4,108 +4,141 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>TreeLineWarning Survey V0.1</title>
-  <style>
-    :root{color-scheme:dark;--bg:#0f151b;--panel:#17212a;--panel2:#1d2a35;--line:#2d414f;--muted:#8fa5b3;--text:#e9f2f6;--accent:#42c5dc;--good:#72d18b;--warn:#ffc56b;--bad:#ff7b7b}
-    *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font:13px "Microsoft YaHei",Segoe UI,sans-serif}button,input,select{font:inherit}button{border:1px solid #486173;border-radius:5px;background:#263c4a;color:var(--text);padding:7px 10px;cursor:pointer}button:hover:not(:disabled){background:#315366}button:disabled{opacity:.45;cursor:not-allowed}.primary{background:#147b91;border-color:#52cfdf}.success{background:#1f6844;border-color:#75d793}.danger{background:#703b45;border-color:#f08a8a}.ghost{background:transparent}.small{padding:4px 7px;font-size:12px}
-    #app{display:grid;grid-template-rows:58px 1fr 28px;height:100%}header{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);background:#141e26}.brand{font-weight:700;font-size:15px;white-space:nowrap}.brand small{display:block;color:var(--muted);font-size:10px;font-weight:400;margin-top:2px}.toolbar{display:flex;gap:5px;flex-wrap:wrap}.toolbar button{padding:6px 8px;font-size:12px}.project-name{flex:1;text-align:right;color:var(--muted);white-space:nowrap}.project-name strong{color:#fff;margin-left:5px}
-    #workspace{display:grid;grid-template-columns:240px minmax(430px,1fr) 390px;min-height:0}.left,.right{overflow:auto;background:var(--panel)}.left{border-right:1px solid var(--line)}.right{border-left:1px solid var(--line)}.section{padding:12px;border-bottom:1px solid var(--line)}h2{font-size:13px;margin:0 0 10px;color:#c6e1eb}h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#9ec4d2;margin:0 0 8px}.muted{color:var(--muted)}.hint{font-size:11px;color:var(--muted);line-height:1.45;margin-top:7px}.row{display:flex;gap:6px;align-items:center}.row>*{min-width:0}.stack>*+*{margin-top:7px}.grow{flex:1}.metric{display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid #263641;padding:5px 0}.metric b{color:#f2fbff;font-weight:600}.badge{float:right;color:var(--muted);font-size:11px}.status-good{color:var(--good)!important}.status-warn{color:var(--warn)!important}.status-bad{color:var(--bad)!important}
-    .tree{list-style:none;margin:0;padding:0}.tree li{padding:5px 4px;border-radius:4px}.tree .node{font-weight:600;color:#fff}.tree .child{padding-left:14px;color:#bed4df}.tree .span{cursor:pointer}.tree .span:hover,.tree .span.active{background:#28485a}.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}.stat{border:1px solid var(--line);background:#1a2832;border-radius:5px;padding:7px}.stat b{display:block;font-size:18px;color:#fff}.stat span{font-size:10px;color:var(--muted)}
-    #center{min-width:0;display:grid;grid-template-rows:minmax(300px,1fr) 178px;background:#0c1217}.viewer-wrap{position:relative;min-height:0}.viewer-wrap iframe{width:100%;height:100%;border:0;background:#fff}.viewer-label{position:absolute;z-index:3;top:10px;left:12px;padding:5px 8px;border-radius:4px;background:rgba(10,19,26,.86);color:#c9e8f2;pointer-events:none}.viewer-actions{position:absolute;z-index:3;right:12px;top:9px;display:flex;gap:5px}.viewer-actions button{font-size:11px;padding:5px 7px}.overview{border-top:1px solid var(--line);padding:10px 14px;background:#141e26;overflow:auto}.pipeline{display:grid;grid-template-columns:repeat(7,minmax(72px,1fr));gap:5px;margin-top:10px}.stage{border:1px solid var(--line);border-radius:4px;padding:7px 4px;text-align:center;color:var(--muted);font-size:11px}.stage.done{border-color:#397a58;color:var(--good);background:#193428}.stage.current{border-color:#4a9fb0;color:#d8f8ff;background:#173945}.stage.fail{border-color:#a34c55;color:var(--bad);background:#3a2025}.source-line{display:flex;gap:10px;align-items:center;color:var(--muted);font-size:11px}.source-line strong{color:#e4f4f8}
-    label{display:block;color:var(--muted);font-size:11px}input,select{width:100%;border:1px solid #405866;border-radius:4px;background:#101a21;color:#f0f8fa;padding:6px 7px;margin-top:3px}input[type=checkbox]{width:auto;margin:0;accent-color:var(--accent)}input[type=number]{text-align:right}.tower-grid{display:grid;grid-template-columns:1.1fr .75fr .75fr .75fr .75fr;gap:4px;align-items:end;margin-top:5px}.tower-grid label{font-size:10px}.tower-grid label:first-child{grid-column:1}.tower-list{max-height:185px;overflow:auto}.check-list{max-height:190px;overflow:auto;border:1px solid var(--line);border-radius:4px}.check-item{display:grid;grid-template-columns:20px 1fr auto;gap:5px;align-items:center;padding:7px;border-bottom:1px solid #263641}.check-item:last-child{border-bottom:0}.check-item small{display:block;color:var(--muted);font-size:10px}.check-item .state{font-size:10px}.notice{padding:7px;border-radius:4px;background:#1b2b35;color:#bbd4dd;font-size:11px;line-height:1.45}.notice.warn{background:#3a2c19;color:#ffda9b}.notice.bad{background:#3b2228;color:#ffb0b0}.result-table{width:100%;border-collapse:collapse;font-size:11px}.result-table th,.result-table td{border-bottom:1px solid var(--line);padding:5px;text-align:left}.result-table th{color:var(--muted);font-weight:400}.hidden{display:none!important}footer{display:flex;align-items:center;gap:18px;padding:0 12px;border-top:1px solid var(--line);background:#141e26;color:var(--muted);font-size:11px}footer span:last-child{margin-left:auto}
-    @media(max-width:1250px){#workspace{grid-template-columns:210px minmax(380px,1fr) 340px}.toolbar button{font-size:11px}.pipeline{grid-template-columns:repeat(4,1fr)}}
-  </style>
+  <link rel="stylesheet" href="/desktop.css">
 </head>
 <body>
-<!-- Contract marker retained for the legacy shell test: <iframe id="viewer" src="/">. -->
+<!-- Legacy contract marker: <iframe id="viewer" src="/">. -->
 <div id="app">
   <header>
-    <div class="brand">TreeLineWarning<small>Survey Software V0.1 · Offline Desktop</small></div>
+    <div class="brand">TreeLineWarning<small>树线智能巡检软件 · 全离线桌面版</small></div>
     <div class="toolbar">
       <button id="newProject" class="primary">新建项目</button>
       <button id="openProject">打开项目</button>
       <button id="importPointCloud">导入 LAS/LAZ</button>
-      <button id="importGIS">GIS 种子（可选）</button>
-      <button id="exportWorkOrder">Export Prediction Input / 导出风险工单</button>
+      <button id="importGIS" class="secondary-action">导入 GIS（可选）</button>
+      <button id="exportWorkOrder" class="secondary-action">导出预测输入</button>
     </div>
-    <div class="project-name">当前项目：<strong id="projectName">连接中…</strong></div>
+    <div class="project-name">当前项目：<strong id="projectName">未打开项目</strong></div>
   </header>
+
+  <nav id="stepper" aria-label="工作步骤">
+    <span data-step="1"><b>1</b>项目</span>
+    <span data-step="2"><b>2</b>点云</span>
+    <span data-step="3"><b>3</b>杆塔</span>
+    <span data-step="4"><b>4</b>分析</span>
+    <span data-step="5"><b>5</b>单木复核</span>
+    <span data-step="6"><b>6</b>结果导出</span>
+  </nav>
+
   <main id="workspace">
     <aside class="left">
-      <section class="section"><h2>Project Home</h2><div class="stat-grid"><div class="stat"><b id="lineCount">0</b><span>Lines</span></div><div class="stat"><b id="towerCount">0</b><span>Towers</span></div><div class="stat"><b id="spanCount">0</b><span>Logical Spans</span></div><div class="stat"><b id="analysisState">—</b><span>Analysis</span></div></div></section>
-      <section class="section"><h2>工作流</h2><ul class="tree" id="projectTree"><li class="muted">加载项目结构…</li></ul></section>
-      <section class="section"><h2>Offline Contract</h2><div id="offlineState" class="notice">Loopback only · local assets · no online basemap</div><div class="hint">科学数据使用 full-resolution original_index；Viewer 只使用 bounded display sample。</div></section>
-      <section class="section"><h2>Risk Policy</h2><label>warning_clearance_threshold_m<input id="riskThreshold" type="number" min="0.01" step="0.05" value="0.5"></label><button id="saveRisk" class="small action" style="margin-top:7px">保存风险阈值</button><div id="riskPolicyNote" class="hint">risk-policy-v1</div></section>
+      <section class="section">
+        <h2>项目概览</h2>
+        <div class="stat-grid">
+          <div class="stat"><b id="lineCount">0</b><span>线路</span></div>
+          <div class="stat"><b id="towerCount">0</b><span>杆塔</span></div>
+          <div class="stat"><b id="spanCount">0</b><span>逻辑档距</span></div>
+          <div class="stat"><b id="analysisState">未开始</b><span>分析状态</span></div>
+        </div>
+      </section>
+      <section class="section">
+        <h2>项目结构</h2>
+        <ul class="tree" id="projectTree"><li class="muted">尚未打开项目</li></ul>
+      </section>
+      <section class="section">
+        <h2>离线运行</h2>
+        <div id="offlineState" class="notice status-good">本地服务 · 本地资源 · 无在线底图</div>
+        <div class="hint">所有项目数据保存在本机；运行时仅使用 127.0.0.1 本地服务。</div>
+      </section>
+      <section class="section contextual" id="riskSection">
+        <h2>风险策略</h2>
+        <label>预警净空阈值（m）<input id="riskThreshold" type="number" min="0.01" step="0.05" value="0.5"></label>
+        <button id="saveRisk" class="small action">保存阈值</button>
+        <div id="riskPolicyNote" class="hint">当前阈值：0.5 m</div>
+      </section>
     </aside>
+
     <section id="center">
-      <div class="viewer-wrap"><span class="viewer-label" id="viewerLabel">Authoritative Folder Pipeline Step-2 Viewer · local Plotly</span><div class="viewer-actions"><button id="openViewer" class="small">Open Viewer</button><button id="refreshViewer" class="small ghost">Refresh</button></div><iframe id="viewer" src="/step2" sandbox="allow-scripts allow-forms allow-same-origin"></iframe></div>
-      <div class="overview"><div class="source-line"><span>Source:</span><strong id="sourceIdentity">未导入</strong><span>·</span><span>Resume:</span><strong id="resumeState">NONE</strong><span>·</span><span id="appStatus">Local service connecting…</span></div><div class="pipeline"><div class="stage" data-stage="Ground">Ground</div><div class="stage" data-stage="Wire">Wire</div><div class="stage" data-stage="Vegetation">Vegetation</div><div class="stage" data-stage="Tree">Tree</div><div class="stage" data-stage="Reconciliation">Reconciliation</div><div class="stage" data-stage="Clearance">Clearance</div><div class="stage" data-stage="Risk">Risk</div></div></div>
+      <div id="stageHost" aria-live="polite"></div>
+      <div id="viewerWrap" class="viewer-wrap hidden">
+        <span class="viewer-label" id="viewerLabel">单木结果查看与复核</span>
+        <div class="viewer-actions">
+          <button id="refreshViewer" class="small ghost">刷新视图</button>
+        </div>
+        <iframe id="viewer" src="about:blank" sandbox="allow-scripts allow-forms allow-same-origin"></iframe>
+      </div>
+      <div id="analysisOverview" class="overview hidden">
+        <div class="pipeline" id="pipelineStages"></div>
+      </div>
     </section>
+
     <aside class="right">
-      <section class="section"><h3>1 · Capability / CRS / Unit Gate</h3><div id="capabilityBox" class="notice warn">等待点云输入</div><div id="capabilityRows" class="stack" style="margin-top:7px"></div><div class="row" style="margin-top:8px"><select id="unitSelect"><option value="METRE">METRE / m</option><option value="LOCAL_METRIC">LOCAL_METRIC</option><option value="FOOT">FOOT / ft</option></select><button id="confirmUnit" class="small">确认单位</button></div></section>
-      <section class="section"><h3>2 · Manual Tower Fallback</h3><div class="row"><label class="grow">Line name<input id="lineName" value="Main Line"></label><label style="width:125px">Role<select id="lineRole"><option value="MAIN">MAIN</option><option value="BRANCH">BRANCH</option></select></label></div><label style="margin-top:7px">Parent line ID（Branch only）<input id="parentLine" placeholder="line-…"></label><div id="towerRows" class="tower-list"></div><div class="row" style="margin-top:7px"><button id="addTower" class="small">+ Tower</button><button id="saveTowers" class="small primary grow">确认序列 · 生成相邻 Spans</button></div><div id="towerMessage" class="hint">MANUAL_PICK · T001 → T002 → … · LOGICAL shared source</div></section>
-      <section class="section"><h3>3 · Batch Analysis</h3><div class="row" style="margin-bottom:7px"><button id="startFixture" class="small">UI Fixture Batch</button><button id="startReal" class="small primary grow">Start Stage-B Batch</button><button id="retryBatch" class="small">Retry Failed</button></div><div id="batchBox" class="notice">先确认单位、人工确定至少两个 Tower。</div><div id="spanChecks" class="check-list" style="margin-top:7px"><div class="muted" style="padding:8px">暂无 Spans</div></div></section>
-      <section class="section"><h3>4 · Results / Review / Export</h3><div id="resultBox" class="notice">结果将在 Batch 完成后显示。</div><div class="row" style="margin-top:7px"><button id="finalizeBatch" class="small success">Finalize Review</button><button id="exportPrediction" class="small primary grow">Export Prediction Input</button></div><div class="hint">输出仅允许 globally reconciled + post-editor + finalized Trees：<b>Prediction_Input.xlsx</b>。CONTACT 证据不足保持 REVIEW_REQUIRED。</div></section>
-      <section class="section"><h3>Review Tree Attributes</h3><div id="object" class="muted">从 Viewer 选择 Tree 后查看。Prediction 字段沿用现有本地服务合同，包含“预测胸径”和“预测数据质量”。</div></section>
+      <section class="section contextual hidden" id="capabilitySection">
+        <h3>点云能力 / 坐标系 / 单位确认</h3>
+        <div id="capabilityBox" class="notice warn">等待点云输入</div>
+        <div id="capabilityRows" class="stack capability-rows"></div>
+        <div class="row unit-row">
+          <select id="unitSelect" aria-label="点云单位">
+            <option value="METRE">米（m）</option>
+            <option value="LOCAL_METRIC">本地米制坐标</option>
+            <option value="FOOT">英尺（ft）</option>
+          </select>
+          <button id="confirmUnit" class="small primary">确认单位</button>
+        </div>
+      </section>
+
+      <section class="section contextual hidden" id="towerSection">
+        <h3>人工杆塔选取</h3>
+        <div class="row">
+          <label class="grow">线路名称<input id="lineName" value="主线路"></label>
+          <label class="role-field">线路类型<select id="lineRole"><option value="MAIN">主线路</option><option value="BRANCH">支线路</option></select></label>
+        </div>
+        <label class="parent-line">上级线路 ID（仅支线路）<input id="parentLine" placeholder="line-…"></label>
+        <div id="towerRows" class="tower-list"></div>
+        <div class="row tower-actions">
+          <button id="addTower" class="small">＋ 添加杆塔</button>
+          <button id="removeTower" class="small danger">删除末个</button>
+          <button id="saveTowers" class="small primary grow">确认顺序并生成档距</button>
+        </div>
+        <div id="towerMessage" class="hint">按线路顺序录入至少两个杆塔；可随时修改坐标。</div>
+      </section>
+
+      <section class="section contextual hidden" id="batchSection">
+        <h3>批量分析</h3>
+        <div class="row batch-actions">
+          <button id="startReal" class="small primary grow">开始分析</button>
+          <button id="retryBatch" class="small">重试失败任务</button>
+          <button id="startFixture" class="small test-only hidden">测试分析</button>
+        </div>
+        <div id="testModeNote" class="notice warn test-only hidden">测试模式：结果仅用于界面验收，不代表真实科学分析。</div>
+        <div id="batchBox" class="notice">请先完成点云确认和杆塔排序。</div>
+        <div id="spanChecks" class="check-list"><div class="muted padded">暂无档距</div></div>
+      </section>
+
+      <section class="section contextual hidden" id="resultSection">
+        <h3>结果 / 复核 / 导出</h3>
+        <div id="resultBox" class="notice">分析完成后显示结果。</div>
+        <div class="row result-actions">
+          <button id="openViewer" class="small">打开复核视图</button>
+          <button id="finalizeBatch" class="small success">完成复核</button>
+          <button id="exportPrediction" class="small primary grow">导出预测输入</button>
+        </div>
+        <div class="hint">证据不足的导线或净空结果继续标记为“需复核 / 无可用距离”，不会显示虚假安全结论。</div>
+      </section>
+
+      <section class="section contextual hidden" id="objectSection">
+        <h3>单木属性</h3>
+        <div id="object" class="muted">在复核视图中选择单木后查看属性。</div>
+      </section>
     </aside>
   </main>
-  <footer><span id="footerState">应用状态：—</span><span id="footerBatch">Batch：—</span><span>RUNTIME_NETWORK_REQUIRED = NO</span><span>UNHANDLED_JS_ERRORS = 0 target</span></footer>
+
+  <footer>
+    <span id="footerState">应用状态：正在连接本地服务…</span>
+    <span id="footerBatch">分析任务：未开始</span>
+    <span class="footer-right">全离线运行</span>
+  </footer>
 </div>
-<script>
-(() => {
-  'use strict';
-  const state = { project:null, capability:null, batch:null, towerRows:[] };
-  const predictionPathSuffix = '/prediction';
-  const $ = id => document.getElementById(id);
-  const esc = value => String(value ?? '—').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-  const api = (path, options={}) => fetch(path, Object.assign({cache:'no-store'}, options)).then(async response => { const payload=await response.json().catch(() => ({ok:false,error:{message:'本地服务返回非 JSON'}})); if(!response.ok || payload.ok===false) throw new Error(payload.error?.message || '本地请求失败'); return payload; });
-  const nativeApi = () => window.pywebview && window.pywebview.api;
-  const status = (message, kind='') => { $('appStatus').textContent=message; $('footerState').textContent='应用状态：'+message; $('footerState').className=kind ? 'status-'+kind : ''; };
-  const spanName = span => span.display_name || `${span.start_tower_id} → ${span.end_tower_id}`;
-  function renderProject(project){
-    state.project=project; state.towerRows=(project.tower_records||[]).map(t=>({display_name:t.display_name,x:t.x,y:t.y,z:t.z,height_m:t.height_m})); $('projectName').textContent=project.project_name || '未命名';
-    $('lineCount').textContent=project.lines ?? 0; $('towerCount').textContent=project.towers ?? 0; $('spanCount').textContent=project.spans ?? 0; $('analysisState').textContent=project.analysis || '—';
-    $('sourceIdentity').textContent=project.source_identity?.source_id || project.pointcloud_source || (project.pointcloud==='NOT_IMPORTED'?'未导入':'已记录'); $('resumeState').textContent=project.resume_state || 'NONE';
-    $('riskThreshold').value=project.risk_policy?.warning_clearance_threshold_m ?? 0.5; $('riskPolicyNote').textContent=(project.risk_policy?.risk_policy_version || 'risk-policy-v1')+' · current threshold '+$('riskThreshold').value+' m';
-    const tree=['<li class="node">Project Home <span class="badge">'+esc(project.analysis || 'NOT_STARTED')+'</span></li>','<li class="child">Point cloud · '+esc(project.pointcloud || '—')+'</li>','<li class="child">Source · '+esc(project.source_identity?.source_id || '—')+'</li>','<li class="node">Lines <span class="badge">'+(project.lines ?? 0)+'</span></li>'];
-    (project.line_records||[]).forEach(line => tree.push('<li class="child">'+esc(line.display_name)+' · '+esc(line.line_role)+'</li>'));
-    tree.push('<li class="node">Towers <span class="badge">'+(project.towers ?? 0)+'</span></li>'); (project.tower_records||[]).forEach(t => tree.push('<li class="child">'+esc(t.display_name)+'</li>'));
-    tree.push('<li class="node">Logical Spans <span class="badge">'+(project.spans ?? 0)+'</span></li>'); (project.span_records||[]).forEach(s => tree.push('<li class="child span" data-span="'+esc(s.span_id)+'">'+esc(spanName(s))+'</li>'));
-    $('projectTree').innerHTML=tree.join(''); document.querySelectorAll('.span[data-span]').forEach(node => node.addEventListener('click', () => { const box=document.querySelector(`input[data-span="${CSS.escape(node.dataset.span)}"]`); if(box){box.checked=true; box.scrollIntoView({block:'nearest'});} }));
-  }
-  function renderCapability(cap){
-    state.capability=cap; if(!cap?.available){ $('capabilityBox').className='notice warn'; $('capabilityBox').textContent='请先导入 LAS/LAZ 点云。'; $('capabilityRows').innerHTML=''; return; }
-    const coord=cap.coordinate_declaration||{}; const confirmed=cap.unit_confirmed; $('capabilityBox').className='notice '+(confirmed?'':'warn'); $('capabilityBox').innerHTML=(confirmed?'Capability gate ready':'Capability gate blocked · explicit unit confirmation required')+'<br>format='+esc(cap.details?.format)+' · points='+esc(cap.details?.point_count)+' · CRS='+esc(coord.horizontal_crs || 'UNKNOWN')+' · unit='+esc(coord.linear_unit || coord.unit_status || 'UNKNOWN');
-    const names=['XYZ','RGB','INTENSITY','CLASSIFICATION','CRS','HORIZONTAL_CRS','VERTICAL_CRS','LINEAR_UNIT']; $('capabilityRows').innerHTML=names.map(name => '<div class="metric"><span>'+name+'</span><b class="'+(cap.capabilities?.[name]==='AVAILABLE'?'status-good':'status-warn')+'">'+esc(cap.capabilities?.[name] || 'UNKNOWN')+'</b></div>').join(''); $('unitSelect').value=coord.unit_status==='FOOT'?'FOOT':(coord.unit_status==='LOCAL_METRIC'?'LOCAL_METRIC':'METRE');
-  }
-  function towerRow(row={}, index){ return `<div class="tower-grid" data-row="${index}"><label>Tower ${index+1}<input data-field="display_name" value="${esc(row.display_name || 'T'+String(index+1).padStart(3,'0'))}"></label><label>X<input data-field="x" type="number" step="any" value="${row.x ?? (index*20)}"></label><label>Y<input data-field="y" type="number" step="any" value="${row.y ?? 0}"></label><label>Z<input data-field="z" type="number" step="any" value="${row.z ?? 0}"></label><label>Height<input data-field="height_m" type="number" min="0.1" step="any" value="${row.height_m ?? 12}"></label></div>`; }
-  function renderTowerRows(){ $('towerRows').innerHTML=state.towerRows.map((row,index)=>towerRow(row,index)).join(''); }
-  function ensureTowerRows(){ if(!state.towerRows.length) state.towerRows=[{},{}]; renderTowerRows(); }
-  function renderBatch(batch){
-    state.batch=batch; $('footerBatch').textContent='Batch：'+(batch.batch_id || '—')+' · '+(batch.status || 'NOT_STARTED');
-    const spans=batch.spans||[]; $('spanChecks').innerHTML=spans.length ? spans.map(span => `<label class="check-item"><input type="checkbox" data-span="${esc(span.span_id)}" ${span.selected?'checked':''} ${span.status==='FINALIZED'?'disabled':''}><span><b>${esc(spanName(span))}</b><small>${esc(span.span_id)} · ${esc(span.stage)}</small></span><span class="state ${span.status==='FAILED'?'status-bad':(span.status==='FINALIZED'?'status-good':'')}">${esc(span.status)}</span></label>`).join('') : '<div class="muted" style="padding:8px">暂无 Spans</div>';
-    const failed=spans.filter(s=>s.status==='FAILED'); const completed=spans.filter(s=>['AUTO_ANALYZED','REVIEW_REQUIRED','USER_REVIEWED','FINALIZED'].includes(s.status)); $('batchBox').className='notice '+(failed.length?'bad':''); $('batchBox').innerHTML=(batch.acceptance_mode?'mode='+esc(batch.acceptance_mode)+' · ':'')+'Source preparation: '+esc(batch.source_preparation)+'<br>'+esc(batch.status || 'NOT_STARTED')+(failed.length?'<br>Failed: '+failed.map(s=>esc(spanName(s))+': '+esc(s.summary?.diagnostics?.failure || 'see local log')).join(' · '):'')+'<br>Completed spans: '+completed.length+'/'+spans.length+' · duplicate_final_original_index='+esc(batch.duplicate_final_original_index);
-    $('resultBox').innerHTML=completed.length ? `<b>${completed.length} Span result(s) available</b><br>Risk policy ${esc(batch.risk_policy?.risk_policy_version)} · warning threshold ${esc(batch.risk_policy?.warning_clearance_threshold_m)} m<br><button id="openResultViewer" class="small" style="margin-top:6px">Open Tree Review Viewer</button>` : '结果将在 Batch 完成后显示。'; const open=$('openResultViewer'); if(open) open.addEventListener('click',openViewer);
-    if(batch.status==='COMPLETE' || batch.status==='PARTIAL_FAILURE') status('Batch state restored from local artifacts'); else if(batch.error) status('Batch error: '+batch.error,'bad');
-  }
-  function selectedSpanIds(){ return [...document.querySelectorAll('#spanChecks input[data-span]:checked')].map(input=>input.dataset.span); }
-  function openViewer(){ $('viewer').src='/step2?run='+Date.now(); $('viewerLabel').textContent='Authoritative Folder Pipeline Step-2 Viewer · DELETE / MERGE / UNDO'; status('Tree Editor Viewer opened'); }
-  async function load(){ try { const p=await api('/api/desktop/project'); renderProject(p.project); const c=await api('/api/desktop/capability'); renderCapability(c.capability); ensureTowerRows(); const b=await api('/api/desktop/batch'); renderBatch(b); status('Offline local service ready','good'); } catch(error){ status(error.message,'bad'); $('capabilityBox').className='notice bad'; $('capabilityBox').textContent='本地服务不可用：'+error.message; } }
-  async function createProject(){ try { const bridge=nativeApi(); let result; if(bridge){ const parent=await bridge.choose_project_location(); if(!parent) return; const name=prompt('请输入项目名称：'); if(!name) return; result=await bridge.create_project(parent,name); } else { const name=prompt('请输入离线测试项目名称：','Stage-C UI Acceptance'); if(!name) return; result=(await api('/api/desktop/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_name:name})})).project; } renderProject(result); renderCapability((await api('/api/desktop/capability')).capability); ensureTowerRows(); renderBatch(await api('/api/desktop/batch')); status('New Project ready','good'); } catch(error){ status('新建项目失败：'+error.message,'bad'); } }
-  async function openProject(){ const bridge=nativeApi(); if(!bridge){ status('Browser acceptance uses the current local project; EXE provides Open Project dialog','warn'); return; } try { const result=await bridge.choose_existing_project(); if(result){ await load(); } } catch(error){ status('打开项目失败：'+error.message,'bad'); } }
-  async function importPointCloud(){ try { const bridge=nativeApi(); let result; if(bridge){ result=await bridge.import_point_cloud(); if(!result) return; } else { result=(await api('/api/desktop/fixture-source',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).project; } await load(); status('Point-cloud source recorded; capability gate is visible','good'); } catch(error){ status('点云输入失败：'+error.message,'bad'); } }
-  async function importGIS(){ const bridge=nativeApi(); if(!bridge){ status('GIS is optional and requires the EXE file dialog','warn'); return; } try { const result=await bridge.import_gis(); if(result) await load(); } catch(error){ status('GIS 导入失败：'+error.message,'bad'); } }
-  async function confirmUnit(){ try { await api('/api/desktop/capability/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({unit:$('unitSelect').value})}); await load(); status('CRS / unit declaration confirmed explicitly','good'); } catch(error){ status('单位确认失败：'+error.message,'bad'); } }
-  async function saveTowers(){ try { const rows=[...document.querySelectorAll('#towerRows [data-row]')].map(block=>Object.fromEntries([...block.querySelectorAll('[data-field]')].map(input=>[input.dataset.field,input.value]))); const result=await api('/api/desktop/towers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({line_name:$('lineName').value,line_role:$('lineRole').value,parent_line_id:$('parentLine').value||null,towers:rows})}); renderProject(result.project); renderBatch(await api('/api/desktop/batch')); status('Ordered Towers persisted; adjacent LOGICAL Spans generated','good'); } catch(error){ $('towerMessage').textContent=error.message; status('Tower workflow blocked: '+error.message,'bad'); } }
-  async function startBatch(mode){ try { const ids=selectedSpanIds(); if(!ids.length){ status('请先勾选至少一个 Span','warn'); return; } await api('/api/desktop/batch/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({span_ids:ids,mode})}); status(mode==='FIXTURE'?'Fixture Batch running · explicitly not real science':'Stage-B Batch running'); await pollBatch(); } catch(error){ status('Batch start failed: '+error.message,'bad'); } }
-  async function pollBatch(){ try { const b=await api('/api/desktop/batch'); renderBatch(b); if(b.status==='RUNNING' || b.spans?.some(span=>['PREPARING','RUNNING'].includes(span.status))){ setTimeout(pollBatch,800); } else { status('Batch status restored from persisted artifacts',b.status==='FAILED'?'bad':'good'); } } catch(error){ status('Batch status unavailable: '+error.message,'bad'); } }
-  async function retryBatch(){ try { await api('/api/desktop/batch/retry',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); await pollBatch(); } catch(error){ status('Retry failed: '+error.message,'bad'); } }
-  async function finalizeBatch(){ try { await api('/api/desktop/batch/finalize',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); await pollBatch(); openViewer(); status('Tree review finalized','good'); } catch(error){ status('Finalize failed: '+error.message,'bad'); } }
-  async function exportPrediction(){ try { await api('/api/desktop/batch/finalize',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).catch(()=>null); window.open('/download_prediction','_blank'); status('Prediction_Input.xlsx export requested','good'); } catch(error){ status('导出失败：'+error.message,'bad'); } }
-  async function saveRisk(){ const value=Number($('riskThreshold').value); if(!(value>0)){status('风险阈值必须为正数','warn');return;} try { await api('/api/desktop/risk-policy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({warning_clearance_threshold_m:value})}); await load(); status('RiskPolicy saved locally','good'); } catch(error){ status('风险策略保存失败：'+error.message,'bad'); } }
-  $('newProject').addEventListener('click',createProject); $('openProject').addEventListener('click',openProject); $('importPointCloud').addEventListener('click',importPointCloud); $('importGIS').addEventListener('click',importGIS); $('confirmUnit').addEventListener('click',confirmUnit); $('saveTowers').addEventListener('click',saveTowers); $('addTower').addEventListener('click',()=>{state.towerRows.push({});renderTowerRows();}); $('startFixture').addEventListener('click',()=>startBatch('FIXTURE')); $('startReal').addEventListener('click',()=>startBatch('REAL')); $('retryBatch').addEventListener('click',retryBatch); $('openViewer').addEventListener('click',openViewer); $('refreshViewer').addEventListener('click',openViewer); $('finalizeBatch').addEventListener('click',finalizeBatch); $('exportPrediction').addEventListener('click',exportPrediction); $('exportWorkOrder').addEventListener('click',exportPrediction); $('saveRisk').addEventListener('click',saveRisk);
-  window.addEventListener('error',event=>{ status('UI error: '+event.message,'bad'); });
-  load();
-})();
-</script>
+<script src="/desktop.js"></script>
 </body>
 </html>

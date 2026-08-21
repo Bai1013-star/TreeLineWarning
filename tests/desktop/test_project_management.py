@@ -8,6 +8,25 @@ from desktop.project_management import (
 )
 
 
+class _DialogWindow:
+    def __init__(self, selection):
+        self.selection = selection
+
+    def create_file_dialog(self, *_args, **_kwargs):
+        return self.selection
+
+
+class _Backend:
+    def __init__(self, project_root: Path):
+        self.project_root = project_root
+        self.configured = None
+
+    def configure_project(self, project_root: Path):
+        self.project_root = project_root
+        self.configured = describe_project(project_root)
+        return self.configured
+
+
 def test_empty_desktop_project_has_no_analysis_or_prediction_state(tmp_path: Path) -> None:
     project = create_empty_project(tmp_path, "线路巡检 A")
 
@@ -57,3 +76,27 @@ def test_gis_import_builds_route_topology_and_logical_spans(tmp_path: Path) -> N
     assert imported["topology_workflow"] == "LINE_ROUTE_ORDERED_TOWERS_AUTO_SPANS"
     persisted = Path(project["root"]) / "stage-a-project.json"
     assert '"full_source_copy": false' in persisted.read_text(encoding="utf-8")
+
+
+def test_new_project_folder_cancel_is_a_normal_bridge_result(tmp_path: Path) -> None:
+    from desktop.app import DesktopApi
+
+    bridge = DesktopApi(_Backend(tmp_path))
+    bridge._window = _DialogWindow(None)
+
+    assert bridge.choose_project_location() is None
+
+
+def test_new_project_success_refreshes_backend_project_state(tmp_path: Path) -> None:
+    from desktop.app import DesktopApi
+
+    backend = _Backend(tmp_path)
+    bridge = DesktopApi(backend)
+    bridge._window = _DialogWindow((str(tmp_path),))
+
+    assert bridge.choose_project_location() == str(tmp_path)
+    created = bridge.create_project(str(tmp_path), "中文验收项目")
+
+    assert created["project_name"] == "中文验收项目"
+    assert created["pointcloud"] == "NOT_IMPORTED"
+    assert backend.configured == created
