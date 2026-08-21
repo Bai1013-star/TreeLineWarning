@@ -197,6 +197,7 @@ class BatchAnalysisScheduler:
             project, scan_id, risk_policy=self.risk_policy, config=self.config
         )
         self.science_runner = science_runner or self._default_science_runner
+        self._uses_default_source_preparer = source_preparer is None
         self.source_preparer = source_preparer or prepare_source_shared
         self.source_access_enabled = source_access_enabled
         self._latest_result: BatchAnalysisResult | None = None
@@ -495,7 +496,23 @@ class BatchAnalysisScheduler:
         try:
             statuses = {span_id: BatchSpanStatus.PREPARING for span_id in selected}
             first_input = bindings[selected[0]].science_input
-            preparation = self.source_preparer(self.project_root, first_input)
+            if self._uses_default_source_preparer:
+                # Source-shared Wire routing includes the reviewed span-aligned
+                # rescue path.  Give it the complete project topology so a
+                # cache prepared by a subset/retry is still valid for every
+                # logical Span in this project.
+                all_span_inputs = tuple(
+                    binding.science_input
+                    for binding in self.bridge.bind_spans(None)
+                )
+                preparation = prepare_source_shared(
+                    self.project_root,
+                    first_input,
+                    span_inputs=all_span_inputs,
+                )
+            else:
+                # Preserve the established two-argument test/integration seam.
+                preparation = self.source_preparer(self.project_root, first_input)
             telemetry.source_prep_count = 0 if preparation.telemetry.get("cache_hit_count") else 1
             telemetry.cache_hit_count += int(preparation.telemetry.get("cache_hit_count", 0))
             telemetry.cache_miss_count += int(preparation.telemetry.get("cache_miss_count", 0))

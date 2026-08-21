@@ -204,7 +204,10 @@ def launch(project_root: Path | None) -> int:
         desktop_api = DesktopApi(backend)
         window = webview.create_window(
             "TreeLineWarning",
-            url + "desktop.html",
+            # Each backend owns its landing route: the Stage-A desktop server
+            # maps ``/`` to the dashboard, while a legacy project server maps
+            # ``/`` to the full-source project viewer.
+            url,
             width=1600,
             height=980,
             min_size=(1100, 700),

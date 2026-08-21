@@ -178,6 +178,23 @@ def test_duplicate_source_index_validation_is_bounded_and_fails_closed(tmp_path:
         _validate_region_original_index_unique(dup_region, chunk_size=2)
 
 
+def test_tile_major_unique_source_indices_pass_bounded_validation(tmp_path: Path):
+    writer = _RawRegionWriter(
+        tmp_path / "tile_major", origin_xyz=(0.0, 0.0, 0.0)
+    )
+    writer.append(
+        np.array(
+            [[2.0, 0.0, 1.0], [0.0, 0.0, 1.0], [1.0, 0.0, 1.0]],
+            dtype=np.float64,
+        ),
+        np.array([2, 0, 1], dtype=np.int64),
+        np.zeros(3, dtype=np.uint8),
+    )
+    region = writer.close()
+
+    _validate_region_original_index_unique(region, chunk_size=2)
+
+
 def _dup_region(root: Path):
     writer = _RawRegionWriter(root, origin_xyz=(0.0, 0.0, 0.0))
     writer.append(

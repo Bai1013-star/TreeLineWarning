@@ -158,26 +158,48 @@ _TREE_MEMBERS_CHUNK_ROWS = 500_000  # engineering-only bounded default, not scie
 def _validate_region_original_index_unique(
     region: Any, *, chunk_size: int = _TREE_MEMBERS_CHUNK_ROWS
 ) -> None:
-    """Bounded ascending + duplicate validation of a RawRegion's source rows.
+    """Bounded duplicate validation of a RawRegion's source rows.
 
-    RawRegion rows are streamed in ascending source-row order and never
-    duplicate source rows, so a bounded per-chunk scan with a single window
-    detects any violation without a global sort/hash or a full index copy.
-    This replaces the two redundant 26.8M ``np.unique`` validations.
+    Direct source-recovery regions are ascending and use the constant-memory
+    fast path.  Role-tile queries are deterministic but tile-major, so their
+    globally unique source rows are not necessarily ascending.  That fallback
+    uses a packed source-index bitmap plus bounded per-chunk sorts; it does not
+    allocate a full-region ``np.unique``/sort or change scientific row order.
     """
 
     if region.count == 0:
         return
     original = region.original_index()
     previous = -1
+    ascending = True
+    maximum = -1
     for start in range(0, region.count, chunk_size):
         stop = min(region.count, start + chunk_size)
         chunk = np.asarray(original[start:stop], dtype=np.int64)
-        if np.any(chunk[1:] <= chunk[:-1]):
+        if np.any(chunk < 0):
             raise PoleEvidenceError("TREE_MEMBERS_SOURCE_INDEX_NOT_UNIQUE")
-        if start > 0 and chunk[0] <= previous:
-            raise PoleEvidenceError("TREE_MEMBERS_SOURCE_INDEX_NOT_UNIQUE")
+        maximum = max(maximum, int(np.max(chunk)))
+        if np.any(chunk[1:] <= chunk[:-1]) or (
+            start > 0 and chunk[0] <= previous
+        ):
+            ascending = False
         previous = int(chunk[-1])
+    if ascending:
+        return
+
+    seen = np.zeros((maximum // 8) + 1, dtype=np.uint8)
+    for start in range(0, region.count, chunk_size):
+        stop = min(region.count, start + chunk_size)
+        chunk = np.asarray(original[start:stop], dtype=np.int64)
+        ordered = chunk.copy()
+        ordered.sort()
+        if np.any(ordered[1:] == ordered[:-1]):
+            raise PoleEvidenceError("TREE_MEMBERS_SOURCE_INDEX_NOT_UNIQUE")
+        byte = chunk >> 3
+        bit = np.left_shift(np.uint8(1), (chunk & 7).astype(np.uint8))
+        if np.any(seen[byte] & bit):
+            raise PoleEvidenceError("TREE_MEMBERS_SOURCE_INDEX_NOT_UNIQUE")
+        np.bitwise_or.at(seen, byte, bit)
 
 
 def _assemble_tree_members_store(

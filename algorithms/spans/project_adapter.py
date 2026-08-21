@@ -272,7 +272,10 @@ def preparation_cache_hit(value: Mapping[str, Any] | None) -> bool:
 
 
 def prepare_source_shared(
-    project_root: Path, input_data: SpanAnalysisInput
+    project_root: Path,
+    input_data: SpanAnalysisInput,
+    *,
+    span_inputs: tuple[SpanAnalysisInput, ...] | None = None,
 ) -> SourceSharedPreparation:
     """Create/reuse one digest-bound source/scan preparation.
 
@@ -284,6 +287,9 @@ def prepare_source_shared(
     """
 
     from core.stage_b.ground import ensure_ground_preparation
+    from core.stage_b.role_preparation import ensure_role_tile_indexes
+
+    role_span_inputs = span_inputs or (input_data,)
 
     source_digest = canonical_digest(dict(input_data.source_identity))
     configuration_digest = input_data.science_configuration_digest
@@ -318,6 +324,7 @@ def prepare_source_shared(
                         payload[key] = reference
                         changed = True
             ground_preparation = payload.get("ground_preparation")
+            ground_prepared_now = False
             source_path = (
                 input_data.source_identity.get("resolved_access_path")
                 or input_data.source_identity.get("point_cloud_source")
@@ -338,7 +345,32 @@ def prepare_source_shared(
                     }
                 )
                 ground_preparation = preparation.to_dict()
+                ground_prepared_now = True
                 changed = True
+            role_preparation = None
+            if source_path:
+                role_preparation = ensure_role_tile_indexes(
+                    project_root,
+                    path.parent,
+                    input_data.source_identity,
+                    span_inputs=role_span_inputs,
+                    wire_configuration_digest=wire_role_index_configuration_digest(),
+                    vegetation_configuration_digest=(
+                        PROJECT_SPAN_VEGETATION_ROLE_CONFIGURATION_DIGEST
+                    ),
+                )
+                role_values = {
+                    "wire_role_tile_index_reference": role_preparation.wire_reference,
+                    "vegetation_role_tile_index_reference": (
+                        role_preparation.vegetation_reference
+                    ),
+                    "source_point_count": role_preparation.source_point_count,
+                    "role_preparation": dict(role_preparation.details),
+                }
+                for key, value in role_values.items():
+                    if payload.get(key) != value:
+                        payload[key] = value
+                        changed = True
             if changed:
                 _write_json_atomic(path, payload)
             return SourceSharedPreparation(
@@ -347,12 +379,39 @@ def prepare_source_shared(
                 relative.as_posix(),
                 ground_preparation=dict(ground_preparation or {}),
                 telemetry={
-                    "source_prep_count": 0,
-                    "cache_hit_count": 1,
-                    "cache_miss_count": 0,
-                    "ground_prep_count": 0 if preparation_cache_hit(ground_preparation) else 1,
+                    "source_prep_count": (
+                        0
+                        if role_preparation is None or role_preparation.cache_hit
+                        else 1
+                    ),
+                    "cache_hit_count": (
+                        1
+                        if not ground_prepared_now
+                        and (
+                            role_preparation is None
+                            or role_preparation.cache_hit
+                        )
+                        else 0
+                    ),
+                    "cache_miss_count": (
+                        0
+                        if not ground_prepared_now
+                        and (
+                            role_preparation is None
+                            or role_preparation.cache_hit
+                        )
+                        else 1
+                    ),
+                    "ground_prep_count": 1 if ground_prepared_now else 0,
                     "source_full_pass_count": int(
                         (ground_preparation or {}).get("source_full_pass_count", 0)
+                        if ground_prepared_now
+                        else 0
+                    )
+                    + int(
+                        role_preparation.source_full_pass_count
+                        if role_preparation is not None
+                        else 0
                     ),
                 },
             )
@@ -399,6 +458,28 @@ def prepare_source_shared(
             }
         )
         ground_preparation = preparation.to_dict()
+        role_preparation = ensure_role_tile_indexes(
+            project_root,
+            path.parent,
+            input_data.source_identity,
+            span_inputs=role_span_inputs,
+            wire_configuration_digest=wire_role_index_configuration_digest(),
+            vegetation_configuration_digest=(
+                PROJECT_SPAN_VEGETATION_ROLE_CONFIGURATION_DIGEST
+            ),
+        )
+        payload.update(
+            {
+                "wire_role_tile_index_reference": role_preparation.wire_reference,
+                "vegetation_role_tile_index_reference": (
+                    role_preparation.vegetation_reference
+                ),
+                "source_point_count": role_preparation.source_point_count,
+                "role_preparation": dict(role_preparation.details),
+            }
+        )
+    else:
+        role_preparation = None
     _write_json_atomic(path, payload)
     return SourceSharedPreparation(
         source_digest,
@@ -412,6 +493,11 @@ def prepare_source_shared(
             "ground_prep_count": 1 if ground_preparation else 0,
             "source_full_pass_count": int(
                 (ground_preparation or {}).get("source_full_pass_count", 0)
+            )
+            + int(
+                role_preparation.source_full_pass_count
+                if role_preparation is not None
+                else 0
             ),
         },
     )

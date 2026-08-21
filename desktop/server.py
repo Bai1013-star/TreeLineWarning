@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import mimetypes
 import threading
 import urllib.parse
@@ -26,6 +27,18 @@ def _json_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     raw = handler.rfile.read(length)
     payload = json.loads(raw.decode("utf-8"))
     return payload if isinstance(payload, dict) else {}
+
+
+def _strict_json_value(value: Any) -> Any:
+    """Normalize diagnostics to browser-parseable RFC JSON values."""
+
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {str(key): _strict_json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_strict_json_value(item) for item in value]
+    return value
 
 
 class DesktopApplication:
@@ -97,7 +110,12 @@ class _DesktopHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, payload: dict[str, Any], *, status: int = HTTPStatus.OK) -> None:
         self._send_bytes(
-            json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"),
+            json.dumps(
+                _strict_json_value(payload),
+                ensure_ascii=False,
+                default=str,
+                allow_nan=False,
+            ).encode("utf-8"),
             status=status,
             content_type="application/json; charset=utf-8",
         )
