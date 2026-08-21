@@ -86,12 +86,39 @@ def test_frontend_waits_for_required_new_project_bridge_contract():
 def test_tower_picker_accepts_a_zero_distance_pointerup_as_a_click():
     """A normal pointer click has zero travel and must request local evidence."""
     script = (
-        Path(__file__).resolve().parents[2] / "viewer_poc" / "giro3d" / "desktop.js"
+        Path(__file__).resolve().parents[2]
+        / "viewer_poc"
+        / "giro3d"
+        / "tower_picker_3d.js"
     ).read_text(encoding="utf-8")
 
-    assert "if (!drag) return; const moved = Math.hypot" in script
-    assert "if (moved > 4) return;" in script
-    assert "if (!moved || moved > 4) return;" not in script
+    assert "Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4" in script
+    assert "!start || start.button !== 0" in script
+    assert "if (!hits.length) return;" in script
+
+
+def test_tower_picker_is_true_xyz_webgl_with_orbit_and_world_picking():
+    root = Path(__file__).resolve().parents[2] / "viewer_poc" / "giro3d"
+    page = (root / "desktop.html").read_text(encoding="utf-8")
+    shell = (root / "desktop.js").read_text(encoding="utf-8")
+    viewer = (root / "tower_picker_3d.js").read_text(encoding="utf-8")
+
+    assert '<script src="/giro3d.bundle.js"></script>' in page
+    assert '<script src="/tower-picker-3d.js"></script>' in page
+    assert "new this.THREE.PerspectiveCamera" in viewer
+    assert "new G.MapControls" in viewer
+    assert "mouseButtons.LEFT = this.THREE.MOUSE.ROTATE" in viewer
+    assert "mouseButtons.RIGHT = this.THREE.MOUSE.PAN" in viewer
+    assert "new this.THREE.Raycaster" in viewer
+    assert "intersectObject(this.points, false)" in viewer
+    assert "z: point.z + this.origin[2]" in viewer
+    assert "sizeAttenuation: false" in viewer
+    assert "setMarkers(towers)" in viewer
+    assert "id=\"perspectiveTowerView\"" in shell
+    assert "id=\"topTowerView\"" in shell
+    assert "id=\"sideTowerView\"" in shell
+    assert "new window.TreeLineTowerViewer3D($('tower3dCanvas')" in shell
+    assert "JSON.stringify(world)" in shell
 
 
 def test_main_product_copy_is_chinese_and_tree_editor_is_state_gated():

@@ -164,6 +164,12 @@ class _DesktopHandler(BaseHTTPRequestHandler):
         if path == "/desktop.js":
             self._static("viewer_poc/giro3d/desktop.js")
             return
+        if path == "/tower-picker-3d.js":
+            self._static("viewer_poc/giro3d/tower_picker_3d.js")
+            return
+        if path == "/giro3d.bundle.js":
+            self._static("viewer_poc/giro3d/vendor/giro3d.bundle.js")
+            return
         if path == "/step2":
             self._send_bytes(step2_html().encode("utf-8"), content_type="text/html; charset=utf-8")
             return

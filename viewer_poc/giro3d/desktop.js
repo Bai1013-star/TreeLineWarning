@@ -9,7 +9,9 @@
     towerRows: [],
     towerViewer: null,
     localPreview: null,
-    towerView: {scale: 1, offsetX: 0, offsetY: 0},
+    towerMain3d: null,
+    towerLocal3d: null,
+    towerTimings: null,
     treeReviewReady: false,
     finalized: false,
     testMode: false,
@@ -131,6 +133,7 @@
   }
   function renderTowerRows() {
     $('towerRows').innerHTML = state.towerRows.map((row, index) => towerRow(row, index)).join('');
+    if (state.towerMain3d) state.towerMain3d.setMarkers(state.towerRows);
   }
   function ensureTowerRows() { renderTowerRows(); }
 
@@ -160,7 +163,7 @@
     return `<div class="stage-card"><div class="stage-kicker">${kicker}</div><h1>${title}</h1><p>${body}</p>${extra}${actions ? `<div class="stage-actions">${actions}</div>` : ''}</div>`;
   }
   function towerPicker() {
-    return `<div class="picker-card"><div class="picker-head"><div><h3>真实点云俯视图（XY）</h3><p>请沿线路方向依次点击实际杆塔。点击将使用真实局部点云推导坐标与高度。</p></div><div class="picker-controls"><select id="displayMode"><option value="rgb">RGB</option><option value="height">高度着色</option><option value="intensity">强度</option></select><label>点大小 <input id="pointSize" type="range" min="1" max="5" value="2"></label><button id="resetTowerView" class="small">重置视角</button></div></div><div id="towerLoad" class="notice">正在准备点云显示…</div><div class="picker-grid"><canvas id="towerCanvas" aria-label="真实点云俯视图"></canvas><canvas id="tower3dCanvas" aria-label="3D确认视图"></canvas></div><div class="picker-caption"><span>左：俯视 XY（滚轮缩放、拖拽平移、点击选杆）</span><span>右：3D 确认（最近一次点击的真实局部点云）</span></div></div>`;
+    return `<div class="picker-card"><div class="picker-head"><div><h3>真实三维点云杆塔选取器</h3><p>斜视、侧视或自由旋转看清杆塔后单击；点击将使用真实局部点云确认坐标与高度。</p></div><div class="picker-controls"><select id="displayMode"><option value="height" selected>高度着色</option><option value="rgb">RGB</option><option value="intensity">强度</option></select><label>点大小 <input id="pointSize" type="range" min="1" max="8" value="2"></label><button id="perspectiveTowerView" class="small">透视视图</button><button id="topTowerView" class="small">俯视</button><button id="sideTowerView" class="small">侧视</button><button id="resetTowerView" class="small">重置视角</button></div></div><div id="towerLoad" class="notice">正在准备点云显示…</div><div id="towerDiagnostics" class="picker-diagnostics"></div><div class="picker-grid"><canvas id="towerCanvas" aria-label="可旋转真实三维点云主视图"></canvas><canvas id="tower3dCanvas" aria-label="局部高密度三维确认视图"></canvas></div><div class="picker-caption"><span>左：主 3D（左键旋转 · 右/中键平移 · 滚轮缩放 · 单击选杆）</span><span>右：局部高密度 3D 确认（同样支持旋转、平移、缩放）</span></div></div>`;
   }
   function pipelineMarkup(mode) {
     const names = ['地面处理', '导线识别', '植被提取', '单木分割', '跨档整理', '净空计算', '风险分析'];
@@ -242,7 +245,7 @@
         await bridge.create_project(parent, name.trim());
       }
       state.viewerLoaded = false;
-      state.towerViewer = null; state.localPreview = null; state.towerView = {scale: 1, offsetX: 0, offsetY: 0};
+      state.towerViewer = null; state.localPreview = null; state.towerMain3d = null; state.towerLocal3d = null;
       await loadWorkspace();
       setStatus('项目已创建，可以导入点云', 'good');
     } catch (error) {
@@ -256,7 +259,7 @@
       const result = await bridge.choose_existing_project();
       if (!result) { setStatus('已取消打开项目'); return; }
       state.viewerLoaded = false;
-      state.towerViewer = null; state.localPreview = null; state.towerView = {scale: 1, offsetX: 0, offsetY: 0};
+      state.towerViewer = null; state.localPreview = null; state.towerMain3d = null; state.towerLocal3d = null;
       await loadWorkspace();
       setStatus('项目已打开', 'good');
     } catch (error) {
@@ -268,7 +271,7 @@
       const bridge = await getNativeBridge(['import_point_cloud']);
       if (!bridge) await jsonPost('/api/desktop/fixture-source');
       else if (!await bridge.import_point_cloud()) { setStatus('已取消导入点云'); return; }
-      state.towerViewer = null; state.localPreview = null; state.towerView = {scale: 1, offsetX: 0, offsetY: 0};
+      state.towerViewer = null; state.localPreview = null; state.towerMain3d = null; state.towerLocal3d = null;
       await loadWorkspace();
       setStatus('点云已导入，请确认坐标系和单位', 'good');
     } catch (error) {
@@ -291,46 +294,98 @@
       setStatus('点云单位已确认，可以选取杆塔', 'good');
     } catch (error) { setStatus(userError(error, '单位确认失败，请重新选择。'), 'bad'); }
   }
-  function colorFor(point, mode) {
-    if (mode === 'height') { const z = point[2]; return `hsl(${220 - Math.max(0, Math.min(220, z % 220))},75%,58%)`; }
-    if (mode === 'intensity') { const c = Math.max(30, Math.min(245, point[3] / 256)); return `rgb(${c},${c},${c})`; }
-    return `rgb(${point[4]},${point[5]},${point[6]})`;
+  async function timedJson(path, options = {}) {
+    const requestStart = performance.now();
+    const response = await fetch(path, Object.assign({cache: 'no-store'}, options));
+    const text = await response.text();
+    const transportMs = performance.now() - requestStart;
+    const parseStart = performance.now();
+    let payload;
+    try { payload = JSON.parse(text); }
+    catch (_) { payload = {ok: false, error: {message: '本地服务返回了无法读取的数据'}}; }
+    const parseMs = performance.now() - parseStart;
+    if (!response.ok || payload.ok === false) throw new Error(payload.error?.message || '本地请求失败');
+    return {payload, transport_ms: transportMs, js_parse_ms: parseMs, request_start: requestStart};
   }
-  function drawTowerPicker() {
-    const canvas = $('towerCanvas'); if (!canvas || !state.towerViewer) return;
-    const ctx = canvas.getContext('2d'); const rect = canvas.getBoundingClientRect();
-    canvas.width = Math.max(1, Math.floor(rect.width * devicePixelRatio)); canvas.height = Math.max(1, Math.floor(rect.height * devicePixelRatio));
-    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0); ctx.fillStyle = '#071015'; ctx.fillRect(0, 0, rect.width, rect.height);
-    const b = state.towerViewer.source_bounds, view = state.towerView, spanX = Math.max(1, b[3] - b[0]), spanY = Math.max(1, b[4] - b[1]);
-    const base = Math.min(rect.width / spanX, rect.height / spanY) * .92 * view.scale;
-    const project = p => [rect.width / 2 + (p[0] - (b[0] + b[3]) / 2) * base + view.offsetX, rect.height / 2 - (p[1] - (b[1] + b[4]) / 2) * base + view.offsetY];
-    canvas._towerProject = project; canvas._towerBase = base;
-    const size = Number($('pointSize')?.value || 2), mode = $('displayMode')?.value || 'rgb';
-    ctx.globalAlpha = .68;
-    for (let i = 0; i < state.towerViewer.xyz.length; i++) { const p = state.towerViewer.xyz[i], q = project(p); ctx.fillStyle = colorFor([p[0], p[1], p[2], state.towerViewer.intensity[i], ...state.towerViewer.rgb[i]], mode); ctx.fillRect(q[0], q[1], size, size); }
-    ctx.globalAlpha = 1;
-    state.towerRows.forEach((tower, i) => { const q = project([tower.x, tower.y]); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.fillStyle = '#ff9f1c'; ctx.beginPath(); ctx.arc(q[0], q[1], 9, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.fillStyle = '#fff'; ctx.font = 'bold 13px Microsoft YaHei'; ctx.fillText(tower.display_name || `T${String(i + 1).padStart(3, '0')}`, q[0] + 11, q[1] - 10); });
+
+  function showTowerTimings(timings) {
+    state.towerTimings = timings;
+    const node = $('towerDiagnostics'); if (!node) return;
+    const ms = value => Number(value || 0).toFixed(0);
+    node.textContent = `诊断：缓存 ${timings.overview_cache_hit ? '命中' : '新建'} · 源打开 ${ms(timings.source_open_ms)} ms · 缓存查询 ${ms(timings.overview_cache_lookup_ms)} ms · overview 构建 ${ms(timings.overview_build_ms)} ms · Python payload ${ms(timings.python_payload_build_ms)} ms · 传输 ${ms(timings.transport_ms)} ms · JS 解析 ${ms(timings.js_parse_ms)} ms · 3D 初始化 ${ms(timings.gpu_viewer_init_ms)} ms · 首帧 ${ms(timings.first_visible_ms)} ms`;
+    console.info('TOWER_VIEWER_TIMINGS', timings);
   }
-  function drawLocal3d() {
-    const canvas = $('tower3dCanvas'); if (!canvas) return; const ctx = canvas.getContext('2d'), rect = canvas.getBoundingClientRect();
-    canvas.width = Math.max(1, Math.floor(rect.width * devicePixelRatio)); canvas.height = Math.max(1, Math.floor(rect.height * devicePixelRatio)); ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0); ctx.fillStyle = '#071015'; ctx.fillRect(0, 0, rect.width, rect.height);
-    const local = state.localPreview; if (!local) { ctx.fillStyle = '#a8bdc8'; ctx.font = '14px Microsoft YaHei'; ctx.fillText('点击左侧真实点云中的杆塔后显示局部 3D 确认', 20, 40); return; }
-    const xyz = local.xyz, min = [Math.min(...xyz.map(p => p[0])), Math.min(...xyz.map(p => p[1])), Math.min(...xyz.map(p => p[2]))], max = [Math.max(...xyz.map(p => p[0])), Math.max(...xyz.map(p => p[1])), Math.max(...xyz.map(p => p[2]))];
-    const scale = Math.min(rect.width / Math.max(1, max[0]-min[0]+max[1]-min[1]), rect.height / Math.max(1, max[2]-min[2])) * .82;
-    for (let i = 0; i < xyz.length; i++) { const p=xyz[i], qx=rect.width/2+(p[0]-min[0]-(p[1]-min[1]))*scale, qy=rect.height-25-(p[2]-min[2])*scale+(p[0]-min[0]+p[1]-min[1])*scale*.22; const c=local.rgb[i]; ctx.fillStyle=`rgb(${c[0]},${c[1]},${c[2]})`; ctx.fillRect(qx,qy,2,2); }
+
+  async function acceptTowerPick(world) {
+    if ($('towerLoad').dataset.loading === 'yes') return;
+    $('towerLoad').dataset.loading = 'yes';
+    try {
+      $('towerLoad').className = 'notice';
+      $('towerLoad').textContent = '正在加载局部高密度点云…';
+      const timed = await timedJson('/api/desktop/tower-viewer/refine', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(world),
+      });
+      const result = timed.payload;
+      const tower = {...result.tower, display_name: `T${String(state.towerRows.length + 1).padStart(3, '0')}`};
+      state.towerRows.push(tower);
+      state.localPreview = result.local;
+      if (!state.towerLocal3d) state.towerLocal3d = new window.TreeLineTowerViewer3D($('tower3dCanvas'), {mode: $('displayMode').value, pointSize: 2});
+      const localRenderStart = performance.now();
+      state.towerLocal3d.setData(result.local);
+      state.towerLocal3d.setMode($('displayMode').value);
+      await state.towerLocal3d.firstVisible;
+      result.diagnostic_timings.transport_ms = timed.transport_ms;
+      result.diagnostic_timings.js_parse_ms = timed.js_parse_ms;
+      result.diagnostic_timings.local_3d_render_ms = performance.now() - localRenderStart;
+      console.info('TOWER_LOCAL_TIMINGS', result.diagnostic_timings);
+      renderTowerRows();
+      $('towerLoad').textContent = `已选择 ${tower.display_name}：3D 可见点 ${world.x.toFixed(2)}, ${world.y.toFixed(2)}, ${world.z.toFixed(2)}；真实局部点云已确认`;
+    } catch (error) {
+      $('towerLoad').className = 'notice bad';
+      $('towerLoad').textContent = userError(error, '杆塔局部点云加载失败，请缩放后重试。');
+    } finally { $('towerLoad').dataset.loading = 'no'; }
   }
+
   async function loadTowerViewer() {
-    if (!$('towerCanvas') || state.towerViewer) { drawTowerPicker(); drawLocal3d(); return; }
-    try { $('towerLoad').textContent = '正在加载俯视点云…'; const data = await api('/api/desktop/tower-viewer/overview'); state.towerViewer = data; $('towerLoad').textContent = `真实点云已就绪：显示 ${data.display_point_count.toLocaleString()} 个浏览样本点（源点 ${data.source_point_count.toLocaleString()} 个）`; drawTowerPicker(); drawLocal3d(); bindTowerCanvas(); }
-    catch (error) { $('towerLoad').className = 'notice bad'; $('towerLoad').textContent = userError(error, '点云显示加载失败，请重试。'); }
+    if (!$('towerCanvas')) return;
+    if (state.towerViewer && state.towerMain3d) { state.towerMain3d.setMarkers(state.towerRows); return; }
+    try {
+      $('towerLoad').textContent = '正在加载三维点云…';
+      const timed = await timedJson('/api/desktop/tower-viewer/overview');
+      const data = timed.payload;
+      state.towerViewer = data;
+      if (data.viewer_cache !== 'HIT') $('towerLoad').textContent = '正在生成显示缓存…';
+      const initStart = performance.now();
+      state.towerMain3d = new window.TreeLineTowerViewer3D($('towerCanvas'), {mode: 'height', pointSize: 2, onPick: acceptTowerPick});
+      const init = state.towerMain3d.setData(data);
+      state.towerMain3d.setMarkers(state.towerRows);
+      await state.towerMain3d.firstVisible;
+      const timings = Object.assign({}, data.diagnostic_timings, init, {
+        transport_ms: timed.transport_ms,
+        js_parse_ms: timed.js_parse_ms,
+        first_visible_ms: performance.now() - timed.request_start,
+        gpu_viewer_init_ms: performance.now() - initStart,
+      });
+      showTowerTimings(timings);
+      $('towerLoad').textContent = `真实 3D 点云已就绪：显示 ${data.display_point_count.toLocaleString()} 个浏览点（源点 ${data.source_point_count.toLocaleString()} 个，${data.viewer_cache === 'HIT' ? '显示缓存命中' : '显示缓存已建立'}）`;
+      bindTowerControls();
+    } catch (error) {
+      $('towerLoad').className = 'notice bad';
+      $('towerLoad').textContent = userError(error, '点云显示加载失败，请重试。');
+    }
   }
-  function bindTowerCanvas() {
-    const canvas = $('towerCanvas'); if (!canvas || canvas._bound) return; canvas._bound = true; let drag = null;
-    canvas.addEventListener('wheel', e => { e.preventDefault(); state.towerView.scale = Math.max(.25, Math.min(30, state.towerView.scale * (e.deltaY < 0 ? 1.2 : .83))); drawTowerPicker(); }, {passive:false});
-    canvas.addEventListener('pointerdown', e => { drag = [e.clientX, e.clientY]; canvas.setPointerCapture(e.pointerId); });
-    canvas.addEventListener('pointermove', e => { if (!drag) return; state.towerView.offsetX += e.clientX-drag[0]; state.towerView.offsetY += e.clientY-drag[1]; drag=[e.clientX,e.clientY]; drawTowerPicker(); });
-    canvas.addEventListener('pointerup', async e => { if (!drag) return; const moved = Math.hypot(e.clientX-drag[0], e.clientY-drag[1]); drag=null; if (moved > 4) return; const r=canvas.getBoundingClientRect(), b=state.towerViewer.source_bounds, base=canvas._towerBase, v=state.towerView; const x=(e.clientX-r.left-r.width/2-v.offsetX)/base+(b[0]+b[3])/2, y=(r.height/2-(e.clientY-r.top)-v.offsetY)/base+(b[1]+b[4])/2; try { $('towerLoad').textContent='正在加载局部高密度点云…'; const result=await jsonPost('/api/desktop/tower-viewer/refine',{x,y}); const tower={...result.tower,display_name:`T${String(state.towerRows.length+1).padStart(3,'0')}`}; state.towerRows.push(tower); state.localPreview=result.local; renderTowerRows(); $('towerLoad').textContent=`已选择 ${tower.display_name}：真实坐标已由局部点云确认`; drawTowerPicker(); drawLocal3d(); } catch(error) { $('towerLoad').className='notice bad'; $('towerLoad').textContent=userError(error,'杆塔局部点云加载失败，请缩放后重试。'); }});
-    $('displayMode').addEventListener('change', drawTowerPicker); $('pointSize').addEventListener('input', drawTowerPicker); $('resetTowerView').addEventListener('click', () => { state.towerView={scale:1,offsetX:0,offsetY:0}; drawTowerPicker(); }); window.addEventListener('resize', () => { drawTowerPicker(); drawLocal3d(); });
+
+  function bindTowerControls() {
+    if ($('displayMode').dataset.bound) return;
+    $('displayMode').dataset.bound = 'yes';
+    $('displayMode').addEventListener('change', event => {
+      state.towerMain3d?.setMode(event.target.value); state.towerLocal3d?.setMode(event.target.value);
+    });
+    $('pointSize').addEventListener('input', event => state.towerMain3d?.setPointSize(event.target.value));
+    $('perspectiveTowerView').addEventListener('click', () => state.towerMain3d?.perspectiveView());
+    $('topTowerView').addEventListener('click', () => state.towerMain3d?.topView());
+    $('sideTowerView').addEventListener('click', () => state.towerMain3d?.sideView());
+    $('resetTowerView').addEventListener('click', () => state.towerMain3d?.resetView());
   }
   function selectedSpanIds() {
     return [...document.querySelectorAll('#spanChecks input[data-span]:checked')].map(input => input.dataset.span);
@@ -430,7 +485,7 @@
   $('importGIS').addEventListener('click', importGIS);
   $('confirmUnit').addEventListener('click', confirmUnit);
   $('saveTowers').addEventListener('click', saveTowers);
-  $('removeTower').addEventListener('click', () => { if (state.towerRows.length) { state.towerRows.pop(); renderTowerRows(); drawTowerPicker(); } });
+  $('removeTower').addEventListener('click', () => { if (state.towerRows.length) { state.towerRows.pop(); renderTowerRows(); } });
   $('startFixture').addEventListener('click', () => startBatch('FIXTURE'));
   $('startReal').addEventListener('click', () => startBatch('REAL'));
   $('retryBatch').addEventListener('click', retryBatch);

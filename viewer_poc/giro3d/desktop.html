@@ -99,7 +99,7 @@
           <button id="removeTower" class="small danger">删除末个</button>
           <button id="saveTowers" class="small primary grow">确认顺序并生成档距</button>
         </div>
-        <div id="towerMessage" class="hint">请沿线路方向依次在真实点云俯视图点击杆塔。至少选择两根后才能生成档距。</div>
+        <div id="towerMessage" class="hint">请旋转真实三维点云看清杆塔，并沿线路方向依次单击。至少选择两根后才能生成档距。</div>
       </section>
 
       <section class="section contextual hidden" id="batchSection">
@@ -138,6 +138,8 @@
     <span class="footer-right">全离线运行</span>
   </footer>
 </div>
+<script src="/giro3d.bundle.js"></script>
+<script src="/tower-picker-3d.js"></script>
 <script src="/desktop.js"></script>
 </body>
 </html>

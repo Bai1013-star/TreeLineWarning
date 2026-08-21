@@ -553,11 +553,20 @@ class DesktopWorkflow:
             raise ValueError("原始点云不可读取，请重新选择 LAS/LAZ 文件。")
         self._log("tower_viewer_overview_requested", source=str(source))
         try:
-            payload = tower_overview(source)
+            payload = tower_overview(
+                source,
+                cache_dir=self._root / "viewer_cache" / "tower_overview",
+                source_identity=scan.source_identity.to_dict(),
+            )
         except Exception as exc:
             self._log("tower_viewer_overview_failed", error=f"{type(exc).__name__}: {exc}")
             raise ValueError("点云显示加载失败，请重试。") from exc
-        self._log("tower_viewer_overview_ready", points=payload["display_point_count"])
+        self._log(
+            "tower_viewer_overview_ready",
+            points=payload["display_point_count"],
+            cache=payload["viewer_cache"],
+            timings=payload["diagnostic_timings"],
+        )
         return payload
 
     def refine_tower_pick(self, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -568,14 +577,28 @@ class DesktopWorkflow:
             raise ValueError("POINT_CLOUD_NOT_IMPORTED")
         try:
             x, y = float(payload["x"]), float(payload["y"])
+            z = float(payload["z"]) if payload.get("z") is not None else None
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("杆塔点击坐标无效") from exc
         try:
-            result = refine_tower_pick(Path(scan.point_cloud_source), x, y)
+            result = refine_tower_pick(
+                Path(scan.point_cloud_source),
+                x,
+                y,
+                z=z,
+                cache_dir=self._root / "viewer_cache" / "tower_overview",
+                source_identity=scan.source_identity.to_dict(),
+            )
         except Exception as exc:
             self._log("tower_pick_refine_failed", error=f"{type(exc).__name__}: {exc}")
             raise ValueError("杆塔局部点云加载失败，请缩放后重试。") from exc
-        self._log("tower_pick_refined", x=result["tower"]["x"], y=result["tower"]["y"])
+        self._log(
+            "tower_pick_refined",
+            x=result["tower"]["x"],
+            y=result["tower"]["y"],
+            picked_source_xyz=result["tower"]["picked_source_xyz"],
+            timings=result["diagnostic_timings"],
+        )
         return result
 
     def _fixture_preparer(self, _root: Path, input_data: Any) -> SourceSharedPreparation:
