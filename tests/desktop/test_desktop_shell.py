@@ -83,6 +83,17 @@ def test_frontend_waits_for_required_new_project_bridge_contract():
     assert "已取消新建项目" in script
 
 
+def test_tower_picker_accepts_a_zero_distance_pointerup_as_a_click():
+    """A normal pointer click has zero travel and must request local evidence."""
+    script = (
+        Path(__file__).resolve().parents[2] / "viewer_poc" / "giro3d" / "desktop.js"
+    ).read_text(encoding="utf-8")
+
+    assert "if (!drag) return; const moved = Math.hypot" in script
+    assert "if (moved > 4) return;" in script
+    assert "if (!moved || moved > 4) return;" not in script
+
+
 def test_main_product_copy_is_chinese_and_tree_editor_is_state_gated():
     root = Path(__file__).resolve().parents[2] / "viewer_poc" / "giro3d"
     page = (root / "desktop.html").read_text(encoding="utf-8")
