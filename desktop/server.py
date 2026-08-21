@@ -14,6 +14,7 @@ from typing import Any
 
 from algorithms.folder_pipeline.html import step2_html, step3_html
 
+from desktop.pdal_runtime import dependency_health
 from desktop.project_management import create_empty_project, import_pointcloud
 from desktop.workflow import DesktopWorkflow, ensure_desktop_manifest
 
@@ -165,6 +166,9 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/desktop/batch":
             self._send_json(self.workflow.batch_projection())
+            return
+        if path == "/api/desktop/dependency-health":
+            self._send_json({"ok": True, "dependency": dependency_health()})
             return
         if path in {"/api/desktop/review", "/api/editor_data"}:
             self._send_json({"ok": True, **self.workflow.editor_data()})

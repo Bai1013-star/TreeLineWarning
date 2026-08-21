@@ -62,7 +62,7 @@
   const status = (message, kind='') => { $('appStatus').textContent=message; $('footerState').textContent='应用状态：'+message; $('footerState').className=kind ? 'status-'+kind : ''; };
   const spanName = span => span.display_name || `${span.start_tower_id} → ${span.end_tower_id}`;
   function renderProject(project){
-    state.project=project; $('projectName').textContent=project.project_name || '未命名';
+    state.project=project; state.towerRows=(project.tower_records||[]).map(t=>({display_name:t.display_name,x:t.x,y:t.y,z:t.z,height_m:t.height_m})); $('projectName').textContent=project.project_name || '未命名';
     $('lineCount').textContent=project.lines ?? 0; $('towerCount').textContent=project.towers ?? 0; $('spanCount').textContent=project.spans ?? 0; $('analysisState').textContent=project.analysis || '—';
     $('sourceIdentity').textContent=project.source_identity?.source_id || project.pointcloud_source || (project.pointcloud==='NOT_IMPORTED'?'未导入':'已记录'); $('resumeState').textContent=project.resume_state || 'NONE';
     $('riskThreshold').value=project.risk_policy?.warning_clearance_threshold_m ?? 0.5; $('riskPolicyNote').textContent=(project.risk_policy?.risk_policy_version || 'risk-policy-v1')+' · current threshold '+$('riskThreshold').value+' m';

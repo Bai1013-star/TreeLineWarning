@@ -9,6 +9,7 @@ import threading
 import urllib.request
 from pathlib import Path
 
+from desktop.pdal_runtime import dependency_health
 from desktop.project_management import (
     create_empty_project,
     describe_project,
@@ -278,11 +279,22 @@ def prediction_smoke(project_root: Path | None) -> int:
         backend.stop()
 
 
+def dependency_health_smoke() -> int:
+    """Print the local PDAL health report for release acceptance tooling."""
+
+    report = dependency_health()
+    print(json.dumps(report, ensure_ascii=False))
+    return 0 if report.get("found") and report.get("minimal_operation_pass") else 5
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="TreeLineWarning desktop viewer")
     parser.add_argument("--project-root", type=Path, default=None)
     parser.add_argument("--prediction-smoke", action="store_true")
+    parser.add_argument("--dependency-health", action="store_true")
     args = parser.parse_args(argv)
+    if args.dependency_health:
+        return dependency_health_smoke()
     if args.prediction_smoke:
         return prediction_smoke(args.project_root)
     return launch(args.project_root)
