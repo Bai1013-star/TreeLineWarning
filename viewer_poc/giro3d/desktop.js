@@ -7,6 +7,9 @@
     batch: null,
     uiState: 'NO_PROJECT',
     towerRows: [],
+    towerViewer: null,
+    localPreview: null,
+    towerView: {scale: 1, offsetX: 0, offsetY: 0},
     treeReviewReady: false,
     finalized: false,
     testMode: false,
@@ -124,15 +127,12 @@
   }
 
   function towerRow(row = {}, index) {
-    return `<div class="tower-grid" data-row="${index}"><label>杆塔 ${index + 1}<input data-field="display_name" value="${esc(row.display_name || `T${String(index + 1).padStart(3, '0')}`)}"></label><label>X<input data-field="x" type="number" step="any" value="${row.x ?? index * 20}"></label><label>Y<input data-field="y" type="number" step="any" value="${row.y ?? 0}"></label><label>Z<input data-field="z" type="number" step="any" value="${row.z ?? 0}"></label><label>高度<input data-field="height_m" type="number" min="0.1" step="any" value="${row.height_m ?? 12}"></label></div>`;
+    return `<div class="tower-picked" data-row="${index}"><b>${esc(row.display_name || `T${String(index + 1).padStart(3, '0')}`)}</b><span>X ${Number(row.x).toFixed(2)} · Y ${Number(row.y).toFixed(2)}</span><small>Z ${Number(row.z).toFixed(2)} · 高度 ${Number(row.height_m).toFixed(2)} m · 真实局部点云</small></div>`;
   }
   function renderTowerRows() {
     $('towerRows').innerHTML = state.towerRows.map((row, index) => towerRow(row, index)).join('');
   }
-  function ensureTowerRows() {
-    if (!state.towerRows.length) state.towerRows = [{}, {}];
-    renderTowerRows();
-  }
+  function ensureTowerRows() { renderTowerRows(); }
 
   function renderBatch(batch) {
     state.batch = batch;
@@ -159,10 +159,8 @@
   function stageCard(kicker, title, body, actions = '', extra = '') {
     return `<div class="stage-card"><div class="stage-kicker">${kicker}</div><h1>${title}</h1><p>${body}</p>${extra}${actions ? `<div class="stage-actions">${actions}</div>` : ''}</div>`;
   }
-  function towerPreview() {
-    const rows = state.towerRows.length ? state.towerRows : [{display_name: 'T001'}, {display_name: 'T002'}];
-    const route = rows.map((row, index) => `${index ? '<i class="tower-link"></i>' : ''}<span class="tower-node">${esc(row.display_name || `T${String(index + 1).padStart(3, '0')}`)}</span>`).join('');
-    return `<div class="tower-preview"><div class="preview-pane"><h4>杆塔坐标俯视（XY）</h4><div class="tower-route">${route}</div></div><div class="preview-pane"><h4>当前选取</h4><p>已录入 ${rows.length} 个杆塔。请在右侧按线路顺序检查名称、坐标和高度。</p><p class="muted">确认后自动生成相邻逻辑档距。</p></div></div>`;
+  function towerPicker() {
+    return `<div class="picker-card"><div class="picker-head"><div><h3>真实点云俯视图（XY）</h3><p>请沿线路方向依次点击实际杆塔。点击将使用真实局部点云推导坐标与高度。</p></div><div class="picker-controls"><select id="displayMode"><option value="rgb">RGB</option><option value="height">高度着色</option><option value="intensity">强度</option></select><label>点大小 <input id="pointSize" type="range" min="1" max="5" value="2"></label><button id="resetTowerView" class="small">重置视角</button></div></div><div id="towerLoad" class="notice">正在准备点云显示…</div><div class="picker-grid"><canvas id="towerCanvas" aria-label="真实点云俯视图"></canvas><canvas id="tower3dCanvas" aria-label="3D确认视图"></canvas></div><div class="picker-caption"><span>左：俯视 XY（滚轮缩放、拖拽平移、点击选杆）</span><span>右：3D 确认（最近一次点击的真实局部点云）</span></div></div>`;
   }
   function pipelineMarkup(mode) {
     const names = ['地面处理', '导线识别', '植被提取', '单木分割', '跨档整理', '净空计算', '风险分析'];
@@ -190,7 +188,8 @@
       $('stageHost').innerHTML = stageCard('步骤 2 / 6', '确认点云信息', '点云已导入。请核对点数、坐标参考系（CRS）和单位；确认单位后才能进入杆塔选取。', '<button class="primary" data-action="focus-unit">确认点云单位</button>', `<div class="source-summary"><div class="summary-tile"><span>点云文件</span><b>${esc(state.capability?.details?.format || 'LAS/LAZ')}</b></div><div class="summary-tile"><span>点数</span><b>${esc(state.capability?.details?.point_count || '待读取')}</b></div><div class="summary-tile"><span>坐标参考系（CRS）</span><b>${esc(coord.horizontal_crs || '未知')}</b></div></div>`);
     } else if (uiState === 'TOWER_SELECTION') {
       show('capabilitySection'); show('towerSection'); ensureTowerRows();
-      $('stageHost').innerHTML = stageCard('步骤 3 / 6', '杆塔选取', '点云信息已就绪。请按线路顺序录入杆塔位置，确认后将自动生成相邻逻辑档距。', '<button class="primary" data-action="focus-towers">开始录入杆塔</button>', towerPreview());
+      $('stageHost').innerHTML = `<div class="stage-card picker-stage"><div class="stage-kicker">步骤 3 / 6</div><h1>杆塔选取</h1>${towerPicker()}</div>`;
+      window.setTimeout(loadTowerViewer, 0);
     } else if (uiState === 'TOPOLOGY_READY') {
       show('towerSection'); show('batchSection');
       $('stageHost').innerHTML = stageCard('步骤 4 / 6', '准备开始分析', '线路拓扑已确认。请选择需要处理的档距，然后开始离线分析。', '<button class="primary" data-action="start-analysis">开始分析</button>', `<div class="topology-summary"><div class="summary-tile"><span>线路</span><b>${state.project.lines ?? 0}</b></div><div class="summary-tile"><span>杆塔</span><b>${state.project.towers ?? 0}</b></div><div class="summary-tile"><span>逻辑档距</span><b>${state.project.spans ?? 0}</b></div></div>`);
@@ -243,6 +242,7 @@
         await bridge.create_project(parent, name.trim());
       }
       state.viewerLoaded = false;
+      state.towerViewer = null; state.localPreview = null; state.towerView = {scale: 1, offsetX: 0, offsetY: 0};
       await loadWorkspace();
       setStatus('项目已创建，可以导入点云', 'good');
     } catch (error) {
@@ -256,6 +256,7 @@
       const result = await bridge.choose_existing_project();
       if (!result) { setStatus('已取消打开项目'); return; }
       state.viewerLoaded = false;
+      state.towerViewer = null; state.localPreview = null; state.towerView = {scale: 1, offsetX: 0, offsetY: 0};
       await loadWorkspace();
       setStatus('项目已打开', 'good');
     } catch (error) {
@@ -267,6 +268,7 @@
       const bridge = await getNativeBridge(['import_point_cloud']);
       if (!bridge) await jsonPost('/api/desktop/fixture-source');
       else if (!await bridge.import_point_cloud()) { setStatus('已取消导入点云'); return; }
+      state.towerViewer = null; state.localPreview = null; state.towerView = {scale: 1, offsetX: 0, offsetY: 0};
       await loadWorkspace();
       setStatus('点云已导入，请确认坐标系和单位', 'good');
     } catch (error) {
@@ -289,12 +291,53 @@
       setStatus('点云单位已确认，可以选取杆塔', 'good');
     } catch (error) { setStatus(userError(error, '单位确认失败，请重新选择。'), 'bad'); }
   }
+  function colorFor(point, mode) {
+    if (mode === 'height') { const z = point[2]; return `hsl(${220 - Math.max(0, Math.min(220, z % 220))},75%,58%)`; }
+    if (mode === 'intensity') { const c = Math.max(30, Math.min(245, point[3] / 256)); return `rgb(${c},${c},${c})`; }
+    return `rgb(${point[4]},${point[5]},${point[6]})`;
+  }
+  function drawTowerPicker() {
+    const canvas = $('towerCanvas'); if (!canvas || !state.towerViewer) return;
+    const ctx = canvas.getContext('2d'); const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.max(1, Math.floor(rect.width * devicePixelRatio)); canvas.height = Math.max(1, Math.floor(rect.height * devicePixelRatio));
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0); ctx.fillStyle = '#071015'; ctx.fillRect(0, 0, rect.width, rect.height);
+    const b = state.towerViewer.source_bounds, view = state.towerView, spanX = Math.max(1, b[3] - b[0]), spanY = Math.max(1, b[4] - b[1]);
+    const base = Math.min(rect.width / spanX, rect.height / spanY) * .92 * view.scale;
+    const project = p => [rect.width / 2 + (p[0] - (b[0] + b[3]) / 2) * base + view.offsetX, rect.height / 2 - (p[1] - (b[1] + b[4]) / 2) * base + view.offsetY];
+    canvas._towerProject = project; canvas._towerBase = base;
+    const size = Number($('pointSize')?.value || 2), mode = $('displayMode')?.value || 'rgb';
+    ctx.globalAlpha = .68;
+    for (let i = 0; i < state.towerViewer.xyz.length; i++) { const p = state.towerViewer.xyz[i], q = project(p); ctx.fillStyle = colorFor([p[0], p[1], p[2], state.towerViewer.intensity[i], ...state.towerViewer.rgb[i]], mode); ctx.fillRect(q[0], q[1], size, size); }
+    ctx.globalAlpha = 1;
+    state.towerRows.forEach((tower, i) => { const q = project([tower.x, tower.y]); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.fillStyle = '#ff9f1c'; ctx.beginPath(); ctx.arc(q[0], q[1], 9, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.fillStyle = '#fff'; ctx.font = 'bold 13px Microsoft YaHei'; ctx.fillText(tower.display_name || `T${String(i + 1).padStart(3, '0')}`, q[0] + 11, q[1] - 10); });
+  }
+  function drawLocal3d() {
+    const canvas = $('tower3dCanvas'); if (!canvas) return; const ctx = canvas.getContext('2d'), rect = canvas.getBoundingClientRect();
+    canvas.width = Math.max(1, Math.floor(rect.width * devicePixelRatio)); canvas.height = Math.max(1, Math.floor(rect.height * devicePixelRatio)); ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0); ctx.fillStyle = '#071015'; ctx.fillRect(0, 0, rect.width, rect.height);
+    const local = state.localPreview; if (!local) { ctx.fillStyle = '#a8bdc8'; ctx.font = '14px Microsoft YaHei'; ctx.fillText('点击左侧真实点云中的杆塔后显示局部 3D 确认', 20, 40); return; }
+    const xyz = local.xyz, min = [Math.min(...xyz.map(p => p[0])), Math.min(...xyz.map(p => p[1])), Math.min(...xyz.map(p => p[2]))], max = [Math.max(...xyz.map(p => p[0])), Math.max(...xyz.map(p => p[1])), Math.max(...xyz.map(p => p[2]))];
+    const scale = Math.min(rect.width / Math.max(1, max[0]-min[0]+max[1]-min[1]), rect.height / Math.max(1, max[2]-min[2])) * .82;
+    for (let i = 0; i < xyz.length; i++) { const p=xyz[i], qx=rect.width/2+(p[0]-min[0]-(p[1]-min[1]))*scale, qy=rect.height-25-(p[2]-min[2])*scale+(p[0]-min[0]+p[1]-min[1])*scale*.22; const c=local.rgb[i]; ctx.fillStyle=`rgb(${c[0]},${c[1]},${c[2]})`; ctx.fillRect(qx,qy,2,2); }
+  }
+  async function loadTowerViewer() {
+    if (!$('towerCanvas') || state.towerViewer) { drawTowerPicker(); drawLocal3d(); return; }
+    try { $('towerLoad').textContent = '正在加载俯视点云…'; const data = await api('/api/desktop/tower-viewer/overview'); state.towerViewer = data; $('towerLoad').textContent = `真实点云已就绪：显示 ${data.display_point_count.toLocaleString()} 个浏览样本点（源点 ${data.source_point_count.toLocaleString()} 个）`; drawTowerPicker(); drawLocal3d(); bindTowerCanvas(); }
+    catch (error) { $('towerLoad').className = 'notice bad'; $('towerLoad').textContent = userError(error, '点云显示加载失败，请重试。'); }
+  }
+  function bindTowerCanvas() {
+    const canvas = $('towerCanvas'); if (!canvas || canvas._bound) return; canvas._bound = true; let drag = null;
+    canvas.addEventListener('wheel', e => { e.preventDefault(); state.towerView.scale = Math.max(.25, Math.min(30, state.towerView.scale * (e.deltaY < 0 ? 1.2 : .83))); drawTowerPicker(); }, {passive:false});
+    canvas.addEventListener('pointerdown', e => { drag = [e.clientX, e.clientY]; canvas.setPointerCapture(e.pointerId); });
+    canvas.addEventListener('pointermove', e => { if (!drag) return; state.towerView.offsetX += e.clientX-drag[0]; state.towerView.offsetY += e.clientY-drag[1]; drag=[e.clientX,e.clientY]; drawTowerPicker(); });
+    canvas.addEventListener('pointerup', async e => { const moved = !drag || Math.hypot(e.clientX-drag[0], e.clientY-drag[1]); drag=null; if (!moved || moved > 4) return; const r=canvas.getBoundingClientRect(), b=state.towerViewer.source_bounds, base=canvas._towerBase, v=state.towerView; const x=(e.clientX-r.left-r.width/2-v.offsetX)/base+(b[0]+b[3])/2, y=(r.height/2-(e.clientY-r.top)-v.offsetY)/base+(b[1]+b[4])/2; try { $('towerLoad').textContent='正在加载局部高密度点云…'; const result=await jsonPost('/api/desktop/tower-viewer/refine',{x,y}); const tower={...result.tower,display_name:`T${String(state.towerRows.length+1).padStart(3,'0')}`}; state.towerRows.push(tower); state.localPreview=result.local; renderTowerRows(); $('towerLoad').textContent=`已选择 ${tower.display_name}：真实坐标已由局部点云确认`; drawTowerPicker(); drawLocal3d(); } catch(error) { $('towerLoad').className='notice bad'; $('towerLoad').textContent=userError(error,'杆塔局部点云加载失败，请缩放后重试。'); }});
+    $('displayMode').addEventListener('change', drawTowerPicker); $('pointSize').addEventListener('input', drawTowerPicker); $('resetTowerView').addEventListener('click', () => { state.towerView={scale:1,offsetX:0,offsetY:0}; drawTowerPicker(); }); window.addEventListener('resize', () => { drawTowerPicker(); drawLocal3d(); });
+  }
   function selectedSpanIds() {
     return [...document.querySelectorAll('#spanChecks input[data-span]:checked')].map(input => input.dataset.span);
   }
   async function saveTowers() {
     try {
-      const towers = [...document.querySelectorAll('#towerRows [data-row]')].map(block => Object.fromEntries([...block.querySelectorAll('[data-field]')].map(input => [input.dataset.field, input.value])));
+      const towers = state.towerRows;
       await jsonPost('/api/desktop/towers', {line_name: $('lineName').value, line_role: $('lineRole').value, parent_line_id: $('parentLine').value || null, towers});
       await loadWorkspace();
       setStatus('杆塔顺序已保存，逻辑档距已生成', 'good');
@@ -387,8 +430,7 @@
   $('importGIS').addEventListener('click', importGIS);
   $('confirmUnit').addEventListener('click', confirmUnit);
   $('saveTowers').addEventListener('click', saveTowers);
-  $('addTower').addEventListener('click', () => { state.towerRows.push({}); renderTowerRows(); renderWorkspace(); });
-  $('removeTower').addEventListener('click', () => { if (state.towerRows.length > 2) state.towerRows.pop(); renderTowerRows(); renderWorkspace(); });
+  $('removeTower').addEventListener('click', () => { if (state.towerRows.length) { state.towerRows.pop(); renderTowerRows(); drawTowerPicker(); } });
   $('startFixture').addEventListener('click', () => startBatch('FIXTURE'));
   $('startReal').addEventListener('click', () => startBatch('REAL'));
   $('retryBatch').addEventListener('click', retryBatch);

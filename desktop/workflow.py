@@ -43,6 +43,8 @@ from core.stage_b import BatchAnalysisResult, BatchAnalysisScheduler, BatchSpanS
 from desktop.project_management import (
     describe_project,
 )
+from desktop.tower_viewer import overview as tower_overview
+from desktop.tower_viewer import refine as refine_tower_pick
 
 WORKFLOW_SCHEMA = "treeline-desktop-workflow-v2"
 WORKFLOW_MANIFEST = "desktop-workflow.json"
@@ -462,7 +464,7 @@ class DesktopWorkflow:
                 raise ValueError("tower row must be an object")
             try:
                 position = tuple(float(raw[key]) for key in ("x", "y", "z"))
-                height = float(raw.get("height_m", 12.0))
+                height = float(raw["height_m"])
             except (KeyError, TypeError, ValueError) as exc:
                 raise ValueError("tower coordinates and height must be numeric") from exc
             if height <= 0.0:
@@ -537,6 +539,44 @@ class DesktopWorkflow:
             span_count=len(spans),
         )
         return self.project_projection()
+
+    def tower_viewer_overview(self) -> dict[str, Any]:
+        """Bounded viewer-only source sample for the REAL manual picker."""
+        project = self._stage_project()
+        scan = self._scan(project)
+        if scan is None or _unit_from_scan(scan) not in {
+            UnitStatus.METRE, UnitStatus.FOOT, UnitStatus.LOCAL_METRIC,
+        }:
+            raise ValueError("请先导入点云并确认单位。")
+        source = Path(scan.point_cloud_source)
+        if not source.is_file():
+            raise ValueError("原始点云不可读取，请重新选择 LAS/LAZ 文件。")
+        self._log("tower_viewer_overview_requested", source=str(source))
+        try:
+            payload = tower_overview(source)
+        except Exception as exc:
+            self._log("tower_viewer_overview_failed", error=f"{type(exc).__name__}: {exc}")
+            raise ValueError("点云显示加载失败，请重试。") from exc
+        self._log("tower_viewer_overview_ready", points=payload["display_point_count"])
+        return payload
+
+    def refine_tower_pick(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Refine an operator XY seed against a read-only local RAW crop."""
+        project = self._stage_project()
+        scan = self._scan(project)
+        if scan is None:
+            raise ValueError("POINT_CLOUD_NOT_IMPORTED")
+        try:
+            x, y = float(payload["x"]), float(payload["y"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("杆塔点击坐标无效") from exc
+        try:
+            result = refine_tower_pick(Path(scan.point_cloud_source), x, y)
+        except Exception as exc:
+            self._log("tower_pick_refine_failed", error=f"{type(exc).__name__}: {exc}")
+            raise ValueError("杆塔局部点云加载失败，请缩放后重试。") from exc
+        self._log("tower_pick_refined", x=result["tower"]["x"], y=result["tower"]["y"])
+        return result
 
     def _fixture_preparer(self, _root: Path, input_data: Any) -> SourceSharedPreparation:
         return SourceSharedPreparation(

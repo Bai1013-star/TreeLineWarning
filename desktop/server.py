@@ -209,6 +209,9 @@ class _DesktopHandler(BaseHTTPRequestHandler):
                 }
             )
             return
+        if path == "/api/desktop/tower-viewer/overview":
+            self._send_json({"ok": True, **self.workflow.tower_viewer_overview()})
+            return
         if path == "/api/desktop/batch":
             self._send_json(self.workflow.batch_projection())
             return
@@ -283,6 +286,9 @@ class _DesktopHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/desktop/towers":
                 self._send_json({"ok": True, "project": self.workflow.save_manual_towers(payload)})
+                return
+            if path == "/api/desktop/tower-viewer/refine":
+                self._send_json({"ok": True, **self.workflow.refine_tower_pick(payload)})
                 return
             if path == "/api/desktop/batch/start":
                 self._send_json(
