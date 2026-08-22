@@ -550,7 +550,7 @@ class FolderServer:
         origin = np.asarray(run.origin_xyz, dtype=np.float64)
         session = orch.build_editor()
         snap = session.snapshot()
-        trees_out = {"xyz": [], "color": [], "tree_id_by_index": []}
+        trees_out = {"xyz": [], "color": [], "tree_id_by_index": [], "labels": []}
 
         if orch.original_trees is not None:
             final_index, final_tree, final_xyz, _summary = session.build_final()
@@ -562,10 +562,12 @@ class FolderServer:
             xyz = final_xyz[rows] + origin
             tids = np.asarray(final_tree, dtype=np.int32)[rows]
             colors = [_stable_color(int(tid)) for tid in tids]
+            labels = _tree_label_payload(snap["trees"], final_tree, final_xyz, origin)
             trees_out = {
                 "xyz": xyz.tolist(),
                 "color": colors,
                 "tree_id_by_index": tids.tolist(),
+                "labels": labels,
             }
 
         return {
@@ -727,6 +729,45 @@ def _tree_color(tree: dict[str, Any]) -> str:
     source_ids = tree.get("source_tree_ids") or [tree["tree_id"]]
     colour = _stable_color(int(min(source_ids)))
     return colour
+
+
+def _tree_label_payload(
+    trees: list[dict[str, Any]],
+    final_tree: np.ndarray,
+    final_xyz: np.ndarray,
+    origin: np.ndarray,
+) -> list[dict[str, Any]]:
+    """Build UI-only tree labels from the current editor projection.
+
+    The label id comes from the same current snapshot that builds the table.
+    Anchors use the persisted apex when it is valid, otherwise an upper
+    centroid of the current edited members.  Neither path changes science
+    membership or coordinates.
+    """
+
+    labels: list[dict[str, Any]] = []
+    current_tree = np.asarray(final_tree, dtype=np.int32)
+    current_xyz = np.asarray(final_xyz, dtype=np.float64)
+    scene_origin = np.asarray(origin, dtype=np.float64)
+    for tree in trees:
+        tree_id = int(tree["tree_id"])
+        anchor = np.asarray(tree.get("apex_xy_local_m"), dtype=np.float64)
+        if anchor.shape != (3,) or not np.all(np.isfinite(anchor)):
+            members = current_xyz[current_tree == tree_id]
+            if len(members):
+                z = members[:, 2]
+                top_band = max(float(np.ptp(z)) * 0.15, np.finfo(np.float64).eps * 100)
+                anchor = np.mean(members[z >= float(np.max(z)) - top_band], axis=0)
+            else:
+                anchor = np.zeros(3, dtype=np.float64)
+        labels.append(
+            {
+                "tree_id": tree_id,
+                "text": str(tree_id),
+                "xyz": (anchor + scene_origin).tolist(),
+            }
+        )
+    return labels
 
 
 def _stable_color(tree_id: int) -> str:

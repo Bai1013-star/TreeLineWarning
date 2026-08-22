@@ -12,7 +12,7 @@ These tests pin the contract on BOTH sides so the class of bug cannot come
 back without a test failing:
 
 * backend: ``/api/editor_data`` schema is unambiguous — ``trees`` is the tree
-  list, ``trees3d`` is the 3D cloud ``{xyz,color,tree_id_by_index}``, and every
+  list, ``trees3d`` is the 3D cloud ``{xyz,color,tree_id_by_index,labels}``, and every
   display layer always carries an ``xyz`` array;
 * frontend: the Step-2 inline JS reads ``data.trees3d`` and guards every
   display layer with ``Array.isArray(x.xyz)`` so an empty/missing layer renders
@@ -68,11 +68,17 @@ def test_editor_data_schema_is_unambiguous(tmp_path):
         assert "tree_id" in tree
         assert "xyz" not in tree, "trees (the list) must not be the 3D point cloud"
 
-    # `trees3d` is the 3D point cloud: xyz/color/tree_id_by_index aligned.
+    # `trees3d` is the 3D point cloud: xyz/color/tree_id_by_index aligned, with
+    # labels projected from the same current table rows.
     t3d = payload["trees3d"]
-    assert set(t3d) == {"xyz", "color", "tree_id_by_index"}
+    assert set(t3d) == {"xyz", "color", "tree_id_by_index", "labels"}
     assert len(t3d["xyz"]) == len(t3d["color"]) == len(t3d["tree_id_by_index"]) > 0
     assert isinstance(t3d["xyz"][0], (list, tuple))
+    table_ids = {int(tree["tree_id"]) for tree in payload["trees"]}
+    label_ids = {int(label["tree_id"]) for label in t3d["labels"]}
+    assert label_ids == table_ids
+    assert {label["text"] for label in t3d["labels"]} == {str(tree_id) for tree_id in table_ids}
+    assert all(len(label["xyz"]) == 3 for label in t3d["labels"])
 
     # Every optional display layer is a dict that ALWAYS carries `xyz` so the
     # frontend can rely on the shape (empty is expressed as `[]`, never missing).
@@ -81,6 +87,31 @@ def test_editor_data_schema_is_unambiguous(tmp_path):
         assert "xyz" in payload[key], f"{key} must always carry an xyz array"
         assert isinstance(payload[key]["xyz"], list)
 
+
+def test_tree_labels_refresh_after_delete_merge_and_undo(tmp_path):
+    """Labels always follow the current editor ids, including generated merge ids."""
+    _workspace_root, workspace = _build_completed_workspace(tmp_path)
+    server = FolderServer(workspace)
+    orch = server.orchestrator
+
+    def ids() -> tuple[set[int], set[int]]:
+        payload = server._build_editor_display()
+        return (
+            {int(tree["tree_id"]) for tree in payload["trees"]},
+            {int(label["tree_id"]) for label in payload["trees3d"]["labels"]},
+        )
+
+    assert ids() == ({0, 1}, {0, 1})
+    orch.editor_select([0])
+    orch.editor_delete()
+    assert ids() == ({1}, {1})
+    orch.editor_undo()
+    assert ids() == ({0, 1}, {0, 1})
+    orch.editor_select([0, 1])
+    orch.editor_merge()
+    assert ids() == ({2}, {2})
+    orch.editor_undo()
+    assert ids() == ({0, 1}, {0, 1})
 
 def test_step3_final_display_schema_matches_frontend_contract(tmp_path):
     """Step-3 display layers use the same dict-with-xyz contract as Step 2."""
@@ -112,6 +143,20 @@ def test_step2_js_reads_trees3d_and_guards_every_display_layer():
     # Every optional display layer must be guarded with Array.isArray so a
     # missing/empty `.xyz` degrades to an empty layer instead of a TypeError.
     assert js.count("Array.isArray(") >= 5  # background / wire / wires3d / tower / trees3d
+
+
+def test_step2_js_links_viewer_and_table_selection_and_label_toggle():
+    """The real Step-2 page carries both directions of the selection contract."""
+    js = _extract_step2_js()
+    assert "activeTreeId" in js
+    assert "selectTree(Number(tid),true,true)" in js
+    assert "scrollIntoView({block:\"nearest\",inline:\"nearest\"})" in js
+    assert 'id="toggle-labels"' in step2_html()
+    assert "showLabels=Boolean(e.target.checked)" in js
+    assert 'id="tree-label-overlay"' in step2_html()
+    assert "renderHtmlLabels" in js
+    assert "className=\"tree-label\"" in js
+    assert "button.classList.add(\"selected\")" in js
 
 
 def test_step3_js_guards_display_dict_layers():

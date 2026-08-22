@@ -33,9 +33,12 @@ tr.sel td{background:#fff3bf}
 .kpis{display:flex;gap:10px;flex-wrap:wrap}
 .kpi{background:#fff;border:1px solid #dde1e6;border-radius:6px;padding:10px 14px;min-width:120px}
 .kpi .v{font-size:20px;font-weight:700}
-.kpi .k{font-size:12px;color:#5f6b7a}
-a{color:#1f6feb}
-"""
+  .kpi .k{font-size:12px;color:#5f6b7a}
+  a{color:#1f6feb}
+  #tree-label-overlay{position:absolute;inset:0;pointer-events:none;z-index:10}
+  .tree-label{position:absolute;transform:translate(-50%,-100%);pointer-events:auto;border:1px solid #64748b;border-radius:4px;background:rgba(255,255,255,.92);color:#172033;padding:2px 5px;font:700 12px/1.1 "Microsoft YaHei","Segoe UI",sans-serif;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.28)}
+  .tree-label.selected{border:2px solid #d97706;background:#fff3a3;color:#111827;font-size:15px;padding:3px 7px;box-shadow:0 1px 5px rgba(146,64,14,.48)}
+  """
 
 
 def _page_shell(title: str, step: str, body: str, script: str) -> str:
@@ -245,7 +248,10 @@ def step2_html() -> str:
     body = """
 <main>
   <div class="panel plot-panel">
-    <div id="plot3d" style="height:100%"></div>
+    <div style="position:relative;height:100%">
+      <div id="plot3d" style="height:100%"></div>
+      <div id="tree-label-overlay" aria-label="树编号标签"></div>
+    </div>
   </div>
   <div class="side">
     <div class="panel">
@@ -266,6 +272,10 @@ def step2_html() -> str:
         <button id="btn-trim-confirm" class="red">确认剔除</button>
         <button id="btn-trim-cancel" class="gray">取消</button>
       </div>
+      <label style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:12px">
+        <input id="toggle-labels" type="checkbox" checked>
+        显示树编号
+      </label>
       <div style="margin-top:10px">
         <button id="btn-confirm" class="green">确认单木并继续</button>
       </div>
@@ -273,9 +283,9 @@ def step2_html() -> str:
     </div>
     <div class="panel">
       <h3>单木列表 <span id="treecount" style="font-size:12px;color:#5f6b7a"></span></h3>
-      <div style="max-height:40vh;overflow:auto">
+      <div id="treelist" style="max-height:40vh;overflow:auto">
         <table id="treetable">
-          <thead><tr><th>ID</th><th>点数</th><th>高度(m)</th><th>合并</th></tr></thead>
+          <thead><tr><th>ID</th><th>点数</th><th>高度(m)</th><th>编辑状态</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -286,6 +296,11 @@ def step2_html() -> str:
     script = """
 let treeMap = new Map();
 let selected = new Set();
+let activeTreeId = null;
+let currentSnapshot = null;
+let editorDisplay = null;
+let plotClickBound = false;
+let showLabels = true;
 let refreshTimer = null;
 let trimMode = "IDLE";
 let activePreview = null;
@@ -306,24 +321,184 @@ async function post(path, payload){
   if(!r.ok){const t=await r.json().catch(()=>({}));throw new Error(t.error?.message||t.error||("请求失败 "+path));}
   return r.json();
 }
-function renderTrees(snap){
+function scrollToTreeRow(treeId){
+  const row=document.querySelector(`#treetable tr[data-tid="${treeId}"]`);
+  if(row) row.scrollIntoView({block:"nearest",inline:"nearest"});
+}
+function renderTrees(snap, scrollToActive=false){
+  currentSnapshot = snap;
   treeMap = new Map();
   const tbody=document.querySelector("#treetable tbody");
   tbody.innerHTML="";
-  snap.trees.forEach(t=>{
-    treeMap.set(t.tree_id, t);
+  const currentIds = new Set((snap.trees||[]).map(t=>Number(t.tree_id)));
+  selected = new Set([...selected].filter(id=>currentIds.has(Number(id))));
+  if(activeTreeId!=null && !currentIds.has(Number(activeTreeId))) activeTreeId=null;
+  (snap.trees||[]).forEach(t=>{
+    treeMap.set(Number(t.tree_id), t);
     const tr=document.createElement("tr");
     tr.dataset.tid=t.tree_id;
-    if(selected.has(t.tree_id)) tr.className="sel";
+    if(selected.has(Number(t.tree_id)) || activeTreeId===Number(t.tree_id)) tr.className="sel";
     tr.innerHTML=`<td>${t.tree_id}</td><td>${t.point_count}</td><td>${
-      t.apex_height_m!=null?t.apex_height_m.toFixed(1):"—"}</td><td>${t.merged?"合并":""}</td>`;
-    tr.onclick=()=>{
-      if(selected.has(t.tree_id)) selected.delete(t.tree_id); else selected.add(t.tree_id);
-      renderTrees(snap);
-    };
+      t.apex_height_m!=null?t.apex_height_m.toFixed(1):"—"}</td><td>${t.merged?"合并":"—"}</td>`;
+    tr.onclick=()=>selectTree(t.tree_id, true, true);
     tbody.appendChild(tr);
   });
   document.getElementById("treecount").textContent = `共 ${snap.current_tree_count} 棵`;
+  if(scrollToActive && activeTreeId!=null) setTimeout(()=>scrollToTreeRow(activeTreeId),0);
+}
+function treeIdFromPlotPoint(pt){
+  const raw=pt.customdata!=null?pt.customdata:pt.data?.customdata?.[pt.pointNumber];
+  const tid=Number(raw);
+  return Number.isFinite(tid)?tid:null;
+}
+function selectTree(treeId, toggle=true, scroll=false){
+  const tid=Number(treeId);
+  if(!treeMap.has(tid)) return;
+  activeTreeId=tid;
+  if(toggle){
+    if(selected.has(tid)) selected.delete(tid); else selected.add(tid);
+  }else{
+    selected=new Set([tid]);
+  }
+  renderTrees(currentSnapshot, scroll);
+  renderEditorPlot();
+}
+function selectionHighlightIds(){
+  const ids=new Set(selected);
+  if(activeTreeId!=null) ids.add(Number(activeTreeId));
+  return ids;
+}
+function selectedPointRows(treeIds){
+  const ids=selectionHighlightIds();
+  if(!editorDisplay || !Array.isArray(editorDisplay.trees3d?.tree_id_by_index)) return [];
+  return editorDisplay.trees3d.tree_id_by_index.reduce((rows,tid,index)=>{
+    if(ids.has(Number(tid))) rows.push(index);
+    return rows;
+  },[]);
+}
+function plotLayout(){
+  const gd=document.getElementById("plot3d");
+  const previous=gd.layout?.scene?.camera || gd._fullLayout?.scene?.camera;
+  const layout={title:{text:"单木审核（不同颜色=不同树）",font:{size:14}},
+    scene:{aspectmode:"data"},margin:{l:0,r:0,t:36,b:0}};
+  if(previous) layout.scene.camera=previous;
+  return layout;
+}
+function renderHtmlLabels(){
+  const overlay=document.getElementById("tree-label-overlay");
+  if(!overlay) return;
+  overlay.innerHTML="";
+  const labels=editorDisplay?.trees3d?.labels;
+  if(!Array.isArray(labels) || (!showLabels && !selectionHighlightIds().size)) return;
+  const visible=showLabels?labels:labels.filter(label=>selectionHighlightIds().has(Number(label.tree_id)));
+  let matrix;
+  try{matrix=currentViewProjection();}catch(e){return;}
+  const host=document.getElementById("plot3d"), rect=host.getBoundingClientRect();
+  if(!rect.width || !rect.height) return;
+  visible.forEach(label=>{
+    const point=label.xyz, clip=[
+      matrix[0][0]*point[0]+matrix[0][1]*point[1]+matrix[0][2]*point[2]+matrix[0][3],
+      matrix[1][0]*point[0]+matrix[1][1]*point[1]+matrix[1][2]*point[2]+matrix[1][3],
+      matrix[2][0]*point[0]+matrix[2][1]*point[1]+matrix[2][2]*point[2]+matrix[2][3],
+      matrix[3][0]*point[0]+matrix[3][1]*point[1]+matrix[3][2]*point[2]+matrix[3][3]
+    ];
+    if(!clip.every(Number.isFinite) || clip[3]<=0) return;
+    const ndcX=clip[0]/clip[3], ndcY=clip[1]/clip[3];
+    if(!Number.isFinite(ndcX)||!Number.isFinite(ndcY)||ndcX<-1.2||ndcX>1.2||ndcY<-1.2||ndcY>1.2) return;
+    const button=document.createElement("button");
+    button.type="button";button.className="tree-label";
+    if(selectionHighlightIds().has(Number(label.tree_id))) button.classList.add("selected");
+    button.textContent=String(label.tree_id);
+    button.title=`选择树 ${label.tree_id}`;
+    button.setAttribute("aria-label",`选择树 ${label.tree_id}`);
+    button.style.left=`${(ndcX+1)*50}%`;button.style.top=`${(1-ndcY)*50}%`;
+    button.onclick=event=>{event.stopPropagation();selectTree(Number(label.tree_id),true,true);};
+    overlay.appendChild(button);
+  });
+}
+let labelRenderFrame=null;
+function scheduleHtmlLabels(){
+  if(labelRenderFrame!=null) return;
+  const paint=()=>{labelRenderFrame=null;renderHtmlLabels();};
+  labelRenderFrame=typeof requestAnimationFrame==="function"?requestAnimationFrame(paint):setTimeout(paint,0);
+}
+function renderEditorPlot(){
+  if(!editorDisplay) return;
+  const data=editorDisplay, bg=data.background, wire=data.wire, tower=data.tower, wires3d=data.wires3d;
+  const trees3d=data.trees3d||{};
+  const traces=[];
+  if(bg && Array.isArray(bg.xyz) && bg.xyz.length){
+    const c=(Array.isArray(bg.rgb)?bg.rgb:[]).map(v=>`rgb(${v[0]},${v[1]},${v[2]})`);
+    traces.push({x:bg.xyz.map(p=>p[0]),y:bg.xyz.map(p=>p[1]),z:bg.xyz.map(p=>p[2]),
+      type:"scatter3d",mode:"markers",name:"背景",marker:{size:1,color:c,opacity:0.4}});
+  }
+  if(wire && Array.isArray(wire.xyz) && wire.xyz.length){
+    traces.push({x:wire.xyz.map(p=>p[0]),y:wire.xyz.map(p=>p[1]),z:wire.xyz.map(p=>p[2]),
+      type:"scatter3d",mode:"markers",name:"导线",marker:{size:2,color:"#ff1744",opacity:1}});
+  }
+  if(wires3d && Array.isArray(wires3d.xyz) && wires3d.xyz.length){
+    traces.push({x:wires3d.xyz.map(p=>p[0]),y:wires3d.xyz.map(p=>p[1]),z:wires3d.xyz.map(p=>p[2]),
+      type:"scatter3d",mode:"lines",name:"导线曲线",line:{color:"#ff1744",width:3}});
+  }
+  if(tower && Array.isArray(tower.xyz) && tower.xyz.length){
+    traces.push({x:tower.xyz.map(p=>p[0]),y:tower.xyz.map(p=>p[1]),z:tower.xyz.map(p=>p[2]),
+      type:"scatter3d",mode:"markers+text",name:"杆塔",text:tower.labels||[],
+      marker:{size:7,color:"#ff9800",symbol:"diamond"}});
+  }
+  if(Array.isArray(trees3d.xyz) && trees3d.xyz.length){
+    const highlightRows=selectedPointRows();
+    const treeTrace={x:trees3d.xyz.map(p=>p[0]),y:trees3d.xyz.map(p=>p[1]),z:trees3d.xyz.map(p=>p[2]),
+      type:"scatter3d",mode:"markers",name:"单木",customdata:trees3d.tree_id_by_index,
+      marker:{size:1.6,color:trees3d.color,opacity:0.95}};
+    if(highlightRows.length){
+      treeTrace.selectedpoints=highlightRows;
+      treeTrace.selected={marker:{size:3.8,opacity:1}};
+      treeTrace.unselected={marker:{opacity:0.18}};
+    }
+    traces.push(treeTrace);
+  }
+  if(activePreview && Array.isArray(activePreview.preview_xyz)){
+    const p=activePreview.preview_xyz;
+    traces.push({x:p.map(v=>v[0]),y:p.map(v=>v[1]),z:p.map(v=>v[2]),type:"scatter3d",mode:"markers",
+      name:"待剔除",marker:{size:3.2,color:"#ff0000",opacity:1}});
+  }
+  if(!traces.length){
+    document.getElementById("plot3d").textContent="暂无可审核的 Tree display sample；完成 Batch 后刷新。";
+    return;
+  }
+  const gd=document.getElementById("plot3d");
+  let renderPromise=null;
+  if(plotClickBound && typeof Plotly.react==="function"){
+    renderPromise=Plotly.react(gd,traces,plotLayout(),{responsive:true,displaylogo:false});
+  }else{
+    renderPromise=Plotly.newPlot(gd,traces,plotLayout(),{responsive:true,displaylogo:false});
+    if(!plotClickBound) bindPlotClicks();
+  }
+  if(renderPromise&&typeof renderPromise.then==="function") renderPromise.then(scheduleHtmlLabels);
+  else scheduleHtmlLabels();
+}
+function bindPlotClicks(){
+  const gd=document.getElementById("plot3d");
+  if(!gd || plotClickBound || typeof gd.on!=="function") return;
+  plotClickBound=true;
+  gd.on("plotly_click", data=>{
+    if(!data.points||!data.points.length) return;
+    const pt=data.points[0], name=pt.data?.name||pt.fullData?.name||"";
+    const tid=name==="树编号"||name==="选中树编号"?treeIdFromPlotPoint(pt):
+      (name==="单木"?Number(editorDisplay?.trees3d?.tree_id_by_index?.[pt.pointNumber]):null);
+    if(tid==null || !Number.isFinite(Number(tid))) return;
+    if(name==="单木" && trimMode==="COMPONENT"){
+      if(selected.size!==1 || !selected.has(Number(tid))){
+        document.getElementById("editmsg").textContent="请点击当前选中单木中的误分点团。";
+        return;
+      }
+      previewComponent(Number(tid),[Number(pt.x),Number(pt.y),Number(pt.z)]);
+      return;
+    }
+    selectTree(Number(tid),true,true);
+  });
+  gd.on("plotly_relayout",scheduleHtmlLabels);
+  gd.on("plotly_relayouting",scheduleHtmlLabels);
 }
 async function refreshTrees(){
   try{
@@ -342,70 +517,12 @@ async function loadEditorData(){
   // right-panel tree LIST.  Guard every layer independently so a missing or
   // empty layer renders as an empty trace instead of throwing `.length` of
   // undefined and blanking the whole viewer.
-  const bg=data.background, wire=data.wire, tower=data.tower, wires3d=data.wires3d;
-  const trees3d=data.trees3d||{};
-  const traces=[];
-  if(bg && Array.isArray(bg.xyz) && bg.xyz.length){
-    const c=bg.rgb.map(v=>`rgb(${v[0]},${v[1]},${v[2]})`);
-    traces.push({x:bg.xyz.map(p=>p[0]),y:bg.xyz.map(p=>p[1]),z:bg.xyz.map(p=>p[2]),
-      type:"scatter3d",mode:"markers",name:"背景",
-      marker:{size:1,color:c,opacity:0.4}});
-  }
-  if(wire && Array.isArray(wire.xyz) && wire.xyz.length){
-    traces.push({x:wire.xyz.map(p=>p[0]),y:wire.xyz.map(p=>p[1]),z:wire.xyz.map(p=>p[2]),
-      type:"scatter3d",mode:"markers",name:"导线",
-      marker:{size:2,color:"#ff1744",opacity:1}});
-  }
-  if(wires3d && Array.isArray(wires3d.xyz) && wires3d.xyz.length){
-    traces.push({x:wires3d.xyz.map(p=>p[0]),y:wires3d.xyz.map(p=>p[1]),z:wires3d.xyz.map(p=>p[2]),
-      type:"scatter3d",mode:"lines",name:"导线曲线",
-      line:{color:"#ff1744",width:3}});
-  }
-  if(tower && Array.isArray(tower.xyz) && tower.xyz.length){
-    traces.push({x:tower.xyz.map(p=>p[0]),y:tower.xyz.map(p=>p[1]),z:tower.xyz.map(p=>p[2]),
-      type:"scatter3d",mode:"markers+text",name:"杆塔",
-      text:tower.labels||[],
-      marker:{size:7,color:"#ff9800",symbol:"diamond"}});
-  }
-  if(Array.isArray(trees3d.xyz) && trees3d.xyz.length){
-    traces.push({x:trees3d.xyz.map(p=>p[0]),y:trees3d.xyz.map(p=>p[1]),z:trees3d.xyz.map(p=>p[2]),
-      type:"scatter3d",mode:"markers",name:"单木",
-      marker:{size:1.6,color:trees3d.color,opacity:0.95}});
-  }
-  if(activePreview && Array.isArray(activePreview.preview_xyz)){
-    const p=activePreview.preview_xyz;
-    traces.push({x:p.map(v=>v[0]),y:p.map(v=>v[1]),z:p.map(v=>v[2]),
-      type:"scatter3d",mode:"markers",name:"待剔除",
-      marker:{size:3.2,color:"#ff0000",opacity:1}});
-  }
-  if(!traces.length){
-    document.getElementById("plot3d").textContent="暂无可审核的 Tree display sample；完成 Batch 后刷新。";
-    return;
-  }
-  Plotly.newPlot("plot3d", traces,
-    {title:{text:"单木审核（不同颜色=不同树）",font:{size:14}},
-     scene:{aspectmode:"data"}, margin:{l:0,r:0,t:36,b:0}},
-    {responsive:true, displaylogo:false});
-  const gd=document.getElementById("plot3d");
-  gd.on("plotly_click", data=>{
-    if(!data.points||!data.points.length) return;
-    const pt=data.points[0];
-    if((pt.data?.name||pt.fullData?.name)==="单木"){
-      const tid=trees3d.tree_id_by_index[pt.pointNumber];
-      if(tid!=null){
-        if(trimMode==="COMPONENT"){
-          if(selected.size!==1 || !selected.has(tid)){
-            document.getElementById("editmsg").textContent="请点击当前选中单木中的误分点团。";
-            return;
-          }
-          previewComponent(tid,[Number(pt.x),Number(pt.y),Number(pt.z)]);
-          return;
-        }
-        if(selected.has(tid)) selected.delete(tid); else selected.add(tid);
-        refreshTrees();
-      }
-    }
-  });
+  editorDisplay=data;
+  const currentIds=new Set((data.trees||[]).map(t=>Number(t.tree_id)));
+  selected=new Set([...selected].filter(id=>currentIds.has(Number(id))));
+  if(activeTreeId!=null && !currentIds.has(Number(activeTreeId))) activeTreeId=null;
+  renderTrees({trees:data.trees||[],current_tree_count:(data.trees||[]).length}, false);
+  renderEditorPlot();
 }
 function requireOneTree(){
   if(selected.size!==1){document.getElementById("editmsg").textContent="请先选择一棵单木。";return null;}
@@ -440,7 +557,20 @@ function currentViewProjection(){
   const cp=gp?.cameraParams;
   if(!cp?.view||!cp?.projection||!cp?.model) throw new Error("当前 3D 相机状态不可用，请稍后重试。");
   const columnMajor=matrixMultiply(cp.projection,matrixMultiply(cp.view,cp.model));
-  return Array.from({length:4},(_,r)=>Array.from({length:4},(_,c)=>columnMajor[c*4+r]));
+  const raw=Array.from({length:4},(_,r)=>Array.from({length:4},(_,c)=>columnMajor[c*4+r]));
+  const scene=document.getElementById("plot3d")._fullLayout.scene;
+  const internal=scene?._scene;
+  const scale=internal?.dataScale;
+  const ranges=[scene?.xaxis?.range,scene?.yaxis?.range,scene?.zaxis?.range];
+  if(!scale || scale.length!==3 || ranges.some(range=>!range||range.length!==2)) return raw;
+  const normalize=[
+    [Number(scale[0]),0,0,0],
+    [0,Number(scale[1]),0,0],
+    [0,0,Number(scale[2]),0],
+    [0,0,0,1]
+  ];
+  return Array.from({length:4},(_,r)=>Array.from({length:4},(_,c)=>
+    raw[r].reduce((sum,value,k)=>sum+value*normalize[k][c],0)));
 }
 function removeLassoOverlay(){if(lassoOverlay){lassoOverlay.remove();lassoOverlay=null;}}
 function beginLasso(){
@@ -472,6 +602,8 @@ async function cancelTrim(){
   activePreview=null;removeLassoOverlay();document.getElementById("trim-preview").style.display="none";setTrimMode("IDLE","已取消，单木点成员未改变。");await loadEditorData();
 }
 document.getElementById("btn-trim-cancel").onclick=cancelTrim;
+document.getElementById("toggle-labels").onchange=e=>{showLabels=Boolean(e.target.checked);renderEditorPlot();};
+window.addEventListener?.("resize",scheduleHtmlLabels);
 document.addEventListener?.("keydown",e=>{if(e.key==="Escape"&&(trimMode!=="IDLE"||activePreview)){e.preventDefault();cancelTrim();}});
 document.getElementById("btn-delete").onclick=async()=>{
   try{await post("/api/select",{tree_ids:[...selected]});const s=await post("/api/delete",{});selected.clear();renderTrees(s);
