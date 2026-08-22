@@ -110,6 +110,8 @@ def _span_geometry(
     return {
         "length_m": length,
         "direction_xy": list(axis),
+        "core_half_width_m": config.span_half_width_m,
+        "longitudinal_halo_m": config.span_halo_m,
         "core_bounds_min_xyz": list(core_min),
         "core_bounds_max_xyz": list(core_max),
         "halo_bounds_min_xyz": list(halo_min),

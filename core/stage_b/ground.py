@@ -8,14 +8,17 @@ Span cannot reach the canonical executor with a null ground reference.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from core.config.fast_baseline import canonical_digest
+
+if TYPE_CHECKING:
+    from algorithms.spans.project_adapter import SpanAnalysisInput
 
 GROUND_PREPARATION_SCHEMA = "treeline-stage-b-ground-preparation-v1"
 GROUND_BACKEND = "algorithms.vegetation.fast_research.run_fast_ground_hag"
@@ -35,6 +38,7 @@ class GroundPreparation:
     source_identity: Mapping[str, Any]
     cache_hit: bool = False
     source_full_pass_count: int = 0
+    region_digest: str | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -54,6 +58,10 @@ class GroundPreparation:
             raise ValueError("invalid GroundPreparation telemetry")
         if self.source_full_pass_count < 0:
             raise ValueError("source_full_pass_count must be non-negative")
+        if self.region_digest is not None and (
+            type(self.region_digest) is not str or len(self.region_digest) != 64
+        ):
+            raise ValueError("region_digest must be a SHA-256 digest or None")
         object.__setattr__(self, "source_identity", dict(self.source_identity))
 
     def to_dict(self) -> dict[str, Any]:
@@ -68,6 +76,7 @@ class GroundPreparation:
             "backend": GROUND_BACKEND,
             "cache_hit": self.cache_hit,
             "source_full_pass_count": self.source_full_pass_count,
+            "region_digest": self.region_digest,
         }
 
 
@@ -128,6 +137,7 @@ def _validate_existing(
             dict(payload.get("source_identity") or {}),
             cache_hit=True,
             source_full_pass_count=0,
+            region_digest=payload.get("region_digest"),
         )
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         return None
@@ -139,6 +149,7 @@ def ensure_ground_preparation(
     *,
     configuration: Mapping[str, Any] | None = None,
     producer: Callable[[Path, Path], Mapping[str, Any]] | None = None,
+    span_inputs: Sequence[SpanAnalysisInput] | None = None,
 ) -> GroundPreparation:
     """Load or create one source-bound Ground/HAG preparation.
 
@@ -150,9 +161,15 @@ def ensure_ground_preparation(
     root = Path(project_root).expanduser().resolve()
     identity = dict(source_identity)
     source_digest = canonical_digest(identity)
+    region_digest: str | None = None
+    if span_inputs:
+        from core.stage_b.ground_workset import ground_region_plan
+
+        region_digest, _regions = ground_region_plan(span_inputs)
     config_payload = {
         "backend": GROUND_BACKEND,
         "configuration": dict(configuration or {}),
+        "ground_region_digest": region_digest,
     }
     config_digest = canonical_digest(config_payload)
     shared_root = root / "artifacts" / "project-runs" / "source-shared" / source_digest
@@ -169,11 +186,26 @@ def ensure_ground_preparation(
     if producer is None:
         from algorithms.vegetation.coarse_to_fine import load_coarse_ground_representatives
         from algorithms.vegetation.fast_research import run_fast_ground_hag
+        ground_input = source
+        source_full_pass_count = 1
+        if span_inputs:
+            from core.stage_b.ground_workset import ensure_ground_workset
 
-        _status, result = run_fast_ground_hag(source, ground_root)
+            workset_status, workset = ensure_ground_workset(
+                source,
+                shared_root / "ground-worksets",
+                identity,
+                span_inputs,
+            )
+            ground_input = Path(workset.workset_las_path)
+            source_full_pass_count = (
+                0 if workset_status == "SKIPPED_FROM_CACHE" else workset.source_full_pass_count
+            )
+            ground_root = shared_root / "ground-regions" / workset.region_digest
+
+        _status, result = run_fast_ground_hag(ground_input, ground_root)
         coarse_xyz = load_coarse_ground_representatives(result)
         ground_reference = Path(result.output_las_path)
-        source_full_pass_count = 1
         origin = tuple(
             float(item)
             for item in identity.get("origin_context")
@@ -214,6 +246,7 @@ def ensure_ground_preparation(
         identity,
         cache_hit=False,
         source_full_pass_count=source_full_pass_count,
+        region_digest=region_digest,
     )
     _write_json(manifest_path, preparation.to_dict())
     return preparation

@@ -330,11 +330,21 @@ def prepare_source_shared(
                 or input_data.source_identity.get("point_cloud_source")
                 or input_data.source_identity.get("path")
             )
-            if source_path and not payload.get("coarse_ground_reference"):
+            local_ground_preparation = (
+                ground_preparation
+                if isinstance(ground_preparation, Mapping)
+                and ground_preparation.get("region_digest")
+                else None
+            )
+            if source_path and (
+                not payload.get("coarse_ground_reference")
+                or local_ground_preparation is not None
+            ):
                 preparation = ensure_ground_preparation(
                     project_root,
                     input_data.source_identity,
                     configuration={"science_configuration_digest": configuration_digest},
+                    span_inputs=role_span_inputs,
                 )
                 payload.update(
                     {
@@ -342,10 +352,11 @@ def prepare_source_shared(
                         "coarse_ground_reference": preparation.coarse_ground_reference,
                         "origin_xyz": list(preparation.origin_xyz),
                         "ground_preparation": preparation.to_dict(),
+                        "ground_region_digest": preparation.region_digest,
                     }
                 )
                 ground_preparation = preparation.to_dict()
-                ground_prepared_now = True
+                ground_prepared_now = not preparation.cache_hit
                 changed = True
             role_preparation = None
             if source_path:
@@ -448,6 +459,7 @@ def prepare_source_shared(
             project_root,
             input_data.source_identity,
             configuration={"science_configuration_digest": configuration_digest},
+            span_inputs=role_span_inputs,
         )
         payload.update(
             {
@@ -455,6 +467,7 @@ def prepare_source_shared(
                 "coarse_ground_reference": preparation.coarse_ground_reference,
                 "origin_xyz": list(preparation.origin_xyz),
                 "ground_preparation": preparation.to_dict(),
+                "ground_region_digest": preparation.region_digest,
             }
         )
         ground_preparation = preparation.to_dict()
