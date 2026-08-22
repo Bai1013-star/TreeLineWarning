@@ -900,14 +900,7 @@ class DesktopWorkflow:
         self._editor = scheduler.open_editor(result)
         edits = _load_json(self._editor.artifact_root / "tree_edits.json")
         if edits:
-            for operation in load_edits_payload(edits.get("operations", [])):
-                self._editor.session.select(operation["tree_ids"])
-                if operation["type"] == "DELETE":
-                    self._editor.session.delete_selected()
-                    continue
-                merged_id = self._editor.session.merge_selected()
-                if merged_id != operation["merged_id"]:
-                    raise ValueError("PERSISTED_TREE_EDIT_MERGE_ID_MISMATCH")
+            self._editor.session.operations = load_edits_payload(edits.get("operations", []))
         return self._editor
 
     def editor_state(self) -> dict[str, Any]:
@@ -1015,6 +1008,64 @@ class DesktopWorkflow:
         editor.persist()
         self._log("tree_editor_undo", tree_edit_count=len(editor.session.operations))
         return editor.snapshot()
+
+    def _trim_binding(self) -> str:
+        editor = self._ensure_editor()
+        if editor is None:
+            raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
+        return f"{self._root}|{editor.result.analysis_run_id}"
+
+    def preview_trim_component(self, tree_id: int, seed_xyz: list[float]) -> dict[str, Any]:
+        editor = self._ensure_editor()
+        if editor is None:
+            raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
+        preview = editor.session.preview_trim_component(
+            int(tree_id), seed_xyz, binding=self._trim_binding()
+        )
+        preview.update(self.trim_preview_display(preview["preview_id"]))
+        preview["preview_xyz"] = preview.pop("xyz")
+        return preview
+
+    def preview_trim_lasso(
+        self, tree_id: int, view_projection: list[list[float]], polygon_ndc: list[list[float]]
+    ) -> dict[str, Any]:
+        editor = self._ensure_editor()
+        if editor is None:
+            raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
+        preview = editor.session.preview_trim_lasso(
+            int(tree_id), view_projection, polygon_ndc, binding=self._trim_binding()
+        )
+        preview.update(self.trim_preview_display(preview["preview_id"]))
+        preview["preview_xyz"] = preview.pop("xyz")
+        return preview
+
+    def commit_trim(self, preview_id: str) -> dict[str, Any]:
+        editor = self._ensure_editor()
+        if editor is None:
+            raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
+        editor.session.commit_trim(
+            preview_id,
+            binding=self._trim_binding(),
+            minimum_remaining_points=int(editor.config.tree_min_final_members),
+        )
+        editor.persist()
+        self._log("tree_editor_trim", tree_edit_count=len(editor.session.operations))
+        return editor.snapshot()
+
+    def cancel_trim(self, preview_id: str) -> dict[str, Any]:
+        editor = self._ensure_editor()
+        if editor is None:
+            raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
+        editor.session.cancel_trim(preview_id)
+        return editor.snapshot()
+
+    def trim_preview_display(self, preview_id: str) -> dict[str, Any]:
+        editor = self._ensure_editor()
+        if editor is None:
+            raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
+        xyz = editor.session.preview_xyz(preview_id)
+        rows = np.linspace(0, len(xyz) - 1, min(len(xyz), _MAX_DISPLAY_POINTS), dtype=np.int64)
+        return {"xyz": xyz[rows].tolist(), "full_point_count": int(len(xyz))}
 
     def finalize(self) -> dict[str, Any]:
         editor = self._ensure_editor()

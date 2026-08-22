@@ -1,4 +1,4 @@
-"""Human tree editing model (DELETE / MERGE / UNDO) on top of algorithm trees.
+"""Human tree editing model (DELETE / MERGE / REMOVE_POINTS / UNDO).
 
 The algorithm tree result is NEVER mutated.  It is the immutable
 ``original``; human edits are a pure operation log.  The current effective
@@ -25,12 +25,20 @@ the editor never carries or copies XYZ — the display path decimates on read.
 
 from __future__ import annotations
 
+import base64
+import time
+import uuid
+import zlib
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+from scipy.spatial import cKDTree
 
 TREE_EDIT_LOG_SCHEMA = "folder-to-excel-tree-edits-v1"
+_LARGE_REMOVAL_FRACTION = 1.0 / 3.0
+_WHOLE_TREE_FRACTION = 0.95
+_AUTO_COMPONENT_MAX_FRACTION = 0.75
 
 
 class TreeEditorError(RuntimeError):
@@ -164,6 +172,10 @@ def _apply_ops(
                     merged_id=merged_id, source_ids=tuple(present)
                 )
                 alive.add(merged_id)
+        elif op_type == "REMOVE_POINTS":
+            # Point removals do not change the tree entity graph.  They are
+            # applied by exact original_index later in ``build_final``.
+            continue
         else:
             raise TreeEditorError(f"未知编辑操作类型: {op_type}")
     tree_members: dict[int, list[int]] = {}
@@ -182,6 +194,72 @@ class TreeEditSession:
         self.original = original
         self.operations: list[dict[str, Any]] = []
         self.selected_ids: list[int] = []
+        self._previews: dict[str, dict[str, Any]] = {}
+        self._source_rows_cache: dict[int, np.ndarray] = {}
+
+    @property
+    def revision(self) -> int:
+        """Monotonic committed membership revision for stale-preview checks."""
+
+        return len(self.operations)
+
+    def _removed_original_indices(self) -> np.ndarray:
+        chunks = [
+            _decode_indices(operation["removed_indices_b64"])
+            for operation in self.operations
+            if operation.get("type") == "REMOVE_POINTS"
+        ]
+        if not chunks:
+            return np.empty(0, dtype=np.int64)
+        return np.unique(np.concatenate(chunks))
+
+    def _source_rows(self, source_id: int) -> np.ndarray:
+        rows = self._source_rows_cache.get(source_id)
+        if rows is None:
+            rows = np.flatnonzero(self.original.tree_id == source_id)
+            self._source_rows_cache[source_id] = rows
+        return rows
+
+    def current_membership(self, tree_id: int) -> tuple[np.ndarray, np.ndarray]:
+        """Return authoritative full-resolution (original_index, XYZ) for one tree."""
+
+        members, _merges = _apply_ops(self.original, self.operations)
+        source_ids = members.get(int(tree_id))
+        if not source_ids:
+            raise TreeEditorError(f"当前不存在单木 id: {tree_id}")
+        chunks: list[np.ndarray] = []
+        for source_id in source_ids:
+            # A source-tree membership is discovered once, then all click and
+            # lasso work stays on those rows.  This scans the compact final-tree
+            # artifact, never the raw LAS/LAZ.
+            chunks.append(self._source_rows(source_id))
+        rows = chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
+        indices = self.original.original_index[rows]
+        removed = self._removed_original_indices()
+        keep = np.ones(len(rows), dtype=bool) if not len(removed) else ~np.isin(indices, removed)
+        if not np.any(keep):
+            raise TreeEditorError(f"当前不存在单木 id: {tree_id}")
+        return indices[keep], np.asarray(self.original.xyz_local_m[rows[keep]], dtype=np.float64)
+
+    def edit_provenance_by_current_tree(self) -> dict[int, tuple[str, ...]]:
+        """Map current tree ids to human edit methods affecting their members."""
+
+        members, _merges = _apply_ops(self.original, self.operations)
+        provenance: dict[int, tuple[str, ...]] = {}
+        for final_id, source_ids in members.items():
+            methods: set[str] = set()
+            source_mask = np.isin(self.original.tree_id, source_ids)
+            source_indices = self.original.original_index[source_mask]
+            if len(source_ids) > 1:
+                methods.add("MERGE")
+            for operation in self.operations:
+                if operation.get("type") != "REMOVE_POINTS":
+                    continue
+                removed = _decode_indices(operation["removed_indices_b64"])
+                if np.any(np.isin(removed, source_indices)):
+                    methods.add(str(operation.get("selection_method") or "TRIM"))
+            provenance[int(final_id)] = tuple(sorted(methods))
+        return provenance
 
     # ------------------------------------------------------------------ state
     def current_tree_ids(self) -> list[int]:
@@ -194,6 +272,19 @@ class TreeEditSession:
         members, merges = _apply_ops(self.original, self.operations)
         by_id = {record.tree_id: record for record in self.original.records}
         trees: list[dict[str, Any]] = []
+        removed = self._removed_original_indices()
+        counts: dict[int, int] = {}
+        for final_id, source_ids in members.items():
+            total = sum(by_id[source_id].point_count for source_id in source_ids)
+            if len(removed):
+                source_indices = np.concatenate(
+                    [
+                        self.original.original_index[self._source_rows(source_id)]
+                        for source_id in source_ids
+                    ]
+                )
+                total -= int(np.count_nonzero(np.isin(removed, source_indices)))
+            counts[final_id] = total
         for final_id in sorted(members):
             source_ids = members[final_id]
             if len(source_ids) == 1:
@@ -202,7 +293,7 @@ class TreeEditSession:
                     {
                         "tree_id": final_id,
                         "external_name": record.external_name,
-                        "point_count": record.point_count,
+                        "point_count": counts.get(final_id, 0),
                         "apex_xy_local_m": record.apex_xy_local_m,
                         "apex_height_m": record.apex_height_m,
                         "merged": False,
@@ -211,7 +302,7 @@ class TreeEditSession:
                 )
             else:
                 merged_id = final_id
-                source_count = sum(by_id[tid].point_count for tid in source_ids)
+                source_count = counts.get(final_id, 0)
                 apex = _union_apex([by_id[tid] for tid in source_ids])
                 trees.append(
                     {
@@ -230,7 +321,10 @@ class TreeEditSession:
             "current_tree_count": len(trees),
             "trees": trees,
             "selected_ids": list(self.selected_ids),
-            "operations": [dict(op) for op in self.operations],
+            # Never send compressed (potentially very large) exact membership
+            # payloads to the UI.  Persistence still receives them via
+            # ``edits_payload``.
+            "operations": [_public_operation(op) for op in self.operations],
         }
 
     def edits_payload(self) -> dict[str, Any]:
@@ -255,6 +349,178 @@ class TreeEditSession:
         deleted = list(self.selected_ids)
         self.selected_ids = []
         return deleted
+
+    def preview_trim_component(
+        self,
+        tree_id: int,
+        seed_xyz: list[float] | tuple[float, float, float] | np.ndarray,
+        *,
+        binding: str = "",
+    ) -> dict[str, Any]:
+        """Preview the adaptive 3-D component containing a clicked seed."""
+
+        started = time.perf_counter()
+        indices, xyz = self.current_membership(int(tree_id))
+        seed = np.asarray(seed_xyz, dtype=np.float64)
+        if seed.shape != (3,) or not np.all(np.isfinite(seed)):
+            raise TreeEditorError("点击位置无效")
+        if len(xyz) < 2:
+            raise TreeEditorError("当前单木点成员不足，无法分析团块")
+        tree = cKDTree(xyz, copy_data=False)
+        seed_distance, seed_row = tree.query(seed, k=1, workers=1)
+        spacing = _adaptive_spacing(xyz, tree)
+        radius = _adaptive_component_radius(xyz, spacing)
+        if float(seed_distance) > max(radius * 4.0, np.finfo(float).eps * 100.0):
+            raise TreeEditorError("点击位置未命中当前单木，请重新点击")
+        component_rows = _seed_component(tree, int(seed_row), radius)
+        fraction = len(component_rows) / len(indices)
+        if fraction >= _AUTO_COMPONENT_MAX_FRACTION:
+            raise TreeEditorError(
+                "该区域与树体主体连接较紧密，自动团块剔除可能范围过大，"
+                "建议使用‘套索剔除’手动选择。"
+            )
+        return self._create_preview(
+            tree_id=int(tree_id),
+            removed_indices=indices[component_rows],
+            method="COMPONENT",
+            binding=binding,
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            extra={
+                "adaptive_spacing_m": spacing,
+                "connection_radius_m": radius,
+                "seed_original_index": int(indices[int(seed_row)]),
+            },
+        )
+
+    def preview_trim_lasso(
+        self,
+        tree_id: int,
+        view_projection: list[list[float]] | np.ndarray,
+        polygon_ndc: list[list[float]] | np.ndarray,
+        *,
+        binding: str = "",
+    ) -> dict[str, Any]:
+        """Preview current-tree full-res points inside a screen-space polygon."""
+
+        started = time.perf_counter()
+        indices, xyz = self.current_membership(int(tree_id))
+        matrix = np.asarray(view_projection, dtype=np.float64)
+        polygon = np.asarray(polygon_ndc, dtype=np.float64)
+        if matrix.shape != (4, 4) or not np.all(np.isfinite(matrix)):
+            raise TreeEditorError("套索相机矩阵无效")
+        if polygon.ndim != 2 or polygon.shape[1] != 2 or len(polygon) < 3:
+            raise TreeEditorError("套索至少需要三个有效顶点")
+        if not np.all(np.isfinite(polygon)) or np.any(np.abs(polygon) > 2.0):
+            raise TreeEditorError("套索屏幕坐标无效")
+        homogeneous = np.column_stack((xyz, np.ones(len(xyz), dtype=np.float64)))
+        clip = homogeneous @ matrix.T
+        valid = np.isfinite(clip).all(axis=1) & (clip[:, 3] > np.finfo(float).eps)
+        projected = np.full((len(xyz), 2), np.nan, dtype=np.float64)
+        projected[valid] = clip[valid, :2] / clip[valid, 3, None]
+        inside = valid & _points_in_polygon(projected, polygon)
+        selected = np.flatnonzero(inside)
+        if not len(selected):
+            raise TreeEditorError("套索内没有当前单木的点")
+        return self._create_preview(
+            tree_id=int(tree_id),
+            removed_indices=indices[selected],
+            method="LASSO",
+            binding=binding,
+            elapsed_ms=(time.perf_counter() - started) * 1000.0,
+        )
+
+    def _create_preview(
+        self,
+        *,
+        tree_id: int,
+        removed_indices: np.ndarray,
+        method: str,
+        binding: str,
+        elapsed_ms: float,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        values = np.unique(np.asarray(removed_indices, dtype=np.int64))
+        current_indices, _xyz = self.current_membership(tree_id)
+        if not len(values) or not np.all(np.isin(values, current_indices)):
+            raise TreeEditorError("预览点成员无效")
+        fraction = len(values) / len(current_indices)
+        if fraction >= _WHOLE_TREE_FRACTION:
+            raise TreeEditorError("本次选择接近整棵单木；如需移除整棵树，请使用‘删除单木’。")
+        preview_id = uuid.uuid4().hex
+        preview = {
+            "preview_id": preview_id,
+            "tree_id": tree_id,
+            "revision": self.revision,
+            "binding": str(binding),
+            "method": method,
+            "removed_indices": values,
+            "point_count": int(len(values)),
+            "tree_point_count": int(len(current_indices)),
+            "fraction": float(fraction),
+            "large_removal_warning": bool(fraction > _LARGE_REMOVAL_FRACTION),
+            "selection_ms": round(float(elapsed_ms), 3),
+        }
+        if extra:
+            preview.update(extra)
+        self._previews = {preview_id: preview}
+        return _public_preview(preview)
+
+    def preview_indices(self, preview_id: str) -> np.ndarray:
+        preview = self._require_preview(preview_id)
+        return np.asarray(preview["removed_indices"], dtype=np.int64)
+
+    def preview_xyz(self, preview_id: str) -> np.ndarray:
+        preview = self._require_preview(preview_id)
+        indices, xyz = self.current_membership(int(preview["tree_id"]))
+        return xyz[np.isin(indices, preview["removed_indices"])]
+
+    def commit_trim(
+        self,
+        preview_id: str,
+        *,
+        binding: str = "",
+        minimum_remaining_points: int | None = None,
+    ) -> dict[str, Any]:
+        preview = self._require_preview(preview_id)
+        if preview["revision"] != self.revision or preview["binding"] != str(binding):
+            self._previews.clear()
+            raise TreeEditorError("预览已过期，请重新选择")
+        # Revalidate against the current authoritative membership immediately
+        # before commit.  No geometry approximation is used for the edit.
+        current, _xyz = self.current_membership(int(preview["tree_id"]))
+        removed = np.asarray(preview["removed_indices"], dtype=np.int64)
+        if not np.all(np.isin(removed, current)):
+            self._previews.clear()
+            raise TreeEditorError("预览已过期，请重新选择")
+        remaining = len(current) - len(removed)
+        if minimum_remaining_points is not None and remaining < int(minimum_remaining_points):
+            raise TreeEditorError(
+                "剔除后该单木无法形成有效结果，请取消本次操作或删除整棵单木。"
+            )
+        operation = {
+            "type": "REMOVE_POINTS",
+            "tree_ids": [int(preview["tree_id"])],
+            "selection_method": str(preview["method"]),
+            "point_count": int(len(removed)),
+            "removed_indices_b64": _encode_indices(removed),
+            "sequence": self.revision + 1,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        self.operations.append(operation)
+        self.selected_ids = []
+        self._previews.clear()
+        return _public_operation(operation)
+
+    def cancel_trim(self, preview_id: str) -> bool:
+        if preview_id not in self._previews:
+            return False
+        del self._previews[preview_id]
+        return True
+
+    def _require_preview(self, preview_id: str) -> dict[str, Any]:
+        if not isinstance(preview_id, str) or preview_id not in self._previews:
+            raise TreeEditorError("预览不存在或已过期")
+        return self._previews[preview_id]
 
     def merge_selected(self) -> int:
         if len(self.selected_ids) < 2:
@@ -281,11 +547,13 @@ class TreeEditSession:
         if not self.operations:
             return None
         self.selected_ids = []
+        self._previews.clear()
         return self.operations.pop()
 
     def reset(self) -> None:
         self.operations = []
         self.selected_ids = []
+        self._previews.clear()
 
     # ------------------------------------------------------------- final set
     def build_final(
@@ -315,6 +583,10 @@ class TreeEditSession:
                 mask = algorithm_tree == source_id
                 keep |= mask
                 final_ids[mask] = final_id
+        removed = self._removed_original_indices()
+        if len(removed):
+            keep &= ~np.isin(original_index, removed)
+            final_ids[~keep] = -1
         final_index = original_index[keep]
         final_tree = final_ids[keep]
         final_xyz = np.asarray(xyz_all[keep], dtype=np.float64)
@@ -357,7 +629,7 @@ def load_edits_payload(operations: list[dict[str, Any]]) -> list[dict[str, Any]]
         if not isinstance(operation, dict):
             raise TreeEditorError("编辑操作必须是对象")
         op_type = operation.get("type")
-        if op_type not in {"DELETE", "MERGE"}:
+        if op_type not in {"DELETE", "MERGE", "REMOVE_POINTS"}:
             raise TreeEditorError(f"未知编辑操作类型: {op_type}")
         tree_ids = [int(value) for value in operation.get("tree_ids", [])]
         if not tree_ids:
@@ -368,8 +640,111 @@ def load_edits_payload(operations: list[dict[str, Any]]) -> list[dict[str, Any]]
             if merged_id is None:
                 raise TreeEditorError("MERGE 操作缺少 merged_id")
             item["merged_id"] = int(merged_id)
+        elif op_type == "REMOVE_POINTS":
+            encoded = operation.get("removed_indices_b64")
+            if not isinstance(encoded, str) or not encoded:
+                raise TreeEditorError("REMOVE_POINTS 操作缺少精确点成员")
+            decoded = _decode_indices(encoded)
+            if not len(decoded) or len(decoded) != len(np.unique(decoded)):
+                raise TreeEditorError("REMOVE_POINTS 精确点成员无效")
+            item.update(
+                {
+                    "selection_method": str(operation.get("selection_method") or "UNKNOWN"),
+                    "point_count": int(operation.get("point_count", len(decoded))),
+                    "removed_indices_b64": encoded,
+                    "sequence": int(operation.get("sequence", len(cleaned) + 1)),
+                    "timestamp": str(operation.get("timestamp") or ""),
+                }
+            )
+            if item["point_count"] != len(decoded):
+                raise TreeEditorError("REMOVE_POINTS 点数与精确成员不一致")
         cleaned.append(item)
     return cleaned
+
+
+def _encode_indices(values: np.ndarray) -> str:
+    ordered = np.unique(np.asarray(values, dtype=np.int64))
+    deltas = np.diff(np.concatenate((np.asarray([0], dtype=np.int64), ordered)))
+    return base64.b64encode(zlib.compress(deltas.astype("<i8").tobytes(), level=9)).decode("ascii")
+
+
+def _decode_indices(encoded: str) -> np.ndarray:
+    try:
+        raw = zlib.decompress(base64.b64decode(encoded, validate=True))
+        if len(raw) % 8:
+            raise ValueError("unaligned")
+        deltas = np.frombuffer(raw, dtype="<i8")
+        values = np.cumsum(deltas, dtype=np.int64)
+    except (ValueError, TypeError, zlib.error) as exc:
+        raise TreeEditorError("REMOVE_POINTS 精确点成员编码无效") from exc
+    if len(values) and (np.any(np.diff(values) <= 0) or np.any(values < 0)):
+        raise TreeEditorError("REMOVE_POINTS 精确点成员编码无效")
+    return values
+
+
+def _public_operation(operation: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in operation.items() if key != "removed_indices_b64"}
+
+
+def _public_preview(preview: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in preview.items()
+        if key not in {"removed_indices", "binding"}
+    }
+
+
+def _adaptive_spacing(xyz: np.ndarray, tree: cKDTree) -> float:
+    rows = np.linspace(0, len(xyz) - 1, min(len(xyz), 10_000), dtype=np.int64)
+    distances = tree.query(xyz[rows], k=min(5, len(xyz)), workers=1)[0]
+    values = distances[:, -1] if distances.ndim == 2 else distances
+    positive = values[np.isfinite(values) & (values > 0)]
+    if not len(positive):
+        raise TreeEditorError("当前单木点间距无法可靠估计")
+    return float(np.median(positive))
+
+
+def _adaptive_component_radius(xyz: np.ndarray, spacing: float) -> float:
+    diagonal = float(np.linalg.norm(np.ptp(xyz, axis=0)))
+    numerical_floor = max(diagonal * 1e-7, np.finfo(float).eps * 100.0)
+    structural_ceiling = max(numerical_floor, diagonal * 0.08)
+    # The fifth-neighbour median represents a local density scale rather than
+    # a scanner-specific metric.  Three such scales bridge ordinary sampling
+    # gaps inside a crown while the structural ceiling prevents a sparse
+    # bridge from swallowing a spatially separate cluster.
+    return float(np.clip(spacing * 3.0, numerical_floor, structural_ceiling))
+
+
+def _seed_component(tree: cKDTree, seed_row: int, radius: float) -> np.ndarray:
+    visited = np.zeros(tree.n, dtype=bool)
+    visited[seed_row] = True
+    queue = [seed_row]
+    cursor = 0
+    while cursor < len(queue):
+        row = queue[cursor]
+        cursor += 1
+        for neighbour in tree.query_ball_point(tree.data[row], radius):
+            neighbour = int(neighbour)
+            if not visited[neighbour]:
+                visited[neighbour] = True
+                queue.append(neighbour)
+    return np.asarray(queue, dtype=np.int64)
+
+
+def _points_in_polygon(points: np.ndarray, polygon: np.ndarray) -> np.ndarray:
+    x = points[:, 0]
+    y = points[:, 1]
+    inside = np.zeros(len(points), dtype=bool)
+    j = len(polygon) - 1
+    for i in range(len(polygon)):
+        xi, yi = polygon[i]
+        xj, yj = polygon[j]
+        crosses = (yi > y) != (yj > y)
+        denominator = (yj - yi) if yj != yi else np.finfo(float).eps
+        boundary_x = (xj - xi) * (y - yi) / denominator + xi
+        inside ^= crosses & (x < boundary_x)
+        j = i
+    return inside
 
 
 __all__ = [

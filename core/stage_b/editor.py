@@ -139,6 +139,7 @@ class BatchTreeEditor:
             int(tree["tree_id"]): tuple(int(value) for value in tree["source_tree_ids"])
             for tree in self.session.snapshot()["trees"]
         }
+        provenance = self.session.edit_provenance_by_current_tree()
         by_id = {
             int(record.global_tree_id): record
             for record in self.original_reconciled.global_tree_records
@@ -151,6 +152,33 @@ class BatchTreeEditor:
             source_records = [by_id[source_id] for source_id in source_ids]
             base = min(source_records, key=lambda record: record.global_tree_id)
             point_count = int(np.count_nonzero(final_tree == final_id))
+            member_index = final_index[final_tree == final_id]
+            apex_xyz = base.apex_xy_local_m
+            apex_height = base.apex_height_m
+            height_candidates: list[tuple[float, tuple[float, float, float]]] = []
+            for source_record in source_records:
+                source_mask = self.original.tree_id == int(source_record.global_tree_id)
+                source_index = self.original.original_index[source_mask]
+                source_xyz = self.original.xyz_local_m[source_mask]
+                remaining_mask = np.isin(source_index, member_index)
+                if not np.any(remaining_mask):
+                    continue
+                remaining_xyz = source_xyz[remaining_mask]
+                highest = remaining_xyz[int(np.argmax(remaining_xyz[:, 2]))]
+                source_height = source_record.apex_height_m
+                if source_height is not None:
+                    adjusted_height = (
+                        float(source_height)
+                        + float(highest[2])
+                        - float(np.max(source_xyz[:, 2]))
+                    )
+                else:
+                    adjusted_height = float(highest[2])
+                height_candidates.append(
+                    (adjusted_height, tuple(float(value) for value in highest))
+                )
+            if height_candidates:
+                apex_height, apex_xyz = max(height_candidates, key=lambda item: item[0])
             merged_keys = tuple(
                 sorted(
                     key
@@ -179,6 +207,8 @@ class BatchTreeEditor:
                     else f"Merged-Tree{final_id:03d}"
                 ),
                 full_resolution_point_count=point_count,
+                apex_xy_local_m=apex_xyz,
+                apex_height_m=apex_height,
                 core_point_count=min(base.core_point_count, point_count),
                 halo_point_count=max(0, point_count - min(base.core_point_count, point_count)),
                 core_fraction=(
@@ -189,7 +219,11 @@ class BatchTreeEditor:
                 review=review,
                 merged_span_tree_keys=merged_keys,
                 persistent_tree_id=persistent,
-                identity_state="BATCH_EDITOR_FINAL",
+                identity_state=(
+                    "HUMAN_" + "+".join(provenance.get(final_id, ()))
+                    if provenance.get(final_id)
+                    else "BATCH_EDITOR_FINAL"
+                ),
             )
             records.append(record)
             if review:

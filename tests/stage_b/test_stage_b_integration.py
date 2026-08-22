@@ -346,7 +346,10 @@ def test_batch_tree_editor_isolates_span_delete_and_restores_with_undo(tmp_path:
             tree_records=(
                 {
                     "tree_id": 0,
-                    "apex_xy_local_m": [float(span_id * 10 + 5), 0.0, 10.0],
+                    # Production reconciliation may persist apex XY without a
+                    # Z element; editor geometry refresh must use membership
+                    # XYZ rather than indexing a nonexistent apex[2].
+                    "apex_xy_local_m": [float(span_id * 10 + 5), 0.0],
                     "apex_height_m": 10.0,
                 },
             ),

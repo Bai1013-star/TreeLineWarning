@@ -745,6 +745,65 @@ class FolderOrchestrator:
         self.state.update(tree_edit_count=len(session.operations))
         return session.snapshot()
 
+    def _trim_binding(self) -> str:
+        run = self._require_run()
+        return f"{self.workspace.root}|{self.workspace.source_sha256}|{run.source_id}"
+
+    def editor_preview_trim_component(
+        self, tree_id: int, seed_xyz_absolute: list[float]
+    ) -> dict[str, Any]:
+        session = self.build_editor()
+        run = self._require_run()
+        seed = np.asarray(seed_xyz_absolute, dtype=np.float64) - np.asarray(
+            run.origin_xyz, dtype=np.float64
+        )
+        preview = session.preview_trim_component(
+            int(tree_id), seed, binding=self._trim_binding()
+        )
+        preview["preview_xyz"] = self._trim_preview_xyz(session, preview["preview_id"])
+        return preview
+
+    def editor_preview_trim_lasso(
+        self, tree_id: int, view_projection: list[list[float]], polygon_ndc: list[list[float]]
+    ) -> dict[str, Any]:
+        session = self.build_editor()
+        # The matrix is built against absolute coordinates shown by Plotly.
+        # Fold the local-to-absolute translation into it without copying or
+        # mutating the authoritative full-resolution coordinate array.
+        run = self._require_run()
+        matrix = np.asarray(view_projection, dtype=np.float64)
+        translation = np.eye(4, dtype=np.float64)
+        translation[:3, 3] = np.asarray(run.origin_xyz, dtype=np.float64)
+        preview = session.preview_trim_lasso(
+            int(tree_id), (matrix @ translation).tolist(), polygon_ndc,
+            binding=self._trim_binding(),
+        )
+        preview["preview_xyz"] = self._trim_preview_xyz(session, preview["preview_id"])
+        return preview
+
+    def _trim_preview_xyz(self, session: TreeEditSession, preview_id: str) -> list[list[float]]:
+        xyz = session.preview_xyz(preview_id)
+        rows = np.linspace(0, len(xyz) - 1, min(len(xyz), 60_000), dtype=np.int64)
+        origin = np.asarray(self._require_run().origin_xyz, dtype=np.float64)
+        return (xyz[rows] + origin).tolist()
+
+    def editor_commit_trim(self, preview_id: str) -> dict[str, Any]:
+        session = self.build_editor()
+        run = self._require_run()
+        session.commit_trim(
+            preview_id,
+            binding=self._trim_binding(),
+            minimum_remaining_points=int(run.cfg.tree_min_final_members),
+        )
+        self._persist_edits(session)
+        self.state.update(tree_edit_count=len(session.operations))
+        return session.snapshot()
+
+    def editor_cancel_trim(self, preview_id: str) -> dict[str, Any]:
+        session = self.build_editor()
+        session.cancel_trim(preview_id)
+        return session.snapshot()
+
     def _persist_edits(self, session: TreeEditSession) -> None:
         payload = session.edits_payload()
         payload["source_sha256"] = self.workspace.source_sha256
@@ -773,6 +832,7 @@ class FolderOrchestrator:
             run, final_index, final_xyz, final_tree, merged_summary,
             self.original_trees if self.original_trees is not None else None,
             self.workspace,
+            session.edit_provenance_by_current_tree(),
         )
         self.final_reconciled = edited_reconciled
 
@@ -1163,6 +1223,7 @@ def _build_edited_reconciliation(
     merged_summary: dict[int, dict[str, Any]],
     original_trees: OriginalTrees | None,
     workspace: FolderWorkspace,
+    edit_provenance: dict[int, tuple[str, ...]] | None = None,
 ) -> Any:
     from algorithms.spans.reconcile import (
         GlobalTreeRecord,
@@ -1223,6 +1284,11 @@ def _build_edited_reconciliation(
                     tuple((0, tid) for tid in merge["source_tree_ids"])
                     if merge is not None
                     else ((0, tree_id),)
+                ),
+                identity_state=(
+                    "HUMAN_" + "+".join((edit_provenance or {}).get(tree_id, ()))
+                    if (edit_provenance or {}).get(tree_id)
+                    else "TREE_EDITOR_FINAL"
                 ),
                 longitudinal_s_m=longitudinal_s_m,
                 lateral_n_m=lateral_n_m,
@@ -1339,13 +1405,16 @@ def _risk_label(risk_record: Any, threshold_m: float) -> str:
 
 
 def _human_edited(record: Any) -> bool:
-    return bool(
+    return str(getattr(record, "identity_state", "")).startswith("HUMAN_") or bool(
         getattr(record, "merged_span_tree_keys", None)
         and len(record.merged_span_tree_keys) > 1
     )
 
 
 def _edit_provenance(record: Any) -> str:
+    state = str(getattr(record, "identity_state", ""))
+    if state.startswith("HUMAN_"):
+        return state.removeprefix("HUMAN_")
     if _human_edited(record):
         return "MERGE"
     return "UNEDITED"

@@ -44,6 +44,10 @@ def export_batch_prediction(
     rows: list[dict[str, Any]] = []
     for record in reconciled.global_tree_records:
         extra = dict((identity_by_tree or {}).get(record.global_tree_id, {}))
+        identity_state = str(getattr(record, "identity_state", ""))
+        if identity_state.startswith("HUMAN_"):
+            extra.setdefault("human_edited", True)
+            extra.setdefault("edit_provenance", identity_state.removeprefix("HUMAN_"))
         clearance = clearance_by_tree.get(record.global_tree_id)
         evidence = contact_evidence_from_clearance(
             None if clearance is None else clearance.minimum_clearance_m,

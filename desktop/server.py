@@ -325,6 +325,28 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             if path == "/api/undo":
                 self._send_json(self.workflow.undo_editor())
                 return
+            if path == "/api/trim/component-preview":
+                self._send_json(
+                    self.workflow.preview_trim_component(
+                        int(payload.get("tree_id")), list(payload.get("seed_xyz") or [])
+                    )
+                )
+                return
+            if path == "/api/trim/lasso-preview":
+                self._send_json(
+                    self.workflow.preview_trim_lasso(
+                        int(payload.get("tree_id")),
+                        list(payload.get("view_projection") or []),
+                        list(payload.get("polygon_ndc") or []),
+                    )
+                )
+                return
+            if path == "/api/trim/commit":
+                self._send_json(self.workflow.commit_trim(str(payload.get("preview_id") or "")))
+                return
+            if path == "/api/trim/cancel":
+                self._send_json(self.workflow.cancel_trim(str(payload.get("preview_id") or "")))
+                return
             self._error("未找到本地操作", status=HTTPStatus.NOT_FOUND)
         except (ValueError, KeyError, TypeError, OSError, RuntimeError) as exc:
             self.workflow._log("api_failure", path=path, error=f"{type(exc).__name__}: {exc}")

@@ -251,14 +251,21 @@ def step2_html() -> str:
     <div class="panel">
       <h3>第二步：人工审核单木</h3>
       <p style="font-size:12px;color:#5f6b7a">
-        点击选中一棵树（可多选）。可删除、合并或撤销。确认后计算最终净空与 Excel。
+        点击选中单木。局部剔除会先红色预览，确认后才修改完整点成员。
       </p>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button id="btn-delete" class="red">删除单木</button>
         <button id="btn-merge">合并选中</button>
+        <button id="btn-trim-component">剔除误分团块</button>
+        <button id="btn-trim-lasso">套索剔除</button>
         <button id="btn-undo" class="gray">撤销</button>
       </div>
       <div id="editmsg" class="msg" style="margin-top:6px"></div>
+      <div id="trim-preview" style="display:none;margin-top:8px;padding:8px;border:2px solid #d64545;border-radius:4px;background:#fff5f5">
+        <div id="trim-summary" style="font-size:13px;margin-bottom:7px"></div>
+        <button id="btn-trim-confirm" class="red">确认剔除</button>
+        <button id="btn-trim-cancel" class="gray">取消</button>
+      </div>
       <div style="margin-top:10px">
         <button id="btn-confirm" class="green">确认单木并继续</button>
       </div>
@@ -280,6 +287,9 @@ def step2_html() -> str:
 let treeMap = new Map();
 let selected = new Set();
 let refreshTimer = null;
+let trimMode = "IDLE";
+let activePreview = null;
+let lassoOverlay = null;
 
 function setStatus(t){document.getElementById("status").textContent=t;}
 function colorOf(treeId){
@@ -362,6 +372,12 @@ async function loadEditorData(){
       type:"scatter3d",mode:"markers",name:"单木",
       marker:{size:1.6,color:trees3d.color,opacity:0.95}});
   }
+  if(activePreview && Array.isArray(activePreview.preview_xyz)){
+    const p=activePreview.preview_xyz;
+    traces.push({x:p.map(v=>v[0]),y:p.map(v=>v[1]),z:p.map(v=>v[2]),
+      type:"scatter3d",mode:"markers",name:"待剔除",
+      marker:{size:3.2,color:"#ff0000",opacity:1}});
+  }
   if(!traces.length){
     document.getElementById("plot3d").textContent="暂无可审核的 Tree display sample；完成 Batch 后刷新。";
     return;
@@ -377,12 +393,86 @@ async function loadEditorData(){
     if((pt.data?.name||pt.fullData?.name)==="单木"){
       const tid=trees3d.tree_id_by_index[pt.pointNumber];
       if(tid!=null){
+        if(trimMode==="COMPONENT"){
+          if(selected.size!==1 || !selected.has(tid)){
+            document.getElementById("editmsg").textContent="请点击当前选中单木中的误分点团。";
+            return;
+          }
+          previewComponent(tid,[Number(pt.x),Number(pt.y),Number(pt.z)]);
+          return;
+        }
         if(selected.has(tid)) selected.delete(tid); else selected.add(tid);
         refreshTrees();
       }
     }
   });
 }
+function requireOneTree(){
+  if(selected.size!==1){document.getElementById("editmsg").textContent="请先选择一棵单木。";return null;}
+  return [...selected][0];
+}
+function setTrimMode(mode,message){
+  trimMode=mode;
+  document.getElementById("btn-trim-component").style.outline=mode==="COMPONENT"?"3px solid #d64545":"";
+  document.getElementById("btn-trim-lasso").style.outline=mode==="LASSO"?"3px solid #d64545":"";
+  document.getElementById("editmsg").textContent=message||"";
+}
+async function showPreview(preview){
+  activePreview=preview;setTrimMode("PREVIEW","");removeLassoOverlay();
+  const percent=(preview.fraction*100).toFixed(1);
+  const warning=preview.large_removal_warning?" 本次将移除该树较大比例的点，请确认选择是否正确。":"";
+  document.getElementById("trim-summary").textContent=`待剔除 ${preview.point_count.toLocaleString()} 个点，占当前单木 ${percent}%。${warning}`;
+  document.getElementById("trim-preview").style.display="block";
+  await loadEditorData();
+}
+async function previewComponent(treeId,seed){
+  try{document.getElementById("editmsg").textContent="正在分析当前单木的完整点成员...";
+    await showPreview(await post("/api/trim/component-preview",{tree_id:treeId,seed_xyz:seed}));
+  }catch(e){setTrimMode("IDLE",e.message);}
+}
+function matrixMultiply(a,b){
+  const out=new Array(16).fill(0);
+  for(let c=0;c<4;c++)for(let r=0;r<4;r++)for(let k=0;k<4;k++)out[c*4+r]+=a[k*4+r]*b[c*4+k];
+  return out;
+}
+function currentViewProjection(){
+  const gp=document.getElementById("plot3d")._fullLayout?.scene?._scene?.glplot;
+  const cp=gp?.cameraParams;
+  if(!cp?.view||!cp?.projection||!cp?.model) throw new Error("当前 3D 相机状态不可用，请稍后重试。");
+  const columnMajor=matrixMultiply(cp.projection,matrixMultiply(cp.view,cp.model));
+  return Array.from({length:4},(_,r)=>Array.from({length:4},(_,c)=>columnMajor[c*4+r]));
+}
+function removeLassoOverlay(){if(lassoOverlay){lassoOverlay.remove();lassoOverlay=null;}}
+function beginLasso(){
+  const treeId=requireOneTree();if(treeId==null)return;
+  setTrimMode("LASSO","请圈出需要剔除的区域，闭合后可旋转视图检查。");
+  const host=document.getElementById("plot3d"),rect=host.getBoundingClientRect();
+  const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");lassoOverlay=svg;
+  Object.assign(svg.style,{position:"fixed",left:`${rect.left}px`,top:`${rect.top}px`,width:`${rect.width}px`,height:`${rect.height}px`,zIndex:20,cursor:"crosshair"});
+  const line=document.createElementNS(svg.namespaceURI,"polyline");line.setAttribute("fill","rgba(255,0,0,.12)");line.setAttribute("stroke","#ff0000");line.setAttribute("stroke-width","2");svg.appendChild(line);document.body.appendChild(svg);
+  let points=[],drawing=false;
+  svg.onpointerdown=e=>{drawing=true;points=[[e.offsetX,e.offsetY]];svg.setPointerCapture(e.pointerId);};
+  svg.onpointermove=e=>{if(!drawing)return;const last=points[points.length-1];if(Math.hypot(e.offsetX-last[0],e.offsetY-last[1])>=3){points.push([e.offsetX,e.offsetY]);line.setAttribute("points",points.map(p=>p.join(",")).join(" "));}};
+  svg.onpointerup=async e=>{if(!drawing)return;drawing=false;svg.releasePointerCapture(e.pointerId);
+    if(points.length<3){removeLassoOverlay();setTrimMode("IDLE","套索至少需要三个顶点。");return;}
+    const polygon=points.map(p=>[2*p[0]/rect.width-1,1-2*p[1]/rect.height]);
+    try{const preview=await post("/api/trim/lasso-preview",{tree_id:treeId,view_projection:currentViewProjection(),polygon_ndc:polygon});await showPreview(preview);}
+    catch(err){removeLassoOverlay();setTrimMode("IDLE",err.message);}
+  };
+}
+document.getElementById("btn-trim-component").onclick=()=>{if(requireOneTree()!=null)setTrimMode("COMPONENT","请点击需要从当前单木中剔除的误分点团。");};
+document.getElementById("btn-trim-lasso").onclick=beginLasso;
+document.getElementById("btn-trim-confirm").onclick=async()=>{
+  if(!activePreview)return;
+  try{const snap=await post("/api/trim/commit",{preview_id:activePreview.preview_id});activePreview=null;selected.clear();document.getElementById("trim-preview").style.display="none";setTrimMode("IDLE","已剔除所选点，可使用撤销精确恢复。");renderTrees(snap);await loadEditorData();}
+  catch(e){document.getElementById("editmsg").textContent="失败："+e.message;}
+};
+async function cancelTrim(){
+  if(activePreview){try{await post("/api/trim/cancel",{preview_id:activePreview.preview_id});}catch(e){}}
+  activePreview=null;removeLassoOverlay();document.getElementById("trim-preview").style.display="none";setTrimMode("IDLE","已取消，单木点成员未改变。");await loadEditorData();
+}
+document.getElementById("btn-trim-cancel").onclick=cancelTrim;
+document.addEventListener?.("keydown",e=>{if(e.key==="Escape"&&(trimMode!=="IDLE"||activePreview)){e.preventDefault();cancelTrim();}});
 document.getElementById("btn-delete").onclick=async()=>{
   try{await post("/api/select",{tree_ids:[...selected]});const s=await post("/api/delete",{});selected.clear();renderTrees(s);
       document.getElementById("editmsg").textContent="已删除所选单木";await loadEditorData();}

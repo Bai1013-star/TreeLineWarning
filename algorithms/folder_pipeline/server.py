@@ -302,6 +302,32 @@ class FolderServer:
                         return self._send_json(folder_server.orchestrator.editor_merge())
                     if path == "/api/undo":
                         return self._send_json(folder_server.orchestrator.editor_undo())
+                    if path == "/api/trim/component-preview":
+                        return self._send_json(
+                            folder_server.orchestrator.editor_preview_trim_component(
+                                int(payload.get("tree_id")), list(payload.get("seed_xyz") or [])
+                            )
+                        )
+                    if path == "/api/trim/lasso-preview":
+                        return self._send_json(
+                            folder_server.orchestrator.editor_preview_trim_lasso(
+                                int(payload.get("tree_id")),
+                                list(payload.get("view_projection") or []),
+                                list(payload.get("polygon_ndc") or []),
+                            )
+                        )
+                    if path == "/api/trim/commit":
+                        return self._send_json(
+                            folder_server.orchestrator.editor_commit_trim(
+                                str(payload.get("preview_id") or "")
+                            )
+                        )
+                    if path == "/api/trim/cancel":
+                        return self._send_json(
+                            folder_server.orchestrator.editor_cancel_trim(
+                                str(payload.get("preview_id") or "")
+                            )
+                        )
                     if path == "/api/confirm_trees":
                         return self._confirm_trees()
                     if path == "/restart":
@@ -527,25 +553,19 @@ class FolderServer:
         trees_out = {"xyz": [], "color": [], "tree_id_by_index": []}
 
         if orch.original_trees is not None:
-            original = orch.original_trees
-            # original tree id -> display colour (lowest-order rule for merges)
-            color_map: dict[int, str] = {}
-            for tree in snap["trees"]:
-                color_map[tree["tree_id"]] = _tree_color(tree)
-            rows = _even_rows(len(original.xyz_local_m), _MAX_TREE_DISPLAY)
-            # Sample FIRST, then add the origin only on the sampled rows: the
-            # editor xyz is a large (possibly memmap-backed) array, and this
-            # avoids materializing the full array just for display.
-            xyz = original.xyz_local_m[rows] + origin
-            tids = np.asarray(original.tree_id, dtype=np.int32)[rows]
-            colors: list[str] = []
-            for tid in tids:
-                effective = _effective_tree_id(session, int(tid))
-                colors.append(color_map.get(effective, "#9e9e9e"))
+            final_index, final_tree, final_xyz, _summary = session.build_final()
+            del final_index
+            rows = _even_rows(len(final_xyz), _MAX_TREE_DISPLAY)
+            # The view is sampled only after authoritative edit-log replay, so
+            # removed points disappear visually while the edit itself remains
+            # full-resolution and original_index based.
+            xyz = final_xyz[rows] + origin
+            tids = np.asarray(final_tree, dtype=np.int32)[rows]
+            colors = [_stable_color(int(tid)) for tid in tids]
             trees_out = {
                 "xyz": xyz.tolist(),
                 "color": colors,
-                "tree_id_by_index": [int(t) for t in tids],
+                "tree_id_by_index": tids.tolist(),
             }
 
         return {
