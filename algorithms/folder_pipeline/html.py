@@ -259,14 +259,21 @@ def step2_html() -> str:
       <p style="font-size:12px;color:#5f6b7a">
         点击选中单木。局部剔除会先红色预览，确认后才修改完整点成员。
       </p>
+      <div id="review-status" style="font-size:13px;font-weight:600;margin-bottom:8px">正在加载单木复核数据...</div>
+      <div id="current-tree" style="font-size:12px;color:#5f6b7a;margin-bottom:8px">当前：未选择</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button id="btn-prev" class="gray">上一棵</button>
+        <button id="btn-next" class="gray">下一棵</button>
         <button id="btn-delete" class="red">删除单木</button>
         <button id="btn-merge">合并选中</button>
         <button id="btn-trim-component">剔除误分团块</button>
         <button id="btn-trim-lasso">套索剔除</button>
         <button id="btn-undo" class="gray">撤销</button>
       </div>
+      <div id="selection-state" style="font-size:12px;color:#5f6b7a;margin-top:7px">未选择单木</div>
+      <div id="lasso-mode-indicator" style="display:none;margin-top:8px;padding:8px;border-radius:4px;background:#fff3cd;color:#6b4f00;font-weight:600;white-space:pre-line"></div>
       <div id="editmsg" class="msg" style="margin-top:6px"></div>
+      <details id="error-details" style="display:none;font-size:11px;color:#5f6b7a;margin-top:4px"><summary>查看详情</summary><pre id="error-detail-text" style="white-space:pre-wrap"></pre></details>
       <div id="trim-preview" style="display:none;margin-top:8px;padding:8px;border:2px solid #d64545;border-radius:4px;background:#fff5f5">
         <div id="trim-summary" style="font-size:13px;margin-bottom:7px"></div>
         <button id="btn-trim-confirm" class="red">确认剔除</button>
@@ -277,7 +284,7 @@ def step2_html() -> str:
         显示树编号
       </label>
       <div style="margin-top:10px">
-        <button id="btn-confirm" class="green">确认单木并继续</button>
+        <button id="btn-confirm" class="green">完成复核并生成 Excel</button>
       </div>
       <div id="progress" style="font-size:12px;margin-top:8px"></div>
     </div>
@@ -305,8 +312,21 @@ let refreshTimer = null;
 let trimMode = "IDLE";
 let activePreview = null;
 let lassoOverlay = null;
+let reviewed = new Set();
+let editorLoadPromise = null;
 
 function setStatus(t){document.getElementById("status").textContent=t;}
+function setEditingBusy(busy){
+  ["btn-prev","btn-next","btn-delete","btn-merge","btn-trim-component","btn-trim-lasso","btn-undo","btn-trim-confirm","btn-confirm"].forEach(id=>{
+    const element=document.getElementById(id);if(element)element.disabled=Boolean(busy);
+  });
+}
+function showFailure(error,prefix="失败："){
+  document.getElementById("editmsg").textContent=prefix+(error?.message||String(error));
+  const details=document.getElementById("error-details"),text=document.getElementById("error-detail-text");
+  if(details&&text&&error?.details){text.textContent=error.details;details.style.display="block";}
+  else if(details){details.style.display="none";}
+}
 function colorOf(treeId){
   const hue = ((treeId * 137.508) % 360) / 360;
   const c = hsvToRgb(hue, 0.68, 0.92);
@@ -318,7 +338,7 @@ function hsvToRgb(h,s,v){
 }
 async function post(path, payload){
   const r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload||{})});
-  if(!r.ok){const t=await r.json().catch(()=>({}));throw new Error(t.error?.message||t.error||("请求失败 "+path));}
+  if(!r.ok){const t=await r.json().catch(()=>({}));const e=new Error(t.error?.message||t.error||("请求失败 "+path));e.details=t.error?.details||"";throw e;}
   return r.json();
 }
 function scrollToTreeRow(treeId){
@@ -332,6 +352,7 @@ function renderTrees(snap, scrollToActive=false){
   tbody.innerHTML="";
   const currentIds = new Set((snap.trees||[]).map(t=>Number(t.tree_id)));
   selected = new Set([...selected].filter(id=>currentIds.has(Number(id))));
+  reviewed = new Set([...reviewed].filter(id=>currentIds.has(Number(id))));
   if(activeTreeId!=null && !currentIds.has(Number(activeTreeId))) activeTreeId=null;
   (snap.trees||[]).forEach(t=>{
     treeMap.set(Number(t.tree_id), t);
@@ -344,7 +365,17 @@ function renderTrees(snap, scrollToActive=false){
     tbody.appendChild(tr);
   });
   document.getElementById("treecount").textContent = `共 ${snap.current_tree_count} 棵`;
+  updateReviewStatus();
   if(scrollToActive && activeTreeId!=null) setTimeout(()=>scrollToTreeRow(activeTreeId),0);
+}
+function updateReviewStatus(){
+  const total=treeMap.size, reviewedCount=[...reviewed].filter(id=>treeMap.has(Number(id))).length;
+  document.getElementById("review-status").textContent=`${total} 棵树 · 已复核 ${reviewedCount} · 待复核 ${Math.max(0,total-reviewedCount)}`;
+  document.getElementById("current-tree").textContent=activeTreeId==null?"当前：未选择":`当前：树 ${activeTreeId}`;
+  const ids=[...selected].sort((a,b)=>a-b);
+  document.getElementById("selection-state").textContent=ids.length?`已选择 ${ids.length} 棵树：${ids.join("、")}`:"未选择单木";
+  document.getElementById("btn-delete").textContent=ids.length===1?`删除树 ${ids[0]}`:"删除单木";
+  document.getElementById("btn-merge").textContent=ids.length>1?`合并选中（${ids.length} 棵）`:"合并选中";
 }
 function treeIdFromPlotPoint(pt){
   const raw=pt.customdata!=null?pt.customdata:pt.data?.customdata?.[pt.pointNumber];
@@ -354,6 +385,7 @@ function treeIdFromPlotPoint(pt){
 function selectTree(treeId, toggle=true, scroll=false){
   const tid=Number(treeId);
   if(!treeMap.has(tid)) return;
+  if(activeTreeId!=null && activeTreeId!==tid) reviewed.add(Number(activeTreeId));
   activeTreeId=tid;
   if(toggle){
     if(selected.has(tid)) selected.delete(tid); else selected.add(tid);
@@ -504,12 +536,20 @@ async function refreshTrees(){
   try{
     const s=await (await fetch("/state")).json();
     setStatus(s.step_label + (s.current_message?" — "+s.current_message:""));
-    if(s.error){document.getElementById("editmsg").textContent="失败："+s.error;}
+    if(s.step==="FINALIZING") document.getElementById("progress").textContent=s.current_message||s.step_label;
+    if(s.error){
+      const error=new Error(s.error);error.details=s.error_details||"";showFailure(error);
+      document.getElementById("progress").textContent=s.current_message||"复核结果生成失败";
+      setEditingBusy(false);
+    }
     if(s.step==="DONE"){clearInterval(refreshTimer);window.location.href="/step3";}
     if(s.tree_snapshot) renderTrees(s.tree_snapshot);
   }catch(e){}
 }
 async function loadEditorData(){
+  if(editorLoadPromise) return editorLoadPromise;
+  editorLoadPromise=(async()=>{
+  if(!editorDisplay) document.getElementById("editmsg").textContent="正在加载单木列表与 3D 预览...";
   const data=await (await fetch("/api/editor_data")).json();
   // Payload contract: each display layer is an optional dict `{xyz:[...], ...}`
   // (background/wire/wires3d/tower) and the tree 3D cloud lives under
@@ -523,6 +563,10 @@ async function loadEditorData(){
   if(activeTreeId!=null && !currentIds.has(Number(activeTreeId))) activeTreeId=null;
   renderTrees({trees:data.trees||[],current_tree_count:(data.trees||[]).length}, false);
   renderEditorPlot();
+  if(document.getElementById("editmsg").textContent.startsWith("正在加载")) document.getElementById("editmsg").textContent="";
+  return data;
+  })();
+  try{return await editorLoadPromise;}finally{editorLoadPromise=null;}
 }
 function requireOneTree(){
   if(selected.size!==1){document.getElementById("editmsg").textContent="请先选择一棵单木。";return null;}
@@ -533,6 +577,9 @@ function setTrimMode(mode,message){
   document.getElementById("btn-trim-component").style.outline=mode==="COMPONENT"?"3px solid #d64545":"";
   document.getElementById("btn-trim-lasso").style.outline=mode==="LASSO"?"3px solid #d64545":"";
   document.getElementById("editmsg").textContent=message||"";
+  const indicator=document.getElementById("lasso-mode-indicator");
+  indicator.style.display=mode==="LASSO"?"block":"none";
+  indicator.textContent=mode==="LASSO"?"套索模式：拖动鼠标圈选要剔除的区域\\nEsc 取消":"";
 }
 async function showPreview(preview){
   activePreview=preview;setTrimMode("PREVIEW","");removeLassoOverlay();
@@ -540,7 +587,7 @@ async function showPreview(preview){
   const warning=preview.large_removal_warning?" 本次将移除该树较大比例的点，请确认选择是否正确。":"";
   document.getElementById("trim-summary").textContent=`待剔除 ${preview.point_count.toLocaleString()} 个点，占当前单木 ${percent}%。${warning}`;
   document.getElementById("trim-preview").style.display="block";
-  await loadEditorData();
+  renderEditorPlot();
 }
 async function previewComponent(treeId,seed){
   try{document.getElementById("editmsg").textContent="正在分析当前单木的完整点成员...";
@@ -575,60 +622,80 @@ function currentViewProjection(){
 function removeLassoOverlay(){if(lassoOverlay){lassoOverlay.remove();lassoOverlay=null;}}
 function beginLasso(){
   const treeId=requireOneTree();if(treeId==null)return;
-  setTrimMode("LASSO","请圈出需要剔除的区域，闭合后可旋转视图检查。");
+  setTrimMode("LASSO","套索模式已开启：拖动鼠标圈选；松开后恢复旋转。Esc 取消。");
   const host=document.getElementById("plot3d"),rect=host.getBoundingClientRect();
   const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");lassoOverlay=svg;
-  Object.assign(svg.style,{position:"fixed",left:`${rect.left}px`,top:`${rect.top}px`,width:`${rect.width}px`,height:`${rect.height}px`,zIndex:20,cursor:"crosshair"});
+  Object.assign(svg.style,{position:"fixed",left:`${rect.left}px`,top:`${rect.top}px`,width:`${rect.width}px`,height:`${rect.height}px`,zIndex:20,cursor:"crosshair",touchAction:"none",userSelect:"none"});
   const line=document.createElementNS(svg.namespaceURI,"polyline");line.setAttribute("fill","rgba(255,0,0,.12)");line.setAttribute("stroke","#ff0000");line.setAttribute("stroke-width","2");svg.appendChild(line);document.body.appendChild(svg);
   let points=[],drawing=false;
   svg.onpointerdown=e=>{drawing=true;points=[[e.offsetX,e.offsetY]];svg.setPointerCapture(e.pointerId);};
   svg.onpointermove=e=>{if(!drawing)return;const last=points[points.length-1];if(Math.hypot(e.offsetX-last[0],e.offsetY-last[1])>=3){points.push([e.offsetX,e.offsetY]);line.setAttribute("points",points.map(p=>p.join(",")).join(" "));}};
+  const abortDraw=message=>{drawing=false;removeLassoOverlay();setTrimMode("IDLE",message||"已取消套索，3D 旋转已恢复。");};
+  svg.onpointercancel=()=>abortDraw("套索已取消，3D 旋转已恢复。");
   svg.onpointerup=async e=>{if(!drawing)return;drawing=false;svg.releasePointerCapture(e.pointerId);
     if(points.length<3){removeLassoOverlay();setTrimMode("IDLE","套索至少需要三个顶点。");return;}
     const polygon=points.map(p=>[2*p[0]/rect.width-1,1-2*p[1]/rect.height]);
-    try{const preview=await post("/api/trim/lasso-preview",{tree_id:treeId,view_projection:currentViewProjection(),polygon_ndc:polygon});await showPreview(preview);}
-    catch(err){removeLassoOverlay();setTrimMode("IDLE",err.message);}
+    try{const matrix=currentViewProjection();removeLassoOverlay();setTrimMode("PREVIEW_LOADING","正在计算当前树的套索预览，3D 旋转已恢复...");
+      const preview=await post("/api/trim/lasso-preview",{tree_id:treeId,view_projection:matrix,polygon_ndc:polygon});await showPreview(preview);}
+    catch(err){removeLassoOverlay();setTrimMode("IDLE","");showFailure(err,"");}
   };
 }
 document.getElementById("btn-trim-component").onclick=()=>{if(requireOneTree()!=null)setTrimMode("COMPONENT","请点击需要从当前单木中剔除的误分点团。");};
 document.getElementById("btn-trim-lasso").onclick=beginLasso;
 document.getElementById("btn-trim-confirm").onclick=async()=>{
   if(!activePreview)return;
-  try{const snap=await post("/api/trim/commit",{preview_id:activePreview.preview_id});activePreview=null;selected.clear();document.getElementById("trim-preview").style.display="none";setTrimMode("IDLE","已剔除所选点，可使用撤销精确恢复。");renderTrees(snap);await loadEditorData();}
-  catch(e){document.getElementById("editmsg").textContent="失败："+e.message;}
+  setEditingBusy(true);
+  try{document.getElementById("editmsg").textContent="正在写入完整分辨率点成员...";
+    const snap=await post("/api/trim/commit",{preview_id:activePreview.preview_id});activePreview=null;selected.clear();document.getElementById("trim-preview").style.display="none";setTrimMode("IDLE","已剔除所选点，可使用撤销精确恢复。");renderTrees(snap);await loadEditorData();}
+  catch(e){showFailure(e);}finally{setEditingBusy(false);}
 };
 async function cancelTrim(){
   if(activePreview){try{await post("/api/trim/cancel",{preview_id:activePreview.preview_id});}catch(e){}}
-  activePreview=null;removeLassoOverlay();document.getElementById("trim-preview").style.display="none";setTrimMode("IDLE","已取消，单木点成员未改变。");await loadEditorData();
+  activePreview=null;removeLassoOverlay();document.getElementById("trim-preview").style.display="none";setTrimMode("IDLE","已取消，单木点成员未改变。");
+  renderEditorPlot();
 }
 document.getElementById("btn-trim-cancel").onclick=cancelTrim;
 document.getElementById("toggle-labels").onchange=e=>{showLabels=Boolean(e.target.checked);renderEditorPlot();};
 window.addEventListener?.("resize",scheduleHtmlLabels);
-document.addEventListener?.("keydown",e=>{if(e.key==="Escape"&&(trimMode!=="IDLE"||activePreview)){e.preventDefault();cancelTrim();}});
+function stepTree(delta){
+  if(!treeMap.size||trimMode!=="IDLE"||activePreview)return;
+  const ids=[...treeMap.keys()].sort((a,b)=>a-b),index=activeTreeId==null?(delta>0?-1:0):ids.indexOf(Number(activeTreeId));
+  const next=Math.max(0,Math.min(ids.length-1,index+delta));
+  selectTree(ids[next],false,true);
+}
+document.getElementById("btn-prev").onclick=()=>stepTree(-1);
+document.getElementById("btn-next").onclick=()=>stepTree(1);
+document.addEventListener?.("keydown",e=>{
+  if(e.key==="Escape"&&(trimMode!=="IDLE"||activePreview)){e.preventDefault();cancelTrim();return;}
+  if((e.key==="ArrowLeft"||e.key==="ArrowRight")&&trimMode==="IDLE"&&!activePreview&&!/INPUT|TEXTAREA|SELECT/.test(e.target?.tagName||"")){
+    e.preventDefault();stepTree(e.key==="ArrowLeft"?-1:1);
+  }
+});
 document.getElementById("btn-delete").onclick=async()=>{
-  try{await post("/api/select",{tree_ids:[...selected]});const s=await post("/api/delete",{});selected.clear();renderTrees(s);
+  setEditingBusy(true);try{await post("/api/select",{tree_ids:[...selected]});const s=await post("/api/delete",{});selected.clear();renderTrees(s);
       document.getElementById("editmsg").textContent="已删除所选单木";await loadEditorData();}
-  catch(e){document.getElementById("editmsg").textContent="失败："+e.message;}
+  catch(e){showFailure(e);}finally{setEditingBusy(false);}
 };
 document.getElementById("btn-merge").onclick=async()=>{
-  try{await post("/api/select",{tree_ids:[...selected]});const s=await post("/api/merge",{});selected.clear();renderTrees(s);
+  setEditingBusy(true);try{await post("/api/select",{tree_ids:[...selected]});const s=await post("/api/merge",{});selected.clear();renderTrees(s);
       document.getElementById("editmsg").textContent="已合并所选单木";await loadEditorData();}
-  catch(e){document.getElementById("editmsg").textContent="失败："+e.message;}
+  catch(e){showFailure(e);}finally{setEditingBusy(false);}
 };
 document.getElementById("btn-undo").onclick=async()=>{
-  try{const s=await post("/api/undo",{});selected.clear();renderTrees(s);
+  setEditingBusy(true);try{const s=await post("/api/undo",{});selected.clear();renderTrees(s);
       document.getElementById("editmsg").textContent="已撤销上一步";await loadEditorData();}
-  catch(e){document.getElementById("editmsg").textContent="失败："+e.message;}
+  catch(e){showFailure(e);}finally{setEditingBusy(false);}
 };
 document.getElementById("btn-confirm").onclick=async()=>{
-  const btn=document.getElementById("btn-confirm");btn.disabled=true;
-  document.getElementById("progress").textContent="正在计算最终净空/危险并生成 Excel...";
-  try{await post("/api/confirm_trees",{});}catch(e){
-    document.getElementById("editmsg").textContent="失败："+e.message;btn.disabled=false;return;}
-  refreshTimer=setInterval(refreshTrees,1200);
+  setEditingBusy(true);
+  if(activeTreeId!=null) reviewed.add(Number(activeTreeId));updateReviewStatus();
+  const pending=Math.max(0,treeMap.size-reviewed.size);
+  document.getElementById("editmsg").textContent=pending?`仍有 ${pending} 棵未逐棵查看，将按现有批量确认规则完成复核。`:"";
+  document.getElementById("progress").textContent="正在应用人工修改";
+  try{await post("/api/confirm_trees",{});}catch(e){showFailure(e);setEditingBusy(false);return;}
+  if(refreshTimer)clearInterval(refreshTimer);refreshTimer=setInterval(refreshTrees,700);refreshTrees();
 };
-loadEditorData();
-refreshTimer=setInterval(refreshTrees,1500);
+loadEditorData().then(()=>{refreshTrees();refreshTimer=setInterval(refreshTrees,1500);}).catch(showFailure);
 """
     return _page_shell("STEP 2 人工审核单木", "STEP 2 人工审核单木", body, script)
 

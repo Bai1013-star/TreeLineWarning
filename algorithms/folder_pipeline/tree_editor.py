@@ -273,17 +273,24 @@ class TreeEditSession:
         by_id = {record.tree_id: record for record in self.original.records}
         trees: list[dict[str, Any]] = []
         removed = self._removed_original_indices()
+        removed_by_source: dict[int, int] = {}
+        if len(removed):
+            # Count every removed exact member once.  The old per-tree np.isin
+            # loop rescanned the compact multi-million-row editor artifact for
+            # every tree, making a single historical trim slow all later UI
+            # refreshes.  This remains exact and never touches the raw source.
+            removed_rows = np.isin(self.original.original_index, removed)
+            source_ids, source_counts = np.unique(
+                self.original.tree_id[removed_rows], return_counts=True
+            )
+            removed_by_source = {
+                int(source_id): int(count)
+                for source_id, count in zip(source_ids, source_counts, strict=True)
+            }
         counts: dict[int, int] = {}
         for final_id, source_ids in members.items():
             total = sum(by_id[source_id].point_count for source_id in source_ids)
-            if len(removed):
-                source_indices = np.concatenate(
-                    [
-                        self.original.original_index[self._source_rows(source_id)]
-                        for source_id in source_ids
-                    ]
-                )
-                total -= int(np.count_nonzero(np.isin(removed, source_indices)))
+            total -= sum(removed_by_source.get(source_id, 0) for source_id in source_ids)
             counts[final_id] = total
         for final_id in sorted(members):
             source_ids = members[final_id]
@@ -326,6 +333,52 @@ class TreeEditSession:
             # ``edits_payload``.
             "operations": [_public_operation(op) for op in self.operations],
         }
+
+    def display_sample(self, limit: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return a bounded current-membership sample for interactive display only.
+
+        Confirm/final publication still use :meth:`build_final`.  This method
+        deliberately samples the compact editor membership without constructing
+        multi-million-row final arrays merely to render a few thousand points.
+        """
+
+        maximum = max(0, int(limit))
+        if maximum == 0 or not len(self.original.original_index):
+            return (
+                np.empty(0, dtype=np.int64),
+                np.empty(0, dtype=np.int32),
+                np.empty((0, 3), dtype=np.float64),
+            )
+        members, _merges = _apply_ops(self.original, self.operations)
+        source_to_final = {
+            int(source_id): int(final_id)
+            for final_id, source_ids in members.items()
+            for source_id in source_ids
+        }
+        candidate_count = min(len(self.original.original_index), maximum * 10)
+        candidate_rows = np.linspace(
+            0, len(self.original.original_index) - 1, candidate_count, dtype=np.int64
+        )
+        source_ids = self.original.tree_id[candidate_rows]
+        final_ids = np.asarray(
+            [source_to_final.get(int(source_id), -1) for source_id in source_ids],
+            dtype=np.int32,
+        )
+        keep = final_ids >= 0
+        removed = self._removed_original_indices()
+        if len(removed):
+            keep &= ~np.isin(self.original.original_index[candidate_rows], removed)
+        candidate_rows = candidate_rows[keep]
+        final_ids = final_ids[keep]
+        if len(candidate_rows) > maximum:
+            sampled = np.linspace(0, len(candidate_rows) - 1, maximum, dtype=np.int64)
+            candidate_rows = candidate_rows[sampled]
+            final_ids = final_ids[sampled]
+        return (
+            np.asarray(self.original.original_index[candidate_rows], dtype=np.int64),
+            final_ids,
+            np.asarray(self.original.xyz_local_m[candidate_rows], dtype=np.float64),
+        )
 
     def edits_payload(self) -> dict[str, Any]:
         return {

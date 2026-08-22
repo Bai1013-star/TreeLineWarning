@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import threading
 from collections.abc import Mapping
 from dataclasses import replace
@@ -101,6 +102,68 @@ def _load_json(path: Path) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _load_final_clearance(payload: Mapping[str, Any] | None) -> Any | None:
+    """Hydrate the persisted final-clearance publication for restart/export."""
+
+    if not payload:
+        return None
+    try:
+        from algorithms.spans.clearance import SpanClearanceResult, SpanTreeWireRecord
+
+        records = tuple(
+            SpanTreeWireRecord(
+                global_tree_id=int(item["global_tree_id"]),
+                external_name=str(item["external_name"]),
+                persistent_tree_id=item.get("persistent_tree_id"),
+                line_id=int(item["line_id"]),
+                span_id=int(item["span_id"]),
+                span_name=str(item["span_name"]),
+                nearest_wire_id=(
+                    None if item.get("nearest_wire_id") is None else int(item["nearest_wire_id"])
+                ),
+                minimum_clearance_m=(
+                    None
+                    if item.get("minimum_clearance_m") is None
+                    else float(item["minimum_clearance_m"])
+                ),
+                nearest_tree_original_index=(
+                    None
+                    if item.get("nearest_tree_original_index") is None
+                    else int(item["nearest_tree_original_index"])
+                ),
+                nearest_tree_xyz_local_m=(
+                    None
+                    if item.get("nearest_tree_xyz_local_m") is None
+                    else tuple(float(value) for value in item["nearest_tree_xyz_local_m"])
+                ),
+                nearest_wire_xyz_local_m=(
+                    None
+                    if item.get("nearest_wire_xyz_local_m") is None
+                    else tuple(float(value) for value in item["nearest_wire_xyz_local_m"])
+                ),
+                tree_point_count=int(item.get("tree_point_count", 0)),
+                evaluated_edge_count=int(item.get("evaluated_edge_count", 0)),
+                status=str(item.get("status", "UNKNOWN")),
+                danger_point_count=int(item.get("danger_point_count", 0)),
+            )
+            for item in payload.get("records", [])
+        )
+        diagnostics = dict(payload.get("diagnostics") or {})
+        return SpanClearanceResult(
+            records=records,
+            status=str(payload.get("status", "UNKNOWN")),
+            global_minimum_clearance_m=(
+                None
+                if payload.get("global_minimum_clearance_m") is None
+                else float(payload["global_minimum_clearance_m"])
+            ),
+            edge_count=int(diagnostics.get("edge_count", 0)),
+            diagnostics=diagnostics,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _unit_from_scan(scan: Any) -> UnitStatus:
     try:
         return UnitStatus(scan.capability_report["coordinate_declaration"]["unit_status"])
@@ -149,6 +212,14 @@ class DesktopWorkflow:
         self._batch_error: str | None = None
         self._editor: Any | None = None
         self._result: BatchAnalysisResult | None = None
+        self._editor_snapshot_cache: tuple[tuple[Any, ...], dict[str, Any]] | None = None
+        self._editor_display_cache: tuple[tuple[Any, ...], dict[str, Any]] | None = None
+        self._finalize_thread: threading.Thread | None = None
+        self._finalize_stage = "IDLE"
+        self._finalize_message = ""
+        self._finalize_error: str | None = None
+        self._finalize_detail: str | None = None
+        self._final_tree_records: dict[int, dict[str, Any]] = {}
         self._root = project_root.resolve()
         self._desktop_home = desktop_home
         self._logger = logging.getLogger(f"treeline.desktop.{id(self)}")
@@ -177,6 +248,14 @@ class DesktopWorkflow:
         self._editor = None
         self._result = None
         self._batch_error = None
+        self._editor_snapshot_cache = None
+        self._editor_display_cache = None
+        self._finalize_thread = None
+        self._finalize_stage = "IDLE"
+        self._finalize_message = ""
+        self._finalize_error = None
+        self._finalize_detail = None
+        self._final_tree_records = {}
         manifest = _load_json(self._manifest_path()) or {}
         if manifest.get("schema_version") not in {None, WORKFLOW_SCHEMA}:
             self._log("workflow_manifest_ignored", reason="unsupported_schema")
@@ -227,20 +306,39 @@ class DesktopWorkflow:
         self, manifest: Mapping[str, Any]
     ) -> BatchAnalysisResult | None:
         try:
+            self._final_tree_records = {
+                int(item["global_tree_id"]): dict(item)
+                for item in ((manifest.get("global_reconciliation") or {}).get("trees") or [])
+                if isinstance(item, Mapping) and item.get("global_tree_id") is not None
+            }
             project = self._stage_project()
             scan = self._scan(project)
             if scan is None:
                 return None
-            span_results = {
-                span_id: SpanScienceResult(
+            artifact_root = (
+                self._root
+                / "artifacts"
+                / "project-runs"
+                / "batches"
+                / str(manifest["analysis_run_id"])
+            )
+            span_results = {}
+            for span_id, raw in (manifest.get("span_results") or {}).items():
+                wire_result = None
+                try:
+                    from algorithms.spans.wire import load_span_wire_result
+
+                    wire_result = load_span_wire_result(artifact_root / span_id / "wire")
+                except (OSError, RuntimeError, ValueError, KeyError):
+                    pass
+                span_results[span_id] = SpanScienceResult(
                     tree_count=int(raw.get("tree_count", 0)),
                     minimum_clearance_m=raw.get("minimum_clearance_m"),
                     risk_threshold_m=float(raw.get("risk_threshold_m", 0.5)),
                     risk_counts=dict(raw.get("risk_counts") or {}),
                     diagnostics=dict(raw.get("diagnostics") or {}),
+                    wire_result=wire_result,
                 )
-                for span_id, raw in (manifest.get("span_results") or {}).items()
-            }
             statuses = {
                 span_id: BatchSpanStatus(value)
                 for span_id, value in (manifest.get("span_statuses") or {}).items()
@@ -274,6 +372,7 @@ class DesktopWorkflow:
                 telemetry=telemetry,
                 risk_policy_snapshot=dict(manifest.get("risk_policy_snapshot") or {}),
                 global_reconciled=global_reconciled,
+                final_clearance=_load_final_clearance(manifest.get("final_clearance")),
                 batch_diagnostics=dict(manifest.get("batch_diagnostics") or {}),
                 batch_manifest_reference=manifest.get("batch_manifest_reference"),
                 prediction_export_reference=manifest.get("prediction_export_reference"),
@@ -903,7 +1002,50 @@ class DesktopWorkflow:
             self._editor.session.operations = load_edits_payload(edits.get("operations", []))
         return self._editor
 
+    @staticmethod
+    def _editor_revision_key(editor: Any) -> tuple[Any, ...]:
+        """Cheap process-local key for cached UI projections.
+
+        Operation dictionaries are append-only and replaced on undo/reload, so
+        their identities distinguish edits without hashing compressed exact
+        membership payloads.
+        """
+
+        return (id(editor), *(id(operation) for operation in editor.session.operations))
+
+    def _editor_snapshot(self, editor: Any) -> dict[str, Any]:
+        key = self._editor_revision_key(editor)
+        if self._editor_snapshot_cache is None or self._editor_snapshot_cache[0] != key:
+            self._editor_snapshot_cache = (key, editor.snapshot())
+        return self._editor_snapshot_cache[1]
+
+    def _assert_editor_mutable(self) -> None:
+        if self._finalize_thread is not None and self._finalize_thread.is_alive():
+            raise ValueError("正在生成复核结果，请完成后再修改单木。")
+
     def editor_state(self) -> dict[str, Any]:
+        if self._finalize_stage == "DONE":
+            return {
+                "step": "DONE",
+                "step_label": "复核结果已生成",
+                "current_message": self._finalize_message,
+                "error": None,
+            }
+        if self._finalize_stage == "FAILED":
+            return {
+                "step": "FINALIZE_FAILED",
+                "step_label": "复核结果生成失败",
+                "current_message": self._finalize_message,
+                "error": self._finalize_error,
+                "error_details": self._finalize_detail,
+            }
+        if self._finalize_thread is not None and self._finalize_thread.is_alive():
+            return {
+                "step": "FINALIZING",
+                "step_label": self._finalize_message,
+                "current_message": self._finalize_message,
+                "error": None,
+            }
         editor = self._ensure_editor()
         if editor is None:
             return {
@@ -912,7 +1054,7 @@ class DesktopWorkflow:
                 "error": self.batch_projection().get("error"),
                 "tree_snapshot": {"trees": [], "current_tree_count": 0, "selected_ids": []},
             }
-        snapshot = editor.snapshot()
+        snapshot = self._editor_snapshot(editor)
         return {
             "step": "TREE_EDITING",
             "step_label": "STEP 2 · Tree Editor",
@@ -925,12 +1067,10 @@ class DesktopWorkflow:
         editor = self._ensure_editor()
         if editor is None:
             return _empty_display()
-        final_index, final_tree, final_xyz, _summary = editor.session.build_final()
-        if len(final_xyz) > _MAX_DISPLAY_POINTS:
-            rows = np.linspace(0, len(final_xyz) - 1, _MAX_DISPLAY_POINTS, dtype=np.int64)
-        else:
-            rows = np.arange(len(final_xyz), dtype=np.int64)
-        tree_ids = np.asarray(final_tree, dtype=np.int32)[rows]
+        key = self._editor_revision_key(editor)
+        if self._editor_display_cache is not None and self._editor_display_cache[0] == key:
+            return self._editor_display_cache[1]
+        _final_index, tree_ids, display_xyz = editor.session.display_sample(_MAX_DISPLAY_POINTS)
         colors = [f"hsl({(int(tree_id) * 137) % 360},72%,58%)" for tree_id in tree_ids]
         project = self._stage_project()
         tower_xyz: list[list[float]] = []
@@ -964,18 +1104,20 @@ class DesktopWorkflow:
                     ]
                 )
         display = _empty_display()
-        display["trees"] = [dict(item) for item in editor.snapshot().get("trees", [])]
+        display["trees"] = [dict(item) for item in self._editor_snapshot(editor).get("trees", [])]
         display["trees3d"] = {
-            "xyz": final_xyz[rows].tolist(),
+            "xyz": display_xyz.tolist(),
             "color": colors,
             "tree_id_by_index": tree_ids.tolist(),
         }
         display["tower"] = {"xyz": tower_xyz, "labels": labels}
         display["wire"] = {"xyz": wire_xyz}
         display["wires3d"] = {"xyz": wire_xyz}
+        self._editor_display_cache = (key, display)
         return display
 
     def select_editor_trees(self, tree_ids: list[int]) -> dict[str, Any]:
+        self._assert_editor_mutable()
         editor = self._ensure_editor()
         if editor is None:
             raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
@@ -983,31 +1125,34 @@ class DesktopWorkflow:
         return editor.snapshot()
 
     def delete_selected(self) -> dict[str, Any]:
+        self._assert_editor_mutable()
         editor = self._ensure_editor()
         if editor is None:
             raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
         editor.session.delete_selected()
-        editor.persist()
+        editor.persist_edits()
         self._log("tree_editor_delete", tree_edit_count=len(editor.session.operations))
-        return editor.snapshot()
+        return self._editor_snapshot(editor)
 
     def merge_selected(self) -> dict[str, Any]:
+        self._assert_editor_mutable()
         editor = self._ensure_editor()
         if editor is None:
             raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
         editor.session.merge_selected()
-        editor.persist()
+        editor.persist_edits()
         self._log("tree_editor_merge", tree_edit_count=len(editor.session.operations))
-        return editor.snapshot()
+        return self._editor_snapshot(editor)
 
     def undo_editor(self) -> dict[str, Any]:
+        self._assert_editor_mutable()
         editor = self._ensure_editor()
         if editor is None:
             raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
         editor.session.undo()
-        editor.persist()
+        editor.persist_edits()
         self._log("tree_editor_undo", tree_edit_count=len(editor.session.operations))
-        return editor.snapshot()
+        return self._editor_snapshot(editor)
 
     def _trim_binding(self) -> str:
         editor = self._ensure_editor()
@@ -1016,6 +1161,7 @@ class DesktopWorkflow:
         return f"{self._root}|{editor.result.analysis_run_id}"
 
     def preview_trim_component(self, tree_id: int, seed_xyz: list[float]) -> dict[str, Any]:
+        self._assert_editor_mutable()
         editor = self._ensure_editor()
         if editor is None:
             raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
@@ -1029,6 +1175,7 @@ class DesktopWorkflow:
     def preview_trim_lasso(
         self, tree_id: int, view_projection: list[list[float]], polygon_ndc: list[list[float]]
     ) -> dict[str, Any]:
+        self._assert_editor_mutable()
         editor = self._ensure_editor()
         if editor is None:
             raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
@@ -1040,6 +1187,7 @@ class DesktopWorkflow:
         return preview
 
     def commit_trim(self, preview_id: str) -> dict[str, Any]:
+        self._assert_editor_mutable()
         editor = self._ensure_editor()
         if editor is None:
             raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
@@ -1048,11 +1196,12 @@ class DesktopWorkflow:
             binding=self._trim_binding(),
             minimum_remaining_points=int(editor.config.tree_min_final_members),
         )
-        editor.persist()
+        editor.persist_edits()
         self._log("tree_editor_trim", tree_edit_count=len(editor.session.operations))
-        return editor.snapshot()
+        return self._editor_snapshot(editor)
 
     def cancel_trim(self, preview_id: str) -> dict[str, Any]:
+        self._assert_editor_mutable()
         editor = self._ensure_editor()
         if editor is None:
             raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
@@ -1067,21 +1216,139 @@ class DesktopWorkflow:
         rows = np.linspace(0, len(xyz) - 1, min(len(xyz), _MAX_DISPLAY_POINTS), dtype=np.int64)
         return {"xyz": xyz[rows].tolist(), "full_point_count": int(len(xyz))}
 
+    def _set_finalize_stage(self, stage: str, message: str) -> None:
+        with self._lock:
+            self._finalize_stage = stage
+            self._finalize_message = message
+
+    def _require_finalize_disk_space(self, editor: Any) -> None:
+        """Fail early only when current temp/final artifacts plainly cannot fit."""
+
+        existing = [
+            editor.artifact_root / "tree_segmentation_original.npz",
+            editor.artifact_root / "tree_segmentation_final.npz",
+        ]
+        largest = max((path.stat().st_size for path in existing if path.is_file()), default=0)
+        required = max(64 * 1024**2, largest * 2 + 64 * 1024**2)
+        available = shutil.disk_usage(self._root).free
+        if available < required:
+            raise OSError(28, "No space left on device")
+
     def finalize(self) -> dict[str, Any]:
+        """Synchronous compatibility path used by non-UI callers and tests."""
+
+        self._assert_editor_mutable()
         editor = self._ensure_editor()
         if editor is None:
             raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
+        self._require_finalize_disk_space(editor)
         editor.mark_reviewed()
         self._result = editor.finalize()
+        self._final_tree_records = {
+            int(record.global_tree_id): record.to_dict()
+            for record in self._result.global_reconciled.global_tree_records
+        }
         self._workflow["last_batch_status"] = self._result.status
         self._save_workflow()
         self._log("tree_editor_finalized", analysis_run_id=self._result.analysis_run_id)
         return self.batch_projection()
 
+    def _run_finalize(self) -> None:
+        try:
+            editor = self._ensure_editor()
+            if editor is None:
+                raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
+            self._require_finalize_disk_space(editor)
+            editor.mark_reviewed()
+
+            stage_messages = {
+                "APPLYING_EDITS": "正在应用人工修改",
+                "RECALCULATING_CLEARANCE": "正在重新计算净空",
+                "VALIDATING_CLEARANCE": "正在验证已保存的净空结果",
+            }
+
+            def editor_progress(stage: str) -> None:
+                self._set_finalize_stage(stage, stage_messages[stage])
+
+            self._result = editor.finalize(progress=editor_progress)
+            self._final_tree_records = {
+                int(record.global_tree_id): record.to_dict()
+                for record in self._result.global_reconciled.global_tree_records
+            }
+            self._workflow["last_batch_status"] = self._result.status
+            self._save_workflow()
+
+            from core.stage_b.export import export_batch_prediction
+
+            export_messages = {
+                "RECALCULATING_RISK": "正在重新计算风险",
+                "GENERATING_EXCEL": "正在生成 Excel",
+            }
+
+            def export_progress(stage: str) -> None:
+                self._set_finalize_stage(stage, export_messages[stage])
+
+            path = self._root / "exports" / "Prediction_Input.xlsx"
+            export_batch_prediction(
+                self._result,
+                path,
+                final_reconciled=self._result.global_reconciled,
+                progress=export_progress,
+            )
+            self._log(
+                "tree_editor_finalized",
+                analysis_run_id=self._result.analysis_run_id,
+                prediction_export=str(path),
+            )
+            self._set_finalize_stage("DONE", "完成")
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+            no_space = isinstance(exc, OSError) and getattr(exc, "errno", None) == 28
+            message = (
+                "磁盘剩余空间不足，无法完成复核结果生成。请释放 E 盘空间后重试。"
+                if no_space
+                else "复核结果生成失败，请查看详情后重试。"
+            )
+            with self._lock:
+                self._finalize_stage = "FAILED"
+                self._finalize_message = message
+                self._finalize_error = message
+                self._finalize_detail = detail
+            self._log("tree_editor_finalize_failure", error=detail)
+        finally:
+            with self._lock:
+                self._finalize_thread = None
+
+    def start_finalize(self) -> dict[str, Any]:
+        with self._lock:
+            if self._finalize_thread is not None and self._finalize_thread.is_alive():
+                raise ValueError("复核结果正在生成，请稍候。")
+            self._finalize_error = None
+            self._finalize_detail = None
+            self._finalize_stage = "APPLYING_EDITS"
+            self._finalize_message = "正在应用人工修改"
+            self._finalize_thread = threading.Thread(target=self._run_finalize, daemon=True)
+            self._finalize_thread.start()
+        return self.editor_state()
+
     def export_prediction(self) -> Path:
         editor = self._ensure_editor()
         if editor is None:
             raise ValueError("PREDICTION_EXPORT_REQUIRES_FINALIZED_BATCH")
+        path = self._root / "exports" / "Prediction_Input.xlsx"
+        batch_path = editor.artifact_root / "batch.json"
+        edits_path = editor.artifact_root / "tree_edits.json"
+        source_times = [
+            item.stat().st_mtime_ns for item in (batch_path, edits_path) if item.is_file()
+        ]
+        if path.is_file() and source_times and path.stat().st_mtime_ns >= max(source_times):
+            return path
+        if (
+            batch_path.is_file()
+            and edits_path.is_file()
+            and edits_path.stat().st_mtime_ns > batch_path.stat().st_mtime_ns
+        ):
+            raise ValueError("人工修改已更新，请先点击“完成复核并生成 Excel”。")
         if self._result is None:
             self._result = editor.result
         if any(
@@ -1090,11 +1357,9 @@ class DesktopWorkflow:
         ):
             editor.mark_reviewed()
             self._result = editor.finalize()
-        else:
-            editor.persist()
         from core.stage_b.export import export_batch_prediction
 
-        path = self._root / "exports" / "Prediction_Input.xlsx"
+        self._require_finalize_disk_space(editor)
         export_batch_prediction(self._result, path, final_reconciled=editor.final_reconciled())
         self._log("prediction_export", path=str(path))
         return path
@@ -1103,20 +1368,76 @@ class DesktopWorkflow:
         editor = self._ensure_editor()
         if editor is None:
             return {"trees": [], "display": _empty_display(), "metadata": {}}
-        snapshot = editor.snapshot()
+        if self._result is None:
+            self._result = editor.result
+        snapshot = self._editor_snapshot(editor)
+        reconciled = self._result.global_reconciled
+        records = {
+            int(record.global_tree_id): record
+            for record in (reconciled.global_tree_records if reconciled is not None else ())
+        }
+        clearance_by_tree = {
+            int(record.global_tree_id): record
+            for record in (
+                self._result.final_clearance.records if self._result.final_clearance else ()
+            )
+        }
         rows = []
         for tree in snapshot.get("trees", []):
+            tree_id = int(tree.get("tree_id"))
+            record = records.get(tree_id)
+            persisted_record = self._final_tree_records.get(tree_id, {})
+            clearance = clearance_by_tree.get(tree_id)
+            minimum = None if clearance is None else clearance.minimum_clearance_m
+            current_risk = None
+            record_review = bool(persisted_record.get("review", record.review if record else False))
+            quality_state = "REVIEW_REQUIRED" if record_review else "VALID"
+            if clearance is not None:
+                from core.stage_b.contact import contact_evidence_from_clearance
+
+                evidence = contact_evidence_from_clearance(
+                    minimum,
+                    clearance_status=clearance.status,
+                )
+                assessment = self._risk_policy().classify(
+                    clearance_m=minimum,
+                    contact=(
+                        False if evidence.state.value == "CONTACT_NOT_CONFIRMED" else None
+                    ),
+                    review_required=record_review or evidence.review_required,
+                )
+                current_risk = assessment.risk.value
+                if evidence.review_required:
+                    quality_state = "REVIEW_REQUIRED"
             rows.append(
                 {
-                    "persistent_tree_id": tree.get("persistent_tree_id")
-                    or f"fixture-tree-{tree.get('tree_id')}",
-                    "height_m": tree.get("apex_height_m"),
+                    "persistent_tree_id": (
+                        persisted_record.get("persistent_tree_id")
+                        or (record.persistent_tree_id if record is not None else f"tree-{tree_id}")
+                    ),
+                    "height_m": (
+                        persisted_record.get("apex_height_m")
+                        if persisted_record.get("apex_height_m") is not None
+                        else (
+                            record.apex_height_m
+                            if record is not None
+                            else tree.get("apex_height_m")
+                        )
+                    ),
                     "crown_width_m": None,
-                    "minimum_clearance_m": 0.75,
-                    "danger_point_count": 0,
-                    "current_risk": "SAFE",
-                    "quality_state": "REVIEW_REQUIRED" if tree.get("review") else "VALID",
-                    "human_edited": bool(editor.session.operations),
+                    "minimum_clearance_m": minimum,
+                    "danger_point_count": (
+                        None if clearance is None else clearance.danger_point_count
+                    ),
+                    "current_risk": current_risk,
+                    "quality_state": quality_state,
+                    "human_edited": bool(
+                        str(
+                            persisted_record.get(
+                                "identity_state", record.identity_state if record else ""
+                            )
+                        ).startswith("HUMAN_")
+                    ),
                 }
             )
         return {

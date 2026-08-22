@@ -18,6 +18,7 @@ def export_batch_prediction(
     *,
     final_reconciled: Any | None = None,
     identity_by_tree: Mapping[int, Mapping[str, Any]] | None = None,
+    progress: Any = None,
 ) -> Path:
     """Export only a globally reconciled, finalized tree set.
 
@@ -41,6 +42,8 @@ def export_batch_prediction(
         record.global_tree_id: record
         for record in (result.final_clearance.records if result.final_clearance else ())
     }
+    if progress is not None:
+        progress("RECALCULATING_RISK")
     rows: list[dict[str, Any]] = []
     for record in reconciled.global_tree_records:
         extra = dict((identity_by_tree or {}).get(record.global_tree_id, {}))
@@ -122,6 +125,8 @@ def export_batch_prediction(
         ),
         "prediction_source": "FINAL_GLOBAL_RECONCILED_POST_EDITOR",
     }
+    if progress is not None:
+        progress("GENERATING_EXCEL")
     return write_prediction_input_excel(Path(output_path), rows, metadata)
 
 

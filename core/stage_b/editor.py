@@ -100,16 +100,18 @@ class BatchTreeEditor:
         np.savez(temporary, **arrays)
         temporary.replace(path)
 
-    def persist(self) -> None:
-        """Persist clean/original, edit-log, and current/final memberships."""
+    def persist_edits(self) -> None:
+        """Atomically persist exact edits without republishing reconstructible finals."""
 
         self.artifact_root.mkdir(parents=True, exist_ok=True)
-        self._write_npz(
-            self.artifact_root / "tree_segmentation_original.npz",
-            original_index=np.asarray(self.original.original_index, dtype=np.int64),
-            xyz_local_m=np.asarray(self.original.xyz_local_m, dtype=np.float64),
-            tree_id=np.asarray(self.original.tree_id, dtype=np.int32),
-        )
+        original_path = self.artifact_root / "tree_segmentation_original.npz"
+        if not original_path.is_file():
+            self._write_npz(
+                original_path,
+                original_index=np.asarray(self.original.original_index, dtype=np.int64),
+                xyz_local_m=np.asarray(self.original.xyz_local_m, dtype=np.float64),
+                tree_id=np.asarray(self.original.tree_id, dtype=np.int32),
+            )
         edits = self.session.edits_payload()
         edits.update(
             {
@@ -121,18 +123,32 @@ class BatchTreeEditor:
             }
         )
         self._write_json(self.artifact_root / "tree_edits.json", edits)
-        final_index, final_tree, final_xyz, _summary = self.session.build_final()
+
+    def persist(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[int, dict[str, Any]]]:
+        """Persist clean/original, edit-log, and current/final memberships."""
+
+        self.persist_edits()
+        final_index, final_tree, final_xyz, summary = self.session.build_final()
         self._write_npz(
             self.artifact_root / "tree_segmentation_final.npz",
             original_index=final_index,
             xyz_local_m=final_xyz,
             tree_id=final_tree,
         )
+        return final_index, final_tree, final_xyz, summary
 
-    def final_reconciled(self) -> TreeReconciliationResult:
+    def final_reconciled(
+        self,
+        final_membership: tuple[
+            np.ndarray, np.ndarray, np.ndarray, dict[int, dict[str, Any]]
+        ]
+        | None = None,
+    ) -> TreeReconciliationResult:
         """Return the post-editor, unique full-resolution publication result."""
 
-        final_index, final_tree, final_xyz, _summary = self.session.build_final()
+        final_index, final_tree, final_xyz, _summary = (
+            final_membership if final_membership is not None else self.session.build_final()
+        )
         if len(final_index) != len(np.unique(final_index)):
             raise BatchTreeEditorError("DUPLICATE_FINAL_ORIGINAL_INDEX")
         current = {
@@ -264,7 +280,7 @@ class BatchTreeEditor:
                 statuses[span_id] = BatchSpanStatus.USER_REVIEWED
         self.result = replace(self.result, span_statuses=statuses)
 
-    def finalize(self) -> Any:
+    def finalize(self, *, progress: Any = None) -> Any:
         """Persist edited memberships and return a finalized exportable result."""
 
         from core.stage_b.batch import BatchSpanStatus
@@ -277,8 +293,10 @@ class BatchTreeEditor:
             for status in statuses.values()
         ):
             raise BatchTreeEditorError("FINALIZE_REQUIRES_USER_REVIEW")
-        self.persist()
-        final = self.final_reconciled()
+        if progress is not None:
+            progress("APPLYING_EDITS")
+        final_membership = self.persist()
+        final = self.final_reconciled(final_membership)
         final_clearance = self.result.final_clearance
         wire_results = [
             value.wire_result
@@ -286,6 +304,8 @@ class BatchTreeEditor:
             if value.wire_result is not None
         ]
         if wire_results and len(wire_results) == len(self.result.span_statuses):
+            if progress is not None:
+                progress("RECALCULATING_CLEARANCE")
             from algorithms.spans.clearance import run_span_tree_wire_clearance
 
             final_clearance = run_span_tree_wire_clearance(
@@ -296,6 +316,8 @@ class BatchTreeEditor:
                     self.result.risk_policy_snapshot["warning_clearance_threshold_m"]
                 ),
             )
+        elif progress is not None:
+            progress("VALIDATING_CLEARANCE")
         statuses = {span_id: BatchSpanStatus.FINALIZED for span_id in statuses}
         self.result = replace(
             self.result,

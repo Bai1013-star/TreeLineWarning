@@ -159,6 +159,33 @@ def test_step2_js_links_viewer_and_table_selection_and_label_toggle():
     assert "button.classList.add(\"selected\")" in js
 
 
+def test_step2_lasso_preview_and_cancel_do_not_reload_full_editor_payload():
+    """Preview/cancel are display-only transitions; commit remains authoritative."""
+
+    js = _extract_step2_js()
+    show_preview = re.search(r"async function showPreview\(preview\)\{([\s\S]*?)\n\}", js)
+    cancel_trim = re.search(r"async function cancelTrim\(\)\{([\s\S]*?)\n\}", js)
+    assert show_preview and cancel_trim
+    assert "renderEditorPlot()" in show_preview.group(1)
+    assert "loadEditorData" not in show_preview.group(1)
+    assert "renderEditorPlot()" in cancel_trim.group(1)
+    assert "loadEditorData" not in cancel_trim.group(1)
+    assert "await loadEditorData()" in js  # authoritative commit/delete/merge/undo refresh
+
+
+def test_step2_exposes_lasso_mode_review_status_and_tree_navigation():
+    html = step2_html()
+    js = _extract_step2_js()
+    assert "套索模式：拖动鼠标圈选要剔除的区域" in html
+    assert "Esc 取消" in html
+    assert 'id="review-status"' in html
+    assert 'id="current-tree"' in html
+    assert 'id="btn-prev"' in html and 'id="btn-next"' in html
+    assert "已选择 ${ids.length} 棵树" in js
+    assert 'e.key==="ArrowLeft"||e.key==="ArrowRight"' in js
+    assert 'touchAction:"none"' in js
+
+
 def test_step3_js_guards_display_dict_layers():
     """Step-3 final JS guards the dict-`xyz` layers instead of calling `.length`."""
     js = _extract_step3_js()

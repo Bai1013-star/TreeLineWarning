@@ -132,11 +132,35 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             content_type="application/json; charset=utf-8",
         )
 
-    def _error(self, message: str, *, status: int = HTTPStatus.BAD_REQUEST) -> None:
+    def _error(
+        self,
+        message: str,
+        *,
+        status: int = HTTPStatus.BAD_REQUEST,
+        details: str | None = None,
+    ) -> None:
         self._send_json(
-            {"ok": False, "error": {"code": "DESKTOP_WORKFLOW_ERROR", "message": message}},
+            {
+                "ok": False,
+                "error": {
+                    "code": "DESKTOP_WORKFLOW_ERROR",
+                    "message": message,
+                    "details": details,
+                },
+            },
             status=status,
         )
+
+    def _exception_error(self, exc: Exception, *, status: int = HTTPStatus.CONFLICT) -> None:
+        details = f"{type(exc).__name__}: {exc}"
+        if isinstance(exc, OSError) and getattr(exc, "errno", None) == 28:
+            self._error(
+                "磁盘剩余空间不足，无法完成复核结果生成。请释放 E 盘空间后重试。",
+                status=status,
+                details=details,
+            )
+            return
+        self._error(details, status=status)
 
     def _static(self, relative: str) -> None:
         root = self.application.resource_root.resolve()
@@ -233,7 +257,7 @@ class _DesktopHandler(BaseHTTPRequestHandler):
         if path == "/api/final":
             self._send_json(self.workflow.final_projection())
             return
-        if path == "/download_prediction":
+        if path in {"/download_prediction", "/download_excel"}:
             try:
                 output = self.workflow.export_prediction()
                 self._send_bytes(
@@ -242,7 +266,7 @@ class _DesktopHandler(BaseHTTPRequestHandler):
                     download_name="Prediction_Input.xlsx",
                 )
             except Exception as exc:
-                self._error(f"导出失败: {type(exc).__name__}: {exc}", status=HTTPStatus.CONFLICT)
+                self._exception_error(exc)
             return
         self._error("未找到本地资源", status=HTTPStatus.NOT_FOUND)
 
@@ -307,7 +331,7 @@ class _DesktopHandler(BaseHTTPRequestHandler):
                 self._send_json(self.workflow.retry_failed())
                 return
             if path == "/api/desktop/batch/finalize" or path == "/api/confirm_trees":
-                self._send_json(self.workflow.finalize())
+                self._send_json(self.workflow.start_finalize())
                 return
             if path == "/api/select":
                 self._send_json(
@@ -350,7 +374,7 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             self._error("未找到本地操作", status=HTTPStatus.NOT_FOUND)
         except (ValueError, KeyError, TypeError, OSError, RuntimeError) as exc:
             self.workflow._log("api_failure", path=path, error=f"{type(exc).__name__}: {exc}")
-            self._error(f"{type(exc).__name__}: {exc}", status=HTTPStatus.CONFLICT)
+            self._exception_error(exc)
 
     def _create_fixture_source(self) -> Path:
         root = self.workflow.project_root / "data" / "raw"
