@@ -159,5 +159,6 @@ def test_release_build_cannot_silently_omit_pdal_runtime():
     ).read_text(encoding="utf-8")
 
     assert "TREELINE_PDAL_RUNTIME_ENV is required" in spec
+    assert "validate_pdal_binding_abi" in spec
     assert '[str(bin_root), os.environ.get("PATH", "")]' in spec
     assert "return [], [], []" not in spec

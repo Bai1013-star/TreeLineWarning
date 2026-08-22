@@ -6,6 +6,9 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
+sys.path.insert(0, SPECPATH)
+from desktop.build_contract import validate_pdal_binding_abi
+
 hiddenimports = (
     collect_submodules("algorithms")
     + collect_submodules("core")
@@ -56,9 +59,13 @@ def _pdal_binaries() -> tuple[list[tuple[str, str]], list[tuple[str, str]], list
     if pdal_site_parent not in sys.path:
         sys.path.append(pdal_site_parent)
 
+    pdal_extensions = tuple(pdal_site.glob("*.pyd"))
+    validate_pdal_binding_abi(
+        pdal_extensions, python_version=(sys.version_info.major, sys.version_info.minor)
+    )
     candidates = {path.name.lower(): path for path in bin_root.glob("*.dll")}
-    candidates.update({path.name.lower(): path for path in pdal_site.glob("*.pyd")})
-    queue = deque(["pdalcpp.dll", *[path.name for path in pdal_site.glob("*.pyd")]])
+    candidates.update({path.name.lower(): path for path in pdal_extensions})
+    queue = deque(["pdalcpp.dll", *[path.name for path in pdal_extensions]])
     seen: set[str] = set()
     native: list[tuple[str, str]] = []
     try:
