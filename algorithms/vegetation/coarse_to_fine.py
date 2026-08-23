@@ -259,6 +259,86 @@ def recover_vegetation_region_raw(
     return region
 
 
+def recover_wire_and_high_recall_regions_raw(
+    source_las: Path,
+    working_set: WeightedWorkingSet,
+    wire_representative_ids: np.ndarray,
+    wire_output_root: Path,
+    vegetation_output_root: Path,
+    *,
+    chunk_size: int = _RAW_REGION_CHUNK,
+) -> tuple[RawRegion, RawRegion]:
+    """Recover Wire and all-source Vegetation regions in one exact source pass.
+
+    Vegetation HIGH RECALL retains every source row.  Wire retains exactly the
+    rows whose coarse representative is in ``wire_representative_ids``.  The
+    two writers receive the same decoded source chunk, preserving original row
+    order and the established role semantics while eliminating a redundant
+    second LAS traversal.
+    """
+
+    source_las = Path(source_las).resolve()
+    if not source_las.is_file():
+        raise FastResearchError("COARSE_TO_FINE_VEG_SOURCE_MISSING")
+    retained = np.asarray(wire_representative_ids, dtype=np.uint32)
+    if retained.ndim != 1 or (
+        len(retained) and int(retained.max()) >= working_set.representative_count
+    ):
+        raise FastResearchError("COARSE_TO_FINE_VEG_RETAINED_INVALID")
+    is_wire = np.zeros(working_set.representative_count, dtype=bool)
+    is_wire[retained] = True
+    raw_to_rep = np.load(working_set.raw_to_representative_npy_path, mmap_mode="r")
+    if raw_to_rep.shape != (working_set.source_point_count,):
+        raise FastResearchError("COARSE_TO_FINE_VEG_MAPPING_INVALID")
+    origin = np.asarray(working_set.source_bounds_min_xyz, dtype=np.float64)
+    wire_writer = _RawRegionWriter(
+        Path(wire_output_root).resolve(),
+        origin_xyz=tuple(float(value) for value in origin),
+    )
+    vegetation_writer = _RawRegionWriter(
+        Path(vegetation_output_root).resolve(),
+        origin_xyz=tuple(float(value) for value in origin),
+    )
+    offset = 0
+    try:
+        with laspy.open(source_las) as reader:
+            for chunk in reader.chunk_iterator(chunk_size):
+                count = len(chunk)
+                original = np.arange(offset, offset + count, dtype=np.int64)
+                xyz_absolute = np.column_stack(
+                    (np.asarray(chunk.x), np.asarray(chunk.y), np.asarray(chunk.z))
+                ).astype(np.float64, copy=False)
+                classification = np.asarray(chunk.classification, dtype=np.uint8)
+                xyz_local = xyz_absolute - origin
+                vegetation_writer.append(xyz_local, original, classification)
+                wire_mask = is_wire[np.asarray(raw_to_rep[original], dtype=np.uint32)]
+                if np.any(wire_mask):
+                    wire_writer.append(
+                        xyz_local[wire_mask],
+                        original[wire_mask],
+                        classification[wire_mask],
+                    )
+                offset += count
+        if offset != working_set.source_point_count:
+            raise FastResearchError("COARSE_TO_FINE_VEG_SOURCE_COUNT_CHANGED")
+        wire_region = wire_writer.close()
+        vegetation_region = vegetation_writer.close()
+    except Exception:
+        wire_writer.abort()
+        vegetation_writer.abort()
+        raise
+    finally:
+        del raw_to_rep
+    _write_region_sidecar(
+        wire_region, Path(wire_output_root).resolve() / "region_sidecar.json"
+    )
+    _write_region_sidecar(
+        vegetation_region,
+        Path(vegetation_output_root).resolve() / "region_sidecar.json",
+    )
+    return wire_region, vegetation_region
+
+
 def recover_wire_region_raw(
     source_las: Path,
     region_bounds: tuple[tuple[float, float, float], tuple[float, float, float]],

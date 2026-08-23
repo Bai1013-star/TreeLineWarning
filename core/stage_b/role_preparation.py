@@ -10,11 +10,14 @@ role-specific tile indexes expected by the executor.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import numpy as np
 
@@ -94,6 +97,131 @@ def _span_admission_digest(span_inputs: tuple[SpanAnalysisInput, ...]) -> str:
     )
 
 
+def _global_cache_root(project_root: Path) -> Path:
+    configured = os.environ.get("TREELINE_SOURCE_CACHE_ROOT")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    anchor = Path(project_root.anchor)
+    return (anchor / "TreeLineWarning-source-cache" / "role-index-v1").resolve()
+
+
+def _link_tree(source: Path, destination: Path) -> None:
+    """Materialize an immutable cache entry with hard links where possible."""
+
+    if destination.exists():
+        raise FileExistsError(destination)
+    destination.mkdir(parents=True)
+    for item in source.iterdir():
+        target = destination / item.name
+        if item.is_dir():
+            _link_tree(item, target)
+        else:
+            try:
+                os.link(item, target)
+            except OSError:
+                shutil.copy2(item, target)
+
+
+def _global_role_cache_key(
+    source_identity: Mapping[str, Any],
+    *,
+    point_count: int,
+    admission_digest: str,
+    wire_configuration_digest: str,
+    vegetation_configuration_digest: str,
+) -> str | None:
+    from algorithms.spans.role_tiles import role_source_cache_identity
+
+    from core.config.fast_baseline import canonical_digest
+
+    portable = role_source_cache_identity(source_identity)
+    if portable.get("schema") != "treeline-strong-source-cache-identity-v1":
+        return None
+    return canonical_digest(
+        {
+            "schema": "treeline-global-role-index-cache-v1",
+            "source": portable,
+            "source_point_count": point_count,
+            "wire_span_admission_digest": admission_digest,
+            "wire_configuration_digest": wire_configuration_digest,
+            "vegetation_configuration_digest": vegetation_configuration_digest,
+        }
+    )
+
+
+def _reuse_global_role_cache(
+    cache_root: Path,
+    *,
+    cache_key: str,
+    wire_root: Path,
+    vegetation_root: Path,
+) -> bool:
+    entry = cache_root / cache_key
+    completion = entry / "COMPLETE.json"
+    try:
+        payload = json.loads(completion.read_text(encoding="utf-8"))
+        if (
+            payload.get("schema") != "treeline-global-role-index-cache-v1"
+            or payload.get("status") != "COMPLETE"
+            or payload.get("cache_key") != cache_key
+            or set(payload.get("roles") or ()) != {"wire", "vegetation"}
+        ):
+            return False
+        if wire_root.exists() or vegetation_root.exists():
+            return False
+        _link_tree(entry / "wire", wire_root)
+        try:
+            _link_tree(entry / "vegetation", vegetation_root)
+        except Exception:
+            # A half-materialized entry is never reported as reusable.  The
+            # caller will fail closed rather than accept partial role science.
+            return False
+        return True
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return False
+
+
+def _publish_global_role_cache(
+    cache_root: Path,
+    *,
+    cache_key: str,
+    wire_root: Path,
+    vegetation_root: Path,
+) -> None:
+    entry = cache_root / cache_key
+    if (entry / "COMPLETE.json").is_file():
+        return
+    cache_root.mkdir(parents=True, exist_ok=True)
+    staging = cache_root / f".{cache_key}.tmp-{uuid4().hex}"
+    staging.mkdir()
+    try:
+        _link_tree(wire_root, staging / "wire")
+        _link_tree(vegetation_root, staging / "vegetation")
+        (staging / "COMPLETE.json").write_text(
+            json.dumps(
+                {
+                    "schema": "treeline-global-role-index-cache-v1",
+                    "status": "COMPLETE",
+                    "cache_key": cache_key,
+                    "roles": ["wire", "vegetation"],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        try:
+            os.replace(staging, entry)
+        except OSError:
+            if not (entry / "COMPLETE.json").is_file():
+                raise
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+
+
 def ensure_role_tile_indexes(
     project_root: Path,
     preparation_root: Path,
@@ -121,7 +249,10 @@ def ensure_role_tile_indexes(
         ROLE_TILE_CELL_SIZE_M,
         RoleSpecificTileCache,
     )
-    from algorithms.vegetation.coarse_to_fine import recover_vegetation_region_raw
+    from algorithms.vegetation.coarse_to_fine import (
+        recover_vegetation_region_raw,
+        recover_wire_and_high_recall_regions_raw,
+    )
     from algorithms.vegetation.fast_research import run_fast_ground_hag
     from algorithms.vegetation.fast_weighted_preprocess import (
         build_weighted_working_set,
@@ -185,6 +316,65 @@ def ensure_role_tile_indexes(
                 "vegetation_point_count": int(
                     validated["vegetation"].metadata["totals"]["point_count"]
                 ),
+                "source_sha256": (
+                    source_identity.get("sha256")
+                    or source_identity.get("source_file_sha256")
+                    or source_identity.get("source_sha256")
+                ),
+            },
+        )
+
+    global_cache_key = _global_role_cache_key(
+        source_identity,
+        point_count=point_count,
+        admission_digest=admission_digest,
+        wire_configuration_digest=wire_configuration_digest,
+        vegetation_configuration_digest=vegetation_configuration_digest,
+    )
+    if global_cache_key is not None and _reuse_global_role_cache(
+        _global_cache_root(project_root),
+        cache_key=global_cache_key,
+        wire_root=wire_root,
+        vegetation_root=vegetation_root,
+    ):
+        try:
+            wire_cache = RoleSpecificTileCache.load(
+                wire_root,
+                role="wire",
+                source_identity=source_identity,
+                config_digest=wire_configuration_digest,
+                source_point_count=point_count,
+                expected_cell_size_m=ROLE_TILE_CELL_SIZE_M,
+            )
+            vegetation_cache = RoleSpecificTileCache.load(
+                vegetation_root,
+                role="vegetation",
+                source_identity=source_identity,
+                config_digest=vegetation_configuration_digest,
+                source_point_count=point_count,
+                expected_cell_size_m=ROLE_TILE_CELL_SIZE_M,
+            )
+        except Exception as exc:
+            raise ValueError("GLOBAL_ROLE_CACHE_VALIDATION_FAILED") from exc
+        return RoleIndexPreparation(
+            wire_reference=_reference(project_root, wire_root),
+            vegetation_reference=_reference(project_root, vegetation_root),
+            source_point_count=point_count,
+            source_full_pass_count=0,
+            cache_hit=True,
+            details={
+                "schema": "treeline-stage-b-role-preparation-v1",
+                "status": "REUSED_VALIDATED_GLOBAL_ROLE_INDEXES",
+                "global_cache_key": global_cache_key,
+                "source_sha256": (
+                    source_identity.get("sha256")
+                    or source_identity.get("source_file_sha256")
+                    or source_identity.get("source_sha256")
+                ),
+                "wire_point_count": int(wire_cache.metadata["totals"]["point_count"]),
+                "vegetation_point_count": int(
+                    vegetation_cache.metadata["totals"]["point_count"]
+                ),
             },
         )
 
@@ -196,8 +386,24 @@ def ensure_role_tile_indexes(
         preparation_root / "role-preprocess",
         voxel_size_m=voxel_size,
         artifact_stem="source_role",
+        source_sha256=(
+            source_identity.get("sha256")
+            or source_identity.get("source_file_sha256")
+            or source_identity.get("source_sha256")
+        ),
     )
-    source_full_pass_count = 0 if preprocess_status == "SKIPPED_FROM_CACHE" else 3
+    strong_source_sha = (
+        source_identity.get("sha256")
+        or source_identity.get("source_file_sha256")
+        or source_identity.get("source_sha256")
+    )
+    source_full_pass_count = (
+        0
+        if preprocess_status == "SKIPPED_FROM_CACHE"
+        else 2
+        if strong_source_sha
+        else 3
+    )
 
     ground_status, ground = run_fast_ground_hag(
         Path(working.representative_las_path),
@@ -233,7 +439,18 @@ def ensure_role_tile_indexes(
         f"wire-region-span-rescue-{admission_digest[:12]}"
     )
     wire_region = _load_region(wire_region_root)
-    if wire_region is None:
+    vegetation_region_root = preparation_root / "vegetation-region-high-recall"
+    vegetation_region = _load_region(vegetation_region_root)
+    if wire_region is None and vegetation_region is None:
+        wire_region, vegetation_region = recover_wire_and_high_recall_regions_raw(
+            source,
+            working,
+            wire_representative_ids,
+            wire_region_root,
+            vegetation_region_root,
+        )
+        source_full_pass_count += 1
+    elif wire_region is None:
         wire_region = recover_vegetation_region_raw(
             source,
             working,
@@ -241,10 +458,7 @@ def ensure_role_tile_indexes(
             wire_region_root,
         )
         source_full_pass_count += 1
-
-    vegetation_region_root = preparation_root / "vegetation-region-high-recall"
-    vegetation_region = _load_region(vegetation_region_root)
-    if vegetation_region is None:
+    elif vegetation_region is None:
         # HIGH RECALL means no broad source-role exclusion.  Span geometry and
         # exact confirmed-conductor subtraction are applied by the executor.
         vegetation_region = recover_vegetation_region_raw(
@@ -293,11 +507,20 @@ def ensure_role_tile_indexes(
         source_point_count=point_count,
         expected_cell_size_m=ROLE_TILE_CELL_SIZE_M,
     )
+    if global_cache_key is not None:
+        _publish_global_role_cache(
+            _global_cache_root(project_root),
+            cache_key=global_cache_key,
+            wire_root=wire_root,
+            vegetation_root=vegetation_root,
+        )
     details = {
         "schema": "treeline-stage-b-role-preparation-v1",
         "status": "PREPARED_AND_VALIDATED_ROLE_INDEXES",
         "runtime_seconds": time.perf_counter() - started,
         "source_path": str(source),
+        "source_sha256": working.source_las_sha256,
+        "source_file_size_bytes": source.stat().st_size,
         "source_point_count": point_count,
         "coarse_voxel_size_m": voxel_size,
         "weighted_preprocess_status": preprocess_status,

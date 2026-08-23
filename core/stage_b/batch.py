@@ -29,7 +29,6 @@ from core.config.fast_baseline import FastBaselineConfig, canonical_digest
 from core.stage_a.models import AnalysisRun, AnalysisRunStatus, Project, stable_id
 from core.stage_a.persistence import save_project
 from core.stage_a.risk import RiskPolicy
-from core.stage_a.shared_source import SharedSourceAccess
 from core.stage_b.bridge import ProjectScienceBridge, SpanScienceBinding
 from core.stage_b.failures import structured_failure
 
@@ -120,6 +119,11 @@ class BatchAnalysisResult:
     def duplicate_final_original_index(self) -> int:
         if self.global_reconciled is None:
             return 0
+        validated = self.global_reconciled.diagnostics.get(
+            "duplicate_final_original_index"
+        )
+        if type(validated) is int and validated >= 0:
+            return validated
         values = np.asarray(self.global_reconciled.final_original_index, dtype=np.int64)
         return int(len(values) - len(np.unique(values)))
 
@@ -206,7 +210,7 @@ class BatchAnalysisScheduler:
             [SpanAnalysisInput, SourceSharedPreparation, Path], SpanScienceResult
         ] | None = None,
         source_preparer: Callable[[Path, SpanAnalysisInput], SourceSharedPreparation] | None = None,
-        source_access_enabled: bool = True,
+        source_access_enabled: bool = False,
     ) -> None:
         if type(project) is not Project:
             raise TypeError("project must be a Stage-A Project")
@@ -287,6 +291,16 @@ class BatchAnalysisScheduler:
             save_project(self.project, self.project_root)
 
     def _source_access_metrics(self, telemetry: BatchTelemetry) -> None:
+        """Build the legacy diagnostic chunk index only when explicitly requested.
+
+        Production Span analysis consumes the role-specific tile indexes bound
+        by ``prepare_source_shared``.  The generic ``SharedSourceAccess`` index
+        is not referenced by that executor, so scanning a large source merely
+        to populate diagnostic counters is deliberately opt-in.
+        """
+
+        from core.stage_a.shared_source import SharedSourceAccess
+
         source_identity = self.bridge.source_identity
         source_value = source_identity.get("resolved_access_path") or source_identity.get("path")
         if not self.source_access_enabled or not isinstance(source_value, str):
@@ -318,6 +332,22 @@ class BatchAnalysisScheduler:
             return payload if isinstance(payload, dict) else None
         except (OSError, ValueError, json.JSONDecodeError):
             return None
+
+    def _complete_telemetry(
+        self,
+        result: BatchAnalysisResult,
+        telemetry: BatchTelemetry,
+        started: float,
+    ) -> BatchAnalysisResult:
+        """Publish telemetry after all reconciliation/publication work ends."""
+
+        telemetry.total_time_seconds = time.perf_counter() - started
+        if result.batch_manifest_reference:
+            _write_json(
+                self.project_root / Path(result.batch_manifest_reference),
+                result.to_dict(),
+            )
+        return result
 
     def _load_persisted_global(self, run_id: str) -> TreeReconciliationResult | None:
         """Rehydrate valid global ownership for restart without science rerun."""
@@ -410,20 +440,28 @@ class BatchAnalysisScheduler:
         available = [result for result in results.values() if result.tree_outcome is not None]
         if not available:
             return None
-        outcomes = [result.tree_outcome for result in available]
-        reconciled = reconcile_trees(
-            outcomes,
-            self.config,
-            origin_xyz=tuple(
-                float(item)
-                for item in self.bridge.source_identity.get(
-                    "origin_context",
-                    self.bridge.source_identity.get(
-                        "source_bounds_min_xyz", (0.0, 0.0, 0.0)
-                    ),
-                )
-            ),
-        )
+        # The canonical Span executor has already reconciled its one outcome.
+        # Re-running the same full-membership union for a single-Span batch is
+        # mathematically identical but expensive on tens of millions of rows.
+        # Multi-Span batches still execute the authoritative global union.
+        reused_single_span = len(available) == 1 and available[0].reconciled is not None
+        if reused_single_span:
+            reconciled = available[0].reconciled
+        else:
+            outcomes = [result.tree_outcome for result in available]
+            reconciled = reconcile_trees(
+                outcomes,
+                self.config,
+                origin_xyz=tuple(
+                    float(item)
+                    for item in self.bridge.source_identity.get(
+                        "origin_context",
+                        self.bridge.source_identity.get(
+                            "source_bounds_min_xyz", (0.0, 0.0, 0.0)
+                        ),
+                    )
+                ),
+            )
         # Persistent IDs are lineage-derived, not volatile result-list order.
         source_digest = canonical_digest(self.bridge.source_identity)
         records = []
@@ -445,8 +483,12 @@ class BatchAnalysisScheduler:
                 )
             )
         diagnostics = dict(reconciled.diagnostics)
-        final_index = np.asarray(reconciled.final_original_index, dtype=np.int64)
-        duplicate_final = int(len(final_index) - len(np.unique(final_index)))
+        validated_duplicate_final = diagnostics.get("duplicate_final_original_index")
+        if reused_single_span and type(validated_duplicate_final) is int:
+            duplicate_final = validated_duplicate_final
+        else:
+            final_index = np.asarray(reconciled.final_original_index, dtype=np.int64)
+            duplicate_final = int(len(final_index) - len(np.unique(final_index)))
         diagnostics["duplicate_final_original_index"] = duplicate_final
         if duplicate_final != 0:
             raise ScienceAdapterError("DUPLICATE_FINAL_ORIGINAL_INDEX")
@@ -559,8 +601,8 @@ class BatchAnalysisScheduler:
                     risk_counts={},
                     diagnostics={"failure": failure["technical_message"], **failure},
                 )
-            telemetry.total_time_seconds = time.perf_counter() - started
             result = self._finish(run_id, selected, statuses, results, telemetry)
+            result = self._complete_telemetry(result, telemetry, started)
             self._latest_result = result
             return result
 
@@ -625,8 +667,8 @@ class BatchAnalysisScheduler:
                 statuses[span_id] = BatchSpanStatus.FAILED
             telemetry.per_span_time_seconds[span_id] = time.perf_counter() - span_started
 
-        telemetry.total_time_seconds = time.perf_counter() - started
         result = self._finish(run_id, selected, statuses, results, telemetry, bindings)
+        result = self._complete_telemetry(result, telemetry, started)
         self._latest_result = result
         return result
 
@@ -649,6 +691,7 @@ class BatchAnalysisScheduler:
         global_reconciled = None
         batch_diagnostics: dict[str, Any] = {}
         if not failed:
+            reconciliation_started = time.perf_counter()
             try:
                 global_reconciled = self._global_reconcile(bindings, results)
                 if global_reconciled is None:
@@ -666,6 +709,10 @@ class BatchAnalysisScheduler:
                 batch_diagnostics["global_reconciliation_failure"] = (
                     f"{type(exc).__name__}: {exc}"
                 )
+            finally:
+                telemetry.stage_time_seconds["tree_reconciliation"] = (
+                    time.perf_counter() - reconciliation_started
+                )
         status = (
             "PARTIAL_FAILURE"
             if failed and any(successful)
@@ -681,18 +728,34 @@ class BatchAnalysisScheduler:
                 if value.wire_result is not None
             ]
             if wire_results and len(wire_results) == len(selected):
+                clearance_publish_started = time.perf_counter()
                 try:
-                    from algorithms.spans.clearance import run_span_tree_wire_clearance
+                    # A one-Span global result has the exact same membership,
+                    # wire geometry and risk threshold as the result already
+                    # evaluated by the canonical executor.  Persistent IDs do
+                    # not participate in distance science, so reuse is exact.
+                    only = next(iter(results.values())) if len(selected) == 1 else None
+                    if only is not None and only.clearance_result is not None:
+                        final_clearance = only.clearance_result
+                        batch_diagnostics["final_clearance_reuse"] = (
+                            "EXACT_SINGLE_SPAN_RESULT"
+                        )
+                    else:
+                        from algorithms.spans.clearance import run_span_tree_wire_clearance
 
-                    final_clearance = run_span_tree_wire_clearance(
-                        global_reconciled,
-                        wire_results,
-                        self.config,
-                        danger_threshold_m=self.risk_policy.warning_clearance_threshold_m,
-                    )
+                        final_clearance = run_span_tree_wire_clearance(
+                            global_reconciled,
+                            wire_results,
+                            self.config,
+                            danger_threshold_m=self.risk_policy.warning_clearance_threshold_m,
+                        )
                 except Exception as exc:  # noqa: BLE001 - final review can retry
                     batch_diagnostics["final_clearance_failure"] = (
                         f"{type(exc).__name__}: {exc}"
+                    )
+                finally:
+                    telemetry.stage_time_seconds["clearance_publish"] = (
+                        time.perf_counter() - clearance_publish_started
                     )
         result = BatchAnalysisResult(
             analysis_run_id=run_id,
@@ -708,10 +771,15 @@ class BatchAnalysisScheduler:
             batch_diagnostics=batch_diagnostics,
         )
         batch_root = self.project_root / "artifacts" / "project-runs" / "batches" / run_id
+        manifest_started = time.perf_counter()
         manifest = result.to_dict()
         manifest_path = batch_root / "batch.json"
         _write_json(manifest_path, manifest)
+        telemetry.stage_time_seconds["manifest_write"] = (
+            time.perf_counter() - manifest_started
+        )
         if global_reconciled is not None:
+            reconciliation_write_started = time.perf_counter()
             _write_json(
                 batch_root / "batch-reconciliation.json",
                 {
@@ -721,15 +789,27 @@ class BatchAnalysisScheduler:
                     "diagnostics": dict(global_reconciled.diagnostics),
                 },
             )
+            telemetry.stage_time_seconds["reconciliation_json_write"] = (
+                time.perf_counter() - reconciliation_write_started
+            )
+            membership_started = time.perf_counter()
             _write_npz(
                 batch_root / "tree_segmentation_original.npz",
                 original_index=np.asarray(global_reconciled.final_original_index, dtype=np.int64),
                 xyz_local_m=np.asarray(global_reconciled.final_xyz_local_m, dtype=np.float64),
                 tree_id=np.asarray(global_reconciled.final_tree_id, dtype=np.int32),
             )
+            telemetry.stage_time_seconds["membership_serialization_npz_write"] = (
+                time.perf_counter() - membership_started
+            )
+            viewer_started = time.perf_counter()
             editor = self.open_editor(result)
             editor.persist()
+            telemetry.stage_time_seconds["viewer_artifact_build"] = (
+                time.perf_counter() - viewer_started
+            )
             if final_clearance is not None:
+                clearance_write_started = time.perf_counter()
                 _write_json(
                     batch_root / "batch-clearance.json",
                     {
@@ -739,6 +819,9 @@ class BatchAnalysisScheduler:
                         "records": [record.to_dict() for record in final_clearance.records],
                         "diagnostics": dict(final_clearance.diagnostics),
                     },
+                )
+                telemetry.stage_time_seconds["clearance_risk_json_write"] = (
+                    time.perf_counter() - clearance_write_started
                 )
         final_status = (
             AnalysisRunStatus.COMPLETE

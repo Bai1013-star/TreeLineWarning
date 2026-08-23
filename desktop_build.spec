@@ -109,7 +109,34 @@ def _pdal_binaries() -> tuple[list[tuple[str, str]], list[tuple[str, str]], list
     ]
 
 
+def _required_compat_binaries() -> list[tuple[str, str]]:
+    """Collect release-required codec DLLs from an explicit validated root."""
+
+    roots = []
+    configured = os.environ.get("TREELINE_COMPAT_DLL_ROOT", "").strip()
+    if configured:
+        roots.append(Path(configured).resolve())
+    pdal_root = os.environ.get("TREELINE_PDAL_RUNTIME_ENV", "").strip()
+    if pdal_root:
+        roots.append(Path(pdal_root).resolve() / "Library" / "bin")
+    required = ("openjp2.dll", "zlib-ng2.dll")
+    collected = []
+    for name in required:
+        source = next(
+            (root / name for root in roots if (root / name).is_file()),
+            None,
+        )
+        if source is None:
+            raise SystemExit(
+                f"release build requires {name}; set TREELINE_COMPAT_DLL_ROOT "
+                "to a validated portable runtime"
+            )
+        collected.append((str(source), "."))
+    return collected
+
+
 pdal_binaries, pdal_datas, pdal_hiddenimports = _pdal_binaries()
+compat_binaries = _required_compat_binaries()
 pillow_binaries = collect_dynamic_libs("PIL")
 hiddenimports += pdal_hiddenimports
 optional_excludes = [
@@ -161,7 +188,7 @@ datas = [
 ]
 
 a = Analysis(
-    ["desktop/app.py"], pathex=["."], binaries=[*pdal_binaries, *pillow_binaries], datas=datas, hiddenimports=hiddenimports,
+    ["desktop/app.py"], pathex=["."], binaries=[*pdal_binaries, *pillow_binaries, *compat_binaries], datas=datas, hiddenimports=hiddenimports,
     hookspath=[], hooksconfig={}, runtime_hooks=["desktop/pdal_runtime_hook.py"],
     excludes=optional_excludes, noarchive=False,
 )

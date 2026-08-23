@@ -525,6 +525,7 @@ def run_span_tree_wire_clearance(
         not np.isfinite(danger_threshold_m) or danger_threshold_m <= 0.0
     ):
         raise ValueError("danger_threshold_m must be a finite positive number or None")
+    index_started = time.perf_counter()
     arrays, distance_ready_segments, total_wires = _concatenate_span_wire_edges(wire_results)
     edge_bundle = build_wire_edge_bundle(arrays)
     edge_count = edge_bundle.edge_count
@@ -579,6 +580,7 @@ def run_span_tree_wire_clearance(
         )
 
     bvh = SegmentEdgeBvh(edge_bundle, config.clearance_bvh_leaf_cap)
+    index_runtime = time.perf_counter() - index_started
     selected_backend = backend or "SCIPY_CANDIDATE_EXACT"
     if selected_backend not in {"NUMPY_DIRECT", "PYTHON_BVH", "SCIPY_CANDIDATE_EXACT"}:
         raise ValueError(f"unknown clearance backend: {selected_backend}")
@@ -595,6 +597,7 @@ def run_span_tree_wire_clearance(
         "fallback_points": 0,
         "candidate_expansion_rounds": 0,
     }
+    distance_started = time.perf_counter()
     for tree_ordinal, tree_id in enumerate(tree_ids_to_process, start=1):
         rows = np.flatnonzero(final_tree == tree_id)
         point_count = int(len(rows))
@@ -731,6 +734,7 @@ def run_span_tree_wire_clearance(
                 danger_point_count=danger_count,
             )
         )
+    distance_runtime = time.perf_counter() - distance_started
     valid_values = [
         float(record.minimum_clearance_m)
         for record in records
@@ -760,6 +764,8 @@ def run_span_tree_wire_clearance(
             **candidate_diagnostics,
             "clearance_broad_phase_points": int(len(final_xyz)),
             "clearance_exact_points": int(len(final_xyz)),
+            "index_build_seconds": index_runtime,
+            "distance_evaluation_seconds": distance_runtime,
             "runtime_seconds": time.perf_counter() - started,
         },
         danger_points=tuple(danger_points),

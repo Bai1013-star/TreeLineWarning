@@ -298,6 +298,7 @@ def _run_span_tree_pipeline_legacy(
     output_dir: Any,
     origin_xyz: tuple[float, float, float],
     vegetation_query: SpanRegionQueryResult | None = None,
+    publish_full_resolution: bool = True,
 ) -> SpanTreeOutcome:
     """Run the span-local tree pipeline and persist per-span artifacts.
 
@@ -376,6 +377,60 @@ def _run_span_tree_pipeline_legacy(
     tree_id_by_fine = assign_span_tree_membership(
         fine_xyz, fine_hag, chm, smoothed, crowns, config, membership_diagnostics
     )
+    if not publish_full_resolution:
+        # The promoted CROWN_STEM backend consumes only the exact fine
+        # candidate artifacts below.  Restoring and serializing the legacy raw
+        # membership here would immediately be replaced by hybrid membership,
+        # doubling full-resolution reconstruction and NPZ publication.
+        _write_npz(
+            output_root / "tree_fine.npz",
+            fine_xyz_local_m=fine_arrays["xyz_local_m"],
+            fine_original_index=fine_original,
+            fine_hag_m=fine_hag,
+            fine_tree_id=tree_id_by_fine,
+        )
+        _write_npz(
+            output_root / "chm_review.npz",
+            chm_height_m=chm.height_m,
+            chm_smoothed_m=smoothed,
+            chm_occupied=chm.occupied,
+            chm_origin_xy=np.asarray(chm.origin_xy, dtype=np.float64),
+            chm_cell_size_m=np.asarray(chm.cell_size_m, dtype=np.float64),
+            crown_label=crowns.region_label_by_cell,
+            marker_seed_mask=crowns.marker_seed_mask,
+            accepted_tops_xy=np.asarray(
+                [list(top.xy_local_m) for top in tops.accepted], dtype=np.float64
+            )
+            if tops.accepted
+            else np.empty((0, 2), dtype=np.float64),
+        )
+        outcome = SpanTreeOutcome(
+            span=span,
+            tree_records=(),
+            raw_original_index=np.empty(0, dtype=np.int64),
+            raw_xyz_local_m=np.empty((0, 3), dtype=np.float32),
+            raw_tree_id=np.empty(0, dtype=np.int32),
+            in_core=np.empty(0, dtype=bool),
+            raw_local_maxima=tops.raw_local_maxima_count,
+            accepted_tree_tops=tops.accepted_count,
+            assigned_raw_point_count=0,
+            artifact_root=output_root,
+            tree_top_diagnostics=dict(tops.diagnostics),
+            membership_diagnostics=membership_diagnostics,
+            fine_representative_count=len(fine_xyz),
+            aabb_query_points=vegetation_query.aabb_query_points,
+            oriented_region_points=vegetation_query.oriented_region_points,
+            source_tiles=vegetation_query.tiles,
+            source_total_tiles=vegetation_query.total_tiles,
+            source_intersecting_aabb_tiles=vegetation_query.intersecting_aabb_tiles,
+            source_opened_tiles=vegetation_query.opened_tiles,
+            source_points_read=vegetation_query.points_read,
+        )
+        manifest = outcome.to_manifest()
+        manifest["runtime_seconds"] = time.perf_counter() - started
+        manifest["full_resolution_publication"] = "DEFERRED_TO_CROWN_STEM_HYBRID"
+        _write_json(output_root / "span_tree_manifest.json", manifest)
+        return outcome
     result = build_span_tree_result(
         subset,
         fine_path,
@@ -477,6 +532,7 @@ def run_span_tree_pipeline(
         )
     if config.tree_backend != TREE_BACKEND_CROWN_STEM_HYBRID:
         raise PoleEvidenceError("TREE_BACKEND_INVALID")
+    total_started = time.perf_counter()
     root = Path(output_dir)
     if vegetation_query is None:
         frame = SpanLocalFrame.from_endpoints(
@@ -496,10 +552,15 @@ def run_span_tree_pipeline(
             root / "recovered_region",
         )
     legacy_root = root / "legacy_reference"
+    candidate_started = time.perf_counter()
     legacy = _run_span_tree_pipeline_legacy(
         span, vegetation_region, coarse_ground_xyz_absolute, config,
-        output_dir=legacy_root, origin_xyz=origin_xyz, vegetation_query=vegetation_query,
+        output_dir=legacy_root,
+        origin_xyz=origin_xyz,
+        vegetation_query=vegetation_query,
+        publish_full_resolution=False,
     )
+    candidate_runtime = time.perf_counter() - candidate_started
     from algorithms.vegetation.coarse_to_fine import map_region_rows_to_tree
 
     with np.load(legacy_root / "tree_fine.npz", allow_pickle=False) as stream:
@@ -509,17 +570,22 @@ def run_span_tree_pipeline(
         baseline_id = np.asarray(stream["fine_tree_id"], dtype=np.int32)
     with np.load(legacy_root / "fine_representatives.npz", allow_pickle=False) as stream:
         raw_count = np.asarray(stream["raw_count"], dtype=np.uint32)
+    segmentation_started = time.perf_counter()
     hybrid = segment_stem_guided_hybrid(
         fine_xyz, fine_hag, baseline_id, raw_count=raw_count
     )
+    segmentation_runtime = time.perf_counter() - segmentation_started
+    reconstruction_started = time.perf_counter()
     raw_tree = map_region_rows_to_tree(
         vegetation_query.region,
         legacy_root / "fine_representatives.npz",
         fine_original,
         hybrid.fine_tree_id,
     )
+    reconstruction_runtime = time.perf_counter() - reconstruction_started
     # Per-tree full-resolution raw point counts in one O(N) pass (never
     # O(tree_count x N) full-array rescans).
+    geometry_started = time.perf_counter()
     assigned_tree_ids = raw_tree[raw_tree >= 0]
     per_tree_raw_count = (
         np.bincount(assigned_tree_ids, minlength=int(assigned_tree_ids.max()) + 1)
@@ -542,27 +608,43 @@ def run_span_tree_pipeline(
             "raw_point_count": int(per_tree_raw_count[candidate.tree_id]),
         })
     del assigned_tree_ids, per_tree_raw_count
+    geometry_runtime = time.perf_counter() - geometry_started
     # Bounded two-pass full-resolution output assembly (disk-backed memmaps).
+    membership_started = time.perf_counter()
     xyz_out, original_out, tree_out, core_out, member_count, _store_root = (
         _assemble_tree_members_store(
             vegetation_query.region, raw_tree, span, origin_xyz, root
         )
     )
     del raw_tree
+    membership_runtime = time.perf_counter() - membership_started
     root.mkdir(parents=True, exist_ok=True)
+    publish_started = time.perf_counter()
     _write_npz(root / "tree_members.npz", original_index=original_out, xyz_local_m=xyz_out, tree_id=tree_out, in_core=core_out)
     _write_npz(root / "tree_fine.npz", fine_xyz_local_m=fine_xyz, fine_original_index=fine_original, fine_hag_m=fine_hag, fine_tree_id=hybrid.fine_tree_id)
     for filename in ("fine_representatives.npz", "chm_review.npz"):
         source = legacy_root / filename
         if source.is_file():
             shutil.copy2(source, root / filename)
+    publish_runtime = time.perf_counter() - publish_started
+    diagnostics = dict(hybrid.diagnostics)
+    diagnostics["pipeline_runtime_seconds"] = {
+        "candidate_creation": candidate_runtime,
+        "crown_stem_segmentation": segmentation_runtime,
+        "full_resolution_mapping": reconstruction_runtime,
+        "tree_geometry": geometry_runtime,
+        "membership_assembly": membership_runtime,
+        "artifact_publication": publish_runtime,
+        "total": time.perf_counter() - total_started,
+    }
     outcome = SpanTreeOutcome(
         span=span, tree_records=tuple(records), raw_original_index=original_out,
         raw_xyz_local_m=xyz_out, raw_tree_id=tree_out, in_core=core_out,
         raw_local_maxima=legacy.raw_local_maxima, accepted_tree_tops=legacy.accepted_tree_tops,
         assigned_raw_point_count=int(member_count), artifact_root=root,
         tree_top_diagnostics={**(legacy.tree_top_diagnostics or {}), "tree_backend": config.tree_backend},
-        membership_diagnostics=dict(hybrid.diagnostics), fine_representative_count=legacy.fine_representative_count,
+        membership_diagnostics=diagnostics,
+        fine_representative_count=legacy.fine_representative_count,
         aabb_query_points=legacy.aabb_query_points, oriented_region_points=legacy.oriented_region_points,
         source_tiles=legacy.source_tiles, source_total_tiles=legacy.source_total_tiles,
         source_intersecting_aabb_tiles=legacy.source_intersecting_aabb_tiles,

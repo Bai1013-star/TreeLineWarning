@@ -179,7 +179,6 @@ def test_batch_scheduler_prepares_source_once_and_keeps_partial_failures_isolate
         scan_id,
         science_runner=runner,
         source_preparer=_preparation,
-        source_access_enabled=False,
     )
     result = scheduler.run(span_ids)
 
@@ -189,6 +188,7 @@ def test_batch_scheduler_prepares_source_once_and_keeps_partial_failures_isolate
     assert len(calls) == 2
     assert result.telemetry.source_prep_count == 1
     assert result.telemetry.span_count == 2
+    assert result.telemetry.source_full_pass_count == 0
     assert result.risk_policy_snapshot["warning_clearance_threshold_m"] == 0.5
     assert (tmp_path / "artifacts/project-runs/batches").is_dir()
 
@@ -320,6 +320,65 @@ def test_reconciled_original_index_is_exclusive_and_order_independent() -> None:
     assert [item.apex_xy_local_m for item in result.global_tree_records] == [
         item.apex_xy_local_m for item in reverse.global_tree_records
     ]
+
+
+def test_single_span_global_reconciliation_reuses_canonical_result(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from algorithms.spans.reconcile import reconcile_trees
+    from core.config.fast_baseline import FastBaselineConfig
+
+    project, scan_id, _span_ids = _project(tmp_path, span_count=1)
+    scheduler = BatchAnalysisScheduler(tmp_path, project, scan_id)
+    span = SimpleNamespace(
+        line_id=1,
+        line_name="Line",
+        span_id=0,
+        span_name="S001",
+        start_xyz_absolute_m=(0.0, 0.0, 0.0),
+        end_xyz_absolute_m=(10.0, 0.0, 0.0),
+        length_m=10.0,
+        half_width_m=9.0,
+    )
+    outcome = SimpleNamespace(
+        span=span,
+        raw_original_index=np.asarray((10, 11, 12), dtype=np.int64),
+        raw_xyz_local_m=np.asarray(
+            ((1.0, 0.0, 3.0), (2.0, 0.0, 4.0), (3.0, 0.0, 5.0))
+        ),
+        raw_tree_id=np.zeros(3, dtype=np.int32),
+        in_core=np.ones(3, dtype=bool),
+        tree_records=(
+            {
+                "tree_id": 0,
+                "apex_xy_local_m": [2.0, 0.0, 4.0],
+                "apex_height_m": 4.0,
+            },
+        ),
+    )
+    canonical = reconcile_trees(
+        [outcome], FastBaselineConfig(), origin_xyz=(0.0, 0.0, 0.0)
+    )
+    science = SpanScienceResult(
+        tree_count=1,
+        minimum_clearance_m=1.0,
+        risk_threshold_m=0.5,
+        risk_counts={},
+        tree_outcome=outcome,
+        reconciled=canonical,
+    )
+
+    monkeypatch.setattr(
+        "core.stage_b.batch.reconcile_trees",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("single-Span membership must not be reconciled twice")
+        ),
+    )
+    reused = scheduler._global_reconcile({}, {"span-0": science})
+
+    assert reused is not None
+    assert np.array_equal(reused.final_original_index, canonical.final_original_index)
+    assert reused.diagnostics["duplicate_final_original_index"] == 0
 
 
 def test_batch_tree_editor_isolates_span_delete_and_restores_with_undo(tmp_path: Path) -> None:

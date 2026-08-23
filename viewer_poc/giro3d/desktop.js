@@ -218,7 +218,8 @@
     } else if (uiState === 'ANALYSIS_RUNNING') {
       show('batchSection'); show('analysisOverview');
       $('pipelineStages').innerHTML = pipelineMarkup('current');
-      $('stageHost').innerHTML = stageCard('步骤 4 / 6', '正在分析', '软件正在本机完成地面、导线、植被、单木、净空和风险分析。可继续查看右侧任务状态。', '', '<div class="stage-progress"><i></i></div><div class="notice">请保持软件运行。全部计算均在本机完成。</div>');
+      const cacheMessage = state.batch?.source_cache_message || '首次处理大型点云，正在建立可复用缓存。';
+      $('stageHost').innerHTML = stageCard('步骤 4 / 6', '正在分析', '软件正在本机完成地面、导线、植被、单木、净空和风险分析。可继续查看右侧任务状态。', '', `<div class="stage-progress"><i></i></div><div class="notice">${esc(cacheMessage)}<br>请保持软件运行。全部计算均在本机完成。</div>`);
     } else if (uiState === 'TREE_REVIEW_READY') {
       show('resultSection'); show('objectSection'); show('analysisOverview'); show('viewerWrap');
       $('center').classList.add('review-mode');
@@ -429,7 +430,7 @@
       renderBatch(started);
       state.uiState = started.status === 'RUNNING' ? 'ANALYSIS_RUNNING' : state.uiState;
       renderWorkspace();
-      setStatus(mode === 'FIXTURE' ? '测试分析正在运行' : '离线分析正在运行', 'good');
+      setStatus(mode === 'FIXTURE' ? '测试分析正在运行' : (started.source_cache_message || '离线分析正在运行'), 'good');
       window.setTimeout(pollBatch, 900);
     } catch (error) { setStatus(userError(error, '无法开始分析，请检查点云、单位和档距状态。'), 'bad'); }
   }

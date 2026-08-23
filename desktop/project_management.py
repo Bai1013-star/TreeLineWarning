@@ -8,6 +8,7 @@ tower workflow has produced the normal ``project.json`` contract.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import replace
@@ -42,6 +43,14 @@ _INVALID_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def validate_project_name(name: str) -> str:
@@ -207,10 +216,12 @@ def import_pointcloud(root: Path, source: Path) -> dict:
     source = source.resolve()
     if source.suffix.lower() not in {".las", ".laz"} or not source.is_file():
         raise ValueError("请选择可读取的 LAS 或 LAZ 点云文件")
+    source_sha256 = _sha256_file(source)
     payload["pointcloud_source"] = {
         "path": str(source),
         "format": source.suffix.lower()[1:].upper(),
         "file_size_bytes": source.stat().st_size,
+        "sha256": source_sha256,
         "selected_at": _now(),
     }
     payload["lifecycle"] = {
@@ -241,6 +252,10 @@ def import_pointcloud(root: Path, source: Path) -> dict:
             CoordinateDeclaration.unresolved(),
             {"diagnostic": "header inspection unavailable; explicit confirmation required"},
         )
+    report = replace(
+        report,
+        source=replace(report.source, sha256=source_sha256),
+    )
     stage_project = load_project(root)
     scan = Scan(
         scan_id=stable_id("scan"),

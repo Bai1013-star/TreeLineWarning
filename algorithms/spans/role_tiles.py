@@ -115,7 +115,49 @@ class RoleTileCacheError(RuntimeError):
     """Raised when a role tile cache cannot be built or validated."""
 
 
+def role_source_cache_identity(source_identity: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a portable, strong identity when the source contract provides one.
+
+    Paths and generated project source IDs are intentionally excluded from the
+    portable form.  Without a complete cryptographic identity the legacy full
+    binding remains in force, so weak identities can never cross projects.
+    """
+
+    identity = dict(source_identity)
+    sha256 = (
+        identity.get("sha256")
+        or identity.get("source_file_sha256")
+        or identity.get("source_sha256")
+    )
+    size = identity.get("file_size_bytes")
+    source_format = identity.get("format") or identity.get("source_format")
+    if (
+        isinstance(sha256, str)
+        and len(sha256) == 64
+        and all(character in "0123456789abcdefABCDEF" for character in sha256)
+        and type(size) is int
+        and size >= 0
+        and isinstance(source_format, str)
+        and source_format.strip()
+    ):
+        return {
+            "schema": "treeline-strong-source-cache-identity-v1",
+            "sha256": sha256.lower(),
+            "file_size_bytes": size,
+            "format": source_format.upper(),
+        }
+    return {
+        "schema": "treeline-project-source-binding-fallback-v1",
+        "source_identity": identity,
+    }
+
+
 def role_source_binding_digest(source_identity: Mapping[str, Any]) -> str:
+    portable = role_source_cache_identity(source_identity)
+    if portable.get("schema") == "treeline-strong-source-cache-identity-v1":
+        return canonical_digest(portable)
+    # Preserve the exact legacy digest so existing project-local caches remain
+    # readable until they are explicitly rebound to a proven strong identity.
     return canonical_digest(dict(source_identity))
 
 
@@ -577,9 +619,13 @@ class RoleSpecificTileCache:
             if float(tile_grid["cell_size_m"]) != float(expected_cell_size_m):
                 raise RoleTileCacheError("ROLE_TILE_CACHE_EXPECTED_TILE_SIZE_MISMATCH")
         expected_binding = role_source_binding_digest(source_identity)
-        if metadata.get("source_binding_digest") != expected_binding or metadata.get(
-            "source_identity"
-        ) != dict(source_identity):
+        persisted_identity = metadata.get("source_identity")
+        if (
+            metadata.get("source_binding_digest") != expected_binding
+            or not isinstance(persisted_identity, dict)
+            or role_source_cache_identity(persisted_identity)
+            != role_source_cache_identity(source_identity)
+        ):
             raise RoleTileCacheError("ROLE_TILE_CACHE_SOURCE_MISMATCH")
         if (
             source_point_count is not None
@@ -904,6 +950,56 @@ def migrate_role_tile_configuration_digest(
     )
 
 
+def migrate_role_tile_source_identity(
+    cache_root: str | Path,
+    *,
+    role: str,
+    previous_source_identity: Mapping[str, Any],
+    source_identity: Mapping[str, Any],
+    configuration_digest: str,
+    source_point_count: int,
+    expected_cell_size_m: float | None = None,
+) -> RoleSpecificTileCache:
+    """Rebind validated immutable tile content to a proven strong identity.
+
+    This migration changes metadata only.  Loading the old binding first and
+    the new binding afterwards validates every index/range/content contract;
+    callers remain responsible for independently proving the supplied source
+    SHA-256 before invoking the migration.
+    """
+
+    portable = role_source_cache_identity(source_identity)
+    if portable.get("schema") != "treeline-strong-source-cache-identity-v1":
+        raise RoleTileCacheError("ROLE_TILE_CACHE_STRONG_SOURCE_IDENTITY_REQUIRED")
+    cache = RoleSpecificTileCache.load(
+        cache_root,
+        role=role,
+        source_identity=previous_source_identity,
+        config_digest=configuration_digest,
+        source_point_count=source_point_count,
+        expected_cell_size_m=expected_cell_size_m,
+    )
+    metadata = dict(cache.metadata)
+    metadata["source_identity"] = dict(source_identity)
+    metadata["source_binding_digest"] = role_source_binding_digest(source_identity)
+    exclusion = metadata.get("source_index_exclusion")
+    if isinstance(exclusion, dict):
+        exclusion = dict(exclusion)
+        exclusion["reference_source_binding_digest"] = role_source_binding_digest(
+            source_identity
+        )
+        metadata["source_index_exclusion"] = exclusion
+    _write_json(cache.root / "role-tile-cache.json", metadata)
+    return RoleSpecificTileCache.load(
+        cache.root,
+        role=role,
+        source_identity=source_identity,
+        config_digest=configuration_digest,
+        source_point_count=source_point_count,
+        expected_cell_size_m=expected_cell_size_m,
+    )
+
+
 __all__ = [
     "ROLE_TILE_CACHE_SCHEMA",
     "ROLE_TILE_BOUNDARY_SEMANTICS",
@@ -913,6 +1009,8 @@ __all__ = [
     "RoleTileCacheError",
     "RoleTileQueryResult",
     "migrate_role_tile_configuration_digest",
+    "migrate_role_tile_source_identity",
     "role_tile_configuration_digest",
+    "role_source_cache_identity",
     "role_source_binding_digest",
 ]

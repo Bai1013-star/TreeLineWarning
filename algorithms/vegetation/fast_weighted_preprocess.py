@@ -102,6 +102,7 @@ def build_weighted_working_set(
     voxel_size_m: float,
     chunk_size: int = 1_000_000,
     artifact_stem: str = "scan_large",
+    source_sha256: str | None = None,
 ) -> tuple[str, WeightedWorkingSet]:
     """Build a deterministic representative set and exclusive raw membership map.
 
@@ -127,7 +128,14 @@ def build_weighted_working_set(
         maxs = np.asarray(header.maxs, dtype=np.float64)
         scales = np.asarray(header.scales, dtype=np.float64)
         offsets = np.asarray(header.offsets, dtype=np.float64)
-    source_sha = sha256_file(input_las)
+    if source_sha256 is None:
+        source_sha = sha256_file(input_las)
+    else:
+        source_sha = str(source_sha256).lower()
+        if len(source_sha) != 64 or any(
+            character not in "0123456789abcdef" for character in source_sha
+        ):
+            raise FastResearchError("FAST_WEIGHTED_PREPROCESS_SOURCE_SHA256_INVALID")
     config_digest = canonical_digest(
         {
             "schema_version": FAST_WEIGHTED_PREPROCESS_SCHEMA,

@@ -30,6 +30,7 @@ from core.stage_a import (
     LineRole,
     Project,
     Route,
+    Scan,
     Span,
     Tower,
     UnitStatus,
@@ -874,6 +875,7 @@ class DesktopWorkflow:
             if not selected:
                 raise ValueError("BATCH_REQUIRES_SELECTED_SPAN")
             run_id = stable_id("analysis")
+            source_cache_hint = self._source_cache_hint(project, scan)
             self._workflow.update(
                 {
                     "selected_span_ids": list(selected),
@@ -881,6 +883,7 @@ class DesktopWorkflow:
                     "last_batch_status": "RUNNING",
                     "last_error": None,
                     "acceptance_mode": mode,
+                    "source_cache_hint": source_cache_hint,
                 }
             )
             self._batch_error = None
@@ -970,6 +973,12 @@ class DesktopWorkflow:
             "source_preparation": (
                 "FAILED" if source_preparation_failed else "DONE" if manifest else "WAITING"
             ),
+            "source_cache_hint": self._workflow.get("source_cache_hint", "COLD"),
+            "source_cache_message": (
+                "已复用点云缓存，正在进行档距分析。"
+                if self._workflow.get("source_cache_hint") == "REUSE"
+                else "首次处理大型点云，正在建立可复用缓存。"
+            ),
             "spans": spans,
             "error": self._batch_error or self._workflow.get("last_error"),
             "risk_policy": self._risk_policy().to_dict(),
@@ -982,6 +991,61 @@ class DesktopWorkflow:
                 )
             ),
         }
+
+    def _source_cache_hint(self, project: Project, scan: Scan) -> str:
+        """Return a metadata-only UX hint; production validation still fails closed."""
+
+        try:
+            from algorithms.spans.project_adapter import (
+                PROJECT_SPAN_VEGETATION_ROLE_CONFIGURATION_DIGEST,
+                wire_role_index_configuration_digest,
+            )
+            from core.config.fast_baseline import canonical_digest
+            from core.stage_b.bridge import ProjectScienceBridge
+            from core.stage_b.role_preparation import (
+                _global_cache_root,
+                _global_role_cache_key,
+                _span_admission_digest,
+            )
+
+            identity = scan.source_identity.to_dict()
+            local = (
+                self._root
+                / "artifacts"
+                / "project-runs"
+                / "source-shared"
+                / canonical_digest(identity)
+                / "preparation.json"
+            )
+            if local.is_file():
+                return "REUSE"
+            sha256 = identity.get("sha256")
+            if not isinstance(sha256, str) or len(sha256) != 64:
+                return "COLD"
+            import laspy
+
+            with laspy.open(Path(scan.point_cloud_source), mode="r") as reader:
+                point_count = int(reader.header.point_count)
+            bridge = ProjectScienceBridge(
+                project,
+                scan.scan_id,
+                risk_policy=self._risk_policy(),
+            )
+            inputs = tuple(binding.science_input for binding in bridge.bind_spans(None))
+            key = _global_role_cache_key(
+                identity,
+                point_count=point_count,
+                admission_digest=_span_admission_digest(inputs),
+                wire_configuration_digest=wire_role_index_configuration_digest(),
+                vegetation_configuration_digest=(
+                    PROJECT_SPAN_VEGETATION_ROLE_CONFIGURATION_DIGEST
+                ),
+            )
+            if key and (_global_cache_root(self._root) / key / "COMPLETE.json").is_file():
+                return "REUSE"
+        except Exception:  # noqa: BLE001 - a UX hint must never block science
+            pass
+        return "COLD"
 
     @staticmethod
     def _span_name(project: Project, span: Span) -> str:
