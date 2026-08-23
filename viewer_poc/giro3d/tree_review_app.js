@@ -14,6 +14,8 @@
     lassoOverlay: null,
     previewRequestId: 0,
     editorLoadPromise: null,
+    redirectOnDone: false,
+    workflowDone: false,
     showLabels: true,
     localPreviewXYZ: [],
     viewerState: {
@@ -57,11 +59,16 @@
 
   function showFailure(error, prefix = '失败：') {
     restoreCameraControls();
-    byId('editmsg').textContent = prefix + (error && error.message ? error.message : String(error));
+    const message = error && error.message ? error.message : String(error);
+    byId('editmsg').textContent = prefix + message;
+    if (!state.viewer || !state.editorDisplay) {
+      byId('viewer-renderer-status').textContent = '3D复核视图初始化失败，请查看详情。';
+    }
     const details = byId('error-details');
     const text = byId('error-detail-text');
-    if (details && text && error && error.details) {
-      text.textContent = error.details;
+    const technicalDetail = error && (error.details || error.stack || error.message);
+    if (details && text && technicalDetail) {
+      text.textContent = technicalDetail;
       details.style.display = 'block';
     } else if (details) details.style.display = 'none';
   }
@@ -415,8 +422,15 @@
         setEditingBusy(false);
       }
       if (current.step === 'DONE') {
+        state.workflowDone = true;
         clearInterval(state.refreshTimer);
-        window.location.href = '/step3';
+        state.refreshTimer = null;
+        if (state.redirectOnDone) {
+          window.location.href = '/step3';
+          return;
+        }
+        byId('progress').textContent = '复核结果已生成，可继续查看或编辑单木。';
+        setEditingBusy(false);
       }
       // A global workflow snapshot contains every batch tree.  In scoped review,
       // the authoritative filtered list comes from /api/editor_data?span_id=…;
@@ -495,8 +509,16 @@
       const pending = Math.max(0, state.treeMap.size - state.reviewed.size);
       byId('editmsg').textContent = pending ? `仍有 ${pending} 棵未逐棵查看，将按现有批量确认规则完成复核。` : '';
       byId('progress').textContent = '正在应用人工修改';
-      try { await post('/api/confirm_trees', {}); }
-      catch (error) { showFailure(error); setEditingBusy(false); return; }
+      try {
+        await post('/api/confirm_trees', {});
+        state.redirectOnDone = true;
+      }
+      catch (error) {
+        state.redirectOnDone = false;
+        showFailure(error);
+        setEditingBusy(false);
+        return;
+      }
       clearInterval(state.refreshTimer);
       state.refreshTimer = setInterval(refreshTrees, 700);
       void refreshTrees();
@@ -521,7 +543,7 @@
     try {
       await loadEditorData();
       await refreshTrees();
-      state.refreshTimer = setInterval(refreshTrees, 1500);
+      if (!state.workflowDone) state.refreshTimer = setInterval(refreshTrees, 1500);
     } catch (error) { showFailure(error); }
   }
 

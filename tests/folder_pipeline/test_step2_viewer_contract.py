@@ -209,6 +209,28 @@ def test_span_scoped_review_is_not_overwritten_by_global_status_poll() -> None:
     assert "span_id=${encodeURIComponent(reviewSpanId)}" in app
 
 
+def test_finalized_project_reopens_giro3d_review_without_plotly_redirect() -> None:
+    app = _app_js()
+    assert "redirectOnDone: false" in app
+    assert "workflowDone: false" in app
+    assert "if (state.redirectOnDone)" in app
+    assert "state.redirectOnDone = true" in app
+    assert "if (!state.workflowDone) state.refreshTimer" in app
+    assert "复核结果已生成，可继续查看或编辑单木" in app
+    old_unconditional_redirect = (
+        "if (current.step === 'DONE') {\n"
+        "        clearInterval(state.refreshTimer);\n"
+        "        window.location.href = '/step3';"
+    )
+    assert old_unconditional_redirect not in app
+
+
+def test_viewer_initialization_failure_is_never_a_silent_blank_canvas() -> None:
+    app = _app_js()
+    assert "3D复核视图初始化失败，请查看详情。" in app
+    assert "error.details || error.stack || error.message" in app
+
+
 def test_interaction_timings_are_exposed_for_release_acceptance() -> None:
     app = _app_js()
     assert "dataset.lastTreeClickMs = elapsed.toFixed(3)" in app
