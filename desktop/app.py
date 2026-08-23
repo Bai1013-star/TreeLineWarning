@@ -9,7 +9,7 @@ import threading
 import urllib.request
 from pathlib import Path
 
-from desktop.pdal_runtime import dependency_health
+from desktop.pdal_runtime import dependency_health, pillow_health
 from desktop.project_management import (
     create_empty_project,
     describe_project,
@@ -312,11 +312,15 @@ def prediction_smoke(project_root: Path | None) -> int:
 
 
 def dependency_health_smoke() -> int:
-    """Print the local PDAL health report for release acceptance tooling."""
+    """Print the native Pillow and PDAL health reports for release acceptance tooling."""
 
-    report = dependency_health()
+    pillow = pillow_health()
+    pdal = dependency_health()
+    report = {"pillow": pillow, "pdal": pdal}
     print(json.dumps(report, ensure_ascii=False))
-    return 0 if report.get("found") and report.get("minimal_operation_pass") else 5
+    return 0 if all(
+        item.get("found") and item.get("minimal_operation_pass") for item in report.values()
+    ) else 5
 
 
 def main(argv: list[str] | None = None) -> int:

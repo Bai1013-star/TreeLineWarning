@@ -175,3 +175,6 @@ def test_release_build_cannot_silently_omit_pdal_runtime():
     assert "validate_pdal_binding_abi" in spec
     assert '[str(bin_root), os.environ.get("PATH", "")]' in spec
     assert "return [], [], []" not in spec
+    assert "collect_dynamic_libs(\"PIL\")" in spec
+    assert "validate_pillow_runtime" in spec
+    assert "require CPython 3.11" in spec

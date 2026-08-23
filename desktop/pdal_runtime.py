@@ -9,6 +9,7 @@ user project or real survey data.
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -66,6 +67,37 @@ def _write_probe_las(path: Path) -> None:
     cloud.z = z
     cloud.classification = np.zeros(len(x), dtype=np.uint8)
     cloud.write(path)
+
+
+def pillow_health() -> dict[str, Any]:
+    """Exercise the bundled Pillow extension without relying on a system install."""
+
+    try:
+        import PIL
+        import PIL._imaging
+        import PIL.Image
+
+        image = PIL.Image.new("RGB", (1, 1), color=(1, 2, 3))
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        PIL.Image.open(io.BytesIO(buffer.getvalue())).load()
+        module_path = Path(PIL._imaging.__file__).resolve()
+        bundled = resource_root() in module_path.parents
+        return {
+            "found": True,
+            "source": "BUNDLED_LOCAL_RUNTIME" if bundled else "EXTERNAL_RUNTIME",
+            "minimal_operation_pass": True,
+            "module": str(module_path),
+            "pillow_version": PIL.__version__,
+            "error": None,
+        }
+    except Exception as exc:  # pragma: no cover - native dependency-specific failure details
+        return {
+            "found": False,
+            "source": "NOT_FOUND",
+            "minimal_operation_pass": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def dependency_health() -> dict[str, Any]:
@@ -143,4 +175,4 @@ def dependency_health() -> dict[str, Any]:
         }
 
 
-__all__ = ["bundled_runtime_dir", "dependency_health", "resource_root"]
+__all__ = ["bundled_runtime_dir", "dependency_health", "pillow_health", "resource_root"]

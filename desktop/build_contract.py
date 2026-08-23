@@ -37,4 +37,33 @@ def validate_pdal_binding_abi(
         )
 
 
-__all__ = ["validate_pdal_binding_abi"]
+def validate_pillow_runtime(*, python_version: tuple[int, int]) -> None:
+    """Fail a release build unless Pillow is native-loadable for its interpreter."""
+
+    try:
+        import io
+
+        import PIL
+        import PIL._imaging
+        import PIL.Image
+
+        expected_tag = f"cp{python_version[0]}{python_version[1]}"
+        extension_name = Path(PIL._imaging.__file__ or "").name.lower()
+        if expected_tag not in extension_name:
+            raise RuntimeError(
+                "Pillow extension ABI does not match "
+                f"CPython {python_version[0]}.{python_version[1]}: "
+                f"{extension_name or 'unknown extension'}"
+            )
+        image = PIL.Image.new("RGB", (1, 1), color=(1, 2, 3))
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        PIL.Image.open(io.BytesIO(buffer.getvalue())).load()
+    except Exception as exc:
+        raise SystemExit(
+            f"Pillow native runtime is unusable for the PyInstaller interpreter: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
+
+__all__ = ["validate_pdal_binding_abi", "validate_pillow_runtime"]

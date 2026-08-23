@@ -4,10 +4,18 @@ import sys
 from collections import deque
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 sys.path.insert(0, SPECPATH)
-from desktop.build_contract import validate_pdal_binding_abi
+from desktop.build_contract import validate_pdal_binding_abi, validate_pillow_runtime
+
+if sys.version_info[:2] != (3, 11):
+    raise SystemExit(
+        "TreeLineWarning desktop release builds require CPython 3.11 "
+        "to match libpdalpython.cp311-win_amd64.pyd"
+    )
+
+validate_pillow_runtime(python_version=sys.version_info[:2])
 
 hiddenimports = (
     collect_submodules("algorithms")
@@ -102,6 +110,7 @@ def _pdal_binaries() -> tuple[list[tuple[str, str]], list[tuple[str, str]], list
 
 
 pdal_binaries, pdal_datas, pdal_hiddenimports = _pdal_binaries()
+pillow_binaries = collect_dynamic_libs("PIL")
 hiddenimports += pdal_hiddenimports
 optional_excludes = [
     # Optional scientific/visualization backends that are not imported by the
@@ -152,7 +161,7 @@ datas = [
 ]
 
 a = Analysis(
-    ["desktop/app.py"], pathex=["."], binaries=pdal_binaries, datas=datas, hiddenimports=hiddenimports,
+    ["desktop/app.py"], pathex=["."], binaries=[*pdal_binaries, *pillow_binaries], datas=datas, hiddenimports=hiddenimports,
     hookspath=[], hooksconfig={}, runtime_hooks=["desktop/pdal_runtime_hook.py"],
     excludes=optional_excludes, noarchive=False,
 )
