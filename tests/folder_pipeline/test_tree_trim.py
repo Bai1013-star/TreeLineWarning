@@ -141,7 +141,8 @@ def test_step2_exposes_both_trim_modes_and_non_mutating_preview_controls() -> No
     assert "/api/trim/component-preview" in html
     assert "/api/trim/lasso-preview" in html
     assert "cameraParams" in html
-    assert 'name:"待剔除"' in html
+    assert 'second red scatter trace' in html
+    assert 'name:"待剔除"' not in html
 
 
 def test_preview_path_does_not_rebuild_global_final_membership(monkeypatch) -> None:

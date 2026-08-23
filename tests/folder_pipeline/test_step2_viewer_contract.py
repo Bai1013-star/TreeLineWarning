@@ -164,9 +164,9 @@ def test_step2_lasso_preview_and_cancel_do_not_reload_full_editor_payload():
 
     js = _extract_step2_js()
     show_preview = re.search(r"async function showPreview\(preview\)\{([\s\S]*?)\n\}", js)
-    cancel_trim = re.search(r"async function cancelTrim\(\)\{([\s\S]*?)\n\}", js)
+    cancel_trim = re.search(r"async function cancelTrim\(message=.*?\)\{([\s\S]*?)\n\}", js)
     assert show_preview and cancel_trim
-    # Preview updates only the dedicated red trace.  Rebuilding Plotly's full
+    # Preview recolours the base sampled trace only.  Rebuilding Plotly's full
     # scatter3d figure on every lasso preview reintroduced the user-visible lag.
     assert "updatePreviewTrace" in show_preview.group(1)
     assert "renderEditorPlot()" not in show_preview.group(1)
@@ -185,9 +185,35 @@ def test_step2_tree_switch_and_lasso_preview_are_incremental():
     assert select_tree
     assert "updatePlotSelection()" in select_tree.group(1)
     assert "renderEditorPlot()" not in select_tree.group(1)
-    assert "Plotly.react" not in js
+    assert "Plotly.react" not in select_tree.group(1)
     assert "displayLassoPreview" in js
     assert "display_budget=${displayBudget()}" in js
+
+
+def test_step2_trace_ownership_is_stable_and_preview_never_duplicates_points():
+    """Non-contiguous ids map explicitly and preview recolours rather than overlays."""
+    js = _extract_step2_js()
+    assert "treeTraceById: new Map()" in js
+    assert "viewerState.treeTraceById.set(Number(treeId),treeTraceIndex)" in js
+    assert "meta:{role:\"TREE\"" in js
+    assert "meta:{role:\"WIRE\"}" in js
+    assert "meta:{role:\"TOWER\"}" in js
+    assert "previewTraceIndex" not in js
+    assert '"marker.color":[displayTreeColors()]' in js
+    assert "second red scatter trace" in js
+
+
+def test_step2_preview_cleanup_covers_cancel_commit_and_tree_switch():
+    """Temporary preview state cannot survive any ordinary edit transition."""
+    js = _extract_step2_js()
+    assert 'cancelTrim("已切换单木，已取消待剔除预览。")' in js
+    assert "updatePreviewTrace([]);selected.clear()" in js
+    cancel_trim = re.search(r"async function cancelTrim\(message=.*?\)\{([\s\S]*?)\n\}", js)
+    assert cancel_trim
+    assert "viewerState.activePreviewType=null" in cancel_trim.group(1)
+    assert "updatePreviewTrace([])" in cancel_trim.group(1)
+    assert js.count("if(activePreview)await cancelTrim()") == 3
+    assert "previewRequestId" in js
 
 
 def test_step2_exposes_lasso_mode_review_status_and_tree_navigation():
@@ -249,7 +275,7 @@ const sandbox = {
     const body = String(path).includes('/state') ? state : editorData;
     return { json: async () => body, ok: true };
   },
-  Plotly: { newPlot(el, traces) { tracesSeen.push(...traces.map(t => t.name)); return Promise.resolve(); } },
+  Plotly: { react(el, traces) { tracesSeen.push(...traces.map(t => t.name)); return Promise.resolve(); }, restyle() {} },
   setInterval() { return 1; }, clearInterval() {}, setTimeout() { return 1; },
   window: { location: { set href(v) {} }, addEventListener() {} }, location: { href: '' }, Headers: class {},
 };
