@@ -52,8 +52,9 @@ WORKFLOW_SCHEMA = "treeline-desktop-workflow-v2"
 WORKFLOW_MANIFEST = "desktop-workflow.json"
 # This ceiling is display-only.  Exact tree membership always remains in the
 # editor's original_index arrays and is never sampled for science or edits.
-_MAX_DISPLAY_POINTS = 12_000
-_DEFAULT_DISPLAY_POINTS = 8_000
+_MAX_DISPLAY_POINTS = 60_000
+_DEFAULT_DISPLAY_POINTS = 30_000
+_MAX_EDIT_PREVIEW_POINTS = 12_000
 
 
 def derive_workspace_state(
@@ -1257,7 +1258,12 @@ class DesktopWorkflow:
         if editor is None:
             raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
         xyz = editor.session.preview_xyz(preview_id)
-        rows = np.linspace(0, len(xyz) - 1, min(len(xyz), _MAX_DISPLAY_POINTS), dtype=np.int64)
+        rows = np.linspace(
+            0,
+            len(xyz) - 1,
+            min(len(xyz), _MAX_EDIT_PREVIEW_POINTS),
+            dtype=np.int64,
+        )
         return {"xyz": xyz[rows].tolist(), "full_point_count": int(len(xyz))}
 
     def _set_finalize_stage(self, stage: str, message: str) -> None:

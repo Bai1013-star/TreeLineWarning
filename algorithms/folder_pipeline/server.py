@@ -250,6 +250,25 @@ class FolderServer:
                             return self._send_text(js, "application/javascript; charset=utf-8")
                         except Exception:  # noqa: BLE001
                             return self._send_error("plotly.js 不可用")
+                    if path in {
+                        "/giro3d.bundle.js",
+                        "/tree-review-3d.js",
+                        "/tree-review-app.js",
+                    }:
+                        relative = {
+                            "/giro3d.bundle.js": Path("vendor/giro3d.bundle.js"),
+                            "/tree-review-3d.js": Path("tree_review_3d.js"),
+                            "/tree-review-app.js": Path("tree_review_app.js"),
+                        }[path]
+                        root = Path(__file__).resolve().parents[2] / "viewer_poc" / "giro3d"
+                        target = (root / relative).resolve()
+                        try:
+                            target.relative_to(root.resolve())
+                        except ValueError:
+                            return self._send_error("路径越界", status=403)
+                        if not target.is_file():
+                            return self._send_error("文件不存在", status=404)
+                        return folder_server._serve_static_file(self, target)
                     if path == "/api/editor_data":
                         return self._editor_data()
                     if path == "/api/final":

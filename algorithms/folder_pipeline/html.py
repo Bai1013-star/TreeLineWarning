@@ -3,9 +3,9 @@
 
 The pages are served by ONE local server and share ONE workflow state object
 (``/state``), so they are a single run/session — not three disconnected static
-programs.  Plotly is used for the point rendering (proven pattern of the
-manual-span selector); every colour is assigned server-side from a stable
-deterministic mapping so a page refresh never changes a tree's colour.
+programs.  Plotly remains the bounded fallback for span selection and final
+charts.  The tree editor uses the project's offline Giro3D / Three.js stack;
+every colour is still assigned from a stable deterministic mapping.
 """
 
 from __future__ import annotations
@@ -38,10 +38,34 @@ tr.sel td{background:#fff3bf}
   #tree-label-overlay{position:absolute;inset:0;pointer-events:none;z-index:10}
   .tree-label{position:absolute;transform:translate(-50%,-100%);pointer-events:auto;border:1px solid #64748b;border-radius:4px;background:rgba(255,255,255,.92);color:#172033;padding:2px 5px;font:700 12px/1.1 "Microsoft YaHei","Segoe UI",sans-serif;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.28)}
   .tree-label.selected{border:2px solid #d97706;background:#fff3a3;color:#111827;font-size:15px;padding:3px 7px;box-shadow:0 1px 5px rgba(146,64,14,.48)}
+  .tree-review-main{flex-wrap:nowrap;height:calc(100vh - 48px);min-height:520px}
+  .tree-review-main .plot-panel{min-width:320px;height:auto;min-height:500px;padding:0;overflow:hidden;background:#071015}
+  .tree-review-main .side{min-width:240px;max-width:360px;overflow:auto}
+  #tree-review-stage{position:relative;width:100%;height:100%;min-height:500px;overflow:hidden}
+  #plot3d{position:absolute;inset:0}
+  .tree-review-canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+  #viewer-toolbar{position:absolute;z-index:12;top:8px;left:8px;display:flex;gap:5px;flex-wrap:wrap;pointer-events:auto}
+  #viewer-toolbar button{padding:6px 9px;background:rgba(31,42,68,.9);border:1px solid #7f94a8}
+  #viewer-renderer-status{position:absolute;z-index:11;left:9px;bottom:8px;padding:4px 7px;border-radius:4px;background:rgba(7,16,21,.84);color:#b7d5df;font:11px/1.3 Consolas,monospace;pointer-events:none}
+  .lasso-overlay{position:absolute;inset:0;z-index:30;width:100%;height:100%;cursor:crosshair;touch-action:none;user-select:none}
+  @media(max-width:720px){.tree-review-main{gap:6px;padding:6px}.tree-review-main .side{min-width:218px}.tree-review-main .plot-panel{min-width:270px}}
   """
 
 
-def _page_shell(title: str, step: str, body: str, script: str) -> str:
+def _page_shell(
+    title: str,
+    step: str,
+    body: str,
+    script: str,
+    *,
+    plotly: bool = True,
+    external_scripts: tuple[str, ...] = (),
+) -> str:
+    script_tags = []
+    if plotly:
+        script_tags.append('<script src="/plotly.js"></script>')
+    script_tags.extend(f'<script src="{source}"></script>' for source in external_scripts)
+    dependencies = "\n".join(script_tags)
     return f"""<!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -56,7 +80,7 @@ def _page_shell(title: str, step: str, body: str, script: str) -> str:
   <span id="status"></span>
 </header>
 {body}
-<script src="/plotly.js"></script>
+{dependencies}
 <script>
 {script}
 </script>
@@ -244,13 +268,19 @@ refreshTimer = setInterval(refreshState, 1500);
 # ---------------------------------------------------------------------------
 
 
-def step2_html() -> str:
+def _legacy_step2_plotly_html() -> str:
     body = """
-<main>
+<main class="tree-review-main">
   <div class="panel plot-panel">
-    <div style="position:relative;height:100%">
-      <div id="plot3d" style="height:100%"></div>
+    <div id="tree-review-stage">
+      <div id="plot3d"></div>
       <div id="tree-label-overlay" aria-label="树编号标签"></div>
+      <div id="viewer-toolbar" aria-label="三维视图控制">
+        <button id="btn-view-reset" type="button">重置</button>
+        <button id="btn-view-top" type="button">俯视</button>
+        <button id="btn-view-side" type="button">侧视</button>
+      </div>
+      <div id="viewer-renderer-status">正在初始化 Giro3D / Three.js…</div>
     </div>
   </div>
   <div class="side">
@@ -782,7 +812,75 @@ document.getElementById("btn-confirm").onclick=async()=>{
 };
 loadEditorData().then(()=>{refreshTrees();refreshTimer=setInterval(refreshTrees,1500);}).catch(showFailure);
 """
-    return _page_shell("STEP 2 人工审核单木", "STEP 2 人工审核单木", body, script)
+    return _page_shell("STEP 2 Plotly 旧版调试页", "STEP 2 Plotly 旧版调试页", body, script)
+
+
+def step2_html() -> str:
+    """Return the production Step-5 tree editor using local Giro3D / Three.js."""
+
+    body = """
+<main class="tree-review-main">
+  <div class="panel plot-panel">
+    <div id="tree-review-stage">
+      <div id="plot3d"></div>
+      <div id="tree-label-overlay" aria-label="树编号标签"></div>
+      <div id="viewer-toolbar" aria-label="三维视图控制">
+        <button id="btn-view-reset" type="button">重置</button>
+        <button id="btn-view-top" type="button">俯视</button>
+        <button id="btn-view-side" type="button">侧视</button>
+      </div>
+      <div id="viewer-renderer-status">正在初始化 Giro3D / Three.js…</div>
+    </div>
+  </div>
+  <div class="side">
+    <div class="panel">
+      <h3>第二步：人工审核单木</h3>
+      <p style="font-size:12px;color:#5f6b7a">点击选中单木。局部剔除会先红色预览，确认后才修改完整点成员。</p>
+      <div id="review-status" style="font-size:13px;font-weight:600;margin-bottom:8px">正在加载单木复核数据...</div>
+      <div id="current-tree" style="font-size:12px;color:#5f6b7a;margin-bottom:8px">当前：未选择</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button id="btn-prev" class="gray">上一棵</button>
+        <button id="btn-next" class="gray">下一棵</button>
+        <button id="btn-delete" class="red">删除单木</button>
+        <button id="btn-merge">合并选中</button>
+        <button id="btn-trim-component">剔除误分团块</button>
+        <button id="btn-trim-lasso">套索剔除</button>
+        <button id="btn-undo" class="gray">撤销</button>
+      </div>
+      <div id="selection-state" style="font-size:12px;color:#5f6b7a;margin-top:7px">未选择单木</div>
+      <div id="lasso-mode-indicator" style="display:none;margin-top:8px;padding:8px;border-radius:4px;background:#fff3cd;color:#6b4f00;font-weight:600;white-space:pre-line"></div>
+      <div id="editmsg" class="msg" style="margin-top:6px"></div>
+      <details id="error-details" style="display:none;font-size:11px;color:#5f6b7a;margin-top:4px"><summary>查看详情</summary><pre id="error-detail-text" style="white-space:pre-wrap"></pre></details>
+      <div id="trim-preview" style="display:none;margin-top:8px;padding:8px;border:2px solid #d64545;border-radius:4px;background:#fff5f5">
+        <div id="trim-summary" style="font-size:13px;margin-bottom:7px"></div>
+        <button id="btn-trim-confirm" class="red">确认剔除</button>
+        <button id="btn-trim-cancel" class="gray">取消</button>
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:12px"><input id="toggle-labels" type="checkbox" checked>显示树编号</label>
+      <div style="margin-top:10px"><button id="btn-confirm" class="green">完成复核并生成 Excel</button></div>
+      <div id="progress" style="font-size:12px;margin-top:8px"></div>
+    </div>
+    <div class="panel">
+      <h3>单木列表 <span id="treecount" style="font-size:12px;color:#5f6b7a"></span></h3>
+      <div id="treelist" style="max-height:40vh;overflow:auto">
+        <table id="treetable"><thead><tr><th>ID</th><th>点数</th><th>高度(m)</th><th>编辑状态</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+  </div>
+</main>
+"""
+    return _page_shell(
+        "STEP 2 人工审核单木",
+        "STEP 2 人工审核单木 · Giro3D / Three.js",
+        body,
+        "window.TreeLineTreeReviewApp.start();",
+        plotly=False,
+        external_scripts=(
+            "/giro3d.bundle.js",
+            "/tree-review-3d.js",
+            "/tree-review-app.js",
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

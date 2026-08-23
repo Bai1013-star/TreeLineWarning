@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from algorithms.folder_pipeline.tree_editor import (
@@ -133,16 +135,19 @@ def test_step2_exposes_both_trim_modes_and_non_mutating_preview_controls() -> No
     from algorithms.folder_pipeline.html import step2_html
 
     html = step2_html()
+    root = Path(__file__).resolve().parents[2] / "viewer_poc" / "giro3d"
+    app = (root / "tree_review_app.js").read_text(encoding="utf-8")
+    viewer = (root / "tree_review_3d.js").read_text(encoding="utf-8")
     assert "剔除误分团块" in html
     assert "套索剔除" in html
     assert "确认剔除" in html
     assert "取消" in html
-    assert 'e.key==="Escape"' in html
-    assert "/api/trim/component-preview" in html
-    assert "/api/trim/lasso-preview" in html
-    assert "cameraParams" in html
-    assert 'second red scatter trace' in html
-    assert 'name:"待剔除"' not in html
+    assert "event.key === 'Escape'" in app
+    assert "/api/trim/component-preview" in app
+    assert "/api/trim/lasso-preview" in app
+    assert "currentViewProjection()" in viewer
+    assert "this.previewKeys.has(this.pointKey(point))" in viewer
+    assert "previewPoints" not in viewer
 
 
 def test_preview_path_does_not_rebuild_global_final_membership(monkeypatch) -> None:

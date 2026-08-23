@@ -194,6 +194,12 @@ class _DesktopHandler(BaseHTTPRequestHandler):
         if path == "/giro3d.bundle.js":
             self._static("viewer_poc/giro3d/vendor/giro3d.bundle.js")
             return
+        if path == "/tree-review-3d.js":
+            self._static("viewer_poc/giro3d/tree_review_3d.js")
+            return
+        if path == "/tree-review-app.js":
+            self._static("viewer_poc/giro3d/tree_review_app.js")
+            return
         if path == "/step2":
             self._send_bytes(step2_html().encode("utf-8"), content_type="text/html; charset=utf-8")
             return

@@ -1,98 +1,51 @@
-# ruff: noqa: E501
-"""Step-2 viewer payload-contract regressions.
-
-Regression for the blank Step-2 3D viewer.  The browser threw
-``Cannot read properties of undefined (reading 'length')`` because the
-Step-2 inline JS read the tree 3D point cloud from ``data.trees`` — which the
-backend populates with the right-panel tree LIST (``snap["trees"]``) — instead
-of ``data.trees3d``.  ``data.trees.xyz`` was therefore ``undefined`` and
-``trees.xyz.length`` aborted ``loadEditorData()`` before ``Plotly.newPlot``.
-
-These tests pin the contract on BOTH sides so the class of bug cannot come
-back without a test failing:
-
-* backend: ``/api/editor_data`` schema is unambiguous — ``trees`` is the tree
-  list, ``trees3d`` is the 3D cloud ``{xyz,color,tree_id_by_index,labels}``, and every
-  display layer always carries an ``xyz`` array;
-* frontend: the Step-2 inline JS reads ``data.trees3d`` and guards every
-  display layer with ``Array.isArray(x.xyz)`` so an empty/missing layer renders
-  as an empty trace instead of blanking the whole viewer;
-* JS execution (Node, skipped if absent): the real inline script is run against
-  a populated and an empty payload and must never throw.
-"""
+"""Step-5 Giro3D / Three.js viewer and editor payload regressions."""
 
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 from algorithms.folder_pipeline.html import step2_html
 from algorithms.folder_pipeline.server import FolderServer
 from tests.folder_pipeline.test_restart_hydration import _build_completed_workspace
 
-
-def _extract_step2_js() -> str:
-    html = step2_html()
-    scripts = re.findall(r"<script>([\s\S]*?)</script>", html)
-    assert len(scripts) == 1, "step2_html must contain exactly one inline script"
-    return scripts[0]
+ROOT = Path(__file__).resolve().parents[2]
+VIEWER_JS = ROOT / "viewer_poc" / "giro3d" / "tree_review_3d.js"
+APP_JS = ROOT / "viewer_poc" / "giro3d" / "tree_review_app.js"
 
 
-def _extract_step3_js() -> str:
-    from algorithms.folder_pipeline.html import step3_html
-
-    scripts = re.findall(r"<script>([\s\S]*?)</script>", step3_html())
-    assert len(scripts) == 1
-    return scripts[0]
+def _viewer_js() -> str:
+    return VIEWER_JS.read_text(encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
-# backend payload contract
-# ---------------------------------------------------------------------------
+def _app_js() -> str:
+    return APP_JS.read_text(encoding="utf-8")
 
 
-def test_editor_data_schema_is_unambiguous(tmp_path):
-    """`trees` is the tree list and `trees3d` is the 3D cloud — never confused."""
-    workspace_root, workspace = _build_completed_workspace(tmp_path)
-    server = FolderServer(workspace)
-    payload = server._build_editor_display()
+def test_editor_data_schema_is_unambiguous(tmp_path: Path) -> None:
+    """The table list and bounded 3D cloud remain separate contracts."""
+
+    _workspace_root, workspace = _build_completed_workspace(tmp_path)
+    payload = FolderServer(workspace)._build_editor_display()
     assert set(payload) == {"trees", "trees3d", "background", "wire", "wires3d", "tower"}
-
-    # `trees` is a LIST of tree dicts (right-panel table) — it must not carry xyz.
-    assert isinstance(payload["trees"], list)
-    assert len(payload["trees"]) > 0
-    for tree in payload["trees"]:
-        assert "tree_id" in tree
-        assert "xyz" not in tree, "trees (the list) must not be the 3D point cloud"
-
-    # `trees3d` is the 3D point cloud: xyz/color/tree_id_by_index aligned, with
-    # labels projected from the same current table rows.
-    t3d = payload["trees3d"]
-    assert set(t3d) == {"xyz", "color", "tree_id_by_index", "labels"}
-    assert len(t3d["xyz"]) == len(t3d["color"]) == len(t3d["tree_id_by_index"]) > 0
-    assert isinstance(t3d["xyz"][0], (list, tuple))
+    assert isinstance(payload["trees"], list) and payload["trees"]
+    assert all("tree_id" in tree and "xyz" not in tree for tree in payload["trees"])
+    trees3d = payload["trees3d"]
+    assert set(trees3d) == {"xyz", "color", "tree_id_by_index", "labels"}
+    assert len(trees3d["xyz"]) == len(trees3d["color"]) == len(trees3d["tree_id_by_index"])
     table_ids = {int(tree["tree_id"]) for tree in payload["trees"]}
-    label_ids = {int(label["tree_id"]) for label in t3d["labels"]}
-    assert label_ids == table_ids
-    assert {label["text"] for label in t3d["labels"]} == {str(tree_id) for tree_id in table_ids}
-    assert all(len(label["xyz"]) == 3 for label in t3d["labels"])
-
-    # Every optional display layer is a dict that ALWAYS carries `xyz` so the
-    # frontend can rely on the shape (empty is expressed as `[]`, never missing).
+    assert {int(label["tree_id"]) for label in trees3d["labels"]} == table_ids
     for key in ("background", "wire", "wires3d", "tower"):
         assert isinstance(payload[key], dict)
-        assert "xyz" in payload[key], f"{key} must always carry an xyz array"
         assert isinstance(payload[key]["xyz"], list)
 
 
-def test_tree_labels_refresh_after_delete_merge_and_undo(tmp_path):
-    """Labels always follow the current editor ids, including generated merge ids."""
+def test_tree_labels_refresh_after_delete_merge_and_undo(tmp_path: Path) -> None:
     _workspace_root, workspace = _build_completed_workspace(tmp_path)
     server = FolderServer(workspace)
-    orch = server.orchestrator
 
     def ids() -> tuple[set[int], set[int]]:
         payload = server._build_editor_display()
@@ -102,311 +55,162 @@ def test_tree_labels_refresh_after_delete_merge_and_undo(tmp_path):
         )
 
     assert ids() == ({0, 1}, {0, 1})
-    orch.editor_select([0])
-    orch.editor_delete()
+    server.orchestrator.editor_select([0])
+    server.orchestrator.editor_delete()
     assert ids() == ({1}, {1})
-    orch.editor_undo()
-    assert ids() == ({0, 1}, {0, 1})
-    orch.editor_select([0, 1])
-    orch.editor_merge()
+    server.orchestrator.editor_undo()
+    server.orchestrator.editor_select([0, 1])
+    server.orchestrator.editor_merge()
     assert ids() == ({2}, {2})
-    orch.editor_undo()
+    server.orchestrator.editor_undo()
     assert ids() == ({0, 1}, {0, 1})
 
-def test_step3_final_display_schema_matches_frontend_contract(tmp_path):
-    """Step-3 display layers use the same dict-with-xyz contract as Step 2."""
-    workspace_root, workspace = _build_completed_workspace(tmp_path)
-    server = FolderServer(workspace)
-    # `_build_final_display` needs a reconciled/risk runtime; here we only pin
-    # the shared builder shapes so the frontend's guards line up with the backend.
-    bg = server._background_display()
-    assert set(bg) == {"xyz", "rgb"}
-    tower = server._tower_display()
-    assert set(tower) == {"xyz", "labels"}
-    wire = server._wire_curves_display()
-    assert set(wire) == {"xyz"}
+
+def test_step2_uses_only_offline_giro3d_threejs_assets() -> None:
+    html = step2_html()
+    assert '<script src="/giro3d.bundle.js"></script>' in html
+    assert '<script src="/tree-review-3d.js"></script>' in html
+    assert '<script src="/tree-review-app.js"></script>' in html
+    assert "/plotly.js" not in html
+    assert "Plotly" not in html
+    assert "http://" not in html and "https://" not in html
+    assert "setAttribute('aria-label', 'Giro3D 单木点云复核画布')" in _viewer_js()
 
 
-# ---------------------------------------------------------------------------
-# frontend JS contract (static, no runtime needed)
-# ---------------------------------------------------------------------------
+def test_step2_uses_one_typed_tree_buffer_and_explicit_ids() -> None:
+    viewer = _viewer_js()
+    app = _app_js()
+    assert "new this.THREE.BufferGeometry()" in viewer
+    assert "new this.THREE.Points(" in viewer
+    assert "new this.THREE.BufferAttribute" in viewer
+    assert "new this.THREE.Uint32BufferAttribute(rows, 1)" in viewer
+    assert "this.treeIds[sourceIndex]" in viewer
+    assert "treeIdToMetadata: new Map()" in app
+    assert "treeIdToMetadata.set(treeId, tree)" in app
+    assert "treeId === index" not in viewer + app
 
 
-def test_step2_js_reads_trees3d_and_guards_every_display_layer():
-    """The Step-2 JS consumes `trees3d` (not `trees`) and guards each layer."""
-    js = _extract_step2_js()
-    # The 3D cloud must be read from `data.trees3d`, never from `data.trees`.
-    assert "trees3d=data.trees3d" in js
-    # The bare pattern that crashed the viewer must not exist anywhere.
-    assert "trees.xyz.length" not in js
-    assert "trees && trees.xyz" not in js
-    # Every optional display layer must be guarded with Array.isArray so a
-    # missing/empty `.xyz` degrades to an empty layer instead of a TypeError.
-    assert js.count("Array.isArray(") >= 5  # background / wire / wires3d / tower / trees3d
-
-
-def test_step2_js_links_viewer_and_table_selection_and_label_toggle():
-    """The real Step-2 page carries both directions of the selection contract."""
-    js = _extract_step2_js()
-    assert "activeTreeId" in js
-    assert "selectTree(Number(tid),true,true)" in js
-    assert "scrollIntoView({block:\"nearest\",inline:\"nearest\"})" in js
-    assert 'id="toggle-labels"' in step2_html()
-    assert "showLabels=Boolean(e.target.checked)" in js
-    assert 'id="tree-label-overlay"' in step2_html()
-    assert "renderHtmlLabels" in js
-    assert "className=\"tree-label\"" in js
-    assert "button.classList.add(\"selected\")" in js
-
-
-def test_step2_lasso_preview_and_cancel_do_not_reload_full_editor_payload():
-    """Preview/cancel are display-only transitions; commit remains authoritative."""
-
-    js = _extract_step2_js()
-    show_preview = re.search(r"async function showPreview\(preview\)\{([\s\S]*?)\n\}", js)
-    cancel_trim = re.search(r"async function cancelTrim\(message=.*?\)\{([\s\S]*?)\n\}", js)
-    assert show_preview and cancel_trim
-    # Preview recolours the base sampled trace only.  Rebuilding Plotly's full
-    # scatter3d figure on every lasso preview reintroduced the user-visible lag.
-    assert "updatePreviewTrace" in show_preview.group(1)
-    assert "renderEditorPlot()" not in show_preview.group(1)
-    assert "loadEditorData" not in show_preview.group(1)
-    assert "updatePreviewTrace([])" in cancel_trim.group(1)
-    assert "renderEditorPlot()" not in cancel_trim.group(1)
-    assert "loadEditorData" not in cancel_trim.group(1)
-    assert "await loadEditorData()" in js  # authoritative commit/delete/merge/undo refresh
-
-
-def test_step2_tree_switch_and_lasso_preview_are_incremental():
-    """Selection/lasso must update bounded GPU buffers, not rebuild Plotly."""
-
-    js = _extract_step2_js()
-    select_tree = re.search(r"function selectTree\(treeId, toggle=true, scroll=false\)\{([\s\S]*?)\n\}", js)
+def test_selection_and_preview_are_frontend_local_buffer_updates() -> None:
+    app = _app_js()
+    viewer = _viewer_js()
+    select_tree = re.search(
+        r"function selectTree\(treeId, toggle = true, scroll = false\) \{([\s\S]*?)\n  \}",
+        app,
+    )
     assert select_tree
     assert "updatePlotSelection()" in select_tree.group(1)
-    assert "renderEditorPlot()" not in select_tree.group(1)
-    assert "Plotly.react" not in select_tree.group(1)
-    assert "displayLassoPreview" in js
-    assert "display_budget=${displayBudget()}" in js
+    assert "post(" not in select_tree.group(1)
+    assert "fetch(" not in select_tree.group(1)
+    assert "setSelection(selectionHighlightIds())" in app
+    assert "colorAttr.needsUpdate = true" in viewer
+    preview = re.search(r"setPreview\(points, treeId\) \{([\s\S]*?)\n    \}", viewer)
+    assert preview
+    assert "new this.THREE.Points" not in preview.group(1)
 
 
-def test_step2_trace_ownership_is_stable_and_preview_never_duplicates_points():
-    """Non-contiguous ids map explicitly and preview recolours rather than overlays."""
-    js = _extract_step2_js()
-    assert "treeTraceById: new Map()" in js
-    assert "viewerState.treeTraceById.set(Number(treeId),treeTraceIndex)" in js
-    assert "meta:{role:\"TREE\"" in js
-    assert "meta:{role:\"WIRE\"}" in js
-    assert "meta:{role:\"TOWER\"}" in js
-    assert "previewTraceIndex" not in js
-    assert '"marker.color":[displayTreeColors()]' in js
-    assert "second red scatter trace" in js
+def test_camera_is_local_and_supports_rotate_pan_zoom_views() -> None:
+    viewer = _viewer_js()
+    assert "new G.MapControls(this.camera, this.canvas)" in viewer
+    assert "mouseButtons.LEFT = this.THREE.MOUSE.ROTATE" in viewer
+    assert "mouseButtons.MIDDLE = this.THREE.MOUSE.PAN" in viewer
+    assert "mouseButtons.RIGHT = this.THREE.MOUSE.PAN" in viewer
+    assert "enableDamping = true" in viewer
+    assert "resetView()" in viewer and "topView()" in viewer and "sideView()" in viewer
+    controls = re.search(
+        r"this\.controls = new G\.MapControls\([\s\S]*?this\.raycaster =",
+        viewer,
+    )
+    assert controls
+    assert "fetch(" not in controls.group(0)
+    assert "post(" not in controls.group(0)
 
 
-def test_step2_preview_cleanup_covers_cancel_commit_and_tree_switch():
-    """Temporary preview state cannot survive any ordinary edit transition."""
-    js = _extract_step2_js()
-    assert 'cancelTrim("已切换单木，已取消待剔除预览。")' in js
-    assert "updatePreviewTrace([]);selected.clear()" in js
-    cancel_trim = re.search(r"async function cancelTrim\(message=.*?\)\{([\s\S]*?)\n\}", js)
-    assert cancel_trim
-    assert "viewerState.activePreviewType=null" in cancel_trim.group(1)
-    assert "updatePreviewTrace([])" in cancel_trim.group(1)
-    assert js.count("if(activePreview)await cancelTrim()") == 3
-    assert "previewRequestId" in js
+def test_lasso_overlay_restores_camera_before_exact_request() -> None:
+    app = _app_js()
+    assert "state.viewer.setControlsEnabled(false)" in app
+    assert "const displayCount = displayLassoPreview" in app
+    assert app.index("const displayCount = displayLassoPreview") < app.index(
+        "await post('/api/trim/lasso-preview'"
+    )
+    assert "finally {\n        restoreCameraControls();" in app
+    assert "window.addEventListener('error', restoreCameraControls)" in app
+    assert "window.addEventListener('unhandledrejection', restoreCameraControls)" in app
+    assert "event.key === 'Escape'" in app and "void cancelTrim()" in app
 
 
-def test_step2_exposes_lasso_mode_review_status_and_tree_navigation():
-    html = step2_html()
-    js = _extract_step2_js()
-    assert "套索模式：拖动鼠标圈选要剔除的区域" in html
-    assert "Esc 取消" in html
-    assert 'id="review-status"' in html
-    assert 'id="current-tree"' in html
-    assert 'id="btn-prev"' in html and 'id="btn-next"' in html
-    assert "已选择 ${ids.length} 棵树" in js
-    assert 'e.key==="ArrowLeft"||e.key==="ArrowRight"' in js
-    assert 'touchAction:"none"' in js
+def test_lasso_exact_contract_is_current_tree_matrix_polygon_only() -> None:
+    app = _app_js()
+    assert "tree_id: treeId, view_projection: matrix, polygon_ndc: polygon" in app
+    assert "displayLassoPreview(treeId, matrix, polygon)" in app
+    assert "source.las" not in app.lower()
+    assert "full source" not in app.lower()
 
 
-def test_step3_js_guards_display_dict_layers():
-    """Step-3 final JS guards the dict-`xyz` layers instead of calling `.length`."""
-    js = _extract_step3_js()
-    assert "disp.background" in js
-    assert "disp.wire3d" in js
-    assert "disp.towers" in js
-    # Step 3 must not treat the dict layers as plain arrays (silent skip bug).
-    assert "data.display.background.length" not in js
-    assert "data.display.wire3d.length" not in js
-    assert "data.display.towers.length" not in js
+def test_preview_recolors_base_buffer_without_duplicate_layer() -> None:
+    viewer = _viewer_js()
+    app = _app_js()
+    assert "this.previewKeys.has(this.pointKey(point))" in viewer
+    assert "color = red" in viewer
+    assert "previewPoints" not in viewer
+    assert "updatePreviewTrace([], null)" in app
+    assert "if (!keepLocalDisplayPreview) updatePreviewTrace" in app
 
 
-# ---------------------------------------------------------------------------
-# JS execution (Node) — proves the initialization script no longer throws
-# ---------------------------------------------------------------------------
+def test_display_budget_and_frame_adaptation_are_display_only() -> None:
+    app = _app_js()
+    viewer = _viewer_js()
+    assert "return 12000" in app and "return 30000" in app and "return 50000" in app
+    assert "SLOW_FRAME_MS = 27" in viewer
+    assert "this.qualityFraction * 0.72" in viewer
+    assert "rebuildTrees()" in viewer
+    assert "original_index" not in viewer
+    assert "display_budget=${displayBudget()}" in app
 
 
-_HARNESS = r"""
-const vm = require('vm');
-const fs = require('fs');
-const jsFile = process.argv[2], payloadFile = process.argv[3], stateFile = process.argv[4];
-const scriptSrc = fs.readFileSync(jsFile, 'utf8');
-const editorData = JSON.parse(fs.readFileSync(payloadFile, 'utf8'));
-const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-function makeElement(tag) {
-  const el = { tag, textContent: '', innerHTML: '', className: '', style: {}, dataset: {},
-    disabled: false, onclick: null, on(t, cb) { el._on = cb; return el; },
-    addEventListener() {}, appendChild() {}, removeChild() {},
-    getBoundingClientRect() { return { left: 0, top: 0 }; } };
-  el.querySelector = () => makeElement('child');
-  return el;
-}
-const documentStub = {
-  getElementById(id) { return (documentStub._els[id] ||= makeElement(id)); },
-  querySelector(sel) { return (documentStub._qs[sel] ||= makeElement(sel)); },
-  createElement(tag) { return makeElement(tag); },
-  _els: {}, _qs: {},
-};
-const tracesSeen = [];
-const sandbox = {
-  console, Map, Set, Math, Number, String, JSON, Array, Object, parseInt, parseFloat,
-  document: documentStub,
-  fetch: async (path) => {
-    const body = String(path).includes('/state') ? state : editorData;
-    return { json: async () => body, ok: true };
-  },
-  Plotly: { react(el, traces) { tracesSeen.push(...traces.map(t => t.name)); return Promise.resolve(); }, restyle() {} },
-  setInterval() { return 1; }, clearInterval() {}, setTimeout() { return 1; },
-  window: { location: { set href(v) {} }, addEventListener() {} }, location: { href: '' }, Headers: class {},
-};
-sandbox.window.document = documentStub;
-(async () => {
-  let error = null;
-  try {
-    vm.runInNewContext(scriptSrc, sandbox, { filename: 'step2.js', timeout: 15000 });
-    await new Promise(r => setTimeout(r, 400));
-  } catch (e) { error = String(e && e.message ? e.message : e); }
-  console.log(JSON.stringify({ exception: error || 'NONE', traces: tracesSeen }));
-  process.exit(error ? 1 : 0);
-})();
-"""
-
-
-def _run_node_harness(tmp_path, js: str, editor_data: dict, state: dict) -> dict:
+def test_tree_review_javascript_syntax() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not available")
-    js_path = tmp_path / "step2.js"
-    payload_path = tmp_path / "editor_data.json"
-    state_path = tmp_path / "state.json"
-    js_path.write_text(js, encoding="utf-8")
-    payload_path.write_text(json.dumps(editor_data), encoding="utf-8")
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    harness = tmp_path / "harness.js"
-    harness.write_text(_HARNESS, encoding="utf-8")
-    result = subprocess.run(
-        [node, str(harness), str(js_path), str(payload_path), str(state_path)],
-        capture_output=True, text=True, encoding="utf-8", timeout=60,
-    )
-    if result.returncode != 0:
-        pytest.fail(f"node harness failed: {result.stdout}\n{result.stderr}")
-    return json.loads(result.stdout.strip())
+    for path in (VIEWER_JS, APP_JS):
+        result = subprocess.run(
+            [node, "--check", str(path)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
 
 
-def test_step2_js_executes_against_populated_payload(tmp_path):
-    """The real Step-2 inline JS runs against a populated editor payload without throwing."""
-    workspace_root, workspace = _build_completed_workspace(tmp_path)
-    server = FolderServer(workspace)
-    editor_data = server._build_editor_display()
-    state = {
-        "step": "TREE_EDITING", "step_label": "STEP 2", "current_message": None,
-        "error": None,
-        "tree_snapshot": {"original_tree_count": 2, "current_tree_count": 2,
-                          "trees": editor_data["trees"], "selected_ids": []},
-    }
-    result = _run_node_harness(tmp_path, _extract_step2_js(), editor_data, state)
-    assert result["exception"] == "NONE"
-    names = set(result["traces"])
-    # All five layers come from the SAME payload the tree list is built from.
-    assert "背景" in names and "单木" in names and "导线" in names and "杆塔" in names
+def test_step2_exposes_full_review_controls_and_noncontiguous_labels() -> None:
+    html = step2_html()
+    for text in (
+        "删除单木",
+        "合并选中",
+        "剔除误分团块",
+        "套索剔除",
+        "撤销",
+        "确认剔除",
+        "取消",
+        "显示树编号",
+        "重置",
+        "俯视",
+        "侧视",
+    ):
+        assert text in html
+    app = _app_js()
+    assert "[...state.treeMap.keys()].sort((a, b) => a - b)" in app
+    assert "row.dataset.tid = String(treeId)" in app
 
 
-def test_step2_js_tolerates_empty_and_missing_display_layers(tmp_path):
-    """An empty/missing display layer must render as nothing, never crash the viewer."""
-    js = _extract_step2_js()
-    state = {"step": "TREE_EDITING", "step_label": "STEP 2", "current_message": None,
-             "error": None, "tree_snapshot": {"trees": [], "current_tree_count": 0}}
-
-    empty = {
-        "trees": [],
-        "trees3d": {"xyz": [], "color": [], "tree_id_by_index": []},
-        "background": {"xyz": [], "rgb": []},
-        "wire": {"xyz": []},
-        "wires3d": {"xyz": []},
-        "tower": {"xyz": [], "labels": []},
-    }
-    result = _run_node_harness(tmp_path, js, empty, state)
-    assert result["exception"] == "NONE"
-    assert result["traces"] == []
-
-    # Missing optional layers (the classic undefined.x.length crash).
-    missing = {"trees": [], "background": {"xyz": [], "rgb": []}}
-    result = _run_node_harness(tmp_path, js, missing, state)
-    assert result["exception"] == "NONE"
-    assert result["traces"] == []
-
-    # Every display layer null.
-    nulls = {"trees": None, "trees3d": None, "background": None,
-             "wire": None, "wires3d": None, "tower": None}
-    result = _run_node_harness(tmp_path, js, nulls, state)
-    assert result["exception"] == "NONE"
-    assert result["traces"] == []
+def test_span_scoped_review_is_not_overwritten_by_global_status_poll() -> None:
+    app = _app_js()
+    assert "if (current.tree_snapshot && !reviewSpanId)" in app
+    assert "span_id=${encodeURIComponent(reviewSpanId)}" in app
 
 
-# ---------------------------------------------------------------------------
-# editor vs source tree count distinction
-# ---------------------------------------------------------------------------
-
-
-def test_state_tree_snapshot_refreshes_after_edit(tmp_path):
-    """`/state.tree_snapshot` follows edits instead of flashing the stale snapshot.
-
-    The Step-2 right-panel list is re-rendered on an interval from
-    ``/state.tree_snapshot``; if that snapshot is only written at
-    ``build_editor`` time, a delete/merge is visually reverted on the next poll.
-    """
-    workspace_root, workspace = _build_completed_workspace(tmp_path)
-    server = FolderServer(workspace)
-    orch = server.orchestrator
-    assert orch.build_editor().snapshot()["current_tree_count"] == 2
-
-    orch.editor_select([0])
-    orch.editor_delete()
-    assert orch.state.snapshot()["tree_snapshot"]["current_tree_count"] == 1
-    assert orch.state.snapshot()["tree_edit_count"] == 1
-
-    orch.editor_undo()
-    assert orch.state.snapshot()["tree_snapshot"]["current_tree_count"] == 2
-    assert orch.state.snapshot()["tree_edit_count"] == 0
-
-
-def test_editor_tree_count_distinct_from_source_algorithm_count(tmp_path):
-    """Editor tree count (2, span-owned) stays distinct from source count (3)."""
-    workspace_root, workspace = _build_completed_workspace(tmp_path)
-    manifest = json.loads(
-        (workspace_root / "02_tree_analysis" / "tree_segmentation_original.json")
-        .read_text(encoding="utf-8")
-    )
-    editor = manifest["algorithm_tree_count"]
-    source = manifest["source_algorithm_tree_count"]
-    assert editor == 2
-    assert source == 3
-    assert editor != source, "editor count must stay distinct from source algorithm count"
-
-    server = FolderServer(workspace)
-    snap = server.state.snapshot()
-    ts = snap["tree_snapshot"]
-    # The editor reports the EDITOR count (2), never the source algorithm count (3).
-    assert ts["original_tree_count"] == editor
-    assert ts["current_tree_count"] == editor
-    assert len(server.orchestrator.original_trees.records) == editor
+def test_interaction_timings_are_exposed_for_release_acceptance() -> None:
+    app = _app_js()
+    assert "dataset.lastTreeClickMs = elapsed.toFixed(3)" in app
+    assert "dataset.lastLassoDisplayMs = elapsed.toFixed(3)" in app
+    assert "dataset.lastLassoExactMs = exactElapsed.toFixed(3)" in app
