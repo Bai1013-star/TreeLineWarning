@@ -166,11 +166,28 @@ def test_step2_lasso_preview_and_cancel_do_not_reload_full_editor_payload():
     show_preview = re.search(r"async function showPreview\(preview\)\{([\s\S]*?)\n\}", js)
     cancel_trim = re.search(r"async function cancelTrim\(\)\{([\s\S]*?)\n\}", js)
     assert show_preview and cancel_trim
-    assert "renderEditorPlot()" in show_preview.group(1)
+    # Preview updates only the dedicated red trace.  Rebuilding Plotly's full
+    # scatter3d figure on every lasso preview reintroduced the user-visible lag.
+    assert "updatePreviewTrace" in show_preview.group(1)
+    assert "renderEditorPlot()" not in show_preview.group(1)
     assert "loadEditorData" not in show_preview.group(1)
-    assert "renderEditorPlot()" in cancel_trim.group(1)
+    assert "updatePreviewTrace([])" in cancel_trim.group(1)
+    assert "renderEditorPlot()" not in cancel_trim.group(1)
     assert "loadEditorData" not in cancel_trim.group(1)
     assert "await loadEditorData()" in js  # authoritative commit/delete/merge/undo refresh
+
+
+def test_step2_tree_switch_and_lasso_preview_are_incremental():
+    """Selection/lasso must update bounded GPU buffers, not rebuild Plotly."""
+
+    js = _extract_step2_js()
+    select_tree = re.search(r"function selectTree\(treeId, toggle=true, scroll=false\)\{([\s\S]*?)\n\}", js)
+    assert select_tree
+    assert "updatePlotSelection()" in select_tree.group(1)
+    assert "renderEditorPlot()" not in select_tree.group(1)
+    assert "Plotly.react" not in js
+    assert "displayLassoPreview" in js
+    assert "display_budget=${displayBudget()}" in js
 
 
 def test_step2_exposes_lasso_mode_review_status_and_tree_navigation():

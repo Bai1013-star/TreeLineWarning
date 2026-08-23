@@ -105,12 +105,15 @@
       <section class="section contextual hidden" id="batchSection">
         <h3>批量分析</h3>
         <div class="row batch-actions">
-          <button id="startReal" class="small primary grow">开始分析</button>
+          <button id="startCurrent" class="small primary">分析当前档</button>
+          <button id="startSelected" class="small primary">分析选中档</button>
+          <button id="startAll" class="small primary grow">分析全部档距</button>
           <button id="retryBatch" class="small">重试失败任务</button>
           <button id="startFixture" class="small test-only hidden">测试分析</button>
         </div>
         <div id="testModeNote" class="notice warn test-only hidden">测试模式：结果仅用于界面验收，不代表真实科学分析。</div>
         <div id="batchBox" class="notice">请先完成点云确认和杆塔排序。</div>
+        <div id="lineOverview" class="line-overview" aria-label="线路档距总览"></div>
         <div id="spanChecks" class="check-list"><div class="muted padded">暂无档距</div></div>
       </section>
 

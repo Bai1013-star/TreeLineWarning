@@ -50,7 +50,10 @@ from desktop.tower_viewer import refine as refine_tower_pick
 
 WORKFLOW_SCHEMA = "treeline-desktop-workflow-v2"
 WORKFLOW_MANIFEST = "desktop-workflow.json"
-_MAX_DISPLAY_POINTS = 6_000
+# This ceiling is display-only.  Exact tree membership always remains in the
+# editor's original_index arrays and is never sampled for science or edits.
+_MAX_DISPLAY_POINTS = 12_000
+_DEFAULT_DISPLAY_POINTS = 8_000
 
 
 def derive_workspace_state(
@@ -357,6 +360,7 @@ class DesktopWorkflow:
                 cache_miss_count=int(telemetry_raw.get("CACHE_MISS_COUNT", 0) or 0),
                 total_time_seconds=float(telemetry_raw.get("TOTAL_TIME", 0.0) or 0.0),
                 per_span_time_seconds=dict(telemetry_raw.get("PER_SPAN_TIME") or {}),
+                stage_time_seconds=dict(telemetry_raw.get("STAGE_TIME") or {}),
             )
             scheduler = BatchAnalysisScheduler(
                 self._root, project, scan.scan_id, risk_policy=self._risk_policy()
@@ -968,6 +972,9 @@ class DesktopWorkflow:
             "spans": spans,
             "error": self._batch_error or self._workflow.get("last_error"),
             "risk_policy": self._risk_policy().to_dict(),
+            "stage_timings_seconds": dict(
+                ((manifest or {}).get("telemetry") or {}).get("STAGE_TIME") or {}
+            ),
             "duplicate_final_original_index": int(
                 ((manifest or {}).get("global_reconciliation") or {}).get(
                     "duplicate_final_original_index", 0
@@ -1063,14 +1070,34 @@ class DesktopWorkflow:
             "tree_snapshot": snapshot,
         }
 
-    def editor_data(self) -> dict[str, Any]:
+    def editor_data(
+        self, *, display_budget: int | None = None, span_id: str | None = None
+    ) -> dict[str, Any]:
         editor = self._ensure_editor()
         if editor is None:
             return _empty_display()
-        key = self._editor_revision_key(editor)
+        budget = _DEFAULT_DISPLAY_POINTS if display_budget is None else int(display_budget)
+        budget = max(1_500, min(_MAX_DISPLAY_POINTS, budget))
+        selected_span = str(span_id or "").strip() or None
+        if selected_span is not None and selected_span not in editor.tree_ids_by_span:
+            raise ValueError("UNKNOWN_BATCH_SPAN")
+        key = (*self._editor_revision_key(editor), budget, selected_span)
         if self._editor_display_cache is not None and self._editor_display_cache[0] == key:
             return self._editor_display_cache[1]
-        _final_index, tree_ids, display_xyz = editor.session.display_sample(_MAX_DISPLAY_POINTS)
+        _final_index, tree_ids, display_xyz = editor.session.display_sample(budget)
+        snapshot_trees = [dict(item) for item in self._editor_snapshot(editor).get("trees", [])]
+        if selected_span is not None:
+            source_ids = set(editor.tree_ids_by_span[selected_span])
+            visible_ids = {
+                int(item["tree_id"])
+                for item in snapshot_trees
+                if source_ids.intersection(int(value) for value in item.get("source_tree_ids", []))
+            }
+            keep = np.isin(tree_ids, np.fromiter(visible_ids, dtype=np.int32))
+            tree_ids, display_xyz = tree_ids[keep], display_xyz[keep]
+            snapshot_trees = [
+                item for item in snapshot_trees if int(item["tree_id"]) in visible_ids
+            ]
         colors = [f"hsl({(int(tree_id) * 137) % 360},72%,58%)" for tree_id in tree_ids]
         project = self._stage_project()
         tower_xyz: list[list[float]] = []
@@ -1079,7 +1106,11 @@ class DesktopWorkflow:
             tower_xyz.append(list(tower.position))
             labels.append(tower.display_name)
         wire_xyz: list[list[float]] = []
-        selected_spans = set(self._workflow.get("selected_span_ids") or [])
+        selected_spans = (
+            {selected_span}
+            if selected_span is not None
+            else set(self._workflow.get("selected_span_ids") or [])
+        )
         for span in project.spans:
             if selected_spans and span.span_id not in selected_spans:
                 continue
@@ -1104,15 +1135,28 @@ class DesktopWorkflow:
                     ]
                 )
         display = _empty_display()
-        display["trees"] = [dict(item) for item in self._editor_snapshot(editor).get("trees", [])]
+        display["trees"] = snapshot_trees
+        label_rows: dict[int, list[np.ndarray]] = {}
+        for tree_id, point in zip(tree_ids.tolist(), display_xyz, strict=True):
+            label_rows.setdefault(int(tree_id), []).append(point)
+        labels_3d = [
+            {
+                "tree_id": tree_id,
+                "text": str(tree_id),
+                "xyz": np.mean(points, axis=0).tolist(),
+            }
+            for tree_id, points in sorted(label_rows.items())
+        ]
         display["trees3d"] = {
             "xyz": display_xyz.tolist(),
             "color": colors,
             "tree_id_by_index": tree_ids.tolist(),
+            "labels": labels_3d,
         }
         display["tower"] = {"xyz": tower_xyz, "labels": labels}
         display["wire"] = {"xyz": wire_xyz}
         display["wires3d"] = {"xyz": wire_xyz}
+        display["review_span_id"] = selected_span
         self._editor_display_cache = (key, display)
         return display
 

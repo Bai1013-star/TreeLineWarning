@@ -58,10 +58,29 @@ class BatchTelemetry:
     peak_memory_bytes: int | None = None
     total_time_seconds: float = 0.0
     per_span_time_seconds: dict[str, float] | None = None
+    stage_time_seconds: dict[str, float] | None = None
 
     def __post_init__(self) -> None:
         if self.per_span_time_seconds is None:
             self.per_span_time_seconds = {}
+        if self.stage_time_seconds is None:
+            self.stage_time_seconds = {}
+
+    def record_span_profile(self, result: SpanScienceResult) -> None:
+        """Accumulate canonical-runner diagnostics without changing science."""
+
+        raw = result.diagnostics.get("timings_seconds", {})
+        if not isinstance(raw, Mapping):
+            return
+        for name, value in raw.items():
+            try:
+                elapsed = float(value)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(elapsed) and elapsed >= 0.0:
+                self.stage_time_seconds[str(name)] = (
+                    float(self.stage_time_seconds.get(str(name), 0.0)) + elapsed
+                )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -77,6 +96,7 @@ class BatchTelemetry:
             "PEAK_MEMORY_BYTES": self.peak_memory_bytes,
             "TOTAL_TIME": float(self.total_time_seconds),
             "PER_SPAN_TIME": dict(self.per_span_time_seconds or {}),
+            "STAGE_TIME": dict(self.stage_time_seconds or {}),
         }
 
 
@@ -586,6 +606,7 @@ class BatchAnalysisScheduler:
                 if type(result) is not SpanScienceResult:
                     raise ScienceAdapterError("SCIENCE_EXECUTOR_RETURNED_INVALID_RESULT")
                 results[span_id] = result
+                telemetry.record_span_profile(result)
                 telemetry.span_local_read_count += 1
                 statuses[span_id] = (
                     BatchSpanStatus.REVIEW_REQUIRED

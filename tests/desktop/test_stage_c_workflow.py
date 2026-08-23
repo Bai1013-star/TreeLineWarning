@@ -4,6 +4,8 @@ import json
 import time
 from pathlib import Path
 
+from algorithms.spans.project_adapter import SpanScienceResult
+from core.stage_b.batch import BatchTelemetry
 from desktop.project_management import create_empty_project, import_pointcloud
 from desktop.workflow import DesktopWorkflow, derive_workspace_state
 
@@ -70,13 +72,33 @@ def test_stage_c_fixture_batch_reconciles_and_resumes_without_rerun(tmp_path: Pa
     assert batch["duplicate_final_original_index"] == 0
     editor_data = workflow.editor_data()
     assert isinstance(editor_data["trees"], list)
-    assert set(editor_data["trees3d"]) == {"xyz", "color", "tree_id_by_index"}
+    assert set(editor_data["trees3d"]) == {"xyz", "color", "tree_id_by_index", "labels"}
     assert len(editor_data["trees3d"]["xyz"]) == len(editor_data["trees3d"]["tree_id_by_index"])
+    span_editor_data = workflow.editor_data(span_id=span_ids[0])
+    assert span_editor_data["review_span_id"] == span_ids[0]
+    assert {
+        int(value) for value in span_editor_data["trees3d"]["tree_id_by_index"]
+    } <= {int(item["tree_id"]) for item in span_editor_data["trees"]}
 
     restarted = DesktopWorkflow(workflow.project_root)
     assert restarted.project_projection()["resume_state"] == "RESUMABLE"
     assert restarted.batch_projection()["status"] == "COMPLETE"
     assert len(restarted.editor_data()["trees"]) == 2
+
+
+def test_batch_telemetry_preserves_measured_canonical_stage_profile() -> None:
+    telemetry = BatchTelemetry()
+    telemetry.record_span_profile(
+        SpanScienceResult(
+            tree_count=0,
+            minimum_clearance_m=None,
+            risk_threshold_m=0.5,
+            risk_counts={},
+            diagnostics={"timings_seconds": {"wire": 1.25, "tree": 2.5, "bad": "n/a"}},
+        )
+    )
+
+    assert telemetry.to_dict()["STAGE_TIME"] == {"wire": 1.25, "tree": 2.5}
 
 
 def test_stage_c_restart_replays_persisted_tree_editor_operations(tmp_path: Path) -> None:

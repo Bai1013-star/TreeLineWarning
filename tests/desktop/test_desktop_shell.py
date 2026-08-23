@@ -141,6 +141,19 @@ def test_main_product_copy_is_chinese_and_tree_editor_is_state_gated():
     assert "loadViewer();" in script
 
 
+def test_desktop_exposes_current_selected_all_span_actions_and_scoped_review():
+    root = Path(__file__).resolve().parents[2] / "viewer_poc" / "giro3d"
+    page = (root / "desktop.html").read_text(encoding="utf-8")
+    script = (root / "desktop.js").read_text(encoding="utf-8")
+
+    for text in ("分析当前档", "分析选中档", "分析全部档距", 'id="lineOverview"'):
+        assert text in page
+    assert "startCurrentSpan('REAL')" in script
+    assert "startAllSpans('REAL')" in script
+    assert "activeSpanId" in script
+    assert "span_id=${encodeURIComponent(state.activeSpanId)}" in script
+
+
 def test_failed_span_card_renders_structured_chinese_failure_reason():
     root = Path(__file__).resolve().parents[2] / "viewer_poc" / "giro3d"
     script = (root / "desktop.js").read_text(encoding="utf-8")

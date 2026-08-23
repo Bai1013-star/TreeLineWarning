@@ -16,6 +16,7 @@
     finalized: false,
     testMode: false,
     viewerLoaded: false,
+    activeSpanId: null,
   };
   const browserAcceptance = new URLSearchParams(window.location.search).has('browser-test');
   const $ = id => document.getElementById(id);
@@ -141,6 +142,7 @@
     state.batch = batch;
     $('footerBatch').textContent = `分析任务：${statusLabel(batch.status)}`;
     const spans = batch.spans || [];
+    if (!state.activeSpanId || !spans.some(span => span.span_id === state.activeSpanId)) state.activeSpanId = spans[0]?.span_id || null;
     $('spanChecks').innerHTML = spans.length ? spans.map(span => {
       const failure = span.failure;
       const failureMarkup = span.status === 'FAILED' && failure ? `<div class="failure-reason"><b>分析失败</b><span>阶段：${esc(failure.failure_stage_label || span.stage)}</span><span>原因：${esc(failure.user_message)}</span><span>建议：${esc(failure.recommended_action)}</span><details><summary>查看详情</summary><span>故障代码：${esc(failure.failure_code)}</span><span>${esc(failure.technical_message)}</span></details></div>` : '';
@@ -152,6 +154,19 @@
     $('batchBox').innerHTML = `${batch.acceptance_mode === 'FIXTURE' ? '<b>测试模式</b> · ' : ''}任务状态：${esc(statusLabel(batch.status))}<br>已完成档距：${completed.length}/${spans.length}${failed.length ? `<br>失败：${failed.map(span => esc(spanName(span))).join('、')}` : ''}`;
     const treeCount = completed.reduce((sum, span) => sum + Number(span.summary?.tree_count || 0), 0);
     $('resultBox').innerHTML = completed.length ? `<b>已有 ${completed.length} 个档距结果</b><br>单木：${treeCount} · 预警净空阈值：${esc(batch.risk_policy?.warning_clearance_threshold_m)} m<br>导线或净空证据不足时保持“需复核”。` : '分析完成后显示结果。';
+    $('lineOverview').innerHTML = spans.map(span => {
+      const cls = ['FAILED'].includes(span.status) ? 'failed' : (['REVIEW_REQUIRED'].includes(span.status) ? 'review' : (['AUTO_ANALYZED', 'USER_REVIEWED', 'FINALIZED'].includes(span.status) ? 'done' : ''));
+      return `<button class="${cls} ${span.span_id === state.activeSpanId ? 'active' : ''}" data-line-span="${esc(span.span_id)}"><b>${esc(spanName(span))}</b><br>${esc(statusLabel(span.status))}</button>`;
+    }).join('') || '<span class="muted">暂无档距</span>';
+    document.querySelectorAll('[data-line-span]').forEach(button => button.addEventListener('click', () => selectActiveSpan(button.dataset.lineSpan)));
+  }
+
+  function selectActiveSpan(spanId) {
+    state.activeSpanId = spanId;
+    const box = document.querySelector(`#spanChecks input[data-span="${CSS.escape(spanId)}"]`);
+    if (box) { box.checked = true; box.scrollIntoView({block: 'nearest'}); }
+    renderBatch(state.batch);
+    if (state.treeReviewReady || state.finalized) loadViewer(true);
   }
 
   function setStepper(uiState) {
@@ -394,6 +409,7 @@
   function selectedSpanIds() {
     return [...document.querySelectorAll('#spanChecks input[data-span]:checked')].map(input => input.dataset.span);
   }
+  function allSpanIds() { return (state.batch?.spans || []).map(span => span.span_id).filter(Boolean); }
   async function saveTowers() {
     try {
       const towers = state.towerRows;
@@ -417,6 +433,16 @@
       window.setTimeout(pollBatch, 900);
     } catch (error) { setStatus(userError(error, '无法开始分析，请检查点云、单位和档距状态。'), 'bad'); }
   }
+  async function startCurrentSpan(mode) {
+    if (!state.activeSpanId) { setStatus('请先在档距总览中选择当前档距', 'warn'); return; }
+    const boxes = document.querySelectorAll('#spanChecks input[data-span]');
+    boxes.forEach(box => { box.checked = box.dataset.span === state.activeSpanId; });
+    await startBatch(mode);
+  }
+  async function startAllSpans(mode) {
+    document.querySelectorAll('#spanChecks input[data-span]:not(:disabled)').forEach(box => { box.checked = true; });
+    await startBatch(mode);
+  }
   async function pollBatch() {
     try {
       await loadWorkspace();
@@ -432,7 +458,8 @@
     if (!state.treeReviewReady && !state.finalized) { setStatus('单木结果尚未就绪', 'warn'); return; }
     show('viewerWrap'); $('center').classList.add('review-mode');
     if (!state.viewerLoaded || force) {
-      $('viewer').src = `/step2?run=${Date.now()}`;
+      const span = state.activeSpanId ? `&span_id=${encodeURIComponent(state.activeSpanId)}` : '';
+      $('viewer').src = `/step2?run=${Date.now()}${span}`;
       state.viewerLoaded = true;
     }
     setStatus('单木结果复核视图已打开', 'good');
@@ -491,7 +518,9 @@
   $('saveTowers').addEventListener('click', saveTowers);
   $('removeTower').addEventListener('click', () => { if (state.towerRows.length) { state.towerRows.pop(); renderTowerRows(); } });
   $('startFixture').addEventListener('click', () => startBatch('FIXTURE'));
-  $('startReal').addEventListener('click', () => startBatch('REAL'));
+  $('startCurrent').addEventListener('click', () => startCurrentSpan('REAL'));
+  $('startSelected').addEventListener('click', () => startBatch('REAL'));
+  $('startAll').addEventListener('click', () => startAllSpans('REAL'));
   $('retryBatch').addEventListener('click', retryBatch);
   $('openViewer').addEventListener('click', () => loadViewer());
   $('refreshViewer').addEventListener('click', () => loadViewer(true));

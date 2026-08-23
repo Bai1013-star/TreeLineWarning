@@ -314,6 +314,21 @@ let activePreview = null;
 let lassoOverlay = null;
 let reviewed = new Set();
 let editorLoadPromise = null;
+let treeTraceIndex = -1;
+let previewTraceIndex = -1;
+let displayPreviewXYZ = [];
+const reviewSpanId=typeof URLSearchParams==="function"?new URLSearchParams(window.location.search||"").get("span_id"):null;
+
+// Capability-aware LOD is deliberately display-only.  Weak WebView/GPU
+// combinations receive fewer representative points; exact memberships never
+// leave the backend sampling path.
+function displayBudget(){
+  const device=typeof navigator==="undefined"?{}:navigator;
+  const cores=Number(device.hardwareConcurrency||4), memory=Number(device.deviceMemory||4);
+  if(cores<=4||memory<=4) return 3500;
+  if(cores<=8||memory<=8) return 6500;
+  return 10000;
+}
 
 function setStatus(t){document.getElementById("status").textContent=t;}
 function setEditingBusy(busy){
@@ -392,8 +407,19 @@ function selectTree(treeId, toggle=true, scroll=false){
   }else{
     selected=new Set([tid]);
   }
-  renderTrees(currentSnapshot, scroll);
-  renderEditorPlot();
+  applyTreeSelectionStyles();
+  updateReviewStatus();
+  if(scroll) scrollToTreeRow(activeTreeId);
+  // This must stay local: no backend call and no Plotly figure rebuild on a
+  // tree switch.  `restyle(selectedpoints)` only updates the highlight buffer.
+  updatePlotSelection();
+  scheduleHtmlLabels();
+}
+function applyTreeSelectionStyles(){
+  document.querySelectorAll("#treetable tr[data-tid]").forEach(row=>{
+    const tid=Number(row.dataset.tid);
+    row.className=(selected.has(tid)||activeTreeId===tid)?"sel":"";
+  });
 }
 function selectionHighlightIds(){
   const ids=new Set(selected);
@@ -407,6 +433,19 @@ function selectedPointRows(treeIds){
     if(ids.has(Number(tid))) rows.push(index);
     return rows;
   },[]);
+}
+function updatePlotSelection(){
+  const gd=document.getElementById("plot3d");
+  if(treeTraceIndex<0||!gd||typeof Plotly==="undefined"||typeof Plotly.restyle!=="function") return;
+  const rows=selectedPointRows();
+  try{Plotly.restyle(gd,{selectedpoints:[rows]},[treeTraceIndex]);}catch(_){/* next full data refresh recovers */}
+}
+function updatePreviewTrace(points){
+  displayPreviewXYZ=Array.isArray(points)?points:[];
+  const gd=document.getElementById("plot3d");
+  if(previewTraceIndex<0||!gd||typeof Plotly==="undefined"||typeof Plotly.restyle!=="function") return;
+  const p=displayPreviewXYZ;
+  try{Plotly.restyle(gd,{x:[p.map(v=>v[0])],y:[p.map(v=>v[1])],z:[p.map(v=>v[2])]},[previewTraceIndex]);}catch(_){/* retained for next data refresh */}
 }
 function plotLayout(){
   const gd=document.getElementById("plot3d");
@@ -458,7 +497,7 @@ function renderEditorPlot(){
   if(!editorDisplay) return;
   const data=editorDisplay, bg=data.background, wire=data.wire, tower=data.tower, wires3d=data.wires3d;
   const trees3d=data.trees3d||{};
-  const traces=[];
+  const traces=[];treeTraceIndex=-1;previewTraceIndex=-1;
   if(bg && Array.isArray(bg.xyz) && bg.xyz.length){
     const c=(Array.isArray(bg.rgb)?bg.rgb:[]).map(v=>`rgb(${v[0]},${v[1]},${v[2]})`);
     traces.push({x:bg.xyz.map(p=>p[0]),y:bg.xyz.map(p=>p[1]),z:bg.xyz.map(p=>p[2]),
@@ -481,18 +520,14 @@ function renderEditorPlot(){
     const highlightRows=selectedPointRows();
     const treeTrace={x:trees3d.xyz.map(p=>p[0]),y:trees3d.xyz.map(p=>p[1]),z:trees3d.xyz.map(p=>p[2]),
       type:"scatter3d",mode:"markers",name:"单木",customdata:trees3d.tree_id_by_index,
-      marker:{size:1.6,color:trees3d.color,opacity:0.95}};
-    if(highlightRows.length){
-      treeTrace.selectedpoints=highlightRows;
-      treeTrace.selected={marker:{size:3.8,opacity:1}};
-      treeTrace.unselected={marker:{opacity:0.18}};
-    }
-    traces.push(treeTrace);
+      marker:{size:1.6,color:trees3d.color,opacity:0.95},selectedpoints:highlightRows,
+      selected:{marker:{size:3.8,opacity:1}},unselected:{marker:{opacity:0.18}}};
+    treeTraceIndex=traces.length;traces.push(treeTrace);
   }
-  if(activePreview && Array.isArray(activePreview.preview_xyz)){
-    const p=activePreview.preview_xyz;
-    traces.push({x:p.map(v=>v[0]),y:p.map(v=>v[1]),z:p.map(v=>v[2]),type:"scatter3d",mode:"markers",
-      name:"待剔除",marker:{size:3.2,color:"#ff0000",opacity:1}});
+  if(traces.length){
+    const p=displayPreviewXYZ;
+    previewTraceIndex=traces.length;traces.push({x:p.map(v=>v[0]),y:p.map(v=>v[1]),z:p.map(v=>v[2]),type:"scatter3d",mode:"markers",
+      name:"待剔除",hoverinfo:"skip",marker:{size:3.2,color:"#ff0000",opacity:1}});
   }
   if(!traces.length){
     document.getElementById("plot3d").textContent="暂无可审核的 Tree display sample；完成 Batch 后刷新。";
@@ -500,12 +535,11 @@ function renderEditorPlot(){
   }
   const gd=document.getElementById("plot3d");
   let renderPromise=null;
-  if(plotClickBound && typeof Plotly.react==="function"){
-    renderPromise=Plotly.react(gd,traces,plotLayout(),{responsive:true,displaylogo:false});
-  }else{
-    renderPromise=Plotly.newPlot(gd,traces,plotLayout(),{responsive:true,displaylogo:false});
-    if(!plotClickBound) bindPlotClicks();
-  }
+  // Full construction is only allowed after new display data (load, edit,
+  // merge, delete, undo). Selection and preview use restyle above.
+  plotClickBound=false;
+  renderPromise=Plotly.newPlot(gd,traces,plotLayout(),{responsive:true,displaylogo:false});
+  bindPlotClicks();
   if(renderPromise&&typeof renderPromise.then==="function") renderPromise.then(scheduleHtmlLabels);
   else scheduleHtmlLabels();
 }
@@ -550,7 +584,8 @@ async function loadEditorData(){
   if(editorLoadPromise) return editorLoadPromise;
   editorLoadPromise=(async()=>{
   if(!editorDisplay) document.getElementById("editmsg").textContent="正在加载单木列表与 3D 预览...";
-  const data=await (await fetch("/api/editor_data")).json();
+  const spanQuery=reviewSpanId?`&span_id=${encodeURIComponent(reviewSpanId)}`:"";
+  const data=await (await fetch(`/api/editor_data?display_budget=${displayBudget()}${spanQuery}`)).json();
   // Payload contract: each display layer is an optional dict `{xyz:[...], ...}`
   // (background/wire/wires3d/tower) and the tree 3D cloud lives under
   // `trees3d` `{xyz,color,tree_id_by_index}` — NOT under `trees`, which is the
@@ -587,7 +622,7 @@ async function showPreview(preview){
   const warning=preview.large_removal_warning?" 本次将移除该树较大比例的点，请确认选择是否正确。":"";
   document.getElementById("trim-summary").textContent=`待剔除 ${preview.point_count.toLocaleString()} 个点，占当前单木 ${percent}%。${warning}`;
   document.getElementById("trim-preview").style.display="block";
-  renderEditorPlot();
+  updatePreviewTrace(preview.preview_xyz||displayPreviewXYZ);
 }
 async function previewComponent(treeId,seed){
   try{document.getElementById("editmsg").textContent="正在分析当前单木的完整点成员...";
@@ -620,6 +655,29 @@ function currentViewProjection(){
     raw[r].reduce((sum,value,k)=>sum+value*normalize[k][c],0)));
 }
 function removeLassoOverlay(){if(lassoOverlay){lassoOverlay.remove();lassoOverlay=null;}}
+function pointInPolygon(point,polygon){
+  let inside=false;
+  for(let i=0,j=polygon.length-1;i<polygon.length;j=i++){
+    const a=polygon[i],b=polygon[j];
+    if(((a[1]>point[1])!==(b[1]>point[1])) && point[0]<(b[0]-a[0])*(point[1]-a[1])/(b[1]-a[1])+a[0]) inside=!inside;
+  }
+  return inside;
+}
+function displayLassoPreview(treeId,matrix,polygon){
+  const cloud=editorDisplay?.trees3d||{}, xyz=cloud.xyz||[], ids=cloud.tree_id_by_index||[];
+  const preview=[];
+  for(let i=0;i<xyz.length;i++){
+    if(Number(ids[i])!==Number(treeId)) continue;
+    const p=xyz[i], clip=[
+      matrix[0][0]*p[0]+matrix[0][1]*p[1]+matrix[0][2]*p[2]+matrix[0][3],
+      matrix[1][0]*p[0]+matrix[1][1]*p[1]+matrix[1][2]*p[2]+matrix[1][3],
+      matrix[3][0]*p[0]+matrix[3][1]*p[1]+matrix[3][2]*p[2]+matrix[3][3]
+    ];
+    if(Number.isFinite(clip[0])&&Number.isFinite(clip[1])&&clip[2]>Number.EPSILON&&pointInPolygon([clip[0]/clip[2],clip[1]/clip[2]],polygon)) preview.push(p);
+  }
+  updatePreviewTrace(preview);
+  return preview.length;
+}
 function beginLasso(){
   const treeId=requireOneTree();if(treeId==null)return;
   setTrimMode("LASSO","套索模式已开启：拖动鼠标圈选；松开后恢复旋转。Esc 取消。");
@@ -635,9 +693,9 @@ function beginLasso(){
   svg.onpointerup=async e=>{if(!drawing)return;drawing=false;svg.releasePointerCapture(e.pointerId);
     if(points.length<3){removeLassoOverlay();setTrimMode("IDLE","套索至少需要三个顶点。");return;}
     const polygon=points.map(p=>[2*p[0]/rect.width-1,1-2*p[1]/rect.height]);
-    try{const matrix=currentViewProjection();removeLassoOverlay();setTrimMode("PREVIEW_LOADING","正在计算当前树的套索预览，3D 旋转已恢复...");
+    try{const matrix=currentViewProjection();removeLassoOverlay();const displayCount=displayLassoPreview(treeId,matrix,polygon);setTrimMode("PREVIEW_LOADING",`预览中… 显示样本命中 ${displayCount.toLocaleString()} 个点；正在精确计算完整点成员，3D 旋转已恢复...`);
       const preview=await post("/api/trim/lasso-preview",{tree_id:treeId,view_projection:matrix,polygon_ndc:polygon});await showPreview(preview);}
-    catch(err){removeLassoOverlay();setTrimMode("IDLE","");showFailure(err,"");}
+    catch(err){removeLassoOverlay();updatePreviewTrace([]);setTrimMode("IDLE","");showFailure(err,"");}
   };
 }
 document.getElementById("btn-trim-component").onclick=()=>{if(requireOneTree()!=null)setTrimMode("COMPONENT","请点击需要从当前单木中剔除的误分点团。");};
@@ -652,10 +710,10 @@ document.getElementById("btn-trim-confirm").onclick=async()=>{
 async function cancelTrim(){
   if(activePreview){try{await post("/api/trim/cancel",{preview_id:activePreview.preview_id});}catch(e){}}
   activePreview=null;removeLassoOverlay();document.getElementById("trim-preview").style.display="none";setTrimMode("IDLE","已取消，单木点成员未改变。");
-  renderEditorPlot();
+  updatePreviewTrace([]);
 }
 document.getElementById("btn-trim-cancel").onclick=cancelTrim;
-document.getElementById("toggle-labels").onchange=e=>{showLabels=Boolean(e.target.checked);renderEditorPlot();};
+document.getElementById("toggle-labels").onchange=e=>{showLabels=Boolean(e.target.checked);scheduleHtmlLabels();};
 window.addEventListener?.("resize",scheduleHtmlLabels);
 function stepTree(delta){
   if(!treeMap.size||trimMode!=="IDLE"||activePreview)return;

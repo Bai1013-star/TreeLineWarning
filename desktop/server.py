@@ -249,7 +249,20 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "dependency": dependency_health()})
             return
         if path in {"/api/desktop/review", "/api/editor_data"}:
-            self._send_json({"ok": True, **self.workflow.editor_data()})
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            try:
+                requested_budget = int(query.get("display_budget", ["8000"])[0])
+            except (TypeError, ValueError):
+                requested_budget = 8_000
+            requested_span = query.get("span_id", [None])[0]
+            self._send_json(
+                {
+                    "ok": True,
+                    **self.workflow.editor_data(
+                        display_budget=requested_budget, span_id=requested_span
+                    ),
+                }
+            )
             return
         if path == "/state":
             self._send_json(self.workflow.editor_state())
