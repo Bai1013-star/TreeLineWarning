@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from core.stage_b.danger_points import (
     build_clearance_evidence_display,
     build_danger_point_display,
+    danger_points_path,
     load_final_danger_points,
     persist_final_danger_points,
 )
@@ -78,6 +79,24 @@ def test_persist_and_reload_exact_danger_points(tmp_path) -> None:
     assert original_index.tolist() == [101]
     assert tree_id.tolist() == [1]
     assert xyz.tolist() == [[2.0, 2.0, 3.0]]
+
+
+def test_none_clearance_invalidates_persisted_danger_sidecar(tmp_path) -> None:
+    clearance = SimpleNamespace(
+        status="VALID",
+        global_minimum_clearance_m=0.25,
+        records=(_record(),),
+        danger_points=(_danger(),),
+    )
+    path = persist_final_danger_points(tmp_path, "analysis-danger", clearance)
+    assert path is not None and path.is_file()
+
+    persisted = persist_final_danger_points(tmp_path, "analysis-danger", None)
+
+    assert persisted is None
+    assert load_final_danger_points(tmp_path, "analysis-danger") is None
+    assert not danger_points_path(tmp_path, "analysis-danger").exists()
+    assert not danger_points_path(tmp_path, "analysis-danger").with_suffix(".json").exists()
 
 
 def test_current_zero_danger_never_resurrects_old_sidecar(tmp_path) -> None:
