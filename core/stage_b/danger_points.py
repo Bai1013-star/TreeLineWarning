@@ -39,16 +39,67 @@ def _metadata_path(project_root: Path | str, analysis_run_id: str) -> Path:
     return _artifact_root(project_root, analysis_run_id) / "danger_points_final.json"
 
 
+def load_final_danger_points(
+    project_root: Path | str,
+    analysis_run_id: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    path = danger_points_path(project_root, analysis_run_id)
+    metadata_path = _metadata_path(project_root, analysis_run_id)
+    if not path.is_file() or not metadata_path.is_file():
+        return None
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata.get("schema") != DANGER_POINTS_SCHEMA:
+            return None
+        if metadata.get("authority") != "EXACT_FINAL_CLEARANCE":
+            return None
+        with np.load(path, allow_pickle=False) as stream:
+            original_index = np.asarray(stream["original_index"], dtype=np.int64)
+            tree_id = np.asarray(stream["global_tree_id"], dtype=np.int64)
+            xyz = np.asarray(stream["xyz_local_m"], dtype=np.float64)
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+    if original_index.ndim != 1 or tree_id.shape != original_index.shape:
+        return None
+    if xyz.shape != (len(original_index), 3):
+        return None
+    if len(original_index) != len(np.unique(original_index)) or not np.all(np.isfinite(xyz)):
+        return None
+    if metadata.get("point_count") != int(len(original_index)):
+        return None
+    return original_index, tree_id, xyz
+
+
 def persist_final_danger_points(
     project_root: Path | str,
     analysis_run_id: str,
     clearance: Any | None,
 ) -> Path | None:
-    """Persist exact post-editor danger observations atomically."""
+    """Persist exact post-editor danger observations when XYZ evidence exists.
+
+    A hydrated historical ``batch.json`` restores per-tree danger counts but
+    does not restore every danger XYZ.  That optional display limitation must
+    not block finalization or Excel export.  In that case an already-valid
+    sidecar is reused when its count matches; otherwise the display layer stays
+    unavailable until exact clearance is recomputed.
+    """
 
     if clearance is None:
         return None
     points = tuple(getattr(clearance, "danger_points", ()) or ())
+    expected_count = int(
+        sum(
+            int(getattr(record, "danger_point_count", 0) or 0)
+            for record in getattr(clearance, "records", ())
+        )
+    )
+    path = danger_points_path(project_root, analysis_run_id)
+    if expected_count > 0 and not points:
+        existing = load_final_danger_points(project_root, analysis_run_id)
+        if existing is not None and len(existing[0]) == expected_count:
+            return path
+        return None
+
     original_index = np.asarray(
         [int(point.original_index) for point in points],
         dtype=np.int64,
@@ -65,14 +116,9 @@ def persist_final_danger_points(
         raise ValueError("DANGER_POINT_ORIGINAL_INDEX_DUPLICATE")
     if not np.all(np.isfinite(xyz)):
         raise ValueError("DANGER_POINT_XYZ_NONFINITE")
-
-    expected_count = int(
-        sum(int(getattr(record, "danger_point_count", 0) or 0) for record in getattr(clearance, "records", ()))
-    )
     if expected_count != len(original_index):
         raise ValueError("DANGER_POINT_COUNT_MISMATCH")
 
-    path = danger_points_path(project_root, analysis_run_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp.npz")
     np.savez(
@@ -125,37 +171,6 @@ def _arrays_from_clearance(
     return original_index, tree_id, xyz
 
 
-def load_final_danger_points(
-    project_root: Path | str,
-    analysis_run_id: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
-    path = danger_points_path(project_root, analysis_run_id)
-    metadata_path = _metadata_path(project_root, analysis_run_id)
-    if not path.is_file() or not metadata_path.is_file():
-        return None
-    try:
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        if metadata.get("schema") != DANGER_POINTS_SCHEMA:
-            return None
-        if metadata.get("authority") != "EXACT_FINAL_CLEARANCE":
-            return None
-        with np.load(path, allow_pickle=False) as stream:
-            original_index = np.asarray(stream["original_index"], dtype=np.int64)
-            tree_id = np.asarray(stream["global_tree_id"], dtype=np.int64)
-            xyz = np.asarray(stream["xyz_local_m"], dtype=np.float64)
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-        return None
-    if original_index.ndim != 1 or tree_id.shape != original_index.shape:
-        return None
-    if xyz.shape != (len(original_index), 3):
-        return None
-    if len(original_index) != len(np.unique(original_index)) or not np.all(np.isfinite(xyz)):
-        return None
-    if metadata.get("point_count") != int(len(original_index)):
-        return None
-    return original_index, tree_id, xyz
-
-
 def _empty_danger(authority: str) -> dict[str, Any]:
     return {
         "xyz": [],
@@ -184,13 +199,14 @@ def build_danger_point_display(
         return _empty_danger("UNAVAILABLE")
 
     expected_count = int(
-        sum(int(getattr(record, "danger_point_count", 0) or 0) for record in getattr(clearance, "records", ()))
+        sum(
+            int(getattr(record, "danger_point_count", 0) or 0)
+            for record in getattr(clearance, "records", ())
+        )
     )
     arrays = _arrays_from_clearance(clearance)
     authority = "EXACT_FINAL_CLEARANCE_MEMORY"
     if arrays is None:
-        # An exact clearance result that reports zero danger points is already
-        # authoritative.  Never resurrect an older sidecar in that case.
         if expected_count == 0:
             return _empty_danger(authority)
         arrays = load_final_danger_points(project_root, str(result.analysis_run_id))
@@ -199,8 +215,6 @@ def build_danger_point_display(
         return _empty_danger("UNAVAILABLE")
     original_index, tree_id, xyz = arrays
     if len(original_index) != expected_count:
-        # A sidecar/count disagreement means the display evidence is stale or
-        # incomplete.  Fail closed instead of drawing a misleading red layer.
         return _empty_danger("COUNT_MISMATCH")
     if visible_tree_ids is not None:
         visible = np.asarray(
@@ -249,12 +263,18 @@ def build_clearance_evidence_display(
     )
     tree_records = {
         int(record.global_tree_id): record
-        for record in getattr(getattr(result, "global_reconciled", None), "global_tree_records", ())
+        for record in getattr(
+            getattr(result, "global_reconciled", None), "global_tree_records", ()
+        )
     }
     snapshot = dict(getattr(result, "risk_policy_snapshot", {}) or {})
     policy = RiskPolicy(
-        risk_policy_version=str(snapshot.get("risk_policy_version", "risk-policy-v1")),
-        warning_clearance_threshold_m=float(snapshot.get("warning_clearance_threshold_m", 0.5)),
+        risk_policy_version=str(
+            snapshot.get("risk_policy_version", "risk-policy-v1")
+        ),
+        warning_clearance_threshold_m=float(
+            snapshot.get("warning_clearance_threshold_m", 0.5)
+        ),
     )
     rows: list[dict[str, Any]] = []
     for record in getattr(clearance, "records", ()):
@@ -270,13 +290,19 @@ def build_clearance_evidence_display(
             continue
         tree_xyz_values = tuple(float(value) for value in tree_xyz)
         wire_xyz_values = tuple(float(value) for value in wire_xyz)
-        if not np.all(np.isfinite(np.asarray((*tree_xyz_values, *wire_xyz_values), dtype=np.float64))):
+        if not np.all(
+            np.isfinite(
+                np.asarray((*tree_xyz_values, *wire_xyz_values), dtype=np.float64)
+            )
+        ):
             continue
         evidence = contact_evidence_from_clearance(
             float(minimum), clearance_status=str(record.status)
         )
         source_tree = tree_records.get(tree_id)
-        review_required = bool(getattr(source_tree, "review", False)) or evidence.review_required
+        review_required = (
+            bool(getattr(source_tree, "review", False)) or evidence.review_required
+        )
         assessment = policy.classify(
             clearance_m=float(minimum),
             contact=(
