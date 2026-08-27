@@ -39,6 +39,24 @@ def _metadata_path(project_root: Path | str, analysis_run_id: str) -> Path:
     return _artifact_root(project_root, analysis_run_id) / "danger_points_final.json"
 
 
+def _remove_persisted_danger_points(
+    project_root: Path | str,
+    analysis_run_id: str,
+) -> None:
+    """Remove viewer-only exact-danger sidecars that no longer match science."""
+
+    for path in (
+        danger_points_path(project_root, analysis_run_id),
+        _metadata_path(project_root, analysis_run_id),
+    ):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            # A stale sidecar is never authoritative without a matching current
+            # clearance object.  Best-effort cleanup must not block finalization.
+            pass
+
+
 def load_final_danger_points(
     project_root: Path | str,
     analysis_run_id: str,
@@ -82,9 +100,13 @@ def persist_final_danger_points(
     not block finalization or Excel export.  In that case an already-valid
     sidecar is reused when its count matches; otherwise the display layer stays
     unavailable until exact clearance is recomputed.
+
+    ``clearance is None`` explicitly invalidates any prior sidecar for this run.
+    This prevents edited tree membership from resurrecting pre-edit danger XYZ.
     """
 
     if clearance is None:
+        _remove_persisted_danger_points(project_root, analysis_run_id)
         return None
     points = tuple(getattr(clearance, "danger_points", ()) or ())
     expected_count = int(
@@ -98,6 +120,7 @@ def persist_final_danger_points(
         existing = load_final_danger_points(project_root, analysis_run_id)
         if existing is not None and len(existing[0]) == expected_count:
             return path
+        _remove_persisted_danger_points(project_root, analysis_run_id)
         return None
 
     original_index = np.asarray(
