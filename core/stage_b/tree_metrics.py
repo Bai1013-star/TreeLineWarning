@@ -20,6 +20,8 @@ from algorithms.manual_span.config import default_manual_span_config
 from algorithms.manual_span.metrics import TreeMetrics, compute_tree_metrics
 from core.config.fast_baseline import canonical_digest
 
+_SOURCE_PREPARATION_SCHEMA = "treeline-project-source-shared-preparation-v1"
+
 
 def _read_json(path: Path) -> dict[str, Any] | None:
     try:
@@ -30,12 +32,14 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 
 def _resolve_artifact(project_root: Path, value: str) -> Path | None:
+    root = project_root.resolve()
     candidate = Path(value)
     if not candidate.is_absolute():
-        candidate = project_root / candidate
+        candidate = root / candidate
     try:
         candidate = candidate.resolve()
-    except OSError:
+        candidate.relative_to(root)
+    except (OSError, ValueError):
         return None
     return candidate if candidate.is_file() else None
 
@@ -47,16 +51,16 @@ def _valid_preparation_context(
     expected_point_count: int | None,
 ) -> tuple[np.ndarray, tuple[float, float, float]] | None:
     payload = _read_json(preparation_path)
-    if payload is None or payload.get("authority") != "FULL_RESOLUTION_RAW":
+    if payload is None or payload.get("schema") != _SOURCE_PREPARATION_SCHEMA:
+        return None
+    if payload.get("authority") != "FULL_RESOLUTION_RAW":
         return None
     if payload.get("tower_membership_used_for_vegetation") is not False:
         return None
     source_point_count = payload.get("source_point_count")
-    if (
-        expected_point_count is not None
-        and type(source_point_count) is int
-        and source_point_count != expected_point_count
-    ):
+    if type(source_point_count) is not int or source_point_count <= 0:
+        return None
+    if expected_point_count is not None and source_point_count != expected_point_count:
         return None
     reference = payload.get("coarse_ground_reference")
     origin = payload.get("origin_xyz")
