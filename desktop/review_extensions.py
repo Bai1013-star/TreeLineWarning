@@ -15,6 +15,7 @@ from typing import Any
 from core.stage_b.danger_points import (
     build_clearance_evidence_display,
     build_danger_point_display,
+    persist_final_danger_points,
 )
 from core.stage_b.tree_metrics import compute_stage_b_tree_metrics
 from desktop.review_risk_frontend import TREE_REVIEW_RISK_EXTENSION_JS
@@ -50,6 +51,24 @@ def _clearance_is_current(editor: Any, result: Any) -> bool:
         return operation_count == 0
     published_count = diagnostics.get("editor_operation_count")
     return type(published_count) is int and published_count == operation_count
+
+
+def _persist_optional_danger_sidecar(project_root: Any, result: Any) -> None:
+    """Cache exact display evidence without making the UI artifact science-critical."""
+
+    clearance = getattr(result, "final_clearance", None)
+    if clearance is None or not getattr(clearance, "danger_points", ()):
+        return
+    try:
+        persist_final_danger_points(
+            project_root,
+            str(result.analysis_run_id),
+            clearance,
+        )
+    except (OSError, TypeError, ValueError):
+        # The clearance records remain authoritative.  A failed optional
+        # viewer sidecar must fail closed visually, not invalidate science.
+        return
 
 
 def _install_step2_clearance_ui() -> None:
@@ -118,6 +137,7 @@ def install_review_extensions() -> None:
                 "authority": "STALE_AFTER_TREE_EDIT",
             }
         else:
+            _persist_optional_danger_sidecar(self.project_root, result)
             display["danger_points"] = build_danger_point_display(
                 self.project_root,
                 result,
