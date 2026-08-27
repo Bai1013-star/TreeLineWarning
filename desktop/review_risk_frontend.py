@@ -12,6 +12,7 @@ TREE_REVIEW_RISK_EXTENSION_JS = r'''
   const prototype = Viewer.prototype;
   const originalSetData = prototype.setData;
   const originalRenderLabels = prototype.renderLabels;
+  const originalHitAt = prototype.hitAt;
 
   function classColor(viewer, displayClass) {
     const values = {
@@ -31,11 +32,14 @@ TREE_REVIEW_RISK_EXTENSION_JS = r'''
     return filter === 'ALL' || String(record.display_class || '') === filter;
   }
 
+  function evidenceRecords(viewer) {
+    const payload = viewer.source && viewer.source.clearance_evidence || {};
+    return Array.isArray(payload.records) ? payload.records : [];
+  }
+
   function addClearanceEvidence(viewer) {
     viewer._clearanceEvidenceGroups = [];
-    const payload = viewer.source && viewer.source.clearance_evidence;
-    const records = payload && Array.isArray(payload.records) ? payload.records : [];
-    records.forEach(record => {
+    evidenceRecords(viewer).forEach(record => {
       if (!validXYZ(record.tree_xyz) || !validXYZ(record.wire_xyz)) return;
       const points = [record.tree_xyz, record.wire_xyz];
       const color = classColor(viewer, String(record.display_class || ''));
@@ -85,9 +89,7 @@ TREE_REVIEW_RISK_EXTENSION_JS = r'''
     const danger = viewer.source && viewer.source.danger_points || {};
     const xyz = Array.isArray(danger.xyz) ? danger.xyz : [];
     const treeIds = Array.isArray(danger.tree_id_by_index) ? danger.tree_id_by_index : [];
-    const evidence = viewer.source && viewer.source.clearance_evidence || {};
-    const records = Array.isArray(evidence.records) ? evidence.records : [];
-    const classByTree = new Map(records.map(record => [Number(record.global_tree_id), String(record.display_class || '')]));
+    const classByTree = new Map(evidenceRecords(viewer).map(record => [Number(record.global_tree_id), String(record.display_class || '')]));
     const count = Math.min(xyz.length, treeIds.length);
     const rows = [];
     for (let index = 0; index < count; index += 1) {
@@ -95,9 +97,63 @@ TREE_REVIEW_RISK_EXTENSION_JS = r'''
       if (filter === 'ALL' || classByTree.get(treeId) === filter) rows.push(index);
     }
     object.geometry.setAttribute('position', new viewer.THREE.BufferAttribute(viewer.positions(xyz, rows), 3));
+    object.geometry.setAttribute('sourceIndex', new viewer.THREE.Uint32BufferAttribute(rows, 1));
     if (rows.length) object.geometry.computeBoundingSphere();
     object.geometry.attributes.position.needsUpdate = true;
+    object.geometry.attributes.sourceIndex.needsUpdate = true;
     viewer._dangerFilteredCount = rows.length;
+  }
+
+  function clearancePickAt(viewer, clientX, clientY) {
+    if (!viewer._dangerVisible) return null;
+    const rect = viewer.canvasRect();
+    if (!rect.width || !rect.height) return null;
+    const ndc = new viewer.THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1
+    );
+    viewer.raycaster.setFromCamera(ndc, viewer.camera);
+    const distance = viewer.camera.position.distanceTo(viewer.controls.target);
+    const worldPixel = distance * Math.tan(viewer.camera.fov * Math.PI / 360) / Math.max(1, rect.height);
+    viewer.raycaster.params.Points.threshold = Math.max(viewer.maxDim * 0.0008, worldPixel * 9);
+    viewer.raycaster.params.Line.threshold = Math.max(viewer.maxDim * 0.0005, worldPixel * 6);
+
+    const pickables = [];
+    if (viewer._dangerPointsObject && viewer._dangerPointsObject.visible) pickables.push(viewer._dangerPointsObject);
+    (viewer._clearanceEvidenceGroups || []).forEach(group => {
+      if (!group.visible) return;
+      group.children.forEach(child => {
+        if (child.visible !== false) pickables.push(child);
+      });
+    });
+    if (!pickables.length) return null;
+    const hits = viewer.raycaster.intersectObjects(pickables, false);
+    if (!hits.length) return null;
+    const hit = hits[0];
+    let record = hit.object && hit.object.userData ? hit.object.userData.record : null;
+    let treeId = record ? Number(record.global_tree_id) : NaN;
+    let sourceIndex = null;
+    if (!record && hit.object === viewer._dangerPointsObject) {
+      const attr = hit.object.geometry.getAttribute('sourceIndex');
+      if (attr && Number.isInteger(hit.index) && hit.index >= 0 && hit.index < attr.count) {
+        sourceIndex = Number(attr.getX(hit.index));
+        const danger = viewer.source && viewer.source.danger_points || {};
+        const ids = Array.isArray(danger.tree_id_by_index) ? danger.tree_id_by_index : [];
+        treeId = Number(ids[sourceIndex]);
+        record = evidenceRecords(viewer).find(item => Number(item.global_tree_id) === treeId) || null;
+      }
+    }
+    if (!record || !Number.isFinite(treeId)) return null;
+    const xyz = sourceIndex != null
+      ? ((viewer.source.danger_points && viewer.source.danger_points.xyz || [])[sourceIndex] || record.tree_xyz)
+      : record.tree_xyz;
+    return {
+      treeId,
+      xyz: validXYZ(xyz) ? xyz : record.tree_xyz,
+      renderedPointIndex: Number.isInteger(hit.index) ? hit.index : null,
+      clearanceRecord: record,
+      riskRole: String(hit.object && hit.object.userData && hit.object.userData.role || 'DANGER_POINT'),
+    };
   }
 
   function applyVisibility(viewer) {
@@ -132,6 +188,10 @@ TREE_REVIEW_RISK_EXTENSION_JS = r'''
     return result;
   };
 
+  prototype.hitAt = function (clientX, clientY) {
+    return clearancePickAt(this, clientX, clientY) || originalHitAt.call(this, clientX, clientY);
+  };
+
   prototype.setDangerVisible = function (visible) {
     this._dangerVisible = Boolean(visible);
     applyVisibility(this);
@@ -160,8 +220,7 @@ TREE_REVIEW_RISK_EXTENSION_JS = r'''
   prototype.renderLabels = function () {
     originalRenderLabels.call(this);
     if (!this._dangerVisible || !this.labelOverlay || !this.source) return;
-    const payload = this.source.clearance_evidence || {};
-    const records = Array.isArray(payload.records) ? payload.records : [];
+    const records = evidenceRecords(this);
     const filter = FILTERS.has(this._clearanceFilter) ? this._clearanceFilter : 'ALL';
     records.filter(record => matchesFilter(record, filter)).forEach(record => {
       const midpoint = record.midpoint_xyz;
@@ -242,6 +301,14 @@ TREE_REVIEW_RISK_EXTENSION_JS = r'''
       if (Number.isFinite(Number(record.global_tree_id))) App.selectTree(Number(record.global_tree_id), false, true);
       const edit = document.getElementById('editmsg');
       if (edit) edit.textContent = `树 ${record.global_tree_id} · 档距 ${record.span_name || '—'} · 最小净空 ${Number(record.minimum_clearance_m).toFixed(3)} m · ${record.display_class || record.risk || '—'} · 导线 ${record.nearest_wire_id == null ? '—' : record.nearest_wire_id} · ${record.contact_state || '—'}`;
+    };
+    const originalPointPick = viewer.options.onPointPick;
+    viewer.options.onPointPick = hit => {
+      if (hit && hit.clearanceRecord) {
+        if (typeof viewer.options.onClearancePick === 'function') viewer.options.onClearancePick(hit.clearanceRecord);
+        return true;
+      }
+      return typeof originalPointPick === 'function' ? originalPointPick(hit) : false;
     };
 
     function applyAvailability(detail) {
