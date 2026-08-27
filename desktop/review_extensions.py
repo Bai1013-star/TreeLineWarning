@@ -35,7 +35,9 @@ def _stale_layer(authority: str) -> dict[str, Any]:
     }
 
 
-def _clearance_is_current(editor: Any, result: Any) -> bool:
+def _result_matches_editor_revision(editor: Any, result: Any) -> bool:
+    """Return whether published final membership matches current edit revision."""
+
     operation_count = (
         len(editor.session.operations)
         if editor is not None and getattr(editor, "session", None) is not None
@@ -129,7 +131,7 @@ def install_review_extensions() -> None:
             min(20_000, int(display_budget) // 2),
         )
 
-        if result is None or not _clearance_is_current(editor, result):
+        if result is None or not _result_matches_editor_revision(editor, result):
             display["danger_points"] = _stale_layer("STALE_AFTER_TREE_EDIT")
             display["clearance_evidence"] = {
                 "records": [],
@@ -193,7 +195,14 @@ def install_review_extensions() -> None:
         reconciled = (
             getattr(result, "global_reconciled", None) if result is not None else None
         )
-        if result is None or reconciled is None:
+        if (
+            result is None
+            or reconciled is None
+            or not _result_matches_editor_revision(editor, result)
+        ):
+            projection.setdefault("metadata", {})["tree_metrics_source"] = (
+                "STALE_AFTER_TREE_EDIT"
+            )
             return projection
         metrics = compute_stage_b_tree_metrics(
             result,
