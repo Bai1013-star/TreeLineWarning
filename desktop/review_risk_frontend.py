@@ -76,10 +76,37 @@ TREE_REVIEW_RISK_EXTENSION_JS = r'''
     return found;
   }
 
+  function filterDangerGeometry(viewer, filter) {
+    const object = viewer._dangerPointsObject;
+    if (!object || !object.geometry) {
+      viewer._dangerFilteredCount = 0;
+      return;
+    }
+    const danger = viewer.source && viewer.source.danger_points || {};
+    const xyz = Array.isArray(danger.xyz) ? danger.xyz : [];
+    const treeIds = Array.isArray(danger.tree_id_by_index) ? danger.tree_id_by_index : [];
+    const evidence = viewer.source && viewer.source.clearance_evidence || {};
+    const records = Array.isArray(evidence.records) ? evidence.records : [];
+    const classByTree = new Map(records.map(record => [Number(record.global_tree_id), String(record.display_class || '')]));
+    const count = Math.min(xyz.length, treeIds.length);
+    const rows = [];
+    for (let index = 0; index < count; index += 1) {
+      const treeId = Number(treeIds[index]);
+      if (filter === 'ALL' || classByTree.get(treeId) === filter) rows.push(index);
+    }
+    object.geometry.setAttribute('position', new viewer.THREE.BufferAttribute(viewer.positions(xyz, rows), 3));
+    if (rows.length) object.geometry.computeBoundingSphere();
+    object.geometry.attributes.position.needsUpdate = true;
+    viewer._dangerFilteredCount = rows.length;
+  }
+
   function applyVisibility(viewer) {
     const visible = Boolean(viewer._dangerVisible);
-    if (viewer._dangerPointsObject) viewer._dangerPointsObject.visible = visible;
     const filter = FILTERS.has(viewer._clearanceFilter) ? viewer._clearanceFilter : 'ALL';
+    filterDangerGeometry(viewer, filter);
+    if (viewer._dangerPointsObject) {
+      viewer._dangerPointsObject.visible = visible && Number(viewer._dangerFilteredCount || 0) > 0;
+    }
     (viewer._clearanceEvidenceGroups || []).forEach(group => {
       group.visible = visible && matchesFilter(group.userData.record || {}, filter);
     });
@@ -124,6 +151,7 @@ TREE_REVIEW_RISK_EXTENSION_JS = r'''
       filter: this._clearanceFilter || 'ALL',
       danger_authority: String(danger.authority || 'UNAVAILABLE'),
       danger_point_count: Number(danger.full_point_count || 0),
+      danger_filtered_display_count: Number(this._dangerFilteredCount || 0),
       evidence_authority: String(evidence.authority || 'UNAVAILABLE'),
       evidence_count: Number(evidence.record_count || 0),
     };
