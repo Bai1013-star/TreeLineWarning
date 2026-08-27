@@ -335,7 +335,9 @@ class BatchTreeEditor:
             )
             final = replace(final, diagnostics=diagnostics)
             if progress is not None:
-                progress("INVALIDATING_STALE_CLEARANCE")
+                # Keep the established desktop progress contract compatible;
+                # the exact invalidation reason is published in diagnostics.
+                progress("VALIDATING_CLEARANCE")
         elif progress is not None:
             progress("VALIDATING_CLEARANCE")
         statuses = {span_id: BatchSpanStatus.FINALIZED for span_id in statuses}
