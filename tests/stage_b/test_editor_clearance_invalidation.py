@@ -162,9 +162,11 @@ def test_tree_edit_invalidates_clearance_when_wire_set_cannot_be_recomputed(tmp_
         tree_ids_by_span={"span-a": (0, 1)},
     )
     editor.delete("span-a", [0])
-    finalized = editor.finalize()
+    stages: list[str] = []
+    finalized = editor.finalize(progress=stages.append)
 
     assert finalized.final_clearance is None
+    assert stages == ["APPLYING_EDITS", "VALIDATING_CLEARANCE"]
     assert finalized.global_reconciled.diagnostics["clearance_state"] == (
         "INVALIDATED_AFTER_TREE_EDIT"
     )
@@ -184,8 +186,10 @@ def test_no_tree_edit_keeps_existing_clearance_when_runtime_wires_are_unavailabl
         result,
         tree_ids_by_span={"span-a": (0, 1)},
     )
+    stages: list[str] = []
 
-    finalized = editor.finalize()
+    finalized = editor.finalize(progress=stages.append)
 
     assert finalized.final_clearance is clearance
+    assert stages == ["APPLYING_EDITS", "VALIDATING_CLEARANCE"]
     assert "clearance_state" not in finalized.global_reconciled.diagnostics
