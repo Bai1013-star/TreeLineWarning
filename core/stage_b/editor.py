@@ -13,6 +13,7 @@ from algorithms.folder_pipeline.tree_editor import build_original_trees
 from algorithms.spans.reconcile import GlobalTreeRecord, TreeReconciliationResult
 
 from core.config.fast_baseline import FastBaselineConfig, canonical_digest
+from core.stage_b.danger_points import persist_final_danger_points
 from core.stage_b.region_edit_session import RegionTreeEditSession
 
 
@@ -323,6 +324,11 @@ class BatchTreeEditor:
             span_statuses=statuses,
             global_reconciled=final,
             final_clearance=final_clearance,
+        )
+        persist_final_danger_points(
+            self.project_root,
+            self.result.analysis_run_id,
+            final_clearance,
         )
         self._write_json(
             self.artifact_root / "batch.json",
