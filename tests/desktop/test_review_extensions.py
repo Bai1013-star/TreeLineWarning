@@ -47,5 +47,8 @@ def test_step2_injects_offline_clearance_controls_before_app_start() -> None:
     assert "显示危险点" in page
     assert "clearance-risk-filter" in page
     assert "EXACT_FINAL_CLEARANCE_NEAREST_PAIR" in page
+    assert "filterDangerGeometry" in page
+    assert "tree_id_by_index" in page
+    assert "danger_filtered_display_count" in page
     assert "https://" not in page
     assert "http://" not in page
