@@ -121,6 +121,31 @@ def test_stage_c_restart_replays_persisted_tree_editor_operations(tmp_path: Path
     ]
 
 
+def test_stage_c_restart_retains_finalized_editor_revision(tmp_path: Path) -> None:
+    from desktop.review_extensions import _result_matches_editor_revision
+
+    workflow = _workflow(tmp_path)
+    span_ids = [item["span_id"] for item in workflow.project_projection()["span_records"]]
+    workflow.start_batch(span_ids, mode="FIXTURE")
+    for _ in range(100):
+        if workflow.batch_projection()["status"] != "RUNNING":
+            break
+        time.sleep(0.01)
+
+    workflow.select_editor_trees([0, 1])
+    workflow.merge_selected()
+    workflow.finalize()
+
+    restarted = DesktopWorkflow(workflow.project_root)
+    result = restarted._current_result()
+    editor = restarted._ensure_editor()
+
+    assert result is not None
+    assert editor is not None
+    assert result.global_reconciled.diagnostics["editor_operation_count"] == 1
+    assert _result_matches_editor_revision(editor, result)
+
+
 def test_stage_b_scheduler_snapshot_binds_latest_production_science() -> None:
     from core.stage_b.batch import BatchAnalysisScheduler
 

@@ -5,7 +5,8 @@ Missing-value policy (strict):
 - ``unknown`` / ``unavailable`` values are written as EMPTY cells (never ``0``).
 - A missing ``crown_width_m`` must NEVER become ``0``; a crown below the
   plausibility floor (or NaN/Inf) is written as blank.
-- A missing ``diameter_cm`` must NEVER become ``0``; it is blank.
+- A missing ``diameter_cm`` must NEVER become ``0``; it is blank while an
+  explicit ``REVIEW``/``UNAVAILABLE`` evidence status is retained.
 - Real zero and missing are therefore semantically distinct in the workbook.
 - Any NaN / Inf numeric is sanitized to blank before writing.
 """
@@ -185,7 +186,11 @@ def _sanitize_tree_row(
     diameter = out.get("diameter_cm")
     if diameter is None or not math.isfinite(float(diameter)) or float(diameter) <= 0.0:
         out["diameter_cm"] = None
-        out["diameter_source"] = None
+        source = out.get("diameter_source")
+        if not isinstance(source, str) or not source.strip().upper().endswith(
+            ("REVIEW", "UNAVAILABLE")
+        ):
+            out["diameter_source"] = None
     return out
 
 

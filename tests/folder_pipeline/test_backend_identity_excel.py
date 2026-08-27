@@ -185,6 +185,15 @@ def test_missing_dbh_cannot_become_zero() -> None:
     assert out["diameter_source"] is None
 
 
+def test_missing_dbh_retains_explicit_evidence_qa_status() -> None:
+    row = _base_row()
+    row["diameter_cm"] = None
+    row["diameter_source"] = "BREAST_HEIGHT_1P30M_UNAVAILABLE"
+    out = _sanitize_tree_row(row, "run-1", "2026-01-01")
+    assert out["diameter_cm"] is None
+    assert out["diameter_source"] == "BREAST_HEIGHT_1P30M_UNAVAILABLE"
+
+
 def test_nan_and_inf_are_sanitized_to_blank(tmp_path: Path) -> None:
     rows = [
         {

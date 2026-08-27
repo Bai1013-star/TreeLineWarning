@@ -576,6 +576,18 @@ class BatchAnalysisScheduler:
             else:
                 # Preserve the established two-argument test/integration seam.
                 preparation = self.source_preparer(self.project_root, first_input)
+            if telemetry.source_point_count <= 0:
+                try:
+                    preparation_payload = json.loads(
+                        (self.project_root / preparation.manifest_reference).read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    prepared_point_count = preparation_payload.get("source_point_count")
+                    if type(prepared_point_count) is int and prepared_point_count > 0:
+                        telemetry.source_point_count = prepared_point_count
+                except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                    pass
             telemetry.source_prep_count = 0 if preparation.telemetry.get("cache_hit_count") else 1
             telemetry.cache_hit_count += int(preparation.telemetry.get("cache_hit_count", 0))
             telemetry.cache_miss_count += int(preparation.telemetry.get("cache_miss_count", 0))

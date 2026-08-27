@@ -18,6 +18,7 @@ from core.stage_b.danger_points import (
     persist_final_danger_points,
 )
 from core.stage_b.tree_metrics import compute_stage_b_tree_metrics
+
 from desktop.review_risk_frontend import TREE_REVIEW_RISK_EXTENSION_JS
 
 _INSTALLED = False
@@ -192,9 +193,13 @@ def install_review_extensions() -> None:
         if editor is None:
             return projection
         result = getattr(self, "_result", None) or getattr(editor, "result", None)
-        reconciled = (
-            getattr(result, "global_reconciled", None) if result is not None else None
-        )
+        reconciled = getattr(result, "global_reconciled", None)
+        if (
+            result is not None
+            and _result_matches_editor_revision(editor, result)
+            and callable(getattr(editor, "final_reconciled", None))
+        ):
+            reconciled = editor.final_reconciled()
         if (
             result is None
             or reconciled is None

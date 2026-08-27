@@ -351,8 +351,24 @@ class DesktopWorkflow:
             telemetry_raw = manifest.get("telemetry") or {}
             from core.stage_b.batch import BatchTelemetry
 
+            source_point_count = int(
+                telemetry_raw.get("SOURCE_POINT_COUNT", 0) or 0
+            )
+            if source_point_count <= 0:
+                for raw in (manifest.get("span_results") or {}).values():
+                    candidate = (
+                        ((raw.get("diagnostics") or {}).get("source_spatial_query") or {}).get(
+                            "project_source_points"
+                        )
+                        if isinstance(raw, Mapping)
+                        else None
+                    )
+                    if type(candidate) is int and candidate > 0:
+                        source_point_count = candidate
+                        break
+
             telemetry = BatchTelemetry(
-                source_point_count=int(telemetry_raw.get("SOURCE_POINT_COUNT", 0) or 0),
+                source_point_count=source_point_count,
                 span_count=int(telemetry_raw.get("SPAN_COUNT", len(statuses)) or 0),
                 source_prep_count=int(telemetry_raw.get("SOURCE_PREP_COUNT", 0) or 0),
                 source_full_pass_count=int(telemetry_raw.get("SOURCE_FULL_PASS_COUNT", 0) or 0),
@@ -368,6 +384,30 @@ class DesktopWorkflow:
                 self._root, project, scan.scan_id, risk_policy=self._risk_policy()
             )
             global_reconciled = scheduler._load_persisted_global(str(manifest["analysis_run_id"]))
+            # The persisted global sidecar deliberately stays at the immutable
+            # pre-editor membership so TreeEditSession can replay its journal.
+            # Finalization metadata, however, is published in batch.json. Keep
+            # the two revision markers when hydrating so exact post-editor
+            # clearance/danger evidence is not incorrectly marked stale.
+            published_diagnostics = dict(
+                (manifest.get("global_reconciliation") or {}).get("diagnostics") or {}
+            )
+            if global_reconciled is not None and published_diagnostics.get(
+                "editor_schema"
+            ) == "treeline-stage-b-batch-editor-v1":
+                operation_count = published_diagnostics.get("editor_operation_count")
+                if type(operation_count) is int:
+                    diagnostics = dict(global_reconciled.diagnostics)
+                    diagnostics.update(
+                        {
+                            "editor_schema": "treeline-stage-b-batch-editor-v1",
+                            "editor_operation_count": operation_count,
+                        }
+                    )
+                    global_reconciled = replace(
+                        global_reconciled,
+                        diagnostics=diagnostics,
+                    )
             return BatchAnalysisResult(
                 analysis_run_id=str(manifest["analysis_run_id"]),
                 project_id=str(manifest["project_id"]),

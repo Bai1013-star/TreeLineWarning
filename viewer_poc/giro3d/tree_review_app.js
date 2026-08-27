@@ -194,7 +194,9 @@
     const xyz = Array.isArray(cloud.xyz) ? cloud.xyz : [];
     const ids = Array.isArray(cloud.tree_id_by_index) ? cloud.tree_id_by_index : [];
     const region = Number(treeId) < 0;
-    const scope = new Set((scopeIds || []).map(Number));
+    const scope = new Set(
+      (scopeIds || (region ? [...state.treeMap.keys()] : [])).map(Number)
+    );
     const preview = [];
     for (let index = 0; index < xyz.length; index += 1) {
       const pointTreeId = Number(ids[index]);
@@ -337,7 +339,7 @@
       const polygon = points.map(point => [2 * point[0] / width - 1, 1 - 2 * point[1] / height]);
       try {
         const matrix = state.viewer.currentViewProjection();
-        const displayCount = displayLassoPreview(treeId, matrix, polygon, visibleTreeIds);
+        const displayCount = displayLassoPreview(treeId, matrix, polygon);
         setTrimMode('PREVIEW_LOADING', `显示样本已命中 ${displayCount.toLocaleString()} 个树木点并标红；正在按完整分辨率精确计算框内所有树木点...`);
         const requestId = ++state.previewRequestId;
         await post('/api/select', {tree_ids: visibleTreeIds});
