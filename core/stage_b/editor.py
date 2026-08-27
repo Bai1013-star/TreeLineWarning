@@ -124,7 +124,7 @@ class BatchTreeEditor:
         self._write_json(self.artifact_root / "tree_edits.json", edits)
 
     def persist(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[int, dict[str, Any]]]:
-        """Persist clean/original, edit-log, and current/final memberships."""
+        """Persist clean/original, edit-log, current/final membership and display evidence."""
 
         self.persist_edits()
         final_index, final_tree, final_xyz, summary = self.session.build_final()
@@ -134,6 +134,19 @@ class BatchTreeEditor:
             xyz_local_m=final_xyz,
             tree_id=final_tree,
         )
+        # BatchAnalysisScheduler._finish() already calls this method immediately
+        # after exact clearance is produced.  Persist its exact danger XYZ here
+        # so a close/reopen before the user first opens Step-2 does not discard
+        # the point-level display evidence.  The sidecar is optional UI data;
+        # clearance records remain authoritative if the filesystem write fails.
+        try:
+            persist_final_danger_points(
+                self.project_root,
+                self.result.analysis_run_id,
+                getattr(self.result, "final_clearance", None),
+            )
+        except (OSError, TypeError, ValueError):
+            pass
         return final_index, final_tree, final_xyz, summary
 
     def final_reconciled(
