@@ -70,18 +70,26 @@ def _hag_chunked(
     xyz_local_m: np.ndarray,
     ground_tree: Any,
     ground_xyz_absolute: np.ndarray,
-    origin_z: float,
+    origin_xyz: np.ndarray,
     chunk_size: int,
 ) -> np.ndarray:
+    """Estimate HAG while respecting local-tree versus absolute-ground frames."""
+
+    origin = np.asarray(origin_xyz, dtype=np.float64)
     out = np.empty(len(xyz_local_m), dtype=np.float32)
     for start in range(0, len(xyz_local_m), chunk_size):
         stop = min(len(xyz_local_m), start + chunk_size)
         block = xyz_local_m[start:stop]
-        neighbors = ground_tree.query(block[:, :2], k=8)[1]
+        # ``final_xyz_local_m`` is scene-local while the reviewed coarse Ground
+        # representatives are stored in the absolute LAS frame.  Querying the
+        # absolute-ground KD-tree with unshifted local XY silently selects the
+        # wrong terrain neighbourhood whenever the source origin is non-zero.
+        points_xy_absolute = block[:, :2] + origin[:2]
+        neighbors = ground_tree.query(points_xy_absolute, k=8)[1]
         if neighbors.ndim == 1:
             neighbors = neighbors[:, None]
         ground_z = np.median(ground_xyz_absolute[neighbors, 2], axis=1)
-        out[start:stop] = (block[:, 2] + origin_z) - ground_z
+        out[start:stop] = (block[:, 2] + origin[2]) - ground_z
     return out
 
 
@@ -106,7 +114,7 @@ def compute_tree_metrics(
         rows = np.flatnonzero(final_tree == tree_id)
         points = final_xyz[rows]
         count = int(len(points))
-        hag = _hag_chunked(points, ground_tree, ground, float(origin[2]), 1_000_000)
+        hag = _hag_chunked(points, ground_tree, ground, origin, 1_000_000)
 
         height_m: float | None = None
         top_xyz_local: tuple[float, float, float] | None = None
