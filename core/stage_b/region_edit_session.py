@@ -25,6 +25,10 @@ from algorithms.folder_pipeline.tree_editor import TreeEditSession, TreeEditorEr
 
 REGION_LASSO_METHOD = "REGION_LASSO"
 REGION_LASSO_SENTINEL_TREE_ID = -1
+# Projection intermediates are display-geometry math over exact membership,
+# not science state.  Keep them bounded so a multi-million-point crown cannot
+# create one giant (N, 4) homogeneous matrix during a UI edit.
+REGION_LASSO_PROJECTION_CHUNK = 250_000
 
 
 class RegionTreeEditSession(TreeEditSession):
@@ -71,6 +75,37 @@ class RegionTreeEditSession(TreeEditSession):
             binding=binding,
         )
 
+    @staticmethod
+    def _selected_rows_chunked(
+        xyz: np.ndarray,
+        matrix: np.ndarray,
+        polygon: np.ndarray,
+    ) -> np.ndarray:
+        """Project exact XYZ in bounded blocks and return exact selected rows."""
+
+        selected: list[np.ndarray] = []
+        for start in range(0, len(xyz), REGION_LASSO_PROJECTION_CHUNK):
+            stop = min(len(xyz), start + REGION_LASSO_PROJECTION_CHUNK)
+            block = np.asarray(xyz[start:stop], dtype=np.float64)
+            homogeneous = np.empty((len(block), 4), dtype=np.float64)
+            homogeneous[:, :3] = block
+            homogeneous[:, 3] = 1.0
+            clip = homogeneous @ matrix.T
+            valid = np.isfinite(clip).all(axis=1) & (
+                clip[:, 3] > np.finfo(float).eps
+            )
+            if not np.any(valid):
+                continue
+            projected = np.full((len(block), 2), np.nan, dtype=np.float64)
+            projected[valid] = clip[valid, :2] / clip[valid, 3, None]
+            inside = valid & _base._points_in_polygon(projected, polygon)
+            local_rows = np.flatnonzero(inside)
+            if len(local_rows):
+                selected.append(local_rows.astype(np.int64, copy=False) + start)
+        if not selected:
+            return np.empty(0, dtype=np.int64)
+        return selected[0] if len(selected) == 1 else np.concatenate(selected)
+
     def _preview_region_lasso(
         self,
         view_projection: list[list[float]] | np.ndarray,
@@ -104,17 +139,7 @@ class RegionTreeEditSession(TreeEditSession):
         for current_tree_id in scope:
             indices, xyz = self.current_membership(current_tree_id)
             per_tree_current[current_tree_id] = int(len(indices))
-            homogeneous = np.column_stack(
-                (xyz, np.ones(len(xyz), dtype=np.float64))
-            )
-            clip = homogeneous @ matrix.T
-            valid = np.isfinite(clip).all(axis=1) & (
-                clip[:, 3] > np.finfo(float).eps
-            )
-            projected = np.full((len(xyz), 2), np.nan, dtype=np.float64)
-            projected[valid] = clip[valid, :2] / clip[valid, 3, None]
-            inside = valid & _base._points_in_polygon(projected, polygon)
-            rows = np.flatnonzero(inside)
+            rows = self._selected_rows_chunked(xyz, matrix, polygon)
             if not len(rows):
                 continue
             chosen = np.asarray(indices[rows], dtype=np.int64)
@@ -157,6 +182,7 @@ class RegionTreeEditSession(TreeEditSession):
                 for tree_id, count in sorted(per_tree_removed.items())
             },
             "fully_removed_tree_ids": fully_removed,
+            "projection_chunk_points": REGION_LASSO_PROJECTION_CHUNK,
         }
         self._previews = {preview_id: preview}
         return _base._public_preview(preview)
@@ -239,6 +265,7 @@ class RegionTreeEditSession(TreeEditSession):
 
 __all__ = [
     "REGION_LASSO_METHOD",
+    "REGION_LASSO_PROJECTION_CHUNK",
     "REGION_LASSO_SENTINEL_TREE_ID",
     "RegionTreeEditSession",
 ]
