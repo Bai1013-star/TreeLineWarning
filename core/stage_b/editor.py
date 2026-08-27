@@ -9,13 +9,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from algorithms.folder_pipeline.tree_editor import (
-    TreeEditSession,
-    build_original_trees,
-)
+from algorithms.folder_pipeline.tree_editor import build_original_trees
 from algorithms.spans.reconcile import GlobalTreeRecord, TreeReconciliationResult
 
 from core.config.fast_baseline import FastBaselineConfig, canonical_digest
+from core.stage_b.region_edit_session import RegionTreeEditSession
 
 
 class BatchTreeEditorError(RuntimeError):
@@ -53,7 +51,7 @@ class BatchTreeEditor:
             reconciled.final_xyz_local_m,
             reconciled.final_tree_id,
         )
-        self.session = TreeEditSession(self.original)
+        self.session = RegionTreeEditSession(self.original)
         self.tree_ids_by_span = {
             str(key): tuple(int(value) for value in values)
             for key, values in (tree_ids_by_span or {}).items()
