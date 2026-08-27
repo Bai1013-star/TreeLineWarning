@@ -150,6 +150,25 @@ def _result(clearance: SpanClearanceResult) -> BatchAnalysisResult:
     )
 
 
+def test_batch_publication_persists_exact_danger_points_before_viewer_open(tmp_path) -> None:
+    clearance = _clearance()
+    result = _result(clearance)
+    editor = BatchTreeEditor(
+        tmp_path,
+        result,
+        tree_ids_by_span={"span-a": (0, 1)},
+    )
+
+    editor.persist()
+
+    arrays = load_final_danger_points(tmp_path, result.analysis_run_id)
+    assert arrays is not None
+    original_index, tree_id, xyz = arrays
+    assert original_index.tolist() == [10]
+    assert tree_id.tolist() == [0]
+    assert xyz.tolist() == [[0.0, 0.0, 2.5]]
+
+
 def test_tree_edit_invalidates_clearance_when_wire_set_cannot_be_recomputed(tmp_path) -> None:
     clearance = _clearance()
     result = _result(clearance)
