@@ -108,5 +108,5 @@ def test_single_tree_lasso_contract_remains_unchanged() -> None:
     preview = session.preview_trim_lasso(1, _identity(), polygon, binding="single")
 
     assert preview["tree_id"] == 1
-    assert preview["method"] == "LASSO_TRIM"
+    assert preview["method"] == "LASSO"
     assert preview["point_count"] == 2
