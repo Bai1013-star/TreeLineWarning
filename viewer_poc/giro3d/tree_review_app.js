@@ -172,8 +172,6 @@
     byId('viewer-renderer-status').dataset.lastTreeClickMs = elapsed.toFixed(3);
   }
 
-  function pointKey(point) { return point.map(value => Number(value).toPrecision(15)).join(','); }
-
   function updatePreviewTrace(points, treeId) {
     state.localPreviewXYZ = Array.isArray(points) ? points : [];
     state.viewerState.activePreviewTreeId = state.localPreviewXYZ.length ? Number(treeId) : null;
@@ -190,14 +188,17 @@
     return inside;
   }
 
-  function displayLassoPreview(treeId, matrix, polygon) {
+  function displayLassoPreview(treeId, matrix, polygon, scopeIds) {
     const started = performance.now();
     const cloud = (state.editorDisplay && state.editorDisplay.trees3d) || {};
     const xyz = Array.isArray(cloud.xyz) ? cloud.xyz : [];
     const ids = Array.isArray(cloud.tree_id_by_index) ? cloud.tree_id_by_index : [];
+    const region = Number(treeId) < 0;
+    const scope = new Set((scopeIds || []).map(Number));
     const preview = [];
     for (let index = 0; index < xyz.length; index += 1) {
-      if (Number(ids[index]) !== Number(treeId)) continue;
+      const pointTreeId = Number(ids[index]);
+      if (region ? !scope.has(pointTreeId) : pointTreeId !== Number(treeId)) continue;
       const point = xyz[index];
       const clip = [
         matrix[0][0] * point[0] + matrix[0][1] * point[1] + matrix[0][2] * point[2] + matrix[0][3],
@@ -221,7 +222,7 @@
     byId('editmsg').textContent = message || '';
     const indicator = byId('lasso-mode-indicator');
     indicator.style.display = mode === 'LASSO' ? 'block' : 'none';
-    indicator.textContent = mode === 'LASSO' ? '套索模式：拖动鼠标圈选要剔除的区域\nEsc 取消' : '';
+    indicator.textContent = mode === 'LASSO' ? '区域套索：拖动鼠标圈选要剔除的树木点\n框内跨多棵树生效 · Esc 取消' : '';
   }
 
   function requireOneTree() {
@@ -249,8 +250,16 @@
     setTrimMode('PREVIEW', '');
     removeLassoOverlay();
     const percent = (Number(preview.fraction) * 100).toFixed(1);
-    const warning = preview.large_removal_warning ? ' 本次将移除该树较大比例的点，请确认选择是否正确。' : '';
-    byId('trim-summary').textContent = `待剔除 ${Number(preview.point_count).toLocaleString()} 个点，占当前单木 ${percent}%。${warning}`;
+    if (Number(preview.tree_id) < 0 || preview.method === 'REGION_LASSO') {
+      const affected = Number(preview.affected_tree_count || (preview.tree_ids || []).length || 0);
+      const fullyRemoved = Array.isArray(preview.fully_removed_tree_ids) ? preview.fully_removed_tree_ids.length : 0;
+      const warning = preview.large_removal_warning ? ' 本次区域剔除点数较多，请确认红色区域是否正确。' : '';
+      const fullText = fullyRemoved ? `，其中 ${fullyRemoved} 棵树将被完全移除` : '';
+      byId('trim-summary').textContent = `待剔除 ${Number(preview.point_count).toLocaleString()} 个完整分辨率树木点，影响 ${affected} 棵树${fullText}；占当前可见范围树点 ${percent}%。${warning}`;
+    } else {
+      const warning = preview.large_removal_warning ? ' 本次将移除该树较大比例的点，请确认选择是否正确。' : '';
+      byId('trim-summary').textContent = `待剔除 ${Number(preview.point_count).toLocaleString()} 个点，占当前单木 ${percent}%。${warning}`;
+    }
     byId('trim-preview').dataset.previewId = String(preview.preview_id || '');
     byId('trim-preview').style.display = 'block';
     if (!keepLocalDisplayPreview) updatePreviewTrace(preview.preview_xyz || [], preview.tree_id);
@@ -273,15 +282,19 @@
   }
 
   function beginLasso() {
-    const treeId = requireOneTree();
-    if (treeId == null || !state.viewer) return;
+    const visibleTreeIds = [...state.treeMap.keys()].map(Number);
+    if (!visibleTreeIds.length || !state.viewer) {
+      byId('editmsg').textContent = '当前视图没有可进行区域剔除的树木。';
+      return;
+    }
+    const treeId = -1;
     removeLassoOverlay();
-    setTrimMode('LASSO', '套索模式已开启：拖动鼠标圈选；松开后立即恢复旋转。Esc 取消。');
+    setTrimMode('LASSO', '区域套索已开启：直接框住不需要的树木区域；框内所有树木点都会被剔除。');
     state.viewer.setControlsEnabled(false);
     const stage = byId('tree-review-stage');
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.classList.add('lasso-overlay');
-    svg.setAttribute('aria-label', '套索绘制区域');
+    svg.setAttribute('aria-label', '区域套索绘制');
     state.lassoOverlay = svg;
     const line = document.createElementNS(svg.namespaceURI, 'polyline');
     line.setAttribute('fill', 'rgba(255,0,0,.12)');
@@ -307,9 +320,9 @@
     const abort = message => {
       drawing = false;
       removeLassoOverlay();
-      setTrimMode('IDLE', message || '已取消套索，3D 旋转已恢复。');
+      setTrimMode('IDLE', message || '已取消区域套索，3D 旋转已恢复。');
     };
-    svg.onpointercancel = () => abort('套索已取消，3D 旋转已恢复。');
+    svg.onpointercancel = () => abort('区域套索已取消，3D 旋转已恢复。');
     svg.onpointerup = async event => {
       if (!drawing) return;
       drawing = false;
@@ -324,15 +337,16 @@
       const polygon = points.map(point => [2 * point[0] / width - 1, 1 - 2 * point[1] / height]);
       try {
         const matrix = state.viewer.currentViewProjection();
-        const displayCount = displayLassoPreview(treeId, matrix, polygon);
-        setTrimMode('PREVIEW_LOADING', `显示样本已命中 ${displayCount.toLocaleString()} 个点并标红；正在精确计算完整点成员，3D 旋转已恢复...`);
+        const displayCount = displayLassoPreview(treeId, matrix, polygon, visibleTreeIds);
+        setTrimMode('PREVIEW_LOADING', `显示样本已命中 ${displayCount.toLocaleString()} 个树木点并标红；正在按完整分辨率精确计算框内所有树木点...`);
         const requestId = ++state.previewRequestId;
+        await post('/api/select', {tree_ids: visibleTreeIds});
         const exactStarted = performance.now();
         const preview = await post('/api/trim/lasso-preview', {tree_id: treeId, view_projection: matrix, polygon_ndc: polygon});
         const exactElapsed = performance.now() - exactStarted;
         metrics.lasso_exact_preview_ms.push(exactElapsed);
         byId('viewer-renderer-status').dataset.lastLassoExactMs = exactElapsed.toFixed(3);
-        if (requestId !== state.previewRequestId || Number(state.activeTreeId) !== Number(treeId)) {
+        if (requestId !== state.previewRequestId) {
           await post('/api/trim/cancel', {preview_id: preview.preview_id});
           return;
         }
@@ -347,7 +361,7 @@
     };
   }
 
-  async function cancelTrim(message = '已取消，单木点成员未改变。') {
+  async function cancelTrim(message = '已取消，树木点成员未改变。') {
     state.previewRequestId += 1;
     if (state.activePreview) {
       try { await post('/api/trim/cancel', {preview_id: state.activePreview.preview_id}); } catch (_) {}
@@ -401,7 +415,9 @@
       updatePlotSelection();
       const info = state.viewer.rendererInfo();
       metrics.renderer_info = info;
-      byId('viewer-renderer-status').textContent = `Giro3D / Three.js r${info.three_version} · WebGL${info.webgl_version} · ${timing.visible_tree_points.toLocaleString()} 树点`;
+      const dangerCount = Number(data.danger_points && data.danger_points.full_point_count || 0);
+      const dangerText = dangerCount ? ` · 危险点 ${dangerCount.toLocaleString()}` : '';
+      byId('viewer-renderer-status').textContent = `Giro3D / Three.js r${info.three_version} · WebGL${info.webgl_version} · ${timing.visible_tree_points.toLocaleString()} 树点${dangerText}`;
       if (byId('editmsg').textContent.startsWith('正在加载')) byId('editmsg').textContent = '';
       return data;
     })();
@@ -432,9 +448,6 @@
         byId('progress').textContent = '复核结果已生成，可继续查看或编辑单木。';
         setEditingBusy(false);
       }
-      // A global workflow snapshot contains every batch tree.  In scoped review,
-      // the authoritative filtered list comes from /api/editor_data?span_id=…;
-      // do not let the background status poll replace it with all spans.
       if (current.tree_snapshot && !reviewSpanId) renderTrees(current.tree_snapshot, false);
     } catch (_) {}
   }
@@ -462,6 +475,8 @@
 
   function bindControls() {
     byId('btn-trim-component').onclick = () => { if (requireOneTree() != null) setTrimMode('COMPONENT', '请点击需要从当前单木中剔除的误分点团。'); };
+    byId('btn-trim-lasso').textContent = '区域套索剔除';
+    byId('btn-trim-lasso').title = '框选区域后，剔除框内所有树木点（跨多棵树）';
     byId('btn-trim-lasso').onclick = beginLasso;
     byId('btn-trim-cancel').onclick = () => void cancelTrim();
     byId('btn-trim-confirm').onclick = async () => {
@@ -476,7 +491,7 @@
         state.selected.clear();
         byId('trim-preview').style.display = 'none';
         delete byId('trim-preview').dataset.previewId;
-        setTrimMode('IDLE', '已剔除所选点，可使用撤销精确恢复。');
+        setTrimMode('IDLE', '已剔除框内树木点，可使用撤销精确恢复整个区域操作。');
         renderTrees(snapshot, false);
         await loadEditorData();
       } catch (error) { showFailure(error); }
