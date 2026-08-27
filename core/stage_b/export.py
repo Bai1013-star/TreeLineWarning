@@ -119,7 +119,7 @@ def export_batch_prediction(
                 "diameter_cm": None if dbh_m is None else float(dbh_m) * 100.0,
                 "diameter_source": (
                     None
-                    if dbh_m is None
+                    if metric is None
                     else f"BREAST_HEIGHT_1P30M_{metric.dbh.dbh_quality}"
                 ),
                 "tree_x_m": record.apex_xy_local_m[0],
