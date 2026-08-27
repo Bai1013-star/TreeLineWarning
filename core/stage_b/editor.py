@@ -297,12 +297,16 @@ class BatchTreeEditor:
         final_membership = self.persist()
         final = self.final_reconciled(final_membership)
         final_clearance = self.result.final_clearance
+        operation_count = len(self.session.operations)
         wire_results = [
             value.wire_result
             for value in self.result.span_results.values()
             if value.wire_result is not None
         ]
-        if wire_results and len(wire_results) == len(self.result.span_statuses):
+        complete_wire_set = bool(wire_results) and len(wire_results) == len(
+            self.result.span_statuses
+        )
+        if complete_wire_set:
             if progress is not None:
                 progress("RECALCULATING_CLEARANCE")
             from algorithms.spans.clearance import run_span_tree_wire_clearance
@@ -315,6 +319,23 @@ class BatchTreeEditor:
                     self.result.risk_policy_snapshot["warning_clearance_threshold_m"]
                 ),
             )
+        elif operation_count > 0:
+            # Partial wire geometry cannot be passed into the existing global
+            # clearance function: it concatenates supplied wires and evaluates
+            # every final tree against them.  Retaining pre-edit clearance would
+            # be stale; evaluating a partial set would be scientifically wrong.
+            # Fail closed until all required wire geometry is available again.
+            final_clearance = None
+            diagnostics = dict(final.diagnostics)
+            diagnostics.update(
+                {
+                    "clearance_state": "INVALIDATED_AFTER_TREE_EDIT",
+                    "clearance_reason": "INCOMPLETE_WIRE_RESULTS",
+                }
+            )
+            final = replace(final, diagnostics=diagnostics)
+            if progress is not None:
+                progress("INVALIDATING_STALE_CLEARANCE")
         elif progress is not None:
             progress("VALIDATING_CLEARANCE")
         statuses = {span_id: BatchSpanStatus.FINALIZED for span_id in statuses}
