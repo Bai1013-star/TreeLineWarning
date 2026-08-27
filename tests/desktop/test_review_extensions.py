@@ -50,5 +50,8 @@ def test_step2_injects_offline_clearance_controls_before_app_start() -> None:
     assert "filterDangerGeometry" in page
     assert "tree_id_by_index" in page
     assert "danger_filtered_display_count" in page
+    assert "clearancePickAt" in page
+    assert "clearanceRecord" in page
+    assert "prototype.hitAt" in page
     assert "https://" not in page
     assert "http://" not in page
