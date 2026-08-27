@@ -4,7 +4,7 @@ The Survey product already has one reviewed full-resolution metric implementatio
 (``algorithms.manual_span.metrics``).  This adapter reuses it for Stage-B instead
 of inventing a second DBH/crown formula.  Ground/HAG provenance is recovered only
 from a validated source-shared preparation manifest; ambiguous legacy projects
-fail closed and leave the optional metric cells blank rather than guessing.
+fail closed and leave optional metric cells blank rather than guessing.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import numpy as np
 
 from algorithms.manual_span.config import default_manual_span_config
 from algorithms.manual_span.metrics import TreeMetrics, compute_tree_metrics
+from core.config.fast_baseline import canonical_digest
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -73,7 +74,10 @@ def _valid_preparation_context(
     if ground_path is None:
         return None
     try:
-        ground = np.asarray(np.load(ground_path, allow_pickle=False), dtype=np.float64)
+        ground = np.asarray(
+            np.load(ground_path, allow_pickle=False, mmap_mode="r"),
+            dtype=np.float64,
+        )
     except (OSError, ValueError):
         return None
     if ground.ndim != 2 or ground.shape[1] != 3 or len(ground) == 0:
@@ -93,6 +97,29 @@ def _project_root_from_output(output_path: Path) -> Path | None:
     return None
 
 
+def _active_preparation_candidate(project_root: Path, result: Any) -> Path | None:
+    """Resolve the exact source-shared preparation used by the active scan."""
+
+    try:
+        from core.stage_a import load_project
+        from core.stage_b.bridge import ProjectScienceBridge
+
+        project = load_project(project_root)
+        bridge = ProjectScienceBridge(project, str(result.scan_id))
+        source_digest = canonical_digest(dict(bridge.source_identity))
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+    candidate = (
+        project_root
+        / "artifacts"
+        / "project-runs"
+        / "source-shared"
+        / source_digest
+        / "preparation.json"
+    )
+    return candidate if candidate.is_file() else None
+
+
 def _preparation_candidates(
     project_root: Path,
     result: Any,
@@ -106,10 +133,18 @@ def _preparation_candidates(
     if isinstance(reference, str) and reference:
         path = _resolve_artifact(project_root, reference)
         return [] if path is None else [path]
+
+    active = _active_preparation_candidate(project_root, result)
+    if active is not None:
+        return [active]
+
+    # Legacy fallback: only an unambiguous validated preparation may be used.
     source_shared = project_root / "artifacts" / "project-runs" / "source-shared"
     if not source_shared.is_dir():
         return []
-    return sorted(path for path in source_shared.glob("*/preparation.json") if path.is_file())
+    return sorted(
+        path for path in source_shared.glob("*/preparation.json") if path.is_file()
+    )
 
 
 def compute_stage_b_tree_metrics(
@@ -121,14 +156,17 @@ def compute_stage_b_tree_metrics(
 ) -> dict[int, TreeMetrics]:
     """Return canonical metrics keyed by final global tree id.
 
-    The active preparation is used when Stage-B persisted an explicit reference.
-    Historical batches are supported only when exactly one source-shared
-    preparation is valid for the recorded source point count.  Multiple valid
-    candidates are intentionally treated as ambiguous.
+    The active source preparation is preferred and validated against the
+    source-bound manifest.  Historical batches are supported only when exactly
+    one candidate is valid for the recorded source point count.
     """
 
     output = Path(output_path)
-    root = Path(project_root).resolve() if project_root is not None else _project_root_from_output(output)
+    root = (
+        Path(project_root).resolve()
+        if project_root is not None
+        else _project_root_from_output(output)
+    )
     if root is None:
         return {}
     telemetry = getattr(result, "telemetry", None)
