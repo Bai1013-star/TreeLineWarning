@@ -1,10 +1,10 @@
-"""Small desktop-only review projection extensions.
+"""Desktop-only review projection extensions.
 
-The desktop workflow itself remains the authoritative source for tree, tower,
-wire and editor display data.  This module wraps only ``editor_data`` to append
-a bounded red danger-point layer sourced from the exact clearance result (or
-its validated post-editor sidecar after restart).  It does not alter science,
-editor membership, camera handling, or network behavior.
+These wrappers stay at the product adapter boundary: they append exact
+clearance evidence to the Giro3D payload, avoid materializing a second giant
+XYZ array for region-lasso previews, and enrich the final projection with the
+canonical post-editor tree metrics.  Ground/Wire/Tree/Clearance science is not
+modified here.
 """
 
 from __future__ import annotations
@@ -12,9 +12,43 @@ from __future__ import annotations
 from functools import wraps
 from typing import Any
 
-from core.stage_b.danger_points import build_danger_point_display
+from core.stage_b.danger_points import (
+    build_clearance_evidence_display,
+    build_danger_point_display,
+)
+from core.stage_b.tree_metrics import compute_stage_b_tree_metrics
 
 _INSTALLED = False
+
+
+def _stale_layer(authority: str) -> dict[str, Any]:
+    return {
+        "xyz": [],
+        "tree_id_by_index": [],
+        "original_index": [],
+        "display_point_count": 0,
+        "full_point_count": 0,
+        "authority": authority,
+        "display_only_sampling": False,
+    }
+
+
+def _clearance_is_current(editor: Any, result: Any) -> bool:
+    operation_count = (
+        len(editor.session.operations)
+        if editor is not None and getattr(editor, "session", None) is not None
+        else 0
+    )
+    reconciled = getattr(result, "global_reconciled", None)
+    diagnostics = getattr(reconciled, "diagnostics", {}) if reconciled is not None else {}
+    post_editor = (
+        isinstance(diagnostics, dict)
+        and diagnostics.get("editor_schema") == "treeline-stage-b-batch-editor-v1"
+    )
+    if not post_editor:
+        return operation_count == 0
+    published_count = diagnostics.get("editor_operation_count")
+    return type(published_count) is int and published_count == operation_count
 
 
 def install_review_extensions() -> None:
@@ -24,9 +58,11 @@ def install_review_extensions() -> None:
     from desktop.workflow import DesktopWorkflow
 
     original_editor_data = DesktopWorkflow.editor_data
+    original_preview_trim_lasso = DesktopWorkflow.preview_trim_lasso
+    original_final_projection = DesktopWorkflow.final_projection
 
     @wraps(original_editor_data)
-    def editor_data_with_danger_points(
+    def editor_data_with_clearance_evidence(
         self: Any,
         *,
         display_budget: int | None = None,
@@ -51,40 +87,104 @@ def install_review_extensions() -> None:
             min(20_000, int(display_budget) // 2),
         )
 
-        # Once edits exist, the pre-editor clearance is stale until finalize
-        # recomputes exact clearance.  Never paint stale red points as current.
-        operation_count = (
-            len(editor.session.operations)
-            if editor is not None and getattr(editor, "session", None) is not None
-            else 0
-        )
-        reconciled = getattr(result, "global_reconciled", None)
-        diagnostics = getattr(reconciled, "diagnostics", {}) if reconciled is not None else {}
-        post_editor = (
-            isinstance(diagnostics, dict)
-            and diagnostics.get("editor_schema") == "treeline-stage-b-batch-editor-v1"
-        )
-        if operation_count and not post_editor:
-            danger = {
-                "xyz": [],
-                "tree_id_by_index": [],
-                "original_index": [],
-                "display_point_count": 0,
-                "full_point_count": 0,
+        if result is None or not _clearance_is_current(editor, result):
+            display["danger_points"] = _stale_layer("STALE_AFTER_TREE_EDIT")
+            display["clearance_evidence"] = {
+                "records": [],
+                "record_count": 0,
                 "authority": "STALE_AFTER_TREE_EDIT",
-                "display_only_sampling": False,
             }
         else:
-            danger = build_danger_point_display(
+            display["danger_points"] = build_danger_point_display(
                 self.project_root,
                 result,
                 visible_tree_ids=visible_tree_ids,
                 display_budget=budget,
             )
-        display["danger_points"] = danger
+            display["clearance_evidence"] = build_clearance_evidence_display(
+                result,
+                visible_tree_ids=visible_tree_ids,
+            )
         return display
 
-    DesktopWorkflow.editor_data = editor_data_with_danger_points
+    @wraps(original_preview_trim_lasso)
+    def preview_trim_lasso_bounded(
+        self: Any,
+        tree_id: int,
+        view_projection: list[list[float]],
+        polygon_ndc: list[list[float]],
+    ) -> dict[str, Any]:
+        # Keep the established single-tree path byte-for-byte compatible.
+        if int(tree_id) >= 0:
+            return original_preview_trim_lasso(
+                self,
+                int(tree_id),
+                view_projection,
+                polygon_ndc,
+            )
+        self._assert_editor_mutable()
+        editor = self._ensure_editor()
+        if editor is None:
+            raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
+        preview = editor.session.preview_trim_lasso(
+            int(tree_id),
+            view_projection,
+            polygon_ndc,
+            binding=self._trim_binding(),
+        )
+        # The browser has already painted a red preview from its bounded
+        # display sample.  Returning all exact XYZ would defeat the point of a
+        # full-resolution region edit, so only exact counts/indices remain
+        # authoritative server-side; commit still uses the complete membership.
+        preview["full_point_count"] = int(preview.get("point_count", 0))
+        preview["preview_xyz"] = []
+        return preview
+
+    @wraps(original_final_projection)
+    def final_projection_with_metrics(self: Any) -> dict[str, Any]:
+        projection = original_final_projection(self)
+        editor = self._ensure_editor()
+        if editor is None:
+            return projection
+        result = getattr(self, "_result", None) or getattr(editor, "result", None)
+        reconciled = getattr(result, "global_reconciled", None) if result is not None else None
+        if result is None or reconciled is None:
+            return projection
+        metrics = compute_stage_b_tree_metrics(
+            result,
+            reconciled,
+            self.project_root / "exports" / "Prediction_Input.xlsx",
+            project_root=self.project_root,
+        )
+        persistent_to_metric = {
+            str(record.persistent_tree_id): metrics.get(int(record.global_tree_id))
+            for record in reconciled.global_tree_records
+        }
+        for row in projection.get("trees", []):
+            metric = persistent_to_metric.get(str(row.get("persistent_tree_id")))
+            if metric is None:
+                continue
+            row["height_m"] = (
+                metric.tree_height_m
+                if metric.tree_height_m is not None
+                else row.get("height_m")
+            )
+            row["crown_width_m"] = metric.crown_mean_width_m
+            row["crown_width_major_m"] = metric.crown_major_width_m
+            row["crown_width_minor_m"] = metric.crown_minor_width_m
+            row["crown_area_m2"] = metric.crown_area_m2
+            row["diameter_cm"] = (
+                None if metric.dbh.dbh_m is None else float(metric.dbh.dbh_m) * 100.0
+            )
+            row["diameter_source"] = f"BREAST_HEIGHT_1P30M_{metric.dbh.dbh_quality}"
+        projection.setdefault("metadata", {})["tree_metrics_source"] = (
+            "CANONICAL_FULLRES_POST_EDITOR"
+        )
+        return projection
+
+    DesktopWorkflow.editor_data = editor_data_with_clearance_evidence
+    DesktopWorkflow.preview_trim_lasso = preview_trim_lasso_bounded
+    DesktopWorkflow.final_projection = final_projection_with_metrics
     _INSTALLED = True
 
 
