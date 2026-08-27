@@ -148,7 +148,7 @@
     }
 
     computeBounds(data) {
-      const layers = [data.background, data.wire, data.wires3d, data.tower, data.trees3d];
+      const layers = [data.background, data.wire, data.wires3d, data.tower, data.trees3d, data.danger_points];
       const min = [Infinity, Infinity, Infinity];
       const max = [-Infinity, -Infinity, -Infinity];
       let count = 0;
@@ -235,6 +235,7 @@
       this.addPoints(xyzOf(this.source.wire), '#ff1744', {role: 'WIRE', size: 2.2, opacity: 1, fallback: 0xff1744});
       this.addWireCurve(xyzOf(this.source.wires3d));
       this.addPoints(xyzOf(this.source.tower), '#ff9800', {role: 'TOWER', size: 7, opacity: 1, fallback: 0xff9800});
+      this.addPoints(xyzOf(this.source.danger_points), '#ff0000', {role: 'DANGER_POINT', size: 5.2, opacity: 1, fallback: 0xff0000});
       const trees = this.source.trees3d || {};
       this.treeXYZ = Array.isArray(trees.xyz) ? trees.xyz : [];
       this.treeIds = Array.isArray(trees.tree_id_by_index) ? trees.tree_id_by_index.map(Number) : [];
@@ -290,12 +291,13 @@
       const selectedColor = new this.THREE.Color(0xffd43b);
       const fallback = new this.THREE.Color(0x62d96b);
       const muted = new this.THREE.Color();
+      const previewAllTrees = Number(this.previewTreeId) < 0;
       for (let index = 0; index < colorAttr.count; index += 1) {
         const sourceIndex = sourceAttr.getX(index);
         const treeId = Number(this.treeIds[sourceIndex]);
         const point = this.treeXYZ[sourceIndex];
         let color = this.treeBaseColors[sourceIndex] || fallback;
-        if (Number(treeId) === Number(this.previewTreeId) && this.previewKeys.has(this.pointKey(point))) color = red;
+        if ((previewAllTrees || Number(treeId) === Number(this.previewTreeId)) && this.previewKeys.has(this.pointKey(point))) color = red;
         else if (hasSelection && !this.selection.has(treeId)) color = muted.copy(color).multiplyScalar(0.24);
         else if (this.selection.has(treeId)) color = selectedColor;
         colorAttr.setXYZ(index, color.r, color.g, color.b);
