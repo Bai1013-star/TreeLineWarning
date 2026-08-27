@@ -56,18 +56,18 @@ def test_region_lasso_removes_exact_points_across_multiple_trees_and_undoes_once
     assert operation["tree_ids"] == [1, 2]
     assert operation["point_count"] == 4
     assert len(session.operations) == 1
-    assert {tree["tree_id"]: tree["point_count"] for tree in session.snapshot()["trees"]} == {
-        1: 1,
-        2: 1,
-    }
+    assert {
+        tree["tree_id"]: tree["point_count"]
+        for tree in session.snapshot()["trees"]
+    } == {1: 1, 2: 1}
 
     undone = session.undo()
     assert undone is not None
     assert len(session.operations) == 0
-    assert {tree["tree_id"]: tree["point_count"] for tree in session.snapshot()["trees"]} == {
-        1: 3,
-        2: 3,
-    }
+    assert {
+        tree["tree_id"]: tree["point_count"]
+        for tree in session.snapshot()["trees"]
+    } == {1: 3, 2: 3}
 
 
 def test_region_lasso_scope_is_the_current_selection() -> None:
@@ -80,7 +80,9 @@ def test_region_lasso_scope_is_the_current_selection() -> None:
     assert preview["tree_ids"] == [2]
     assert preview["point_count"] == 3
     assert preview["fully_removed_tree_ids"] == [2]
-    session.commit_trim(preview["preview_id"], binding="scope", minimum_remaining_points=2)
+    session.commit_trim(
+        preview["preview_id"], binding="scope", minimum_remaining_points=2
+    )
     snapshot = session.snapshot()
     assert [tree["tree_id"] for tree in snapshot["trees"]] == [1]
     assert session.current_tree_ids() == [1]
@@ -99,6 +101,24 @@ def test_region_lasso_rejects_tiny_partial_tree_remnants_but_allows_zero() -> No
             minimum_remaining_points=2,
         )
     assert session.operations == []
+
+
+def test_region_lasso_projection_chunks_preserve_exact_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "core.stage_b.region_edit_session.REGION_LASSO_PROJECTION_CHUNK",
+        2,
+    )
+    session = _session()
+    session.select([1, 2])
+    polygon = [[-0.60, -0.20], [0.30, -0.20], [0.30, 0.60], [-0.60, 0.60]]
+
+    preview = session.preview_trim_lasso(-1, _identity(), polygon, binding="chunked")
+
+    assert preview["point_count"] == 4
+    assert preview["per_tree_removed_counts"] == {"1": 2, "2": 2}
+    assert preview["projection_chunk_points"] == 2
 
 
 def test_single_tree_lasso_contract_remains_unchanged() -> None:
