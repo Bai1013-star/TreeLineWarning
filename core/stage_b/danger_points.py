@@ -1,10 +1,9 @@
-"""Persistence and display projection for exact Stage-B danger points.
+"""Persistence and viewer projection for exact Stage-B clearance evidence.
 
-Danger points are produced by the existing exact tree-to-wire clearance engine.
-This module never recalculates or approximates distance.  It only persists the
-already-authoritative ``original_index`` + XYZ observations and builds a
-bounded deterministic viewer sample.  Full-resolution counts remain explicit
-so display LOD cannot be mistaken for science membership.
+The existing clearance engine remains authoritative.  This module never
+recalculates point-to-wire distance: it only persists exact danger observations
+and projects already-computed per-tree nearest-point evidence into bounded UI
+payloads.  Display LOD is explicit and cannot become science membership.
 """
 
 from __future__ import annotations
@@ -14,6 +13,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
+
+from core.stage_a.risk import RiskPolicy
+from core.stage_b.contact import contact_evidence_from_clearance
 
 DANGER_POINTS_SCHEMA = "treeline-stage-b-danger-points-v1"
 _DEFAULT_DISPLAY_BUDGET = 20_000
@@ -42,11 +44,7 @@ def persist_final_danger_points(
     analysis_run_id: str,
     clearance: Any | None,
 ) -> Path | None:
-    """Persist exact post-editor danger observations atomically.
-
-    An empty, valid clearance result is persisted as empty arrays so a restart
-    can distinguish "computed: zero danger points" from "artifact absent".
-    """
+    """Persist exact post-editor danger observations atomically."""
 
     if clearance is None:
         return None
@@ -67,6 +65,12 @@ def persist_final_danger_points(
         raise ValueError("DANGER_POINT_ORIGINAL_INDEX_DUPLICATE")
     if not np.all(np.isfinite(xyz)):
         raise ValueError("DANGER_POINT_XYZ_NONFINITE")
+
+    expected_count = int(
+        sum(int(getattr(record, "danger_point_count", 0) or 0) for record in getattr(clearance, "records", ()))
+    )
+    if expected_count != len(original_index):
+        raise ValueError("DANGER_POINT_COUNT_MISMATCH")
 
     path = danger_points_path(project_root, analysis_run_id)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -100,14 +104,20 @@ def persist_final_danger_points(
     return path
 
 
-def _arrays_from_clearance(clearance: Any | None) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+def _arrays_from_clearance(
+    clearance: Any | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
     if clearance is None:
         return None
     points = tuple(getattr(clearance, "danger_points", ()) or ())
     if not points:
         return None
-    original_index = np.asarray([int(point.original_index) for point in points], dtype=np.int64)
-    tree_id = np.asarray([int(point.global_tree_id) for point in points], dtype=np.int64)
+    original_index = np.asarray(
+        [int(point.original_index) for point in points], dtype=np.int64
+    )
+    tree_id = np.asarray(
+        [int(point.global_tree_id) for point in points], dtype=np.int64
+    )
     xyz = np.asarray(
         [tuple(float(value) for value in point.xyz_local_m) for point in points],
         dtype=np.float64,
@@ -146,6 +156,18 @@ def load_final_danger_points(
     return original_index, tree_id, xyz
 
 
+def _empty_danger(authority: str) -> dict[str, Any]:
+    return {
+        "xyz": [],
+        "tree_id_by_index": [],
+        "original_index": [],
+        "display_point_count": 0,
+        "full_point_count": 0,
+        "authority": authority,
+        "display_only_sampling": False,
+    }
+
+
 def build_danger_point_display(
     project_root: Path | str,
     result: Any | None,
@@ -153,35 +175,42 @@ def build_danger_point_display(
     visible_tree_ids: Iterable[int] | None = None,
     display_budget: int = _DEFAULT_DISPLAY_BUDGET,
 ) -> dict[str, Any]:
-    """Build a bounded red-layer payload without changing danger membership."""
+    """Build a bounded red-point payload from exact current clearance evidence."""
 
     if result is None:
-        return {
-            "xyz": [],
-            "tree_id_by_index": [],
-            "original_index": [],
-            "display_point_count": 0,
-            "full_point_count": 0,
-            "authority": "UNAVAILABLE",
-        }
-    arrays = _arrays_from_clearance(getattr(result, "final_clearance", None))
+        return _empty_danger("UNAVAILABLE")
+    clearance = getattr(result, "final_clearance", None)
+    if clearance is None:
+        return _empty_danger("UNAVAILABLE")
+
+    expected_count = int(
+        sum(int(getattr(record, "danger_point_count", 0) or 0) for record in getattr(clearance, "records", ()))
+    )
+    arrays = _arrays_from_clearance(clearance)
     authority = "EXACT_FINAL_CLEARANCE_MEMORY"
     if arrays is None:
+        # An exact clearance result that reports zero danger points is already
+        # authoritative.  Never resurrect an older sidecar in that case.
+        if expected_count == 0:
+            return _empty_danger(authority)
         arrays = load_final_danger_points(project_root, str(result.analysis_run_id))
         authority = "EXACT_FINAL_CLEARANCE_PERSISTED"
     if arrays is None:
-        return {
-            "xyz": [],
-            "tree_id_by_index": [],
-            "original_index": [],
-            "display_point_count": 0,
-            "full_point_count": 0,
-            "authority": "UNAVAILABLE",
-        }
+        return _empty_danger("UNAVAILABLE")
     original_index, tree_id, xyz = arrays
+    if len(original_index) != expected_count:
+        # A sidecar/count disagreement means the display evidence is stale or
+        # incomplete.  Fail closed instead of drawing a misleading red layer.
+        return _empty_danger("COUNT_MISMATCH")
     if visible_tree_ids is not None:
-        visible = np.asarray(sorted({int(value) for value in visible_tree_ids}), dtype=np.int64)
-        mask = np.isin(tree_id, visible) if len(visible) else np.zeros(len(tree_id), dtype=bool)
+        visible = np.asarray(
+            sorted({int(value) for value in visible_tree_ids}), dtype=np.int64
+        )
+        mask = (
+            np.isin(tree_id, visible)
+            if len(visible)
+            else np.zeros(len(tree_id), dtype=bool)
+        )
         original_index = original_index[mask]
         tree_id = tree_id[mask]
         xyz = xyz[mask]
@@ -203,8 +232,98 @@ def build_danger_point_display(
     }
 
 
+def build_clearance_evidence_display(
+    result: Any | None,
+    *,
+    visible_tree_ids: Iterable[int] | None = None,
+) -> dict[str, Any]:
+    """Project exact per-tree closest tree/wire pairs for the Giro3D reviewer."""
+
+    if result is None or getattr(result, "final_clearance", None) is None:
+        return {"records": [], "authority": "UNAVAILABLE"}
+    clearance = result.final_clearance
+    visible = (
+        None
+        if visible_tree_ids is None
+        else {int(value) for value in visible_tree_ids}
+    )
+    tree_records = {
+        int(record.global_tree_id): record
+        for record in getattr(getattr(result, "global_reconciled", None), "global_tree_records", ())
+    }
+    snapshot = dict(getattr(result, "risk_policy_snapshot", {}) or {})
+    policy = RiskPolicy(
+        risk_policy_version=str(snapshot.get("risk_policy_version", "risk-policy-v1")),
+        warning_clearance_threshold_m=float(snapshot.get("warning_clearance_threshold_m", 0.5)),
+    )
+    rows: list[dict[str, Any]] = []
+    for record in getattr(clearance, "records", ()):
+        tree_id = int(record.global_tree_id)
+        if visible is not None and tree_id not in visible:
+            continue
+        minimum = record.minimum_clearance_m
+        tree_xyz = record.nearest_tree_xyz_local_m
+        wire_xyz = record.nearest_wire_xyz_local_m
+        if minimum is None or tree_xyz is None or wire_xyz is None:
+            continue
+        if not np.isfinite(float(minimum)):
+            continue
+        tree_xyz_values = tuple(float(value) for value in tree_xyz)
+        wire_xyz_values = tuple(float(value) for value in wire_xyz)
+        if not np.all(np.isfinite(np.asarray((*tree_xyz_values, *wire_xyz_values), dtype=np.float64))):
+            continue
+        evidence = contact_evidence_from_clearance(
+            float(minimum), clearance_status=str(record.status)
+        )
+        source_tree = tree_records.get(tree_id)
+        review_required = bool(getattr(source_tree, "review", False)) or evidence.review_required
+        assessment = policy.classify(
+            clearance_m=float(minimum),
+            contact=(
+                False
+                if evidence.state.value == "CONTACT_NOT_CONFIRMED"
+                else None
+            ),
+            review_required=review_required,
+        )
+        display_class = (
+            "REVIEW_REQUIRED"
+            if assessment.review.value == "REVIEW_REQUIRED"
+            else assessment.risk.value
+        )
+        midpoint = [
+            0.5 * (tree_xyz_values[axis] + wire_xyz_values[axis])
+            for axis in range(3)
+        ]
+        rows.append(
+            {
+                "global_tree_id": tree_id,
+                "persistent_tree_id": getattr(record, "persistent_tree_id", None),
+                "span_name": str(record.span_name),
+                "nearest_wire_id": record.nearest_wire_id,
+                "minimum_clearance_m": float(minimum),
+                "nearest_tree_original_index": record.nearest_tree_original_index,
+                "tree_xyz": list(tree_xyz_values),
+                "wire_xyz": list(wire_xyz_values),
+                "midpoint_xyz": midpoint,
+                "risk": assessment.risk.value,
+                "review_state": assessment.review.value,
+                "display_class": display_class,
+                "contact_state": evidence.state.value,
+                "clearance_status": str(record.status),
+            }
+        )
+    return {
+        "records": rows,
+        "authority": "EXACT_FINAL_CLEARANCE_NEAREST_PAIR",
+        "record_count": len(rows),
+        "warning_threshold_m": policy.warning_clearance_threshold_m,
+    }
+
+
 __all__ = [
     "DANGER_POINTS_SCHEMA",
+    "build_clearance_evidence_display",
     "build_danger_point_display",
     "danger_points_path",
     "load_final_danger_points",
