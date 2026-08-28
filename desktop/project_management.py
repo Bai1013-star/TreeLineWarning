@@ -1,6 +1,6 @@
 """Desktop-only project lifecycle metadata.
 
-This deliberately does not manufacture scientific artifacts.  A newly created
+This deliberately does not manufacture scientific artifacts. A newly created
 project is a valid TreeLineWarning desktop workspace with an explicit empty
 state; it becomes an analysis project only after the existing ingestion and
 tower workflow has produced the normal ``project.json`` contract.
@@ -20,21 +20,17 @@ from core.stage_a import (
     CapabilityReport,
     CapabilityState,
     CoordinateDeclaration,
-    Line,
     LineRole,
     Project,
-    Route,
     Scan,
     SourceDescriptor,
-    Tower,
-    generate_spans_from_ordered_towers,
-    import_gis,
     inspect_point_cloud,
     load_project,
     save_project,
 )
 from core.stage_a.capability import CAPABILITY_NAMES
 from core.stage_a.models import stable_id
+from desktop.gis_project_import import import_gis_into_project
 
 DESKTOP_MANIFEST = "desktop-project.json"
 DESKTOP_SCHEMA = "treeline-desktop-project-v1"
@@ -68,6 +64,7 @@ def _manifest_path(root: Path) -> Path:
 
 def create_empty_project(parent: Path, project_name: str) -> dict:
     """Create an empty, non-science project workspace below ``parent``."""
+
     name = validate_project_name(project_name)
     root = (parent / name).resolve()
     if root.exists():
@@ -97,7 +94,7 @@ def create_empty_project(parent: Path, project_name: str) -> dict:
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     # Stage-C metadata is a small product sidecar, separate from the Stage-A
-    # science/topology aggregate.  Keeping it here makes new projects
+    # science/topology aggregate. Keeping it here makes new projects
     # immediately resumable without creating a parallel science project model.
     (root / "desktop-workflow.json").write_text(
         json.dumps(
@@ -140,6 +137,7 @@ def _read_desktop_manifest(root: Path) -> dict:
 
 def describe_project(root: Path) -> dict:
     """Return a small presentation projection for empty and analysis projects."""
+
     root = root.resolve()
     stage_a = root / "stage-a-project.json"
     if stage_a.is_file():
@@ -211,6 +209,7 @@ def describe_project(root: Path) -> dict:
 
 def import_pointcloud(root: Path, source: Path) -> dict:
     """Record a selected LAS/LAZ source without starting scientific analysis."""
+
     root = root.resolve()
     payload = _read_desktop_manifest(root)
     source = source.resolve()
@@ -270,105 +269,9 @@ def import_pointcloud(root: Path, source: Path) -> dict:
     return describe_project(root)
 
 
-def import_gis_file(root: Path, source: Path, **kwargs) -> dict:
-    """Import canonical GIS seeds and persist only product topology metadata."""
+def import_gis_file(root: Path, source: Path, **kwargs: object) -> dict:
+    """Import canonical GIS seeds with revision-safe, idempotent topology writes."""
 
     project_root = root.resolve()
-    project = load_project(project_root)
-    imported = import_gis(source, **kwargs)
-    existing_towers = list(project.towers)
-    tower_by_external = {
-        tower.external_asset_id: tower for tower in existing_towers if tower.external_asset_id
-    }
-    for seed in imported.towers:
-        if seed.external_asset_id in tower_by_external:
-            continue
-        tower = Tower(
-            tower_id=stable_id("tower"),
-            external_asset_id=seed.external_asset_id,
-            display_name=seed.display_name,
-            position=seed.position,
-            position_crs=seed.position_crs,
-            position_source=f"GIS:{imported.source.format}",
-            attributes=seed.attributes,
-        )
-        existing_towers.append(tower)
-        tower_by_external[seed.external_asset_id] = tower
-    lines = list(project.lines)
-    routes = list(project.routes)
-    spans = list(project.spans)
-    line_ids = {route.external_route_id: stable_id("line") for route in imported.routes}
-    route_ids = {route.external_route_id: stable_id("route") for route in imported.routes}
-    for route in imported.routes:
-        ordered = tuple(
-            tower_by_external[item].tower_id
-            for item in route.ordered_external_asset_ids
-            if item in tower_by_external
-        )
-        line = Line(
-            line_ids[route.external_route_id],
-            route.display_name,
-            ordered,
-            route.geometry,
-            {"gis_source": imported.source.to_dict(), "external_route_id": route.external_route_id},
-            route.route_role,
-            line_ids.get(route.parent_external_route_id),
-        )
-        lines.append(line)
-        routes.append(
-            Route(
-                route_ids[route.external_route_id],
-                line.line_id,
-                route.display_name,
-                ordered,
-                route.geometry,
-                route.route_role,
-                route_ids.get(route.parent_external_route_id),
-                {
-                    "gis_source": imported.source.to_dict(),
-                    "external_route_id": route.external_route_id,
-                },
-            )
-        )
-        spans.extend(
-            generate_spans_from_ordered_towers(
-                line,
-                span_id_factory=lambda _owner, index: stable_id(f"span-{index + 1}"),
-            )
-        )
-    if not imported.routes and existing_towers:
-        line = Line(
-            stable_id("line"),
-            "GIS Towers",
-            tuple(tower.tower_id for tower in existing_towers),
-            (),
-            {"gis_source": imported.source.to_dict()},
-        )
-        lines.append(line)
-        routes.append(
-            Route(
-                stable_id("route"),
-                line.line_id,
-                line.display_name,
-                line.ordered_tower_ids,
-                (),
-                LineRole.MAIN,
-                None,
-                {"gis_source": imported.source.to_dict()},
-            )
-        )
-        spans.extend(generate_spans_from_ordered_towers(line))
-    metadata = dict(project.metadata)
-    metadata["gis_import"] = imported.report.to_dict()
-    save_project(
-        replace(
-            project,
-            metadata=metadata,
-            lines=tuple(lines),
-            routes=tuple(routes),
-            towers=tuple(existing_towers),
-            spans=tuple(spans),
-        ),
-        project_root,
-    )
+    import_gis_into_project(project_root, source, **kwargs)
     return describe_project(project_root)
