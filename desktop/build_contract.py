@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import os
 import re
 from collections.abc import Iterable
 from pathlib import Path
@@ -66,4 +68,38 @@ def validate_pillow_runtime(*, python_version: tuple[int, int]) -> None:
         ) from exc
 
 
-__all__ = ["validate_pdal_binding_abi", "validate_pillow_runtime"]
+def validate_pyproj_runtime() -> None:
+    """Require a local PROJ database and a working network-disabled transform."""
+
+    try:
+        import pyproj
+
+        os.environ["PROJ_NETWORK"] = "OFF"
+        pyproj.network.set_network_enabled(False)
+        data_dir = Path(pyproj.datadir.get_data_dir())
+        if not data_dir.is_dir():
+            raise RuntimeError(f"PROJ data directory is unavailable: {data_dir}")
+        transformer = pyproj.Transformer.from_crs(
+            "EPSG:4326",
+            "EPSG:3857",
+            always_xy=True,
+            allow_ballpark=False,
+            only_best=True,
+        )
+        x, y = transformer.transform(1.0, 0.0, errcheck=True)
+        if not (math.isfinite(float(x)) and math.isfinite(float(y))):
+            raise RuntimeError("PROJ smoke transform returned non-finite coordinates")
+        if pyproj.network.is_network_enabled():
+            raise RuntimeError("PROJ network access must remain disabled")
+    except Exception as exc:
+        raise SystemExit(
+            "pyproj/PROJ offline runtime is unusable for the PyInstaller interpreter: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
+
+__all__ = [
+    "validate_pdal_binding_abi",
+    "validate_pillow_runtime",
+    "validate_pyproj_runtime",
+]
