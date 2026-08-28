@@ -29,13 +29,13 @@ def test_runtime_plotly_outputs_are_self_contained() -> None:
 
 
 def test_viewer_and_gis_runtime_assets_are_local_only() -> None:
+    # Giro3D is the current viewer surface. The retired viewer_poc/p3a tree is
+    # intentionally absent and must not be required by the offline-runtime gate.
     local_surfaces = (
         REPO_ROOT / "viewer_poc" / "giro3d" / "index.html",
         REPO_ROOT / "viewer_poc" / "giro3d" / "viewer.js",
         REPO_ROOT / "viewer_poc" / "giro3d" / "desktop.html",
         REPO_ROOT / "viewer_poc" / "giro3d" / "corridor_ui.js",
-        REPO_ROOT / "viewer_poc" / "p3a" / "index.html",
-        REPO_ROOT / "viewer_poc" / "p3a" / "viewer.js",
         REPO_ROOT / "algorithms" / "folder_pipeline" / "html.py",
         REPO_ROOT / "algorithms" / "folder_pipeline" / "potree_page.py",
         REPO_ROOT / "algorithms" / "manual_span" / "server.py",
