@@ -181,6 +181,7 @@ def apply_gis_import(project: Project, imported: CanonicalGISImport) -> Project:
                 {
                     "gis_source": source,
                     "gis_original_position": list(seed.position),
+                    "gis_original_position_crs": seed.position_crs.to_dict(),
                 }
             )
             tower = Tower(
