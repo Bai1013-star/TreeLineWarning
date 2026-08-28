@@ -20,6 +20,7 @@ from core.stage_a import (
     load_project,
     save_project,
 )
+from core.stage_a.gis_shapefile import read_shapefile
 from core.stage_a.models import stable_id
 
 
@@ -310,7 +311,11 @@ def import_gis_into_project(
 
     root = Path(project_root).resolve()
     project = load_project(root)
-    imported = import_gis(source, **kwargs)
+    source_path = Path(source).resolve()
+    if source_path.suffix.lower() in {".shp", ".zip"}:
+        imported = read_shapefile(source_path)
+    else:
+        imported = import_gis(source_path, **kwargs)
     updated = apply_gis_import(project, imported)
     if updated is not project:
         save_project(updated, root)
