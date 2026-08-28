@@ -42,6 +42,11 @@ def test_corridor_ui_exposes_registration_candidates_and_fail_closed_copy() -> N
     assert "/api/desktop/corridor/batch-ready" in ui
 
 
+def test_desktop_picker_lists_all_v01_gis_formats() -> None:
+    app = (REPO_ROOT / "desktop" / "app.py").read_text(encoding="utf-8")
+    assert "GIS (*.kml;*.kmz;*.csv;*.xlsx;*.geojson;*.json)" in app
+
+
 def test_corridor_server_exposes_only_loopback_workflow_endpoints() -> None:
     server = (REPO_ROOT / "desktop" / "corridor_server_extensions.py").read_text(
         encoding="utf-8"
