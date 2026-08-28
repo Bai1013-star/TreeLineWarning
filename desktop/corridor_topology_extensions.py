@@ -25,6 +25,7 @@ def install_corridor_topology_extensions() -> None:
     original_prepare = DesktopWorkflow.prepare_corridor_registration
     original_set_anchor = DesktopWorkflow.set_corridor_anchor
     original_project_projection = DesktopWorkflow.project_projection
+    original_start_batch = DesktopWorkflow.start_batch
 
     def rebuild_corridor_topology(
         self: Any,
@@ -57,6 +58,7 @@ def install_corridor_topology_extensions() -> None:
             assigned_tower_count=diagnostics.get("assigned_tower_count", 0),
             generated_span_count=diagnostics.get("generated_span_count", 0),
             ambiguous_tower_ids=diagnostics.get("ambiguous_tower_ids", []),
+            blocked_route_ids=diagnostics.get("blocked_route_ids", []),
         )
         return diagnostics
 
@@ -93,6 +95,21 @@ def install_corridor_topology_extensions() -> None:
         }
         return projection
 
+    @wraps(original_start_batch)
+    def start_batch_with_registration_gate(
+        self: Any,
+        span_ids: list[str],
+        *,
+        mode: str = "REAL",
+    ) -> dict[str, Any]:
+        requested_mode = str(mode).upper()
+        project = self._stage_project()
+        if requested_mode == "REAL" and isinstance(project.metadata.get("gis_import"), dict):
+            registration = self.corridor_registration_projection()
+            if not registration.get("ready_for_science"):
+                raise ValueError("CORRIDOR_REGISTRATION_NOT_READY_FOR_SCIENCE")
+        return original_start_batch(self, span_ids, mode=requested_mode)
+
     def start_ready_batch(
         self: Any,
         span_ids: list[str] | None = None,
@@ -127,6 +144,7 @@ def install_corridor_topology_extensions() -> None:
     DesktopWorkflow.prepare_corridor_registration = prepare_with_topology
     DesktopWorkflow.set_corridor_anchor = set_anchor_with_topology
     DesktopWorkflow.project_projection = project_projection_with_topology
+    DesktopWorkflow.start_batch = start_batch_with_registration_gate
     DesktopWorkflow.start_ready_batch = start_ready_batch
     _INSTALLED = True
 
