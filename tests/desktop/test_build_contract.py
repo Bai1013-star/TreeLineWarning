@@ -1,7 +1,11 @@
 from pathlib import Path
 
 import pytest
-from desktop.build_contract import validate_pdal_binding_abi, validate_pillow_runtime
+from desktop.build_contract import (
+    validate_pdal_binding_abi,
+    validate_pillow_runtime,
+    validate_pyproj_runtime,
+)
 
 
 def test_pdal_binding_abi_accepts_matching_cpython_minor() -> None:
@@ -26,3 +30,7 @@ def test_pillow_runtime_build_contract_accepts_the_active_native_extension() -> 
     import sys
 
     validate_pillow_runtime(python_version=sys.version_info[:2])
+
+
+def test_pyproj_runtime_build_contract_is_offline_and_transformable() -> None:
+    validate_pyproj_runtime()
