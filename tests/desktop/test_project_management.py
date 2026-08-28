@@ -27,6 +27,23 @@ class _Backend:
         return self.configured
 
 
+class _ComplexProjectionBackend:
+    """Simulate the non-JSON project projection returned by the real backend."""
+
+    def __init__(self, project_root: Path):
+        self.project_root = project_root
+        self.configured_root = None
+        self.projection = {
+            "capability_report": object(),
+            "batch": {"state": object()},
+        }
+
+    def configure_project(self, project_root: Path):
+        self.project_root = project_root
+        self.configured_root = project_root
+        return self.projection
+
+
 def test_empty_desktop_project_has_no_analysis_or_prediction_state(tmp_path: Path) -> None:
     project = create_empty_project(tmp_path, "线路巡检 A")
 
@@ -97,6 +114,49 @@ def test_new_project_success_refreshes_backend_project_state(tmp_path: Path) -> 
     assert bridge.choose_project_location() == str(tmp_path)
     created = bridge.create_project(str(tmp_path), "中文验收项目")
 
-    assert created["project_name"] == "中文验收项目"
-    assert created["pointcloud"] == "NOT_IMPORTED"
-    assert backend.configured == created
+    expected_root = (tmp_path / "中文验收项目").resolve()
+    assert created == {"ok": True, "project_root": str(expected_root)}
+    assert backend.project_root == expected_root
+    assert backend.configured["project_name"] == "中文验收项目"
+    assert backend.configured["pointcloud"] == "NOT_IMPORTED"
+
+
+def test_existing_project_bridge_returns_narrow_ack_not_complex_projection(
+    tmp_path: Path,
+) -> None:
+    from desktop.app import DesktopApi
+
+    project = create_empty_project(tmp_path, "复杂投影项目")
+    project_root = Path(project["root"]).resolve()
+    backend = _ComplexProjectionBackend(tmp_path)
+    bridge = DesktopApi(backend)
+    bridge._window = _DialogWindow((str(project_root),))
+
+    result = bridge.choose_existing_project()
+
+    assert result == {"ok": True, "project_root": str(project_root)}
+    assert backend.configured_root == project_root
+    assert result is not backend.projection
+
+
+def test_import_bridges_return_narrow_ack_not_complex_projection(tmp_path: Path) -> None:
+    from desktop.app import DesktopApi
+
+    project = create_empty_project(tmp_path, "导入桥接项目")
+    project_root = Path(project["root"]).resolve()
+    backend = _ComplexProjectionBackend(project_root)
+    bridge = DesktopApi(backend)
+
+    point_cloud = tmp_path / "source.las"
+    point_cloud.write_bytes(b"LASF")
+    bridge._window = _DialogWindow((str(point_cloud),))
+    assert bridge.import_point_cloud() == {"ok": True, "project_root": str(project_root)}
+
+    gis = tmp_path / "route.csv"
+    gis.write_text(
+        "external_asset_id,display_name,x,y,z\nT001,塔 1,120,30,8\nT002,塔 2,120.1,30.1,9\n",
+        encoding="utf-8",
+    )
+    bridge._window = _DialogWindow((str(gis),))
+    assert bridge.import_gis() == {"ok": True, "project_root": str(project_root)}
+    assert backend.configured_root == project_root

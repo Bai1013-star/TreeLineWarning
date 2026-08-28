@@ -145,15 +145,21 @@ class DesktopApi:
     def choose_project_location(self) -> str | None:
         return self._folder("选择项目保存位置")
 
+    def _configure_project(self, project_root: Path) -> dict[str, bool | str]:
+        """Switch projects while keeping scientific projections off the native bridge."""
+        resolved_root = project_root.resolve()
+        self._backend.configure_project(resolved_root)
+        return {"ok": True, "project_root": str(resolved_root)}
+
     def choose_existing_project(self) -> dict | None:
         selected = self._folder("打开 TreeLineWarning 项目")
         if not selected:
             return None
-        return self._backend.configure_project(Path(selected))
+        return self._configure_project(Path(selected))
 
     def create_project(self, parent: str, project_name: str) -> dict:
         descriptor = create_empty_project(Path(parent), project_name)
-        return self._backend.configure_project(Path(descriptor["root"]))
+        return self._configure_project(Path(descriptor["root"]))
 
     def import_point_cloud(self) -> dict | None:
         if self._window is None:
@@ -169,7 +175,7 @@ class DesktopApi:
         if not selected:
             return None
         descriptor = import_pointcloud(self._backend.project_root, Path(selected[0]))
-        return self._backend.configure_project(Path(descriptor["root"]))
+        return self._configure_project(Path(descriptor["root"]))
 
     def import_gis(self) -> dict | None:
         if self._window is None:
@@ -185,7 +191,7 @@ class DesktopApi:
         if not selected:
             return None
         descriptor = import_gis_file(self._backend.project_root, Path(selected[0]))
-        return self._backend.configure_project(Path(descriptor["root"]))
+        return self._configure_project(Path(descriptor["root"]))
 
 
 def launch(project_root: Path | None, *, ui_test_mode: bool = False) -> int:
