@@ -33,6 +33,7 @@ def test_viewer_and_gis_runtime_assets_are_local_only() -> None:
         REPO_ROOT / "viewer_poc" / "giro3d" / "index.html",
         REPO_ROOT / "viewer_poc" / "giro3d" / "viewer.js",
         REPO_ROOT / "viewer_poc" / "giro3d" / "desktop.html",
+        REPO_ROOT / "viewer_poc" / "giro3d" / "corridor_ui.js",
         REPO_ROOT / "viewer_poc" / "p3a" / "index.html",
         REPO_ROOT / "viewer_poc" / "p3a" / "viewer.js",
         REPO_ROOT / "algorithms" / "folder_pipeline" / "html.py",
@@ -50,6 +51,13 @@ def test_viewer_and_gis_runtime_assets_are_local_only() -> None:
         if forbidden.search(path.read_text(encoding="utf-8"))
     ]
     assert offenders == []
+
+    corridor = (REPO_ROOT / "viewer_poc" / "giro3d" / "corridor_ui.js").read_text(
+        encoding="utf-8"
+    )
+    assert "http://" not in corridor
+    assert "https://" not in corridor
+    assert "/api/desktop/corridor/" in corridor
 
     bundle = (REPO_ROOT / "viewer_poc" / "giro3d" / "vendor" / "giro3d.bundle.js").read_text(
         encoding="utf-8"
