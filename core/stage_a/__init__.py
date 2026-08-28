@@ -25,13 +25,13 @@ from core.stage_a.gis import (
     GISSourceIdentity,
     RouteSeed,
     TowerSeed,
-    import_gis,
     read_csv,
     read_geojson,
     read_kml,
     read_kmz,
     read_xlsx,
 )
+from core.stage_a.gis_dispatch import import_gis, read_shapefile
 from core.stage_a.models import (
     AnalysisRun,
     AnalysisRunStatus,
@@ -166,6 +166,7 @@ __all__ = [
     "read_geojson",
     "read_kml",
     "read_kmz",
+    "read_shapefile",
     "read_xlsx",
     "register_one_anchor",
     "register_one_anchor_geospatial",
