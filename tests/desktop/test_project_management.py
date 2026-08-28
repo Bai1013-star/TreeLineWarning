@@ -71,7 +71,7 @@ def test_empty_project_records_las_source_without_starting_science(tmp_path: Pat
     assert describe_project(Path(project["root"])) == imported
 
 
-def test_gis_import_builds_route_topology_and_logical_spans(tmp_path: Path) -> None:
+def test_kml_import_defers_route_membership_and_spans_until_registration(tmp_path: Path) -> None:
     project = create_empty_project(tmp_path, "拓扑项目")
     gis = tmp_path / "route.kml"
     gis.write_text(
@@ -87,12 +87,15 @@ def test_gis_import_builds_route_topology_and_logical_spans(tmp_path: Path) -> N
 
     imported = import_gis_file(Path(project["root"]), gis)
 
+    assert imported["towers"] == 2
     assert imported["lines"] == 1
     assert imported["routes"] == 1
-    assert imported["spans"] == 1
+    assert imported["spans"] == 0
     assert imported["topology_workflow"] == "LINE_ROUTE_ORDERED_TOWERS_AUTO_SPANS"
     persisted = Path(project["root"]) / "stage-a-project.json"
-    assert '"full_source_copy": false' in persisted.read_text(encoding="utf-8")
+    payload = persisted.read_text(encoding="utf-8")
+    assert '"tower_membership": "DEFERRED_UNTIL_REGISTRATION"' in payload
+    assert '"full_source_copy": true' not in payload
 
 
 def test_new_project_folder_cancel_is_a_normal_bridge_result(tmp_path: Path) -> None:
