@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -148,6 +149,15 @@ def _existing_route_ids_by_external(project: Project) -> dict[str, str]:
     return result
 
 
+def _tower_seed_equivalent(tower: Tower, seed: Any) -> bool:
+    if tower.position_crs.to_dict() != seed.position_crs.to_dict():
+        return False
+    return all(
+        math.isclose(float(current), float(incoming), abs_tol=1e-6, rel_tol=0.0)
+        for current, incoming in zip(tower.position, seed.position, strict=True)
+    )
+
+
 def apply_gis_import(project: Project, imported: CanonicalGISImport) -> Project:
     """Apply one canonical GIS import without duplicating an existing revision."""
 
@@ -163,6 +173,8 @@ def apply_gis_import(project: Project, imported: CanonicalGISImport) -> Project:
     imported_tower_ids: list[str] = []
     for seed in imported.towers:
         tower = tower_by_external.get(seed.external_asset_id)
+        if tower is not None and not _tower_seed_equivalent(tower, seed):
+            raise ValueError("GIS_TOWER_ID_CONFLICT_REQUIRES_CONFIRMATION")
         if tower is None:
             attributes = dict(seed.attributes)
             attributes.update(
