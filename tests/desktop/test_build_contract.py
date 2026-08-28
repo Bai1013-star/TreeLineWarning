@@ -7,6 +7,8 @@ from desktop.build_contract import (
     validate_pyproj_runtime,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 def test_pdal_binding_abi_accepts_matching_cpython_minor() -> None:
     validate_pdal_binding_abi(
@@ -34,3 +36,10 @@ def test_pillow_runtime_build_contract_accepts_the_active_native_extension() -> 
 
 def test_pyproj_runtime_build_contract_is_offline_and_transformable() -> None:
     validate_pyproj_runtime()
+
+
+def test_survey_release_spec_does_not_require_prediction_model_assets() -> None:
+    spec = (REPO_ROOT / "desktop_build.spec").read_text(encoding="utf-8")
+
+    assert "models/species_growth.json" not in spec
+    assert "models/temporal_attention.npz" not in spec
