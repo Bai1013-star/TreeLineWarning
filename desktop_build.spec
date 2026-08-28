@@ -20,6 +20,7 @@ validate_pillow_runtime(python_version=sys.version_info[:2])
 hiddenimports = (
     collect_submodules("algorithms")
     + collect_submodules("core")
+    + collect_submodules("pyproj")
     + [
         "scripts",
         "scripts.serve_p3a_giro3d",
@@ -138,6 +139,8 @@ def _required_compat_binaries() -> list[tuple[str, str]]:
 pdal_binaries, pdal_datas, pdal_hiddenimports = _pdal_binaries()
 compat_binaries = _required_compat_binaries()
 pillow_binaries = collect_dynamic_libs("PIL")
+pyproj_binaries = collect_dynamic_libs("pyproj")
+pyproj_datas = collect_data_files("pyproj")
 hiddenimports += pdal_hiddenimports
 optional_excludes = [
     # Optional scientific/visualization backends that are not imported by the
@@ -185,12 +188,20 @@ datas = [
     ("models/species_growth.json", "models"),
     ("models/temporal_attention.npz", "models"),
     *pdal_datas,
+    *pyproj_datas,
 ]
 
 a = Analysis(
-    ["desktop/app.py"], pathex=["."], binaries=[*pdal_binaries, *pillow_binaries, *compat_binaries], datas=datas, hiddenimports=hiddenimports,
-    hookspath=[], hooksconfig={}, runtime_hooks=["desktop/pdal_runtime_hook.py"],
-    excludes=optional_excludes, noarchive=False,
+    ["desktop/app.py"],
+    pathex=["."],
+    binaries=[*pdal_binaries, *pillow_binaries, *pyproj_binaries, *compat_binaries],
+    datas=datas,
+    hiddenimports=hiddenimports,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=["desktop/pdal_runtime_hook.py"],
+    excludes=optional_excludes,
+    noarchive=False,
 )
 # Some conda scientific wheels advertise optional CUDA imports while importing
 # their CPU paths.  The desktop workflow is CPU/PDAL-only; remove only these
