@@ -4,8 +4,10 @@ from desktop.corridor_extensions import install_corridor_extensions
 from desktop.corridor_server_extensions import install_corridor_server_extensions
 from desktop.corridor_topology_extensions import install_corridor_topology_extensions
 from desktop.review_extensions import install_review_extensions
+from desktop.shapefile_surface_extensions import install_shapefile_surface_extensions
 
 install_review_extensions()
 install_corridor_extensions()
 install_corridor_topology_extensions()
+install_shapefile_surface_extensions()
 install_corridor_server_extensions()
