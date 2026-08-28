@@ -9,9 +9,10 @@ transform to VERIFIED for the assisted workflow.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Any, Sequence
+from typing import Any
 
 from core.stage_a.crs_transform import (
     CRSTransformPlan,
