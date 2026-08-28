@@ -180,9 +180,35 @@ def transform_xyz(
     )
 
 
+def build_anchor_metric_transform(
+    gis_crs: str | None,
+    origin_xy: Sequence[float],
+) -> CRSTransformPlan:
+    """Build a local metre CRS for no-scale anchor registration.
+
+    GIS coordinates may be longitude/latitude, feet, or another projected unit.
+    Anchor fitting always occurs in metres. The local azimuthal-equidistant frame
+    is centred on the first GIS anchor and is constructed entirely from bundled
+    PROJ data with network access disabled.
+    """
+
+    source = _explicit_crs(gis_crs, "gis_crs")
+    origin = _xy(origin_xy)
+    to_wgs84 = build_crs_transform(source, "EPSG:4326")
+    lon, lat = transform_xy(to_wgs84, (origin,))[0]
+    if not (-180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0):
+        raise CRSTransformUnavailable("GIS anchor cannot be expressed as valid lon/lat")
+    local_crs = (
+        f"+proj=aeqd +lat_0={lat:.12f} +lon_0={lon:.12f} "
+        "+datum=WGS84 +units=m +no_defs +type=crs"
+    )
+    return build_crs_transform(source, local_crs)
+
+
 __all__ = [
     "CRSTransformPlan",
     "CRSTransformUnavailable",
+    "build_anchor_metric_transform",
     "build_crs_transform",
     "offline_proj_status",
     "transform_xy",
