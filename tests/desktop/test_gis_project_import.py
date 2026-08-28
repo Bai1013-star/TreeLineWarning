@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.stage_a import load_project
+import pytest
+from core.stage_a import load_project, save_project
+from core.stage_a.models import CoordinateDeclaration
+from core.stage_a.tower_registration import confirm_gis_tower
 from desktop.project_management import create_empty_project, import_gis_file
 
 
@@ -98,3 +101,40 @@ def test_kml_route_import_does_not_create_spans_before_registration(tmp_path: Pa
     assert project.lines[0].source_provenance["tower_membership"] == (
         "DEFERRED_UNTIL_REGISTRATION"
     )
+
+
+def test_same_external_id_from_conflicting_source_fails_closed(tmp_path: Path) -> None:
+    descriptor = create_empty_project(tmp_path, "GIS Conflict Project")
+    root = Path(descriptor["root"])
+    first = tmp_path / "first.csv"
+    second = tmp_path / "second.csv"
+    _write_csv(first, [("T107", "Tower 107", 500000.0, 3000000.0, 15.0)])
+    _write_csv(second, [("T107", "Tower 107", 500050.0, 3000000.0, 15.0)])
+    import_gis_file(root, first, crs="EPSG:32649", linear_unit="m")
+
+    with pytest.raises(ValueError, match="GIS_TOWER_ID_CONFLICT_REQUIRES_CONFIRMATION"):
+        import_gis_file(root, second, crs="EPSG:32649", linear_unit="m")
+
+    project = load_project(root)
+    assert len(project.towers) == 1
+    assert project.towers[0].position[0] == 500000.0
+
+
+def test_changed_gis_revision_cannot_overwrite_confirmed_tower(tmp_path: Path) -> None:
+    descriptor = create_empty_project(tmp_path, "GIS Confirmed Revision")
+    root = Path(descriptor["root"])
+    source = tmp_path / "towers.csv"
+    _write_csv(source, [("T107", "Tower 107", 500000.0, 3000000.0, 15.0)])
+    import_gis_file(root, source, crs="EPSG:32649", linear_unit="m")
+    project = load_project(root)
+    confirmed = confirm_gis_tower(
+        project,
+        project.towers[0].tower_id,
+        (500001.0, 3000001.0, 12.0),
+        CoordinateDeclaration("EPSG:32649", None, "m", project.towers[0].position_crs.unit_status, "GEOREFERENCED"),
+    )
+    save_project(confirmed, root)
+
+    _write_csv(source, [("T107", "Tower 107", 500010.0, 3000000.0, 15.0)])
+    with pytest.raises(ValueError, match="GIS_SOURCE_REVISION_REQUIRES_CONFIRMATION"):
+        import_gis_file(root, source, crs="EPSG:32649", linear_unit="m")
