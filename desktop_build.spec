@@ -7,7 +7,11 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 sys.path.insert(0, SPECPATH)
-from desktop.build_contract import validate_pdal_binding_abi, validate_pillow_runtime
+from desktop.build_contract import (
+    validate_pdal_binding_abi,
+    validate_pillow_runtime,
+    validate_pyproj_runtime,
+)
 
 if sys.version_info[:2] != (3, 11):
     raise SystemExit(
@@ -16,6 +20,7 @@ if sys.version_info[:2] != (3, 11):
     )
 
 validate_pillow_runtime(python_version=sys.version_info[:2])
+validate_pyproj_runtime()
 
 hiddenimports = (
     collect_submodules("algorithms")
