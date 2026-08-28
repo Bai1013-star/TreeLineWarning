@@ -190,8 +190,6 @@ optional_gpu_dlls = {
 datas = [
     ("viewer_poc", "viewer_poc"),
     ("scripts/serve_p3a_giro3d.py", "scripts"),
-    ("models/species_growth.json", "models"),
-    ("models/temporal_attention.npz", "models"),
     *pdal_datas,
     *pyproj_datas,
 ]
