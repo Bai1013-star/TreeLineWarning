@@ -1,8 +1,8 @@
 """Explicit, offline-only horizontal CRS transformation helpers.
 
 TreeLineWarning never guesses a CRS and never enables PROJ network access at
-runtime.  This module only transforms coordinates when both source and target
-CRS declarations are explicit.  Vertical datums are deliberately out of scope
+runtime. This module only transforms coordinates when both source and target
+CRS declarations are explicit. Vertical datums are deliberately out of scope
 for V0.1 corridor registration; Z values are preserved unchanged.
 """
 
@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 # Enforce the product runtime contract before pyproj is imported anywhere in
-# this process.  Individual transformer construction also disables the pyproj
+# this process. Individual transformer construction also disables the pyproj
 # network switch so an ambient user setting cannot silently re-enable it.
 os.environ["PROJ_NETWORK"] = "OFF"
 
@@ -31,7 +31,11 @@ class CRSTransformPlan:
     description: str
 
     def __post_init__(self) -> None:
-        for value, name in ((self.source_crs, "source_crs"), (self.target_crs, "target_crs")):
+        pairs = (
+            (self.source_crs, "source_crs"),
+            (self.target_crs, "target_crs"),
+        )
+        for value, name in pairs:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty explicit CRS")
         if type(self.identity) is not bool:
@@ -63,7 +67,9 @@ def _offline_pyproj() -> Any:
     try:
         import pyproj
     except ImportError as exc:  # pragma: no cover - required product dependency
-        raise CRSTransformUnavailable("pyproj is required for explicit CRS transformation") from exc
+        raise CRSTransformUnavailable(
+            "pyproj is required for explicit CRS transformation"
+        ) from exc
     os.environ["PROJ_NETWORK"] = "OFF"
     pyproj.network.set_network_enabled(False)
     return pyproj
@@ -96,7 +102,10 @@ def _transformer(source_crs: str, target_crs: str) -> Any:
         ) from exc
 
 
-def build_crs_transform(source_crs: str | None, target_crs: str | None) -> CRSTransformPlan:
+def build_crs_transform(
+    source_crs: str | None,
+    target_crs: str | None,
+) -> CRSTransformPlan:
     """Validate an explicit horizontal transform without guessing either CRS."""
 
     source = _explicit_crs(source_crs, "source_crs")
@@ -105,7 +114,8 @@ def build_crs_transform(source_crs: str | None, target_crs: str | None) -> CRSTr
         return CRSTransformPlan(source, target, True, "explicit identical CRS")
     transformer = _transformer(source, target)
     description = str(getattr(transformer, "description", "offline PROJ transform"))
-    if not description.strip() or description.strip().lower() == "unavailable until proj_trans is called":
+    unavailable = "unavailable until proj_trans is called"
+    if not description.strip() or description.strip().lower() == unavailable:
         description = "explicit offline PROJ transform"
     return CRSTransformPlan(source, target, False, description)
 
@@ -142,7 +152,9 @@ def transform_xy(
         ) from exc
     result = tuple((float(x), float(y)) for x, y in zip(tx, ty, strict=True))
     if any(not (math.isfinite(x) and math.isfinite(y)) for x, y in result):
-        raise CRSTransformUnavailable("offline CRS transform returned non-finite coordinates")
+        raise CRSTransformUnavailable(
+            "offline CRS transform returned non-finite coordinates"
+        )
     return result
 
 
@@ -162,7 +174,10 @@ def transform_xyz(
             raise ValueError("coordinate z must be finite")
         values.append((x, y, z))
     transformed = transform_xy(plan, values)
-    return tuple((xy[0], xy[1], values[index][2]) for index, xy in enumerate(transformed))
+    return tuple(
+        (xy[0], xy[1], values[index][2])
+        for index, xy in enumerate(transformed)
+    )
 
 
 __all__ = [
