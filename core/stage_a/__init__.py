@@ -92,6 +92,13 @@ from core.stage_a.topology import (
     generate_spans_from_ordered_towers,
     generate_spans_from_route,
 )
+from core.stage_a.tower_registration import (
+    GIS_CONFIRMED_POSITION_SOURCE,
+    MANUAL_CONFIRMED_POSITION_SOURCES,
+    confirm_gis_tower,
+    confirmed_tower_ids,
+    is_tower_confirmed,
+)
 
 __all__ = [
     "ALLOWED_BASEMAP_POLICIES",
@@ -107,9 +114,11 @@ __all__ = [
     "CoordinateDeclaration",
     "GISImportReport",
     "GISSourceIdentity",
+    "GIS_CONFIRMED_POSITION_SOURCE",
     "LegacyProjectCompatibility",
     "Line",
     "LineRole",
+    "MANUAL_CONFIRMED_POSITION_SOURCES",
     "MetricDistance",
     "OFFLINE_RUNTIME_SCHEMA",
     "Project",
@@ -135,11 +144,14 @@ __all__ = [
     "UnitStatus",
     "apply_registration_xy",
     "build_crs_transform",
+    "confirm_gis_tower",
+    "confirmed_tower_ids",
     "generate_spans_from_ordered_towers",
     "generate_spans_from_route",
     "georeferenced_registration",
     "import_gis",
     "inspect_point_cloud",
+    "is_tower_confirmed",
     "load_project",
     "migrate_legacy_project",
     "no_gis_registration",
