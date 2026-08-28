@@ -20,6 +20,9 @@ def install_corridor_server_extensions() -> None:
 
     def handle_get(self: Any, path: str) -> None:
         try:
+            if path == "/corridor-ui.js":
+                self._static("viewer_poc/giro3d/corridor_ui.js")
+                return
             if path == "/api/desktop/corridor/registration":
                 self._send_json(
                     {
