@@ -25,6 +25,7 @@ def test_synthetic_corridor_bundle_covers_v01_exchange_surfaces(tmp_path: Path) 
     }
     assert expected.issubset({path.name for path in root.iterdir()})
 
+    expected_towers = ["T107", "T108", "T109", "T110"]
     for name in (
         "corridor_wgs84.kml",
         "corridor_wgs84.kmz",
@@ -32,13 +33,10 @@ def test_synthetic_corridor_bundle_covers_v01_exchange_surfaces(tmp_path: Path) 
         "corridor_shapefile_bundle.zip",
     ):
         imported = import_gis(root / name)
-        assert [tower.display_name for tower in imported.towers] == [
-            "T107",
-            "T108",
-            "T109",
-            "T110",
-        ]
+        assert [tower.display_name for tower in imported.towers] == expected_towers
+        assert [tower.external_asset_id for tower in imported.towers] == expected_towers
         assert len(imported.routes) == 1
+        assert imported.routes[0].external_route_id == "QL-220-A"
 
     csv_import = read_csv(
         root / "tower_inventory_projected.csv",
@@ -63,5 +61,5 @@ def test_synthetic_corridor_bundle_covers_v01_exchange_surfaces(tmp_path: Path) 
 
     manifest = json.loads((root / "fixture_manifest.json").read_text(encoding="utf-8"))
     assert manifest["synthetic_only"] is True
-    assert manifest["expected_tower_order"] == ["T107", "T108", "T109", "T110"]
+    assert manifest["expected_tower_order"] == expected_towers
     assert manifest["expected_span_count"] == 3
