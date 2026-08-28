@@ -59,11 +59,12 @@ def test_rebuilding_same_route_keeps_existing_span_ids(tmp_path: Path) -> None:
     save_project(first, root)
 
     second, diagnostics = rebuild_deferred_gis_topology(load_project(root))
-    assert diagnostics["status"] == "NO_DEFERRED_ROUTES"
+    assert diagnostics["status"] == "ASSIGNED"
     assert tuple(span.span_id for span in second.spans) == first_ids
+    assert second.lines[0].ordered_tower_ids == first.lines[0].ordered_tower_ids
 
 
-def test_close_parallel_routes_leave_tower_ambiguous_instead_of_guessing() -> None:
+def test_close_parallel_routes_block_affected_routes_instead_of_bridging() -> None:
     coordinate = CoordinateDeclaration(
         "EPSG:32649",
         None,
@@ -145,7 +146,12 @@ def test_close_parallel_routes_leave_tower_ambiguous_instead_of_guessing() -> No
     )
     assert diagnostics["status"] == "REQUIRES_CONFIRMATION"
     assert diagnostics["ambiguous_tower_ids"] == [tower.tower_id]
+    assert set(diagnostics["blocked_route_ids"]) == {line_a.line_id, line_b.line_id}
     assert all(line.ordered_tower_ids == () for line in updated.lines)
+    assert all(
+        line.source_provenance["tower_membership"] == "SPATIAL_ASSIGNMENT_BLOCKED_V1"
+        for line in updated.lines
+    )
     assert updated.spans == ()
 
 
