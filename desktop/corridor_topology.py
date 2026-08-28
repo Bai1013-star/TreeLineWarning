@@ -25,6 +25,10 @@ from core.stage_a.models import Line, Span, stable_id
 
 DEFAULT_ROUTE_ASSIGNMENT_MAX_DISTANCE_M = 100.0
 DEFAULT_ROUTE_AMBIGUITY_MARGIN_M = 10.0
+_REBUILDABLE_MEMBERSHIP = {
+    "DEFERRED_UNTIL_REGISTRATION",
+    "SPATIAL_METRIC_ASSIGNMENT_V1",
+}
 
 
 def _source(value: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -150,7 +154,7 @@ def rebuild_deferred_gis_topology(
     maximum_distance_m: float = DEFAULT_ROUTE_ASSIGNMENT_MAX_DISTANCE_M,
     ambiguity_margin_m: float = DEFAULT_ROUTE_AMBIGUITY_MARGIN_M,
 ) -> tuple[Project, dict[str, Any]]:
-    """Assign GIS-seeded towers to deferred route geometry and order by chainage."""
+    """Assign/reassign GIS towers to route geometry and order them by chainage."""
 
     if type(project) is not Project:
         raise ValueError("project must be a Project")
@@ -162,7 +166,7 @@ def rebuild_deferred_gis_topology(
     deferred = [
         line
         for line in project.lines
-        if line.source_provenance.get("tower_membership") == "DEFERRED_UNTIL_REGISTRATION"
+        if line.source_provenance.get("tower_membership") in _REBUILDABLE_MEMBERSHIP
         and len(line.route_geometry) >= 2
     ]
     if not deferred:
