@@ -25,6 +25,7 @@ def install_corridor_topology_extensions() -> None:
     original_prepare = DesktopWorkflow.prepare_corridor_registration
     original_set_anchor = DesktopWorkflow.set_corridor_anchor
     original_project_projection = DesktopWorkflow.project_projection
+    original_workspace_projection = DesktopWorkflow.workspace_projection
     original_start_batch = DesktopWorkflow.start_batch
 
     def rebuild_corridor_topology(
@@ -95,6 +96,18 @@ def install_corridor_topology_extensions() -> None:
         }
         return projection
 
+    @wraps(original_workspace_projection)
+    def workspace_projection_with_corridor_gate(self: Any) -> dict[str, Any]:
+        workspace = original_workspace_projection(self)
+        project = workspace.get("project") or {}
+        registration = project.get("corridor_registration") or {}
+        summary = project.get("span_readiness_summary") or {}
+        if registration.get("available") and workspace.get("ui_state") == "TOPOLOGY_READY":
+            if not registration.get("ready_for_science") or int(summary.get("ready") or 0) == 0:
+                workspace["ui_state"] = "TOWER_SELECTION"
+                workspace["corridor_gate"] = "WAITING_FOR_REGISTERED_CONFIRMED_TOWERS"
+        return workspace
+
     @wraps(original_start_batch)
     def start_batch_with_registration_gate(
         self: Any,
@@ -144,6 +157,7 @@ def install_corridor_topology_extensions() -> None:
     DesktopWorkflow.prepare_corridor_registration = prepare_with_topology
     DesktopWorkflow.set_corridor_anchor = set_anchor_with_topology
     DesktopWorkflow.project_projection = project_projection_with_topology
+    DesktopWorkflow.workspace_projection = workspace_projection_with_corridor_gate
     DesktopWorkflow.start_batch = start_batch_with_registration_gate
     DesktopWorkflow.start_ready_batch = start_ready_batch
     _INSTALLED = True
