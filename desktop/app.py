@@ -186,7 +186,10 @@ class DesktopApi:
             webview.OPEN_DIALOG,
             directory="",
             allow_multiple=False,
-            file_types=("GIS (*.kml;*.csv)", "All files (*.*)"),
+            file_types=(
+                "GIS (*.kml;*.kmz;*.csv;*.xlsx;*.geojson;*.json)",
+                "All files (*.*)",
+            ),
         )
         if not selected:
             return None
