@@ -13,6 +13,7 @@ from core.stage_a.capability import (
 from core.stage_a.crs_transform import (
     CRSTransformPlan,
     CRSTransformUnavailable,
+    build_anchor_metric_transform,
     build_crs_transform,
     offline_proj_status,
     transform_xy,
@@ -68,7 +69,10 @@ from core.stage_a.registration import (
     georeferenced_registration,
     no_gis_registration,
     register_one_anchor,
+    register_one_anchor_geospatial,
     register_two_anchors,
+    register_two_anchors_geospatial,
+    registration_result_from_dict,
     validate_registration_checkpoint,
 )
 from core.stage_a.registration_persistence import (
@@ -143,6 +147,7 @@ __all__ = [
     "TowerSeed",
     "UnitStatus",
     "apply_registration_xy",
+    "build_anchor_metric_transform",
     "build_crs_transform",
     "confirm_gis_tower",
     "confirmed_tower_ids",
@@ -163,7 +168,10 @@ __all__ = [
     "read_kmz",
     "read_xlsx",
     "register_one_anchor",
+    "register_one_anchor_geospatial",
     "register_two_anchors",
+    "register_two_anchors_geospatial",
+    "registration_result_from_dict",
     "save_project",
     "save_scan_registration",
     "scan_registration_record",
