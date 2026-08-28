@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from core.stage_a import Line, Project, Route, Tower, load_project, save_project
-from core.stage_a.models import CoordinateDeclaration, LineRole, stable_id
+from core.stage_a import Line, Project, Route, Tower, UnitStatus, load_project, save_project
+from core.stage_a.models import CoordinateDeclaration, stable_id
 from desktop.corridor_topology import rebuild_deferred_gis_topology
 from desktop.project_management import create_empty_project, import_gis_file
 
@@ -65,10 +65,17 @@ def test_rebuilding_same_route_keeps_existing_span_ids(tmp_path: Path) -> None:
 
 def test_close_parallel_routes_leave_tower_ambiguous_instead_of_guessing() -> None:
     coordinate = CoordinateDeclaration(
-        "EPSG:32649", None, "m", __import__("core.stage_a.models", fromlist=["UnitStatus"]).UnitStatus.METRE,
+        "EPSG:32649",
+        None,
+        "m",
+        UnitStatus.METRE,
         "GEOREFERENCED",
     )
-    source = {"path": "C:/corridor/routes.geojson", "format": "GEOJSON", "sha256": "a" * 64}
+    source = {
+        "path": "C:/corridor/routes.geojson",
+        "format": "GEOJSON",
+        "sha256": "a" * 64,
+    }
     tower = Tower(
         stable_id("tower"),
         "T107",
@@ -82,32 +89,48 @@ def test_close_parallel_routes_leave_tower_ambiguous_instead_of_guessing() -> No
             "gis_original_position_crs": coordinate.to_dict(),
         },
     )
+    provenance_a = {
+        "gis_source": source,
+        "external_route_id": "A",
+        "route_position_crs": coordinate.to_dict(),
+        "tower_membership": "DEFERRED_UNTIL_REGISTRATION",
+    }
+    provenance_b = {
+        "gis_source": source,
+        "external_route_id": "B",
+        "route_position_crs": coordinate.to_dict(),
+        "tower_membership": "DEFERRED_UNTIL_REGISTRATION",
+    }
     line_a = Line(
         stable_id("line"),
         "A",
         (),
         ((499900.0, 3000000.0, 0.0), (500100.0, 3000000.0, 0.0)),
-        {
-            "gis_source": source,
-            "external_route_id": "A",
-            "route_position_crs": coordinate.to_dict(),
-            "tower_membership": "DEFERRED_UNTIL_REGISTRATION",
-        },
+        provenance_a,
     )
     line_b = Line(
         stable_id("line"),
         "B",
         (),
         ((499900.0, 3000010.0, 0.0), (500100.0, 3000010.0, 0.0)),
-        {
-            "gis_source": source,
-            "external_route_id": "B",
-            "route_position_crs": coordinate.to_dict(),
-            "tower_membership": "DEFERRED_UNTIL_REGISTRATION",
-        },
+        provenance_b,
     )
-    route_a = Route(stable_id("route"), line_a.line_id, "A", (), line_a.route_geometry)
-    route_b = Route(stable_id("route"), line_b.line_id, "B", (), line_b.route_geometry)
+    route_a = Route(
+        stable_id("route"),
+        line_a.line_id,
+        "A",
+        (),
+        line_a.route_geometry,
+        source_provenance=provenance_a,
+    )
+    route_b = Route(
+        stable_id("route"),
+        line_b.line_id,
+        "B",
+        (),
+        line_b.route_geometry,
+        source_provenance=provenance_b,
+    )
     project = replace(
         Project.new("Ambiguous"),
         towers=(tower,),
@@ -128,11 +151,20 @@ def test_close_parallel_routes_leave_tower_ambiguous_instead_of_guessing() -> No
 
 def test_route_assignment_does_not_touch_manual_line() -> None:
     coordinate = CoordinateDeclaration.local_metric()
-    tower_a = Tower(stable_id("tower"), None, "A", (0.0, 0.0, 0.0), coordinate, "MANUAL_PICK")
-    tower_b = Tower(stable_id("tower"), None, "B", (10.0, 0.0, 0.0), coordinate, "MANUAL_PICK")
+    tower_a = Tower(
+        stable_id("tower"), None, "A", (0.0, 0.0, 0.0), coordinate, "MANUAL_PICK"
+    )
+    tower_b = Tower(
+        stable_id("tower"), None, "B", (10.0, 0.0, 0.0), coordinate, "MANUAL_PICK"
+    )
     line = Line(stable_id("line"), "Manual", (tower_a.tower_id, tower_b.tower_id))
     route = Route(stable_id("route"), line.line_id, "Manual", line.ordered_tower_ids)
-    project = replace(Project.new("Manual"), towers=(tower_a, tower_b), lines=(line,), routes=(route,))
+    project = replace(
+        Project.new("Manual"),
+        towers=(tower_a, tower_b),
+        lines=(line,),
+        routes=(route,),
+    )
 
     updated, diagnostics = rebuild_deferred_gis_topology(project)
     assert diagnostics["status"] == "NO_DEFERRED_ROUTES"
