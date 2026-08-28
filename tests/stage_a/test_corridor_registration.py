@@ -11,11 +11,13 @@ from core.stage_a import (
     Scan,
     SourceDescriptor,
     apply_registration_xy,
+    build_anchor_metric_transform,
     build_crs_transform,
     georeferenced_registration,
     load_project,
     offline_proj_status,
     register_two_anchors,
+    register_two_anchors_geospatial,
     save_project,
     save_scan_registration,
     scan_registration_record,
@@ -88,6 +90,45 @@ def test_two_anchor_transform_requires_checkpoint_before_science() -> None:
         direction="GIS_TO_POINT_CLOUD",
     )
     assert recovered == pytest.approx(checkpoint.point_cloud_xyz[:2], abs=1e-9)
+
+
+def test_geographic_gis_anchors_are_normalized_to_metres_before_rigid_fit() -> None:
+    gis_points = (
+        (120.0, 30.0),
+        (120.001, 30.0),
+        (120.0005, 30.0005),
+    )
+    plan = build_anchor_metric_transform("EPSG:4326", gis_points[0])
+    metric = transform_xy(plan, gis_points)
+    point_cloud = tuple((x + 1000.0, y + 2000.0, 0.0) for x, y in metric)
+    anchors = tuple(
+        _anchor(point_cloud[index], (*gis_points[index], 0.0), f"T{107 + index}")
+        for index in range(3)
+    )
+
+    registration = register_two_anchors_geospatial(
+        anchors[0],
+        anchors[1],
+        gis_crs="EPSG:4326",
+    )
+    assert registration.state is RegistrationState.REGISTERED_TWO_ANCHOR
+    assert registration.transform_2d is not None
+    assert registration.transform_2d["scale"] == 1.0
+    assert "gis_metric_crs" in registration.transform_2d
+
+    verified = validate_registration_checkpoint(
+        registration,
+        anchors[2],
+        maximum_residual_m=0.05,
+    )
+    assert verified.state is RegistrationState.VERIFIED
+    assert verified.checkpoint_residual_m == pytest.approx(0.0, abs=1e-6)
+    predicted = apply_registration_xy(
+        verified,
+        gis_points[2],
+        direction="GIS_TO_POINT_CLOUD",
+    )
+    assert predicted == pytest.approx(point_cloud[2][:2], abs=1e-5)
 
 
 def test_checkpoint_residual_fails_closed_without_silent_scale() -> None:
