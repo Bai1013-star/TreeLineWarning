@@ -83,14 +83,27 @@ def _remove_previous_revision(project: Project, imported: CanonicalGISImport) ->
             require_sha=True,
         )
     }
-    if not old_lines:
+    old_towers_from_source = {
+        tower.tower_id
+        for tower in project.towers
+        if _source_matches(
+            _source_from_mapping(tower.attributes),
+            source,
+            require_sha=False,
+        )
+        and not _source_matches(
+            _source_from_mapping(tower.attributes),
+            source,
+            require_sha=True,
+        )
+    }
+    if not old_lines and not old_towers_from_source:
         return project
 
     for tower in project.towers:
-        tower_source = _source_from_mapping(tower.attributes)
-        if _source_matches(tower_source, source, require_sha=False) and not tower.position_source.startswith(
-            "GIS:"
-        ):
+        if tower.tower_id not in old_towers_from_source:
+            continue
+        if not tower.position_source.startswith("GIS:"):
             raise ValueError("GIS_SOURCE_REVISION_REQUIRES_CONFIRMATION")
 
     old_routes = {route.route_id for route in project.routes if route.line_id in old_lines}
@@ -100,6 +113,7 @@ def _remove_previous_revision(project: Project, imported: CanonicalGISImport) ->
         if line.line_id in old_lines
         for tower_id in line.ordered_tower_ids
     }
+    candidate_towers.update(old_towers_from_source)
     retained_lines = tuple(line for line in project.lines if line.line_id not in old_lines)
     retained_line_towers = {
         tower_id for line in retained_lines for tower_id in line.ordered_tower_ids
@@ -110,7 +124,9 @@ def _remove_previous_revision(project: Project, imported: CanonicalGISImport) ->
         lines=retained_lines,
         routes=tuple(route for route in project.routes if route.route_id not in old_routes),
         spans=tuple(span for span in project.spans if span.line_id not in old_lines),
-        towers=tuple(tower for tower in project.towers if tower.tower_id not in removable_towers),
+        towers=tuple(
+            tower for tower in project.towers if tower.tower_id not in removable_towers
+        ),
     )
 
 
@@ -120,6 +136,15 @@ def _existing_line_ids_by_external(project: Project) -> dict[str, str]:
         value = line.source_provenance.get("external_route_id")
         if isinstance(value, str) and value:
             result[value] = line.line_id
+    return result
+
+
+def _existing_route_ids_by_external(project: Project) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for route in project.routes:
+        value = route.source_provenance.get("external_route_id")
+        if isinstance(value, str) and value:
+            result[value] = route.route_id
     return result
 
 
@@ -166,6 +191,8 @@ def apply_gis_import(project: Project, imported: CanonicalGISImport) -> Project:
     route_ids = {route.external_route_id: stable_id("route") for route in imported.routes}
     external_line_ids = _existing_line_ids_by_external(project)
     external_line_ids.update(line_ids)
+    external_route_ids = _existing_route_ids_by_external(project)
+    external_route_ids.update(route_ids)
 
     for seed in imported.routes:
         ordered = tuple(
@@ -178,7 +205,14 @@ def apply_gis_import(project: Project, imported: CanonicalGISImport) -> Project:
             if seed.parent_external_route_id
             else None
         )
-        if seed.route_role is LineRole.BRANCH and parent_line_id is None:
+        parent_route_id = (
+            external_route_ids.get(seed.parent_external_route_id)
+            if seed.parent_external_route_id
+            else None
+        )
+        if seed.route_role is LineRole.BRANCH and (
+            parent_line_id is None or parent_route_id is None
+        ):
             raise ValueError("BRANCH_PARENT_ROUTE_NOT_FOUND")
         provenance = {
             "gis_source": source,
@@ -198,11 +232,6 @@ def apply_gis_import(project: Project, imported: CanonicalGISImport) -> Project:
             parent_line_id,
         )
         lines.append(line)
-        parent_route_id = (
-            route_ids.get(seed.parent_external_route_id)
-            if seed.parent_external_route_id
-            else None
-        )
         routes.append(
             Route(
                 route_ids[seed.external_route_id],
