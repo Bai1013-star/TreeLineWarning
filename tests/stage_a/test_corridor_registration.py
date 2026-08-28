@@ -25,6 +25,14 @@ from core.stage_a import (
 from core.stage_a.models import stable_id
 
 
+def _anchor(
+    point_cloud_xyz: tuple[float, float, float],
+    gis_xyz: tuple[float, float, float],
+    asset_id: str,
+) -> AnchorCorrespondence:
+    return AnchorCorrespondence(point_cloud_xyz, gis_xyz, asset_id)
+
+
 def test_offline_proj_transform_is_explicit_and_network_disabled() -> None:
     plan = build_crs_transform("EPSG:4326", "EPSG:3857")
     assert plan.source_crs == "EPSG:4326"
@@ -57,14 +65,14 @@ def test_georeferenced_registration_transforms_gis_into_point_cloud_crs() -> Non
 
 
 def test_two_anchor_transform_requires_checkpoint_before_science() -> None:
-    first = AnchorCorrespondence((0.0, 0.0, 0.0), (10.0, 20.0, 0.0), "T107")
-    second = AnchorCorrespondence((10.0, 0.0, 0.0), (10.0, 30.0, 0.0), "T108")
+    first = _anchor((0.0, 0.0, 0.0), (10.0, 20.0, 0.0), "T107")
+    second = _anchor((10.0, 0.0, 0.0), (10.0, 30.0, 0.0), "T108")
     registration = register_two_anchors(first, second)
     assert registration.state is RegistrationState.REGISTERED_TWO_ANCHOR
     assert registration.unique_rigid_transform
     assert not registration.ready_for_science
 
-    checkpoint = AnchorCorrespondence((0.0, 5.0, 0.0), (5.0, 20.0, 0.0), "T109")
+    checkpoint = _anchor((0.0, 5.0, 0.0), (5.0, 20.0, 0.0), "T109")
     verified = validate_registration_checkpoint(
         registration,
         checkpoint,
@@ -83,10 +91,10 @@ def test_two_anchor_transform_requires_checkpoint_before_science() -> None:
 
 
 def test_checkpoint_residual_fails_closed_without_silent_scale() -> None:
-    first = AnchorCorrespondence((0.0, 0.0, 0.0), (10.0, 20.0, 0.0), "T107")
-    second = AnchorCorrespondence((10.0, 0.0, 0.0), (10.0, 30.0, 0.0), "T108")
+    first = _anchor((0.0, 0.0, 0.0), (10.0, 20.0, 0.0), "T107")
+    second = _anchor((10.0, 0.0, 0.0), (10.0, 30.0, 0.0), "T108")
     registration = register_two_anchors(first, second)
-    checkpoint = AnchorCorrespondence((0.0, 5.0, 0.0), (8.0, 20.0, 0.0), "T109")
+    checkpoint = _anchor((0.0, 5.0, 0.0), (8.0, 20.0, 0.0), "T109")
     rejected = validate_registration_checkpoint(
         registration,
         checkpoint,
@@ -109,7 +117,7 @@ def test_invalid_known_crs_fails_closed_to_confirmation() -> None:
     assert registration.transform_2d is None
 
 
-def test_registration_persists_on_existing_scan_without_schema_change(tmp_path: Path) -> None:
+def test_registration_persists_without_project_schema_change(tmp_path: Path) -> None:
     source_path = tmp_path / "source.las"
     source_path.write_bytes(b"placeholder")
     source = SourceDescriptor(
@@ -118,13 +126,18 @@ def test_registration_persists_on_existing_scan_without_schema_change(tmp_path: 
         "LAS",
         source_path.stat().st_size,
     )
-    scan = Scan(stable_id("scan"), source, str(source_path.resolve()), {"capabilities": {}})
+    scan = Scan(
+        stable_id("scan"),
+        source,
+        str(source_path.resolve()),
+        {"capabilities": {}},
+    )
     project = replace(Project.new("Registration project"), scans=(scan,))
     save_project(project, tmp_path)
 
-    first = AnchorCorrespondence((0.0, 0.0, 0.0), (10.0, 20.0, 0.0), "T107")
-    second = AnchorCorrespondence((10.0, 0.0, 0.0), (10.0, 30.0, 0.0), "T108")
-    checkpoint = AnchorCorrespondence((0.0, 5.0, 0.0), (5.0, 20.0, 0.0), "T109")
+    first = _anchor((0.0, 0.0, 0.0), (10.0, 20.0, 0.0), "T107")
+    second = _anchor((10.0, 0.0, 0.0), (10.0, 30.0, 0.0), "T108")
+    checkpoint = _anchor((0.0, 5.0, 0.0), (5.0, 20.0, 0.0), "T109")
     verified = validate_registration_checkpoint(
         register_two_anchors(first, second),
         checkpoint,
@@ -151,6 +164,7 @@ def test_registration_persists_on_existing_scan_without_schema_change(tmp_path: 
     assert record is not None
     assert record["result"]["ready_for_science"] is True
     assert record["result"]["checkpoint_residual_m"] == pytest.approx(0.0)
-    assert [item["gis_asset_id"] for item in record["anchors"]] == ["T107", "T108"]
+    asset_ids = [item["gis_asset_id"] for item in record["anchors"]]
+    assert asset_ids == ["T107", "T108"]
     assert record["checkpoint"]["gis_asset_id"] == "T109"
     assert record["gis_source_identity"]["sha256"] == "a" * 64
