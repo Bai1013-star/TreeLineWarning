@@ -1,7 +1,7 @@
 """Stage-A product foundation for TreeLineWarning.
 
 The modules in this package sit around the validated single-span science
-pipeline.  They deliberately do not replace the existing P1/P2 project
+pipeline. They deliberately do not replace the existing P1/P2 project
 contracts or implement a new science backend.
 """
 
@@ -26,7 +26,10 @@ from core.stage_a.gis import (
     TowerSeed,
     import_gis,
     read_csv,
+    read_geojson,
     read_kml,
+    read_kmz,
+    read_xlsx,
 )
 from core.stage_a.models import (
     AnalysisRun,
@@ -143,7 +146,10 @@ __all__ = [
     "offline_proj_status",
     "open_project",
     "read_csv",
+    "read_geojson",
     "read_kml",
+    "read_kmz",
+    "read_xlsx",
     "register_one_anchor",
     "register_two_anchors",
     "save_project",
