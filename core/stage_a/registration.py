@@ -1,7 +1,7 @@
 """GIS ↔ point-cloud registration state machine.
 
 Known CRS pairs use an explicit offline transform into the point-cloud frame.
-Unknown/local frames use operator anchors.  Two anchors establish a unique 2-D
+Unknown/local frames use operator anchors. Two anchors establish a unique 2-D
 rigid transform without scale; a later checkpoint is required to promote that
 transform to VERIFIED for the assisted workflow.
 """
@@ -38,7 +38,11 @@ class AnchorCorrespondence:
     gis_asset_id: str | None = None
 
     def __post_init__(self) -> None:
-        for value, name in ((self.point_cloud_xyz, "point_cloud_xyz"), (self.gis_xyz, "gis_xyz")):
+        pairs = (
+            (self.point_cloud_xyz, "point_cloud_xyz"),
+            (self.gis_xyz, "gis_xyz"),
+        )
+        for value, name in pairs:
             if len(value) != 3 or not all(math.isfinite(float(item)) for item in value):
                 raise ValueError(f"{name} must contain three finite values")
         if self.gis_asset_id is not None and (
@@ -74,17 +78,18 @@ class RegistrationResult:
             raise ValueError("unique_rigid_transform must be a boolean")
         if type(self.verified) is not bool:
             raise ValueError("verified must be a boolean")
-        if self.checkpoint_residual_m is not None and (
-            not math.isfinite(float(self.checkpoint_residual_m))
-            or float(self.checkpoint_residual_m) < 0.0
+        residual = self.checkpoint_residual_m
+        if residual is not None and (
+            not math.isfinite(float(residual)) or float(residual) < 0.0
         ):
             raise ValueError("checkpoint_residual_m must be finite and non-negative")
 
     @property
     def ready_for_science(self) -> bool:
-        return self.state is RegistrationState.GEOREFERENCED or (
-            self.state is RegistrationState.VERIFIED and self.verified
-        )
+        return self.verified and self.state in {
+            RegistrationState.GEOREFERENCED,
+            RegistrationState.VERIFIED,
+        }
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -106,7 +111,7 @@ def georeferenced_registration(
     """Register GIS coordinates into the point-cloud horizontal CRS.
 
     Different known CRS declarations are transformed explicitly with offline
-    PROJ.  Failure to construct the best non-ballpark transform fails closed to
+    PROJ. Failure to construct the best non-ballpark transform fails closed to
     REQUIRES_CONFIRMATION rather than guessing or silently falling back.
     """
 
@@ -128,15 +133,17 @@ def georeferenced_registration(
             False,
             str(exc),
         )
+    diagnostic = (
+        "compatible explicit CRS"
+        if plan.identity
+        else "explicit offline CRS transform accepted"
+    )
     return RegistrationResult(
         RegistrationState.GEOREFERENCED,
-        {
-            **plan.to_dict(),
-            "direction": "GIS_TO_POINT_CLOUD",
-        },
+        {**plan.to_dict(), "direction": "GIS_TO_POINT_CLOUD"},
         0,
         True,
-        "compatible explicit CRS" if plan.identity else "explicit offline CRS transform accepted",
+        diagnostic,
         checkpoint_residual_m=0.0 if plan.identity else None,
         verified=True,
     )
@@ -177,7 +184,11 @@ def register_two_anchors(
     target_distance = math.hypot(target_dx, target_dy)
     if source_distance <= 0.0 or target_distance <= 0.0:
         return RegistrationResult(
-            RegistrationState.INVALID, None, 2, False, "two anchors must be distinct in 2-D"
+            RegistrationState.INVALID,
+            None,
+            2,
+            False,
+            "two anchors must be distinct in 2-D",
         )
     scale_error = abs(target_distance / source_distance - 1.0)
     if scale_error > relative_scale_tolerance:
@@ -190,8 +201,9 @@ def register_two_anchors(
         )
     theta = math.atan2(target_dy, target_dx) - math.atan2(source_dy, source_dx)
     cosine, sine = math.cos(theta), math.sin(theta)
-    tx = first.gis_xyz[0] - (cosine * first.point_cloud_xyz[0] - sine * first.point_cloud_xyz[1])
-    ty = first.gis_xyz[1] - (sine * first.point_cloud_xyz[0] + cosine * first.point_cloud_xyz[1])
+    source_x, source_y = first.point_cloud_xyz[:2]
+    tx = first.gis_xyz[0] - (cosine * source_x - sine * source_y)
+    ty = first.gis_xyz[1] - (sine * source_x + cosine * source_y)
     return RegistrationResult(
         RegistrationState.REGISTERED_TWO_ANCHOR,
         {
@@ -203,7 +215,7 @@ def register_two_anchors(
         },
         2,
         True,
-        "two-anchor local 2-D rigid transform established; checkpoint validation required",
+        "two-anchor rigid transform established; checkpoint validation required",
     )
 
 
@@ -216,7 +228,9 @@ def _finite_xy(value: Sequence[float]) -> tuple[float, float]:
     return x, y
 
 
-def _rigid_forward(transform: dict[str, Any], xy: tuple[float, float]) -> tuple[float, float]:
+def _rigid_forward(
+    transform: dict[str, Any], xy: tuple[float, float]
+) -> tuple[float, float]:
     theta = float(transform["rotation_rad"])
     tx, ty = (float(item) for item in transform["translation_xy"])
     cosine, sine = math.cos(theta), math.sin(theta)
@@ -224,12 +238,17 @@ def _rigid_forward(transform: dict[str, Any], xy: tuple[float, float]) -> tuple[
     return cosine * x - sine * y + tx, sine * x + cosine * y + ty
 
 
-def _rigid_inverse(transform: dict[str, Any], xy: tuple[float, float]) -> tuple[float, float]:
+def _rigid_inverse(
+    transform: dict[str, Any], xy: tuple[float, float]
+) -> tuple[float, float]:
     theta = float(transform["rotation_rad"])
     tx, ty = (float(item) for item in transform["translation_xy"])
     cosine, sine = math.cos(theta), math.sin(theta)
     shifted_x, shifted_y = xy[0] - tx, xy[1] - ty
-    return cosine * shifted_x + sine * shifted_y, -sine * shifted_x + cosine * shifted_y
+    return (
+        cosine * shifted_x + sine * shifted_y,
+        -sine * shifted_x + cosine * shifted_y,
+    )
 
 
 def apply_registration_xy(
@@ -240,12 +259,13 @@ def apply_registration_xy(
 ) -> tuple[float, float]:
     """Apply a resolved registration in an explicit direction.
 
-    ``GIS_TO_POINT_CLOUD`` is the product-facing direction used to move tower
-    seeds into the LiDAR frame.  ``POINT_CLOUD_TO_GIS`` is retained for
-    diagnostics and checkpoint residual calculation.
+    ``GIS_TO_POINT_CLOUD`` moves tower seeds into the LiDAR frame.
+    ``POINT_CLOUD_TO_GIS`` is retained for checkpoint diagnostics.
     """
 
-    if type(registration) is not RegistrationResult or registration.transform_2d is None:
+    if type(registration) is not RegistrationResult:
+        raise ValueError("registration must be a RegistrationResult")
+    if registration.transform_2d is None:
         raise ValueError("registration has no transform")
     value = _finite_xy(xy)
     requested = str(direction).upper()
@@ -266,11 +286,9 @@ def apply_registration_xy(
             plan = build_crs_transform(plan.target_crs, plan.source_crs)
         return transform_xy(plan, (value,))[0]
     if transform_type == "rigid_2d":
-        return (
-            _rigid_forward(transform, value)
-            if requested == "POINT_CLOUD_TO_GIS"
-            else _rigid_inverse(transform, value)
-        )
+        if requested == "POINT_CLOUD_TO_GIS":
+            return _rigid_forward(transform, value)
+        return _rigid_inverse(transform, value)
     raise ValueError("registration transform is not uniquely applicable")
 
 
@@ -291,10 +309,13 @@ def validate_registration_checkpoint(
     ):
         raise ValueError("checkpoint validation requires a two-anchor rigid registration")
     predicted = apply_registration_xy(
-        registration, checkpoint.point_cloud_xyz, direction="POINT_CLOUD_TO_GIS"
+        registration,
+        checkpoint.point_cloud_xyz,
+        direction="POINT_CLOUD_TO_GIS",
     )
     residual = math.hypot(
-        predicted[0] - checkpoint.gis_xyz[0], predicted[1] - checkpoint.gis_xyz[1]
+        predicted[0] - checkpoint.gis_xyz[0],
+        predicted[1] - checkpoint.gis_xyz[1],
     )
     if residual <= maximum_residual_m:
         return replace(
