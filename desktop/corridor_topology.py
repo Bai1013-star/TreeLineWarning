@@ -28,6 +28,7 @@ DEFAULT_ROUTE_AMBIGUITY_MARGIN_M = 10.0
 _REBUILDABLE_MEMBERSHIP = {
     "DEFERRED_UNTIL_REGISTRATION",
     "SPATIAL_METRIC_ASSIGNMENT_V1",
+    "SPATIAL_ASSIGNMENT_BLOCKED_V1",
 }
 
 
@@ -130,10 +131,7 @@ def _tower_in_route_metric(
     return transform_xy(route_metric_plan, (xy,))[0]
 
 
-def _span_factory(
-    line: Line,
-    existing: Sequence[Span],
-):
+def _span_factory(line: Line, existing: Sequence[Span]):
     pairs = list(zip(line.ordered_tower_ids, line.ordered_tower_ids[1:], strict=False))
     existing_ids = {
         (span.start_tower_id, span.end_tower_id): span.span_id
@@ -154,7 +152,12 @@ def rebuild_deferred_gis_topology(
     maximum_distance_m: float = DEFAULT_ROUTE_ASSIGNMENT_MAX_DISTANCE_M,
     ambiguity_margin_m: float = DEFAULT_ROUTE_AMBIGUITY_MARGIN_M,
 ) -> tuple[Project, dict[str, Any]]:
-    """Assign/reassign GIS towers to route geometry and order them by chainage."""
+    """Assign/reassign GIS towers to route geometry and order them by chainage.
+
+    Ambiguity is route-fatal for the affected routes. We deliberately do not
+    bridge around an unresolved tower because that could manufacture a false
+    long Span between its neighbours.
+    """
 
     if type(project) is not Project:
         raise ValueError("project must be a Project")
@@ -163,35 +166,37 @@ def rebuild_deferred_gis_topology(
     if ambiguity_margin_m < 0.0 or not math.isfinite(ambiguity_margin_m):
         raise ValueError("ambiguity_margin_m must be finite and non-negative")
 
-    deferred = [
+    rebuildable = [
         line
         for line in project.lines
         if line.source_provenance.get("tower_membership") in _REBUILDABLE_MEMBERSHIP
         and len(line.route_geometry) >= 2
     ]
-    if not deferred:
+    if not rebuildable:
         return project, {
             "status": "NO_DEFERRED_ROUTES",
             "assigned_tower_count": 0,
             "ambiguous_tower_ids": [],
             "unassigned_tower_ids": [],
+            "blocked_route_ids": [],
         }
 
     route_cache: dict[str, tuple[Any, tuple[tuple[float, float], ...], str]] = {}
-    for line in deferred:
+    for line in rebuildable:
         plan, metric = _metric_route(line)
         route_cache[line.line_id] = (plan, metric, _route_crs(line))
 
-    assigned: dict[str, list[tuple[float, str]]] = {line.line_id: [] for line in deferred}
+    assigned: dict[str, list[tuple[float, str]]] = {line.line_id: [] for line in rebuildable}
     ambiguous: list[str] = []
     unassigned: list[str] = []
+    blocked_routes: set[str] = set()
     considered = 0
 
     for tower in project.towers:
         tower_source = _source(tower.attributes)
         candidate_lines = [
             line
-            for line in deferred
+            for line in rebuildable
             if _same_source(tower_source, _source(line.source_provenance))
         ]
         if not candidate_lines:
@@ -214,23 +219,41 @@ def rebuild_deferred_gis_topology(
             continue
         if len(scores) > 1 and scores[1][0] - best[0] < ambiguity_margin_m:
             ambiguous.append(tower.tower_id)
+            # Both plausible routes are blocked. This prevents T1→T3 spans
+            # when an unresolved T2 sits between two corridor candidates.
+            blocked_routes.update(item[2] for item in scores[:2])
             continue
         assigned[best[2]].append((best[1], tower.tower_id))
 
     line_updates: dict[str, Line] = {}
-    for line in deferred:
+    for line in rebuildable:
+        provenance = dict(line.source_provenance)
+        if line.line_id in blocked_routes:
+            provenance["tower_membership"] = "SPATIAL_ASSIGNMENT_BLOCKED_V1"
+            provenance["route_assignment_v1"] = {
+                "maximum_distance_m": float(maximum_distance_m),
+                "ambiguity_margin_m": float(ambiguity_margin_m),
+                "assigned_tower_count": 0,
+                "blocked_by_ambiguity": True,
+            }
+            line_updates[line.line_id] = replace(
+                line,
+                ordered_tower_ids=(),
+                source_provenance=provenance,
+            )
+            continue
         ordered = tuple(
             tower_id
             for _chainage, tower_id in sorted(
                 assigned[line.line_id], key=lambda item: (item[0], item[1])
             )
         )
-        provenance = dict(line.source_provenance)
         provenance["tower_membership"] = "SPATIAL_METRIC_ASSIGNMENT_V1"
         provenance["route_assignment_v1"] = {
             "maximum_distance_m": float(maximum_distance_m),
             "ambiguity_margin_m": float(ambiguity_margin_m),
             "assigned_tower_count": len(ordered),
+            "blocked_by_ambiguity": False,
         }
         line_updates[line.line_id] = replace(
             line,
@@ -259,7 +282,11 @@ def rebuild_deferred_gis_topology(
     retained_spans = [span for span in project.spans if span.line_id not in processed_line_ids]
     generated: list[Span] = []
     for line in updated_lines:
-        if line.line_id not in processed_line_ids or len(line.ordered_tower_ids) < 2:
+        if (
+            line.line_id not in processed_line_ids
+            or line.line_id in blocked_routes
+            or len(line.ordered_tower_ids) < 2
+        ):
             continue
         generated.extend(
             generate_spans_from_ordered_towers(
@@ -269,13 +296,16 @@ def rebuild_deferred_gis_topology(
         )
 
     diagnostics = {
-        "status": "ASSIGNED" if not ambiguous else "REQUIRES_CONFIRMATION",
+        "status": "REQUIRES_CONFIRMATION" if blocked_routes else "ASSIGNED",
         "considered_tower_count": considered,
-        "assigned_tower_count": sum(len(items) for items in assigned.values()),
-        "route_count": len(deferred),
+        "assigned_tower_count": sum(
+            len(items) for line_id, items in assigned.items() if line_id not in blocked_routes
+        ),
+        "route_count": len(rebuildable),
         "generated_span_count": len(generated),
         "ambiguous_tower_ids": sorted(ambiguous),
         "unassigned_tower_ids": sorted(unassigned),
+        "blocked_route_ids": sorted(blocked_routes),
         "maximum_distance_m": float(maximum_distance_m),
         "ambiguity_margin_m": float(ambiguity_margin_m),
         "authority": "GIS_TOPOLOGY_ONLY_NOT_SCIENCE_CONFIRMATION",
