@@ -17,7 +17,11 @@ def _normalize_kml_asset_ids(imported: CanonicalGISImport) -> CanonicalGISImport
         return imported
     tower_names = [tower.display_name.strip() for tower in imported.towers]
     route_names = [route.display_name.strip() for route in imported.routes]
-    towers_unique = bool(tower_names) and len(tower_names) == len(set(tower_names)) and all(tower_names)
+    towers_unique = (
+        bool(tower_names)
+        and len(tower_names) == len(set(tower_names))
+        and all(tower_names)
+    )
     routes_unique = len(route_names) == len(set(route_names)) and all(route_names)
 
     towers = imported.towers
