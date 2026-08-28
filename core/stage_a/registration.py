@@ -16,6 +16,7 @@ from typing import Any, Sequence
 from core.stage_a.crs_transform import (
     CRSTransformPlan,
     CRSTransformUnavailable,
+    build_anchor_metric_transform,
     build_crs_transform,
     transform_xy,
 )
@@ -105,15 +106,31 @@ class RegistrationResult:
         }
 
 
+def registration_result_from_dict(value: Any) -> RegistrationResult:
+    """Hydrate the persisted JSON-safe registration result."""
+
+    if not isinstance(value, dict):
+        raise ValueError("registration result must be a mapping")
+    return RegistrationResult(
+        RegistrationState(str(value["state"])),
+        dict(value["transform_2d"]) if isinstance(value.get("transform_2d"), dict) else None,
+        int(value.get("anchor_count", 0)),
+        bool(value.get("unique_rigid_transform", False)),
+        str(value.get("diagnostic") or "persisted registration"),
+        bool(value.get("fallback_manual_tower_selection", False)),
+        (
+            None
+            if value.get("checkpoint_residual_m") is None
+            else float(value["checkpoint_residual_m"])
+        ),
+        bool(value.get("verified", False)),
+    )
+
+
 def georeferenced_registration(
     *, point_cloud_crs: str | None, gis_crs: str | None
 ) -> RegistrationResult:
-    """Register GIS coordinates into the point-cloud horizontal CRS.
-
-    Different known CRS declarations are transformed explicitly with offline
-    PROJ. Failure to construct the best non-ballpark transform fails closed to
-    REQUIRES_CONFIRMATION rather than guessing or silently falling back.
-    """
+    """Register GIS coordinates into the point-cloud horizontal CRS."""
 
     if not point_cloud_crs or not gis_crs:
         return RegistrationResult(
@@ -172,7 +189,7 @@ def register_two_anchors(
     *,
     relative_scale_tolerance: float = 0.01,
 ) -> RegistrationResult:
-    """Establish a no-scale point-cloud→GIS 2-D rigid transform."""
+    """Establish a no-scale point-cloud→GIS-metric 2-D rigid transform."""
 
     if relative_scale_tolerance <= 0.0 or not math.isfinite(relative_scale_tolerance):
         raise ValueError("relative_scale_tolerance must be positive and finite")
@@ -208,7 +225,7 @@ def register_two_anchors(
         RegistrationState.REGISTERED_TWO_ANCHOR,
         {
             "type": "rigid_2d",
-            "direction": "POINT_CLOUD_TO_GIS",
+            "direction": "POINT_CLOUD_TO_GIS_METRIC",
             "rotation_rad": theta,
             "translation_xy": [tx, ty],
             "scale": 1.0,
@@ -217,6 +234,70 @@ def register_two_anchors(
         True,
         "two-anchor rigid transform established; checkpoint validation required",
     )
+
+
+def _metric_anchor(
+    anchor: AnchorCorrespondence,
+    plan: CRSTransformPlan,
+) -> AnchorCorrespondence:
+    x, y = transform_xy(plan, (anchor.gis_xyz,))[0]
+    return AnchorCorrespondence(
+        anchor.point_cloud_xyz,
+        (x, y, float(anchor.gis_xyz[2])),
+        anchor.gis_asset_id,
+    )
+
+
+def register_one_anchor_geospatial(
+    anchor: AnchorCorrespondence,
+    *,
+    gis_crs: str,
+) -> RegistrationResult:
+    """Create a one-anchor hint in a local metre GIS frame."""
+
+    plan = build_anchor_metric_transform(gis_crs, anchor.gis_xyz)
+    metric = _metric_anchor(anchor, plan)
+    result = register_one_anchor(metric)
+    transform = dict(result.transform_2d or {})
+    transform.update(
+        {
+            "direction": "POINT_CLOUD_TO_GIS_METRIC",
+            "gis_source_crs": plan.source_crs,
+            "gis_metric_crs": plan.target_crs,
+        }
+    )
+    return replace(result, transform_2d=transform)
+
+
+def register_two_anchors_geospatial(
+    first: AnchorCorrespondence,
+    second: AnchorCorrespondence,
+    *,
+    gis_crs: str,
+    relative_scale_tolerance: float = 0.01,
+) -> RegistrationResult:
+    """Fit anchors after converting GIS coordinates into a local metre frame."""
+
+    plan = build_anchor_metric_transform(gis_crs, first.gis_xyz)
+    result = register_two_anchors(
+        _metric_anchor(first, plan),
+        _metric_anchor(second, plan),
+        relative_scale_tolerance=relative_scale_tolerance,
+    )
+    if result.transform_2d is None:
+        return result
+    transform = dict(result.transform_2d)
+    transform.update(
+        {
+            "gis_source_crs": plan.source_crs,
+            "gis_metric_crs": plan.target_crs,
+            "gis_metric_origin_source_xy": [
+                float(first.gis_xyz[0]),
+                float(first.gis_xyz[1]),
+            ],
+        }
+    )
+    return replace(result, transform_2d=transform)
 
 
 def _finite_xy(value: Sequence[float]) -> tuple[float, float]:
@@ -251,17 +332,40 @@ def _rigid_inverse(
     )
 
 
+def _gis_metric_plan(transform: dict[str, Any]) -> CRSTransformPlan | None:
+    source = transform.get("gis_source_crs")
+    target = transform.get("gis_metric_crs")
+    if not isinstance(source, str) or not isinstance(target, str):
+        return None
+    return build_crs_transform(source, target)
+
+
+def _gis_to_metric(
+    transform: dict[str, Any],
+    xy: tuple[float, float],
+) -> tuple[float, float]:
+    plan = _gis_metric_plan(transform)
+    return xy if plan is None else transform_xy(plan, (xy,))[0]
+
+
+def _metric_to_gis(
+    transform: dict[str, Any],
+    xy: tuple[float, float],
+) -> tuple[float, float]:
+    plan = _gis_metric_plan(transform)
+    if plan is None:
+        return xy
+    inverse = build_crs_transform(plan.target_crs, plan.source_crs)
+    return transform_xy(inverse, (xy,))[0]
+
+
 def apply_registration_xy(
     registration: RegistrationResult,
     xy: Sequence[float],
     *,
     direction: str,
 ) -> tuple[float, float]:
-    """Apply a resolved registration in an explicit direction.
-
-    ``GIS_TO_POINT_CLOUD`` moves tower seeds into the LiDAR frame.
-    ``POINT_CLOUD_TO_GIS`` is retained for checkpoint diagnostics.
-    """
+    """Apply a resolved registration in an explicit direction."""
 
     if type(registration) is not RegistrationResult:
         raise ValueError("registration must be a RegistrationResult")
@@ -286,9 +390,9 @@ def apply_registration_xy(
             plan = build_crs_transform(plan.target_crs, plan.source_crs)
         return transform_xy(plan, (value,))[0]
     if transform_type == "rigid_2d":
-        if requested == "POINT_CLOUD_TO_GIS":
-            return _rigid_forward(transform, value)
-        return _rigid_inverse(transform, value)
+        if requested == "GIS_TO_POINT_CLOUD":
+            return _rigid_inverse(transform, _gis_to_metric(transform, value))
+        return _metric_to_gis(transform, _rigid_forward(transform, value))
     raise ValueError("registration transform is not uniquely applicable")
 
 
@@ -308,14 +412,12 @@ def validate_registration_checkpoint(
         or registration.transform_2d.get("type") != "rigid_2d"
     ):
         raise ValueError("checkpoint validation requires a two-anchor rigid registration")
-    predicted = apply_registration_xy(
-        registration,
-        checkpoint.point_cloud_xyz,
-        direction="POINT_CLOUD_TO_GIS",
-    )
+    transform = registration.transform_2d
+    predicted_metric = _rigid_forward(transform, _finite_xy(checkpoint.point_cloud_xyz))
+    expected_metric = _gis_to_metric(transform, _finite_xy(checkpoint.gis_xyz))
     residual = math.hypot(
-        predicted[0] - checkpoint.gis_xyz[0],
-        predicted[1] - checkpoint.gis_xyz[1],
+        predicted_metric[0] - expected_metric[0],
+        predicted_metric[1] - expected_metric[1],
     )
     if residual <= maximum_residual_m:
         return replace(
@@ -359,6 +461,9 @@ __all__ = [
     "georeferenced_registration",
     "no_gis_registration",
     "register_one_anchor",
+    "register_one_anchor_geospatial",
     "register_two_anchors",
+    "register_two_anchors_geospatial",
+    "registration_result_from_dict",
     "validate_registration_checkpoint",
 ]
