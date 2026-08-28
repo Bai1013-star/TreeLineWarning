@@ -187,7 +187,7 @@ class DesktopApi:
             directory="",
             allow_multiple=False,
             file_types=(
-                "GIS (*.kml;*.kmz;*.csv;*.xlsx;*.geojson;*.json)",
+                "GIS (*.kml;*.kmz;*.csv;*.xlsx;*.geojson;*.json;*.shp;*.zip)",
                 "All files (*.*)",
             ),
         )
