@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import math
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 # Enforce the product runtime contract before pyproj is imported anywhere in
 # this process. Individual transformer construction also disables the pyproj
