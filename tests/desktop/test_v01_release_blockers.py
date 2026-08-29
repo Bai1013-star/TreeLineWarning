@@ -60,7 +60,7 @@ def test_tree_review_keeps_numeric_selection_ids_but_shows_business_labels() -> 
 
 
 def test_tree_review_patch_runs_before_app_start_and_survives_state_refresh() -> None:
-    import desktop  # noqa: F401 - package import installs production extensions
+    import desktop  # noqa: F401, I001 - package import installs production extensions
 
     from algorithms.folder_pipeline import html as folder_html
 
