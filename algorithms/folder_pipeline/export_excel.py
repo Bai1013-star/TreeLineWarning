@@ -72,6 +72,9 @@ _TREE_COLUMNS = [
     "contact_evidence",
     "warning_threshold_used_m",
     "review_status",
+    # Human-facing presentation identity is appended to preserve Prediction
+    # consumers that depend on the established leading-column contract.
+    "display_tree_id",
 ]
 
 _NUMERIC_COLUMNS = {
