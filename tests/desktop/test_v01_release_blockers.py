@@ -55,7 +55,22 @@ def test_tree_review_keeps_numeric_selection_ids_but_shows_business_labels() -> 
     assert "treeBusinessId(treeId)" in source
     assert "label.text||label.tree_id" in source
     assert "t.display_tree_id||t.tree_id" in source
+    assert "DesktopWorkflow.editor_state = editor_state_with_display_ids" in source
     assert "folder_html.step2_html = step2_html_with_display_ids" in source
+
+
+def test_tree_review_patch_runs_before_app_start_and_survives_state_refresh() -> None:
+    import desktop  # noqa: F401 - package import installs production extensions
+    from algorithms.folder_pipeline import html as folder_html
+
+    page = folder_html.step2_html()
+
+    patch = page.index("function treeBusinessId(treeId)")
+    start = page.index("window.TreeLineTreeReviewApp.start();")
+    assert patch < start
+    assert "<thead><tr><th>树编号</th>" in page
+    assert "treeBusinessId(row.dataset.tid)" in page
+    assert "String(label.text||label.tree_id)" in page
 
 
 def test_display_numbering_is_optional_for_legacy_projection_without_stage_a() -> None:
