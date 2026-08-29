@@ -11,7 +11,13 @@ _INSTALLED = False
 
 
 def _current_display_identities(self: Any, editor: Any) -> dict[int, dict[str, Any]]:
-    """Build presentation IDs from the current exact editor membership."""
+    """Build presentation IDs from the current exact editor membership.
+
+    Legacy/folder-only projections do not own a Stage-A project sidecar.  Tree
+    business numbering is optional presentation metadata there, so absence of
+    ``stage-a-project.json`` must preserve the established projection instead
+    of turning a display enhancement into a hard dependency.
+    """
 
     reconciled = None
     if callable(getattr(editor, "final_reconciled", None)):
@@ -24,10 +30,11 @@ def _current_display_identities(self: Any, editor: Any) -> dict[int, dict[str, A
         reconciled = getattr(result, "global_reconciled", None)
     if reconciled is None:
         return {}
-    return assign_tree_display_ids(
-        self._stage_project(),
-        reconciled.global_tree_records,
-    )
+    try:
+        project = self._stage_project()
+    except (FileNotFoundError, OSError, TypeError, ValueError):
+        return {}
+    return assign_tree_display_ids(project, reconciled.global_tree_records)
 
 
 def install_tree_display_numbering_extensions() -> None:
@@ -43,6 +50,7 @@ def install_tree_display_numbering_extensions() -> None:
 
     original_editor_data = DesktopWorkflow.editor_data
     original_final_projection = DesktopWorkflow.final_projection
+    original_step2_html = folder_html.step2_html
     original_step3_html = folder_html.step3_html
 
     @wraps(original_editor_data)
@@ -123,6 +131,60 @@ def install_tree_display_numbering_extensions() -> None:
             )
         return projection
 
+    @wraps(original_step2_html)
+    def step2_html_with_display_ids() -> str:
+        """Keep numeric edit IDs internal while replacing operator-visible labels."""
+
+        page = original_step2_html()
+        patch = r'''
+function treeBusinessId(treeId){
+  const tree=treeMap.get(Number(treeId));
+  return tree?.display_tree_id||treeId;
+}
+if(window.TreeLineTreeReview3D?.prototype && !window.TreeLineTreeReview3D.prototype._treelineBusinessLabels){
+  const proto=window.TreeLineTreeReview3D.prototype;
+  const originalRenderLabels=proto.renderLabels;
+  proto.renderLabels=function(){
+    originalRenderLabels.call(this);
+    const labels=Array.isArray(this.source?.trees3d?.labels)?this.source.trees3d.labels:[];
+    const visibleById=new Map(labels.map(label=>[Number(label.tree_id),String(label.text||label.tree_id)]));
+    this.labelOverlay?.querySelectorAll('.tree-label').forEach(button=>{
+      const internalId=Number(button.textContent);
+      const visibleId=visibleById.get(internalId);
+      if(visibleId){
+        button.textContent=visibleId;
+        button.title=`选择树 ${visibleId}`;
+        button.setAttribute('aria-label',`选择树 ${visibleId}`);
+      }
+    });
+  };
+  proto._treelineBusinessLabels=true;
+}
+'''
+        page = page.replace("let treeMap = new Map();", "let treeMap = new Map();\n" + patch, 1)
+        page = page.replace("<thead><tr><th>ID</th>", "<thead><tr><th>树编号</th>", 1)
+        page = page.replace(
+            "tr.innerHTML=`<td>${t.tree_id}</td>",
+            "tr.innerHTML=`<td>${t.display_tree_id||t.tree_id}</td>",
+            1,
+        )
+        page = page.replace(
+            "button.textContent=String(label.tree_id);",
+            "button.textContent=String(label.text||label.tree_id);",
+        )
+        page = page.replace(
+            "button.title=`选择树 ${label.tree_id}`;",
+            "button.title=`选择树 ${label.text||label.tree_id}`;",
+        )
+        page = page.replace(
+            "button.setAttribute(\"aria-label\",`选择树 ${label.tree_id}`);",
+            "button.setAttribute(\"aria-label\",`选择树 ${label.text||label.tree_id}`);",
+        )
+        page = page.replace("`当前：树 ${activeTreeId}`", "`当前：树 ${treeBusinessId(activeTreeId)}`")
+        page = page.replace('${ids.join("、")}', '${ids.map(treeBusinessId).join("、")}')
+        page = page.replace("`删除树 ${ids[0]}`", "`删除树 ${treeBusinessId(ids[0])}`")
+        return page
+
     @wraps(original_step3_html)
     def step3_html_with_display_ids() -> str:
         # Keep the legacy HTML implementation intact and only change its final
@@ -137,6 +199,7 @@ def install_tree_display_numbering_extensions() -> None:
 
     DesktopWorkflow.editor_data = editor_data_with_display_ids
     DesktopWorkflow.final_projection = final_projection_with_display_ids
+    folder_html.step2_html = step2_html_with_display_ids
     folder_html.step3_html = step3_html_with_display_ids
     _INSTALLED = True
 
