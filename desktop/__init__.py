@@ -5,9 +5,13 @@ from desktop.corridor_server_extensions import install_corridor_server_extension
 from desktop.corridor_topology_extensions import install_corridor_topology_extensions
 from desktop.review_extensions import install_review_extensions
 from desktop.shapefile_surface_extensions import install_shapefile_surface_extensions
+from desktop.tree_display_numbering_extensions import (
+    install_tree_display_numbering_extensions,
+)
 
 install_review_extensions()
 install_corridor_extensions()
 install_corridor_topology_extensions()
 install_shapefile_surface_extensions()
+install_tree_display_numbering_extensions()
 install_corridor_server_extensions()
