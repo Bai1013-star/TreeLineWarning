@@ -1,9 +1,9 @@
-"""PDAL runtime configuration and a small packaged-dependency probe.
+"""PDAL runtime configuration and packaged release dependency probes.
 
-The probe is deliberately separate from the scientific workflow.  It verifies
-that the release can import the bundled PDAL binding and invoke the validated
-SMRF + HAG-NN operation on a tiny temporary LAS fixture without touching a
-user project or real survey data.
+The probes are deliberately separate from the scientific workflow.  They verify
+that the release can import the bundled native dependencies, run a tiny validated
+SMRF + HAG-NN operation, and perform an explicit network-disabled PROJ transform
+without touching a user project or real survey data.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import math
 import os
 import sys
 import tempfile
@@ -100,10 +101,72 @@ def pillow_health() -> dict[str, Any]:
         }
 
 
+def _offline_proj_health() -> dict[str, Any]:
+    """Return explicit pyproj/PROJ health while enforcing the offline contract."""
+
+    os.environ["PROJ_NETWORK"] = "OFF"
+    try:
+        import pyproj
+
+        pyproj.network.set_network_enabled(False)
+        data_dir = Path(pyproj.datadir.get_data_dir()).resolve()
+        transformer = pyproj.Transformer.from_crs(
+            "EPSG:4326",
+            "EPSG:3857",
+            always_xy=True,
+            allow_ballpark=False,
+            only_best=True,
+        )
+        x, y = transformer.transform(1.0, 0.0, errcheck=True)
+        network_enabled = bool(pyproj.network.is_network_enabled())
+        operation_pass = (
+            data_dir.is_dir()
+            and math.isfinite(float(x))
+            and math.isfinite(float(y))
+            and not network_enabled
+        )
+        return {
+            "pyproj": {
+                "found": True,
+                "version": str(getattr(pyproj, "__version__", "unknown")),
+                "minimal_operation_pass": operation_pass,
+            },
+            "PROJ": {
+                "found": data_dir.is_dir(),
+                "version": str(getattr(pyproj, "proj_version_str", "unknown")),
+                "data_directory": str(data_dir),
+                "minimal_operation_pass": operation_pass,
+            },
+            "PROJ_NETWORK": "OFF" if not network_enabled else "ON",
+            "RUNTIME_NETWORK_REQUIRED": "NO",
+            "proj_minimal_operation_pass": operation_pass,
+            "proj_error": None if operation_pass else "PROJ offline runtime contract failed",
+        }
+    except Exception as exc:  # pragma: no cover - dependency-specific failure details
+        return {
+            "pyproj": {
+                "found": False,
+                "version": None,
+                "minimal_operation_pass": False,
+            },
+            "PROJ": {
+                "found": False,
+                "version": None,
+                "data_directory": None,
+                "minimal_operation_pass": False,
+            },
+            "PROJ_NETWORK": "OFF",
+            "RUNTIME_NETWORK_REQUIRED": "NO",
+            "proj_minimal_operation_pass": False,
+            "proj_error": f"{type(exc).__name__}: {exc}",
+        }
+
+
 def dependency_health() -> dict[str, Any]:
-    """Return an actionable health report for the local PDAL dependency."""
+    """Return an actionable PDAL plus offline pyproj/PROJ release health report."""
 
     runtime_dir, plugin_dirs = _configure_bundled_runtime()
+    proj_health = _offline_proj_health()
     spec = importlib.util.find_spec("pdal")
     if spec is None:
         return {
@@ -111,6 +174,7 @@ def dependency_health() -> dict[str, Any]:
             "source": "NOT_FOUND",
             "minimal_operation_pass": False,
             "error": "Python PDAL binding is unavailable",
+            **proj_health,
         }
 
     module_path = Path(spec.origin).resolve() if spec.origin else None
@@ -151,27 +215,30 @@ def dependency_health() -> dict[str, Any]:
             with laspy.open(output_path) as reader:
                 dimension_names = set(reader.header.point_format.dimension_names)
                 output_count = int(reader.header.point_count)
-            operation_pass = (
-                processed == output_count > 0 and "HeightAboveGround" in dimension_names
-            )
+            pdal_pass = processed == output_count > 0 and "HeightAboveGround" in dimension_names
+        operation_pass = pdal_pass and bool(proj_health["proj_minimal_operation_pass"])
         return {
             "found": True,
             "source": source,
             "minimal_operation_pass": operation_pass,
+            "pdal_minimal_operation_pass": pdal_pass,
             "module": str(module_path) if module_path else None,
             "runtime_directory": str(runtime_dir) if runtime_dir else None,
             "plugin_directories": [str(path) for path in plugin_dirs],
-            "error": None if operation_pass else "PDAL output contract was incomplete",
+            "error": None if pdal_pass else "PDAL output contract was incomplete",
+            **proj_health,
         }
     except Exception as exc:  # pragma: no cover - dependency-specific failure details
         return {
             "found": True,
             "source": source,
             "minimal_operation_pass": False,
+            "pdal_minimal_operation_pass": False,
             "module": str(module_path) if module_path else None,
             "runtime_directory": str(runtime_dir) if runtime_dir else None,
             "plugin_directories": [str(path) for path in plugin_dirs],
             "error": f"{type(exc).__name__}: {exc}",
+            **proj_health,
         }
 
 
