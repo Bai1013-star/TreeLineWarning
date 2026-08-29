@@ -13,6 +13,7 @@ def test_desktop_installs_tree_display_numbering_extension() -> None:
     assert "install_tree_display_numbering_extensions()" in package
     assert 'row["display_tree_id"]' in extension
     assert "${t.display_tree_id||t.persistent_tree_id}" in extension
+    assert 'page.replace("<th>Tree ID</th>", "<th>树编号</th>")' in extension
     assert "persistent_tree_id" in extension
 
 
