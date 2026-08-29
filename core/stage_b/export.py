@@ -11,7 +11,32 @@ from algorithms.manual_span.metrics import CROWN_WIDTH_STATISTIC, TREE_HEIGHT_ST
 
 from core.stage_b.batch import BatchAnalysisResult, BatchSpanStatus
 from core.stage_b.contact import contact_evidence_from_clearance
+from core.stage_b.tree_display_id import assign_tree_display_ids
 from core.stage_b.tree_metrics import compute_stage_b_tree_metrics
+
+
+def _project_for_output(output_path: Path) -> Any | None:
+    """Resolve the Stage-A project owning a desktop export without hard-coded paths."""
+
+    from core.stage_a import load_project
+
+    for candidate in (output_path.parent, *output_path.parents):
+        if (candidate / "stage-a-project.json").is_file():
+            try:
+                return load_project(candidate)
+            except (OSError, TypeError, ValueError):
+                return None
+    return None
+
+
+def _automatic_display_identity(
+    output_path: Path,
+    reconciled: Any,
+) -> dict[int, dict[str, Any]]:
+    project = _project_for_output(output_path)
+    if project is None:
+        return {}
+    return assign_tree_display_ids(project, reconciled.global_tree_records)
 
 
 def export_batch_prediction(
@@ -32,8 +57,12 @@ def export_batch_prediction(
     using the existing canonical full-resolution metric implementation.  If an
     unambiguous source-bound Ground context cannot be recovered, optional
     geometry cells remain blank rather than being guessed.
+
+    ``display_tree_id`` is presentation-only.  The durable
+    ``persistent_tree_id`` remains unchanged for Prediction and restart logic.
     """
 
+    output_path = Path(output_path)
     statuses = tuple(result.span_statuses.values())
     if any(
         status not in {BatchSpanStatus.FINALIZED, BatchSpanStatus.USER_REVIEWED}
@@ -50,11 +79,13 @@ def export_batch_prediction(
         record.global_tree_id: record
         for record in (result.final_clearance.records if result.final_clearance else ())
     }
+    automatic_identity = _automatic_display_identity(output_path, reconciled)
     if progress is not None:
         progress("RECALCULATING_RISK")
     rows: list[dict[str, Any]] = []
     for record in reconciled.global_tree_records:
-        extra = dict((identity_by_tree or {}).get(record.global_tree_id, {}))
+        extra = dict(automatic_identity.get(record.global_tree_id, {}))
+        extra.update(dict((identity_by_tree or {}).get(record.global_tree_id, {})))
         metric = metrics_by_tree.get(int(record.global_tree_id))
         identity_state = str(getattr(record, "identity_state", ""))
         if identity_state.startswith("HUMAN_"):
@@ -90,6 +121,7 @@ def export_batch_prediction(
         rows.append(
             {
                 "persistent_tree_id": record.persistent_tree_id,
+                "display_tree_id": extra.get("display_tree_id"),
                 "analysis_tree_id": f"analysis-tree-{record.global_tree_id:06d}",
                 "project_id": result.project_id,
                 "line_id": extra.get("line_id", record.line_id),
@@ -157,10 +189,11 @@ def export_batch_prediction(
         ),
         "prediction_source": "FINAL_GLOBAL_RECONCILED_POST_EDITOR",
         "tree_metrics_source": "CANONICAL_FULLRES_POST_EDITOR",
+        "tree_display_id_schema": "treeline-tree-display-id-v1",
     }
     if progress is not None:
         progress("GENERATING_EXCEL")
-    return write_prediction_input_excel(Path(output_path), rows, metadata)
+    return write_prediction_input_excel(output_path, rows, metadata)
 
 
 __all__ = ["export_batch_prediction"]
