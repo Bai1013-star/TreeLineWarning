@@ -10,6 +10,26 @@ from core.stage_b.tree_display_id import TREE_DISPLAY_ID_SCHEMA, assign_tree_dis
 _INSTALLED = False
 
 
+def _current_display_identities(self: Any, editor: Any) -> dict[int, dict[str, Any]]:
+    """Build presentation IDs from the current exact editor membership."""
+
+    reconciled = None
+    if callable(getattr(editor, "final_reconciled", None)):
+        try:
+            reconciled = editor.final_reconciled()
+        except (RuntimeError, TypeError, ValueError):
+            reconciled = None
+    if reconciled is None:
+        result = getattr(self, "_result", None) or getattr(editor, "result", None)
+        reconciled = getattr(result, "global_reconciled", None)
+    if reconciled is None:
+        return {}
+    return assign_tree_display_ids(
+        self._stage_project(),
+        reconciled.global_tree_records,
+    )
+
+
 def install_tree_display_numbering_extensions() -> None:
     """Expose ``T-<span>-<tree>`` without replacing durable machine identities."""
 
@@ -21,8 +41,51 @@ def install_tree_display_numbering_extensions() -> None:
 
     from desktop.workflow import DesktopWorkflow
 
+    original_editor_data = DesktopWorkflow.editor_data
     original_final_projection = DesktopWorkflow.final_projection
     original_step3_html = folder_html.step3_html
+
+    @wraps(original_editor_data)
+    def editor_data_with_display_ids(
+        self: Any,
+        *,
+        display_budget: int | None = None,
+        span_id: str | None = None,
+    ) -> dict[str, Any]:
+        display = original_editor_data(
+            self,
+            display_budget=display_budget,
+            span_id=span_id,
+        )
+        editor = self._ensure_editor()
+        if editor is None:
+            return display
+        identities = _current_display_identities(self, editor)
+        if not identities:
+            return display
+
+        for tree in display.get("trees", []):
+            try:
+                tree_id = int(tree["tree_id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            identity = identities.get(tree_id)
+            if identity is not None:
+                tree["display_tree_id"] = identity["display_tree_id"]
+
+        trees3d = display.get("trees3d", {})
+        labels = trees3d.get("labels", []) if isinstance(trees3d, dict) else []
+        for label in labels:
+            try:
+                tree_id = int(label["tree_id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            identity = identities.get(tree_id)
+            if identity is not None:
+                # Numeric tree_id remains untouched for selection/edit commands;
+                # only the visible label becomes the operator-facing business ID.
+                label["text"] = identity["display_tree_id"]
+        return display
 
     @wraps(original_final_projection)
     def final_projection_with_display_ids(self: Any) -> dict[str, Any]:
@@ -33,14 +96,9 @@ def install_tree_display_numbering_extensions() -> None:
         editor = self._ensure_editor()
         if editor is None:
             return projection
-        result = self._result or editor.result
-        reconciled = getattr(result, "global_reconciled", None)
-        if reconciled is None:
+        identities = _current_display_identities(self, editor)
+        if not identities:
             return projection
-        identities = assign_tree_display_ids(
-            self._stage_project(),
-            reconciled.global_tree_records,
-        )
         snapshot = self._editor_snapshot(editor)
         snapshot_trees = snapshot.get("trees", [])
         for row, snapshot_tree in zip(trees, snapshot_trees, strict=False):
@@ -77,6 +135,7 @@ def install_tree_display_numbering_extensions() -> None:
             "${t.display_tree_id||t.persistent_tree_id}",
         )
 
+    DesktopWorkflow.editor_data = editor_data_with_display_ids
     DesktopWorkflow.final_projection = final_projection_with_display_ids
     folder_html.step3_html = step3_html_with_display_ids
     _INSTALLED = True
