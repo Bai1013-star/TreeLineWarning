@@ -6,7 +6,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from core.stage_a.gis import CanonicalGISImport, import_gis as import_standard_gis
+from core.stage_a.gis import CanonicalGISImport
+from core.stage_a.gis import import_gis as import_standard_gis
 from core.stage_a.gis_shapefile import read_shapefile
 
 

@@ -131,7 +131,13 @@ def test_changed_gis_revision_cannot_overwrite_confirmed_tower(tmp_path: Path) -
         project,
         project.towers[0].tower_id,
         (500001.0, 3000001.0, 12.0),
-        CoordinateDeclaration("EPSG:32649", None, "m", project.towers[0].position_crs.unit_status, "GEOREFERENCED"),
+        CoordinateDeclaration(
+            "EPSG:32649",
+            None,
+            "m",
+            project.towers[0].position_crs.unit_status,
+            "GEOREFERENCED",
+        ),
     )
     save_project(confirmed, root)
 

@@ -6,6 +6,7 @@ from functools import wraps
 from typing import Any
 
 from core.stage_a import save_project
+
 from desktop.corridor_topology import (
     DEFAULT_ROUTE_AMBIGUITY_MARGIN_M,
     DEFAULT_ROUTE_ASSIGNMENT_MAX_DISTANCE_M,

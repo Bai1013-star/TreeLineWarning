@@ -206,7 +206,9 @@ def _write_shapefile_zip(root: Path, towers: list[dict[str, object]]) -> None:
         (staging / f"{stem}.prj").write_text(wkt, encoding="utf-8")
         (staging / f"{stem}.cpg").write_text("UTF-8", encoding="ascii")
 
-    with zipfile.ZipFile(root / "corridor_shapefile_bundle.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(
+        root / "corridor_shapefile_bundle.zip", "w", zipfile.ZIP_DEFLATED
+    ) as archive:
         for path in sorted(staging.iterdir()):
             archive.write(path, arcname=path.name)
     for path in staging.iterdir():
@@ -306,7 +308,9 @@ def generate_bundle(output: Path) -> Path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate synthetic TreeLineWarning corridor inputs")
+    parser = argparse.ArgumentParser(
+        description="Generate synthetic TreeLineWarning corridor inputs"
+    )
     parser.add_argument(
         "--output",
         type=Path,

@@ -8,7 +8,6 @@ from core.stage_a import import_gis, read_geojson, read_kmz, read_xlsx
 from core.stage_a.models import UnitStatus
 from openpyxl import Workbook
 
-
 KML_TEXT = """<kml><Document>
 <Placemark><name>A</name><Point><coordinates>120.0,30.0,8</coordinates></Point></Placemark>
 <Placemark><name>B</name><Point><coordinates>120.1,30.1,9</coordinates></Point></Placemark>

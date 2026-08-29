@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from desktop.tower_candidates import rank_tower_candidates
 
 

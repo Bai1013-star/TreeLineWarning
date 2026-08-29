@@ -6,7 +6,6 @@ from pathlib import Path
 import laspy
 import numpy as np
 import pytest
-from pyproj import CRS
 from core.stage_a import (
     apply_registration_xy,
     confirm_gis_tower,
@@ -17,6 +16,7 @@ from core.stage_a import (
 )
 from desktop.project_management import create_empty_project, import_gis_file, import_pointcloud
 from desktop.workflow import DesktopWorkflow, _coordinate_from_scan
+from pyproj import CRS
 
 
 def _write_georeferenced_las(path: Path) -> None:

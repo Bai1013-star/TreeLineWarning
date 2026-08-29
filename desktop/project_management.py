@@ -30,6 +30,7 @@ from core.stage_a import (
 )
 from core.stage_a.capability import CAPABILITY_NAMES
 from core.stage_a.models import stable_id
+
 from desktop.gis_project_import import import_gis_into_project
 
 DESKTOP_MANIFEST = "desktop-project.json"

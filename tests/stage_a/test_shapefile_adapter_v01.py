@@ -4,9 +4,8 @@ import zipfile
 from pathlib import Path
 
 import shapefile
-from pyproj import CRS
-
 from core.stage_a.gis_shapefile import read_shapefile
+from pyproj import CRS
 
 
 def _write_layers(root: Path, *, include_prj: bool = True) -> tuple[Path, Path]:

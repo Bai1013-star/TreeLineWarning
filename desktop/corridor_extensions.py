@@ -9,7 +9,6 @@ confirmation can update a persistent Tower position.
 from __future__ import annotations
 
 from functools import wraps
-from pathlib import Path
 from typing import Any
 
 from core.stage_a import (
@@ -29,6 +28,7 @@ from core.stage_a import (
     validate_registration_checkpoint,
 )
 from core.stage_a.tower_registration import GIS_CONFIRMED_POSITION_SOURCE
+
 from desktop.tower_candidates import rank_tower_candidates
 
 _INSTALLED = False

@@ -431,7 +431,9 @@ def read_xlsx(
     return CanonicalGISImport(source, report, tuple(towers), ())
 
 
-def _geojson_coordinate(payload: Mapping[str, Any]) -> tuple[CoordinateDeclaration, str, tuple[str, ...]]:
+def _geojson_coordinate(
+    payload: Mapping[str, Any],
+) -> tuple[CoordinateDeclaration, str, tuple[str, ...]]:
     raw_crs = payload.get("crs")
     if isinstance(raw_crs, Mapping):
         properties = raw_crs.get("properties")
