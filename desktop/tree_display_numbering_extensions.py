@@ -13,7 +13,7 @@ _INSTALLED = False
 def _current_display_identities(self: Any, editor: Any) -> dict[int, dict[str, Any]]:
     """Build presentation IDs from the current exact editor membership.
 
-    Legacy/folder-only projections do not own a Stage-A project sidecar.  Tree
+    Legacy/folder-only projections do not own a Stage-A project sidecar. Tree
     business numbering is optional presentation metadata there, so absence of
     ``stage-a-project.json`` must preserve the established projection instead
     of turning a display enhancement into a hard dependency.
@@ -37,6 +37,95 @@ def _current_display_identities(self: Any, editor: Any) -> dict[int, dict[str, A
     return assign_tree_display_ids(project, reconciled.global_tree_records)
 
 
+def _append_display_ids_to_trees(
+    trees: Any,
+    identities: dict[int, dict[str, Any]],
+) -> None:
+    if not isinstance(trees, list):
+        return
+    for tree in trees:
+        if not isinstance(tree, dict):
+            continue
+        try:
+            tree_id = int(tree["tree_id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        identity = identities.get(tree_id)
+        if identity is not None:
+            tree["display_tree_id"] = identity["display_tree_id"]
+
+
+_TREE_REVIEW_DISPLAY_PATCH = r"""
+(function(){
+  const app=window.TreeLineTreeReviewApp;
+  if(!app||!app.state)return;
+  function treeBusinessId(treeId){
+    const t=app.state.treeMap.get(Number(treeId));
+    return String((t&&(t.display_tree_id||t.tree_id))??treeId);
+  }
+  function setText(id,value){
+    const node=document.getElementById(id);
+    if(node&&node.textContent!==value)node.textContent=value;
+  }
+  function relabelReview(){
+    document.querySelectorAll('#treetable tr[data-tid]').forEach(row=>{
+      const cell=row.cells&&row.cells[0];
+      const value=treeBusinessId(row.dataset.tid);
+      if(cell&&cell.textContent!==value)cell.textContent=value;
+    });
+    const active=app.state.activeTreeId;
+    setText(
+      'current-tree',
+      active==null?'当前：未选择':`当前：树 ${treeBusinessId(active)}`
+    );
+    const ids=[...app.state.selected].sort((a,b)=>a-b);
+    setText(
+      'selection-state',
+      ids.length
+        ?`已选择 ${ids.length} 棵树：${ids.map(treeBusinessId).join('、')}`
+        :'未选择单木'
+    );
+    setText(
+      'btn-delete',
+      ids.length===1?`删除树 ${treeBusinessId(ids[0])}`:'删除单木'
+    );
+  }
+  let queued=false;
+  const observer=new MutationObserver(()=>{
+    if(queued)return;
+    queued=true;
+    queueMicrotask(()=>{queued=false;relabelReview();});
+  });
+  observer.observe(document.body,{subtree:true,childList:true,characterData:true});
+  const proto=window.TreeLineTreeReview3D?.prototype;
+  if(proto&&!proto._treelineBusinessLabels){
+    const originalRenderLabels=proto.renderLabels;
+    proto.renderLabels=function(){
+      originalRenderLabels.call(this);
+      const labels=Array.isArray(this.source?.trees3d?.labels)
+        ?this.source.trees3d.labels:[];
+      const visibleById=new Map(
+        labels.map(label=>[
+          Number(label.tree_id),
+          String(label.text||label.tree_id)
+        ])
+      );
+      this.labelOverlay?.querySelectorAll('.tree-label').forEach(button=>{
+        const internalId=Number(button.textContent);
+        const visibleId=visibleById.get(internalId);
+        if(!visibleId)return;
+        button.textContent=visibleId;
+        button.title=`选择树 ${visibleId}`;
+        button.setAttribute('aria-label',`选择树 ${visibleId}`);
+      });
+    };
+    proto._treelineBusinessLabels=true;
+  }
+  relabelReview();
+})();
+"""
+
+
 def install_tree_display_numbering_extensions() -> None:
     """Expose ``T-<span>-<tree>`` without replacing durable machine identities."""
 
@@ -49,6 +138,7 @@ def install_tree_display_numbering_extensions() -> None:
     from desktop.workflow import DesktopWorkflow
 
     original_editor_data = DesktopWorkflow.editor_data
+    original_editor_state = DesktopWorkflow.editor_state
     original_final_projection = DesktopWorkflow.final_projection
     original_step2_html = folder_html.step2_html
     original_step3_html = folder_html.step3_html
@@ -72,15 +162,7 @@ def install_tree_display_numbering_extensions() -> None:
         if not identities:
             return display
 
-        for tree in display.get("trees", []):
-            try:
-                tree_id = int(tree["tree_id"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            identity = identities.get(tree_id)
-            if identity is not None:
-                tree["display_tree_id"] = identity["display_tree_id"]
-
+        _append_display_ids_to_trees(display.get("trees"), identities)
         trees3d = display.get("trees3d", {})
         labels = trees3d.get("labels", []) if isinstance(trees3d, dict) else []
         for label in labels:
@@ -94,6 +176,29 @@ def install_tree_display_numbering_extensions() -> None:
                 # only the visible label becomes the operator-facing business ID.
                 label["text"] = identity["display_tree_id"]
         return display
+
+    @wraps(original_editor_state)
+    def editor_state_with_display_ids(self: Any) -> dict[str, Any]:
+        state = dict(original_editor_state(self))
+        snapshot = state.get("tree_snapshot")
+        if not isinstance(snapshot, dict):
+            return state
+        editor = self._ensure_editor()
+        if editor is None:
+            return state
+        identities = _current_display_identities(self, editor)
+        if not identities:
+            return state
+        copied_snapshot = dict(snapshot)
+        copied_trees = [
+            dict(tree)
+            for tree in snapshot.get("trees", [])
+            if isinstance(tree, dict)
+        ]
+        _append_display_ids_to_trees(copied_trees, identities)
+        copied_snapshot["trees"] = copied_trees
+        state["tree_snapshot"] = copied_snapshot
+        return state
 
     @wraps(original_final_projection)
     def final_projection_with_display_ids(self: Any) -> dict[str, Any]:
@@ -133,62 +238,27 @@ def install_tree_display_numbering_extensions() -> None:
 
     @wraps(original_step2_html)
     def step2_html_with_display_ids() -> str:
-        """Keep numeric edit IDs internal while replacing operator-visible labels."""
+        """Keep numeric edit IDs internal while replacing visible labels."""
 
         page = original_step2_html()
-        patch = r'''
-function treeBusinessId(treeId){
-  const tree=treeMap.get(Number(treeId));
-  return tree?.display_tree_id||treeId;
-}
-if(window.TreeLineTreeReview3D?.prototype && !window.TreeLineTreeReview3D.prototype._treelineBusinessLabels){
-  const proto=window.TreeLineTreeReview3D.prototype;
-  const originalRenderLabels=proto.renderLabels;
-  proto.renderLabels=function(){
-    originalRenderLabels.call(this);
-    const labels=Array.isArray(this.source?.trees3d?.labels)?this.source.trees3d.labels:[];
-    const visibleById=new Map(labels.map(label=>[Number(label.tree_id),String(label.text||label.tree_id)]));
-    this.labelOverlay?.querySelectorAll('.tree-label').forEach(button=>{
-      const internalId=Number(button.textContent);
-      const visibleId=visibleById.get(internalId);
-      if(visibleId){
-        button.textContent=visibleId;
-        button.title=`选择树 ${visibleId}`;
-        button.setAttribute('aria-label',`选择树 ${visibleId}`);
-      }
-    });
-  };
-  proto._treelineBusinessLabels=true;
-}
-'''
-        page = page.replace("let treeMap = new Map();", "let treeMap = new Map();\n" + patch, 1)
-        page = page.replace("<thead><tr><th>ID</th>", "<thead><tr><th>树编号</th>", 1)
         page = page.replace(
-            "tr.innerHTML=`<td>${t.tree_id}</td>",
-            "tr.innerHTML=`<td>${t.display_tree_id||t.tree_id}</td>",
+            "<thead><tr><th>ID</th>",
+            "<thead><tr><th>树编号</th>",
             1,
         )
-        page = page.replace(
-            "button.textContent=String(label.tree_id);",
-            "button.textContent=String(label.text||label.tree_id);",
+        marker = "window.TreeLineTreeReviewApp.start();"
+        if marker not in page:
+            raise RuntimeError("TREE_DISPLAY_REVIEW_INJECTION_POINT_MISSING")
+        return page.replace(
+            marker,
+            _TREE_REVIEW_DISPLAY_PATCH + "\n" + marker,
+            1,
         )
-        page = page.replace(
-            "button.title=`选择树 ${label.tree_id}`;",
-            "button.title=`选择树 ${label.text||label.tree_id}`;",
-        )
-        page = page.replace(
-            "button.setAttribute(\"aria-label\",`选择树 ${label.tree_id}`);",
-            "button.setAttribute(\"aria-label\",`选择树 ${label.text||label.tree_id}`);",
-        )
-        page = page.replace("`当前：树 ${activeTreeId}`", "`当前：树 ${treeBusinessId(activeTreeId)}`")
-        page = page.replace('${ids.join("、")}', '${ids.map(treeBusinessId).join("、")}')
-        page = page.replace("`删除树 ${ids[0]}`", "`删除树 ${treeBusinessId(ids[0])}`")
-        return page
 
     @wraps(original_step3_html)
     def step3_html_with_display_ids() -> str:
         # Keep the legacy HTML implementation intact and only change its final
-        # presentation label/value.  The API still carries persistent_tree_id
+        # presentation label/value. The API still carries persistent_tree_id
         # separately for machine identity and Prediction linkage.
         page = original_step3_html()
         page = page.replace("<th>Tree ID</th>", "<th>树编号</th>")
@@ -198,6 +268,7 @@ if(window.TreeLineTreeReview3D?.prototype && !window.TreeLineTreeReview3D.protot
         )
 
     DesktopWorkflow.editor_data = editor_data_with_display_ids
+    DesktopWorkflow.editor_state = editor_state_with_display_ids
     DesktopWorkflow.final_projection = final_projection_with_display_ids
     folder_html.step2_html = step2_html_with_display_ids
     folder_html.step3_html = step3_html_with_display_ids
