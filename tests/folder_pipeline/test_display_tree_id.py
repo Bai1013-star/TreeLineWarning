@@ -3,11 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from openpyxl import load_workbook
-
 from algorithms.folder_pipeline.export_excel import write_prediction_input_excel
 from algorithms.folder_pipeline.identity import assign_persistent_tree_ids
 from algorithms.folder_pipeline.workspace import discover_workspace
+from openpyxl import load_workbook
 from tests.folder_pipeline.conftest import make_workspace
 
 
