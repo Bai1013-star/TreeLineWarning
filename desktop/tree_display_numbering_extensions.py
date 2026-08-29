@@ -18,6 +18,7 @@ def install_tree_display_numbering_extensions() -> None:
         return
 
     from algorithms.folder_pipeline import html as folder_html
+
     from desktop.workflow import DesktopWorkflow
 
     original_final_projection = DesktopWorkflow.final_projection
