@@ -66,10 +66,11 @@ def install_tree_display_numbering_extensions() -> None:
 
     @wraps(original_step3_html)
     def step3_html_with_display_ids() -> str:
-        # Keep the legacy HTML implementation intact and only change the one
-        # presentation expression.  The API still carries persistent_tree_id
+        # Keep the legacy HTML implementation intact and only change its final
+        # presentation label/value.  The API still carries persistent_tree_id
         # separately for machine identity and Prediction linkage.
         page = original_step3_html()
+        page = page.replace("<th>Tree ID</th>", "<th>树编号</th>")
         return page.replace(
             "${t.persistent_tree_id}",
             "${t.display_tree_id||t.persistent_tree_id}",
