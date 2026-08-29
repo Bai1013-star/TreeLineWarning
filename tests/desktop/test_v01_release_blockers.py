@@ -41,3 +41,14 @@ def test_dependency_health_contract_names_offline_proj_and_runtime_requirements(
     assert '"PROJ_NETWORK": "OFF"' in source
     assert '"RUNTIME_NETWORK_REQUIRED": "NO"' in source
     assert 'pyproj.network.set_network_enabled(False)' in source
+
+
+def test_tree_review_keeps_numeric_selection_ids_but_shows_business_labels() -> None:
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "desktop" / "tree_display_numbering_extensions.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'label["text"] = identity["display_tree_id"]' in source
+    assert 'tree["display_tree_id"] = identity["display_tree_id"]' in source
+    assert "tree_id_by_index" not in source
