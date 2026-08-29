@@ -3,11 +3,10 @@ from __future__ import annotations
 from dataclasses import replace
 from types import SimpleNamespace
 
-from openpyxl import load_workbook
-
 from core.stage_a import CoordinateDeclaration, Line, Project, Span, Tower, save_project
 from core.stage_b import BatchSpanStatus
 from core.stage_b.export import export_batch_prediction
+from openpyxl import load_workbook
 
 
 def test_stage_b_export_adds_display_id_without_replacing_persistent_id(tmp_path) -> None:
