@@ -143,6 +143,96 @@
 </div>
 <script src="/giro3d.bundle.js"></script>
 <script src="/tower-picker-3d.js"></script>
+<script>
+(() => {
+  'use strict';
+
+  // Finalization runs in a backend thread.  Delay successful finalize POST
+  // completion until that thread reaches DONE so the main desktop shell cannot
+  // immediately reload a stale TREE_REVIEW_READY workspace or export mid-finalize.
+  const nativeFetch = window.fetch.bind(window);
+  const sleep = ms => new Promise(resolve => window.setTimeout(resolve, ms));
+  async function waitForFinalize() {
+    const deadline = Date.now() + 180000;
+    while (Date.now() < deadline) {
+      const response = await nativeFetch('/state', {cache: 'no-store'});
+      const state = await response.json();
+      if (state.step === 'DONE') return;
+      if (state.step === 'FINALIZE_FAILED') {
+        throw new Error(state.error || state.error_details || '复核结果生成失败');
+      }
+      await sleep(250);
+    }
+    throw new Error('复核结果生成超时，请查看本地日志后重试。');
+  }
+  window.fetch = async (input, init = {}) => {
+    const response = await nativeFetch(input, init);
+    const rawUrl = typeof input === 'string' ? input : (input && input.url) || '';
+    const method = String(init.method || (typeof input !== 'string' && input?.method) || 'GET').toUpperCase();
+    const pathname = new URL(rawUrl, window.location.href).pathname;
+    if (response.ok && method === 'POST' && pathname === '/api/desktop/batch/finalize') {
+      await waitForFinalize();
+    }
+    return response;
+  };
+
+  // The backend capability report is authoritative and already includes these
+  // optional inputs.  The release UI must show each capability explicitly
+  // instead of silently omitting NOT_AVAILABLE/UNKNOWN fields.
+  const extraCapabilityLabels = {
+    GPS_TIME: 'GPS Time',
+    RETURN_NUMBER: '回波序号',
+    SCAN_ANGLE: '扫描角',
+    HORIZONTAL_CRS: '水平坐标系',
+    VERTICAL_CRS: '垂直坐标系',
+    TRAJECTORY: '轨迹',
+    GNSS: 'GNSS',
+    CAMERA: '相机',
+    CAMERA_POSE: '相机姿态',
+    CALIBRATION: '相机标定',
+    GIS: 'GIS',
+  };
+  const capabilityStateLabel = value => ({
+    AVAILABLE: ['可用', 'status-good'],
+    NOT_AVAILABLE: ['不可用', ''],
+    UNKNOWN: ['未知', 'status-warn'],
+    REQUIRES_CONFIRMATION: ['待确认', 'status-warn'],
+  }[value] || ['未知', 'status-warn']);
+  let capabilityRefreshPending = false;
+  async function appendExtendedCapabilities() {
+    if (capabilityRefreshPending) return;
+    const rows = document.getElementById('capabilityRows');
+    if (!rows || !rows.children.length) return;
+    capabilityRefreshPending = true;
+    try {
+      const response = await nativeFetch('/api/desktop/capability', {cache: 'no-store'});
+      const payload = await response.json();
+      const capabilities = payload.capability?.capabilities || {};
+      for (const [name, label] of Object.entries(extraCapabilityLabels)) {
+        if (rows.querySelector(`[data-capability-name="${name}"]`)) continue;
+        const [text, css] = capabilityStateLabel(capabilities[name]);
+        const item = document.createElement('div');
+        item.className = 'metric';
+        item.dataset.capabilityName = name;
+        item.innerHTML = `<span>${label}</span><b class="${css}">${text}</b>`;
+        rows.appendChild(item);
+      }
+    } catch (error) {
+      console.warn('扩展能力面板刷新失败', error);
+    } finally {
+      capabilityRefreshPending = false;
+    }
+  }
+  window.addEventListener('load', () => {
+    const rows = document.getElementById('capabilityRows');
+    if (!rows) return;
+    new MutationObserver(() => appendExtendedCapabilities()).observe(rows, {
+      childList: true,
+    });
+    appendExtendedCapabilities();
+  });
+})();
+</script>
 <script src="/desktop.js"></script>
 <script src="/corridor-ui.js"></script>
 </body>
