@@ -52,3 +52,29 @@ def test_tree_review_keeps_numeric_selection_ids_but_shows_business_labels() -> 
     assert 'label["text"] = identity["display_tree_id"]' in source
     assert 'tree["display_tree_id"] = identity["display_tree_id"]' in source
     assert "tree_id_by_index" not in source
+    assert "treeBusinessId(treeId)" in source
+    assert "label.text||label.tree_id" in source
+    assert "t.display_tree_id||t.tree_id" in source
+    assert "folder_html.step2_html = step2_html_with_display_ids" in source
+
+
+def test_display_numbering_is_optional_for_legacy_projection_without_stage_a() -> None:
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "desktop" / "tree_display_numbering_extensions.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "project = self._stage_project()" in source
+    assert "except (FileNotFoundError, OSError, TypeError, ValueError):" in source
+    assert "return {}" in source
+
+
+def test_packaged_launch_recovers_from_protected_working_directory() -> None:
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "desktop" / "__init__.py").read_text(encoding="utf-8")
+
+    assert "_ensure_packaged_writable_cwd" in source
+    assert 'getattr(sys, "_MEIPASS", None)' in source
+    assert 'for variable in ("LOCALAPPDATA", "APPDATA")' in source
+    assert "os.chdir(candidate)" in source
+    assert "tempfile.gettempdir()" in source
