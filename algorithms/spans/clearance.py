@@ -133,6 +133,47 @@ class SpanClearanceResult:
     danger_points: tuple[SpanDangerPoint, ...] = ()
 
 
+def _validated_local_prefix_offsets(
+    result: SpanWireResult,
+    key: str,
+    *,
+    expected_count: int,
+    expected_end: int,
+    span_index: int,
+) -> np.ndarray:
+    """Return one validated local W1 prefix array as int64 values.
+
+    W1 requires one boundary per item plus the initial zero.  A missing offset
+    array is only safe for an empty collection; accepting a synthetic ``[0]``
+    for non-empty wire/segment data would make later geometry indexing unsafe.
+    """
+
+    raw = result.w1_arrays.get(key)
+    if raw is None:
+        if expected_count == 0 and expected_end == 0:
+            return np.zeros(1, dtype=np.int64)
+        raise ValueError(
+            f"Span {span_index} {key} is missing for {expected_count} items"
+        )
+    values = np.asarray(raw)
+    if values.ndim != 1 or len(values) != expected_count + 1:
+        raise ValueError(
+            f"Span {span_index} {key} must have length {expected_count + 1}"
+        )
+    if not np.issubdtype(values.dtype, np.integer):
+        raise ValueError(f"Span {span_index} {key} must contain integer offsets")
+    values = values.astype(np.int64, copy=False)
+    if (
+        values[0] != 0
+        or values[-1] != expected_end
+        or np.any(values[1:] < values[:-1])
+    ):
+        raise ValueError(
+            f"Span {span_index} {key} must monotonically span 0..{expected_end}"
+        )
+    return values
+
+
 def _concatenate_span_wire_edges(
     wire_results: list[SpanWireResult],
 ) -> tuple[dict[str, np.ndarray], int, int]:
@@ -188,13 +229,15 @@ def _concatenate_span_wire_edges(
                 else (0,)
             )
             arrays[key] = np.empty(shape, dtype=dtype)
-    # Re-base offsets and remap wire ids per span.
+    # Re-base offsets and remap wire ids per span.  W1 offsets are prefix
+    # arrays, so each local array starts with its own boundary zero.  Keep one
+    # global zero and append only each local suffix; appending the full local
+    # array would introduce a duplicate boundary between adjacent Spans.
     new_segment_wire: list[int] = []
     new_wire_id: list[int] = []
-    new_wire_segment_offsets: list[int] = []
-    new_sampled_offsets: list[int] = []
+    new_wire_segment_offsets: list[int] = [0]
+    new_sampled_offsets: list[int] = [0]
     segment_cursor = 0
-    wire_cursor = 0
     sample_cursor = 0
     for span_index, result in enumerate(wire_results):
         local_segments = int(result.w1_arrays.get("segment_wire_id", np.empty(0)).shape[0])
@@ -206,12 +249,27 @@ def _concatenate_span_wire_edges(
             new_segment_wire.append(offset + local_wire)
         for wire_position in range(local_wires):
             new_wire_id.append(offset + wire_position)
-        base_wo = result.w1_arrays.get("wire_segment_offsets", np.zeros(1, dtype=np.int64))
-        new_wire_segment_offsets.extend(int(value) + wire_cursor for value in np.asarray(base_wo))
-        base_so = result.w1_arrays.get("sampled_curve_offsets", np.zeros(1, dtype=np.int64))
-        new_sampled_offsets.extend(int(value) + sample_cursor for value in np.asarray(base_so))
+        base_wo = _validated_local_prefix_offsets(
+            result,
+            "wire_segment_offsets",
+            expected_count=local_wires,
+            expected_end=local_segments,
+            span_index=span_index,
+        )
+        # wire_segment_offsets maps wire positions to segment positions; its
+        # cumulative rebase is therefore the number of preceding segments.
+        new_wire_segment_offsets.extend(
+            int(value) + segment_cursor for value in base_wo[1:]
+        )
+        base_so = _validated_local_prefix_offsets(
+            result,
+            "sampled_curve_offsets",
+            expected_count=local_segments,
+            expected_end=local_samples,
+            span_index=span_index,
+        )
+        new_sampled_offsets.extend(int(value) + sample_cursor for value in base_so[1:])
         segment_cursor += local_segments
-        wire_cursor += local_wires
         sample_cursor += local_samples
     arrays["segment_wire_id"] = np.asarray(new_segment_wire, dtype=np.int32)
     arrays["wire_id"] = np.asarray(new_wire_id, dtype=np.int32)

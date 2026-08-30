@@ -115,6 +115,41 @@ class BatchAnalysisResult:
     batch_manifest_reference: str | None = None
     prediction_export_reference: str | None = None
 
+    def __post_init__(self) -> None:
+        """Restore the authoritative Span order when a result is hydrated.
+
+        Batch manifests sort mapping keys for stable JSON, while the editor's
+        clearance publication consumes ``span_results.values()``.  The
+        scheduler records the topology-derived order explicitly so an
+        in-memory result, a JSON round-trip, and a later editor finalization all
+        concatenate the same wire sequence.  Legacy manifests without this
+        metadata retain their historical mapping order.
+        """
+
+        diagnostics = self.batch_diagnostics
+        if not isinstance(diagnostics, Mapping) or "canonical_span_order" not in diagnostics:
+            return
+        raw_order = diagnostics["canonical_span_order"]
+        if not isinstance(raw_order, (list, tuple)):
+            raise ValueError("canonical_span_order must be a list or tuple")
+        order = tuple(raw_order)
+        if any(type(span_id) is not str for span_id in order):
+            raise ValueError("canonical_span_order must contain string Span IDs")
+        if len(order) != len(set(order)):
+            raise ValueError("canonical_span_order must not contain duplicates")
+        current = dict(self.span_results)
+        unexpected = [span_id for span_id in current if span_id not in order]
+        if unexpected:
+            raise ValueError(
+                "span_results contains IDs absent from canonical_span_order: "
+                + ",".join(str(span_id) for span_id in unexpected)
+            )
+        object.__setattr__(
+            self,
+            "span_results",
+            {span_id: current[span_id] for span_id in order if span_id in current},
+        )
+
     @property
     def duplicate_final_original_index(self) -> int:
         if self.global_reconciled is None:
@@ -494,6 +529,34 @@ class BatchAnalysisScheduler:
             raise ScienceAdapterError("DUPLICATE_FINAL_ORIGINAL_INDEX")
         return replace(reconciled, global_tree_records=tuple(records), diagnostics=diagnostics)
 
+    @staticmethod
+    def _canonical_span_order(
+        selected: tuple[str, ...], bindings: Mapping[str, SpanScienceBinding]
+    ) -> tuple[str, ...]:
+        """Return selected product Span IDs in ProjectScienceBridge order."""
+
+        if len(selected) != len(set(selected)):
+            raise ScienceAdapterError("SPAN_SELECTION_CONTAINS_DUPLICATES")
+        missing = [span_id for span_id in selected if span_id not in bindings]
+        if missing:
+            raise ScienceAdapterError(
+                "SPAN_BINDING_MISSING_FOR_CANONICAL_ORDER:" + ",".join(missing)
+            )
+        ordinals: dict[str, int] = {}
+        for span_id in selected:
+            internal = bindings[span_id].internal_span_id
+            if (
+                type(internal) is not str
+                or len(internal) < 2
+                or internal[0] != "S"
+                or not internal[1:].isdigit()
+            ):
+                raise ScienceAdapterError("INVALID_INTERNAL_SPAN_ORDER_ID")
+            ordinals[span_id] = int(internal[1:])
+        if len(ordinals) != len(set(ordinals.values())):
+            raise ScienceAdapterError("DUPLICATE_INTERNAL_SPAN_ORDER_ID")
+        return tuple(sorted(selected, key=ordinals.__getitem__))
+
     def _tree_ids_by_span(
         self, result: BatchAnalysisResult
     ) -> dict[str, tuple[int, ...]]:
@@ -697,6 +760,18 @@ class BatchAnalysisScheduler:
             binding.product_span.span_id: binding
             for binding in self.bridge.bind_spans(selected)
         }
+        canonical_span_order = self._canonical_span_order(selected, bindings)
+        unexpected_results = [span_id for span_id in results if span_id not in canonical_span_order]
+        if unexpected_results:
+            raise ScienceAdapterError(
+                "RESULT_SPAN_NOT_SELECTED:"
+                + ",".join(str(span_id) for span_id in unexpected_results)
+            )
+        ordered_results = {
+            span_id: results[span_id]
+            for span_id in canonical_span_order
+            if span_id in results
+        }
         statuses = dict(statuses)
         successful = [status is not BatchSpanStatus.FAILED for status in statuses.values()]
         failed = any(status is BatchSpanStatus.FAILED for status in statuses.values())
@@ -735,9 +810,12 @@ class BatchAnalysisScheduler:
         final_clearance = None
         if global_reconciled is not None:
             wire_results = [
-                value.wire_result
-                for value in results.values()
-                if value.wire_result is not None
+                ordered_results[span_id].wire_result
+                for span_id in canonical_span_order
+                if (
+                    span_id in ordered_results
+                    and ordered_results[span_id].wire_result is not None
+                )
             ]
             if wire_results and len(wire_results) == len(selected):
                 clearance_publish_started = time.perf_counter()
@@ -746,7 +824,11 @@ class BatchAnalysisScheduler:
                     # wire geometry and risk threshold as the result already
                     # evaluated by the canonical executor.  Persistent IDs do
                     # not participate in distance science, so reuse is exact.
-                    only = next(iter(results.values())) if len(selected) == 1 else None
+                    only = (
+                        ordered_results.get(canonical_span_order[0])
+                        if len(selected) == 1
+                        else None
+                    )
                     if only is not None and only.clearance_result is not None:
                         final_clearance = only.clearance_result
                         batch_diagnostics["final_clearance_reuse"] = (
@@ -769,13 +851,14 @@ class BatchAnalysisScheduler:
                     telemetry.stage_time_seconds["clearance_publish"] = (
                         time.perf_counter() - clearance_publish_started
                     )
+        batch_diagnostics["canonical_span_order"] = list(canonical_span_order)
         result = BatchAnalysisResult(
             analysis_run_id=run_id,
             project_id=self.project.project_id,
             scan_id=self.bridge.scan.scan_id,
             status=status,
             span_statuses=dict(statuses),
-            span_results=dict(results),
+            span_results=ordered_results,
             telemetry=telemetry,
             risk_policy_snapshot=self.risk_policy_snapshot,
             global_reconciled=global_reconciled,
