@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing
 import sys
 import threading
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
-from desktop.pdal_runtime import dependency_health, pillow_health
+from desktop.packaged_diagnostics import (
+    PackagedPrerequisiteError,
+    current_survey_smoke,
+    dependency_report,
+    finite_backend_smoke,
+    require_edgechromium_renderer,
+    require_webview2_prerequisites,
+    write_json_exclusive,
+)
 from desktop.project_management import (
     create_empty_project,
     describe_project,
@@ -197,15 +207,97 @@ class DesktopApi:
         return self._configure_project(Path(descriptor["root"]))
 
 
-def launch(project_root: Path | None, *, ui_test_mode: bool = False) -> int:
+def _write_diagnostic(path: Path | None, payload: dict) -> int:
+    if path is None:
+        print(json.dumps(payload, ensure_ascii=False, default=str))
+        return 0
+    try:
+        target = write_json_exclusive(path, payload)
+    except FileExistsError:
+        print(f"Diagnostic output already exists; refusing to overwrite: {path}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"Unable to write diagnostic output {path}: {exc}", file=sys.stderr)
+        return 2
+    print(f"Diagnostic written: {target}")
+    return 0
+
+
+def _diagnostic_failure(
+    path: Path | None,
+    *,
+    mode: str,
+    error: Exception | str,
+    status: str = "FAIL",
+) -> int:
+    payload = {
+        "schema": "treeline-desktop-diagnostic-error-v1",
+        "status": status,
+        "mode": mode,
+        "error": str(error),
+        "error_type": type(error).__name__ if isinstance(error, Exception) else None,
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    output_status = _write_diagnostic(path, payload)
+    return output_status if output_status != 0 else 5
+
+
+def _show_gui_error(message: str) -> None:
+    """Show a native error when a windowed executable has no console."""
+
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(None, str(message), "TreeLineWarning", 0x10)
+    except Exception:
+        # The JSON diagnostic and stderr remain the machine-readable fallback.
+        return
+
+
+def launch(
+    project_root: Path | None,
+    *,
+    ui_test_mode: bool = False,
+    diagnostic_output: Path | None = None,
+) -> int:
+    prerequisite_report = None
+    try:
+        prerequisite_report = require_webview2_prerequisites(resource_root())
+    except PackagedPrerequisiteError as exc:
+        _diagnostic_failure(
+            diagnostic_output,
+            mode="gui-launch",
+            error=exc,
+            status="MISSING_PREREQUISITE",
+        )
+        _show_gui_error(str(exc))
+        print(str(exc), file=sys.stderr)
+        return 3
     try:
         import webview
     except ImportError:
-        print(
-            "WebView2/pywebview is unavailable. Install the desktop requirements, then retry.",
-            file=sys.stderr,
+        message = (
+            "pywebview is unavailable. Install the desktop requirements; the native "
+            "WebView2 runtime is also required and is never replaced with MSHTML."
         )
+        _diagnostic_failure(diagnostic_output, mode="gui-launch", error=message)
+        _show_gui_error(message)
+        print(message, file=sys.stderr)
         return 2
+    try:
+        renderer_preflight = require_edgechromium_renderer(webview, resource_root())
+    except PackagedPrerequisiteError as exc:
+        _diagnostic_failure(
+            diagnostic_output,
+            mode="gui-launch",
+            error=exc,
+            status="MISSING_PREREQUISITE",
+        )
+        _show_gui_error(str(exc))
+        print(str(exc), file=sys.stderr)
+        return 3
     # UI acceptance must start from the same empty product home as a fresh
     # packaged install, even when the source checkout contains developer caches.
     project = project_root or (None if ui_test_mode else default_project_root())
@@ -225,6 +317,12 @@ def launch(project_root: Path | None, *, ui_test_mode: bool = False) -> int:
         or (project / "stage-a-project.json").is_file()
         or (project / "desktop-project.json").is_file()
     ):
+        _diagnostic_failure(
+            diagnostic_output,
+            mode="gui-launch",
+            error="Selected project has no supported local TreeLineWarning manifest.",
+        )
+        _show_gui_error("Selected project has no supported local TreeLineWarning manifest.")
         print("Selected project has no supported local TreeLineWarning manifest.", file=sys.stderr)
         return 2
     backend = BackendProcess(
@@ -236,6 +334,8 @@ def launch(project_root: Path | None, *, ui_test_mode: bool = False) -> int:
     try:
         url = backend.start()
     except RuntimeError as exc:
+        _diagnostic_failure(diagnostic_output, mode="gui-launch", error=exc)
+        _show_gui_error(str(exc))
         print(str(exc), file=sys.stderr)
         return 3
     try:
@@ -253,8 +353,44 @@ def launch(project_root: Path | None, *, ui_test_mode: bool = False) -> int:
         )
         desktop_api._window = window
         webview.start(gui="edgechromium", debug=False)
-        return 0
+        active_renderer = getattr(webview, "renderer", None)
+        if active_renderer != "edgechromium":
+            raise PackagedPrerequisiteError(
+                "pywebview did not use the EdgeChromium renderer; refusing an MSHTML fallback."
+            )
+        diagnostic_status = _write_diagnostic(
+            diagnostic_output,
+            {
+                "schema": "treeline-desktop-gui-launch-v1",
+                "status": "PASS",
+                "backend_url": url,
+                "project_root": str(backend.project_root),
+                "resource_root": str(resource_root()),
+                "webview2_prerequisites": prerequisite_report,
+                "renderer_preflight": renderer_preflight,
+                "renderer": active_renderer,
+                "lifecycle": "WINDOW_OPENED_AND_CLOSED",
+                "visual_acceptance": "UNVERIFIED",
+                "visual_acceptance_note": (
+                    "The launcher window completed its lifecycle; visual/browser acceptance "
+                    "requires a separate inspection."
+                ),
+            },
+        )
+        return diagnostic_status
+    except PackagedPrerequisiteError as exc:
+        _diagnostic_failure(
+            diagnostic_output,
+            mode="gui-launch",
+            error=exc,
+            status="MISSING_PREREQUISITE",
+        )
+        _show_gui_error(str(exc))
+        print(str(exc), file=sys.stderr)
+        return 3
     except Exception as exc:  # pywebview backend exceptions are implementation-specific.
+        _diagnostic_failure(diagnostic_output, mode="gui-launch", error=exc)
+        _show_gui_error(str(exc))
         print(f"Desktop window failed to open: {exc}", file=sys.stderr)
         return 4
     finally:
@@ -320,16 +456,14 @@ def prediction_smoke(project_root: Path | None) -> int:
         backend.stop()
 
 
-def dependency_health_smoke() -> int:
-    """Print the native Pillow and PDAL health reports for release acceptance tooling."""
+def dependency_health_smoke(diagnostic_output: Path | None = None) -> int:
+    """Print or persist the native/frozen dependency report for release acceptance."""
 
-    pillow = pillow_health()
-    pdal = dependency_health()
-    report = {"pillow": pillow, "pdal": pdal}
-    print(json.dumps(report, ensure_ascii=False))
-    return 0 if all(
-        item.get("found") and item.get("minimal_operation_pass") for item in report.values()
-    ) else 5
+    report = dependency_report(resource_root())
+    output_status = _write_diagnostic(diagnostic_output, report)
+    if output_status != 0:
+        return output_status
+    return 0 if report.get("overall_pass") else 5
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -337,14 +471,73 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project-root", type=Path, default=None)
     parser.add_argument("--prediction-smoke", action="store_true")
     parser.add_argument("--dependency-health", action="store_true")
+    parser.add_argument(
+        "--diagnostic-output",
+        "--diagnostic-path",
+        dest="diagnostic_output",
+        type=Path,
+        default=None,
+        help="exclusive JSON path for windowed/package diagnostics",
+    )
+    parser.add_argument("--survey-smoke", action="store_true")
+    parser.add_argument("--backend-smoke", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--stop-signal", type=Path, default=None, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--smoke-timeout-seconds",
+        type=float,
+        default=120.0,
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--ui-test-mode", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.dependency_health:
-        return dependency_health_smoke()
+        return dependency_health_smoke(args.diagnostic_output)
+    if args.survey_smoke:
+        if args.project_root is None:
+            return _diagnostic_failure(
+                args.diagnostic_output,
+                mode="survey-smoke",
+                error="--survey-smoke requires --project-root",
+            )
+        try:
+            report = current_survey_smoke(
+                args.project_root,
+                resource_root(),
+                timeout_seconds=args.smoke_timeout_seconds,
+            )
+        except Exception as exc:
+            return _diagnostic_failure(args.diagnostic_output, mode="survey-smoke", error=exc)
+        output_status = _write_diagnostic(args.diagnostic_output, report)
+        if output_status != 0:
+            return output_status
+        return 0 if report.get("status") == "PASS" else 5
+    if args.backend_smoke:
+        if args.project_root is None or args.diagnostic_output is None:
+            print(
+                "--backend-smoke requires --project-root and --diagnostic-output",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            code, _report = finite_backend_smoke(
+                args.project_root,
+                resource_root(),
+                args.diagnostic_output,
+                stop_signal=args.stop_signal,
+                timeout_seconds=args.smoke_timeout_seconds,
+            )
+            return code
+        except Exception as exc:
+            return _diagnostic_failure(args.diagnostic_output, mode="backend-smoke", error=exc)
     if args.prediction_smoke:
         return prediction_smoke(args.project_root)
-    return launch(args.project_root, ui_test_mode=args.ui_test_mode)
+    return launch(
+        args.project_root,
+        ui_test_mode=args.ui_test_mode,
+        diagnostic_output=args.diagnostic_output,
+    )
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     raise SystemExit(main())
