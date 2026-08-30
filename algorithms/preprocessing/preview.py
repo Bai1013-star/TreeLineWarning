@@ -110,7 +110,11 @@ def build_pointcloud_preview(
                     if value is not None:
                         arrays.add_attribute(name, np.asarray(value)[selected])
 
-            peak_memory = max(peak_memory, _rss_bytes(process))
+            current_memory = _rss_bytes(process)
+            if current_memory is not None and (
+                peak_memory is None or current_memory > peak_memory
+            ):
+                peak_memory = current_memory
             _report(
                 reporter,
                 source_id,
@@ -657,15 +661,18 @@ def _plotly_available() -> bool:
 def _current_process() -> Any | None:
     try:
         import psutil
-    except ImportError:
+        return psutil.Process()
+    except Exception:
         return None
-    return psutil.Process()
 
 
 def _rss_bytes(process: Any | None) -> int | None:
     if process is None:
         return None
-    return int(process.memory_info().rss)
+    try:
+        return int(process.memory_info().rss)
+    except Exception:
+        return None
 
 
 def _report(

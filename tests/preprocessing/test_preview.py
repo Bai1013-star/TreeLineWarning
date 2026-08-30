@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
 from pathlib import Path
 
 import laspy
 import numpy as np
 import pytest
 from algorithms.io import LasIoError
+from algorithms.preprocessing import preview as preview_module
 from algorithms.preprocessing.preview import build_pointcloud_preview
 from core.contracts import CancellationToken, PipelineProgress
 
@@ -27,6 +30,11 @@ class CancelAfterFirstReporter:
     def update(self, progress: PipelineProgress) -> None:
         self.events.append(progress)
         self.token.cancel()
+
+
+class FailingMemoryProcess:
+    def memory_info(self) -> object:
+        raise RuntimeError("RSS probe unavailable")
 
 
 def write_las(
@@ -68,6 +76,70 @@ def write_las(
 def load_npz(path: Path) -> dict[str, np.ndarray]:
     with np.load(path, allow_pickle=False) as data:
         return {name: data[name] for name in data.files}
+
+
+def test_preview_continues_when_process_constructor_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_psutil = types.ModuleType("psutil")
+
+    def fail_process() -> object:
+        raise RuntimeError("process probe unavailable")
+
+    fake_psutil.Process = fail_process  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+
+    assert preview_module._current_process() is None
+
+
+@pytest.mark.parametrize(
+    "unavailable_process",
+    [None, FailingMemoryProcess()],
+    ids=["missing-process", "failing-rss-probe"],
+)
+def test_preview_preserves_sample_data_when_rss_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unavailable_process: object | None,
+) -> None:
+    source = tmp_path / "source.las"
+    baseline_output = tmp_path / "baseline"
+    unavailable_output = tmp_path / "unavailable"
+    write_las(source, point_count=10)
+
+    class FixedMemoryProcess:
+        def memory_info(self) -> object:
+            return types.SimpleNamespace(rss=1234)
+
+    monkeypatch.setattr(preview_module, "_current_process", lambda: FixedMemoryProcess())
+    baseline = build_pointcloud_preview(
+        source,
+        baseline_output,
+        source_id="source",
+        target_preview_points=4,
+        max_preview_points=4,
+        chunk_size=3,
+        generate_html=False,
+    )
+
+    monkeypatch.setattr(preview_module, "_current_process", lambda: unavailable_process)
+    unavailable = build_pointcloud_preview(
+        source,
+        unavailable_output,
+        source_id="source",
+        target_preview_points=4,
+        max_preview_points=4,
+        chunk_size=3,
+        generate_html=False,
+    )
+
+    baseline_data = load_npz(baseline.npz_path)
+    unavailable_data = load_npz(unavailable.npz_path)
+    assert baseline_data.keys() == unavailable_data.keys()
+    for name in baseline_data:
+        assert np.array_equal(baseline_data[name], unavailable_data[name])
+    assert unavailable.metadata["memory"]["rss_start_bytes"] is None
+    assert unavailable.metadata["memory"]["rss_peak_bytes"] is None
 
 
 def test_preview_streams_multiple_chunks_and_limits_output(tmp_path: Path) -> None:
