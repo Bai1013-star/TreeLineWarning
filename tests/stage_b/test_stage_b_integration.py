@@ -293,7 +293,7 @@ def test_ground_bad_allocation_has_an_actionable_chinese_reason() -> None:
     assert failure["recoverable"] is True
 
 
-def test_batch_scheduler_reuses_completed_span_on_restart(tmp_path: Path) -> None:
+def test_batch_scheduler_reruns_summary_only_span_on_restart(tmp_path: Path) -> None:
     project, scan_id, span_ids = _project(tmp_path, span_count=1)
     calls: list[str] = []
 
@@ -318,7 +318,14 @@ def test_batch_scheduler_reuses_completed_span_on_restart(tmp_path: Path) -> Non
     first.run(span_ids, analysis_run_id="analysis-restart-fixture")
 
     def restarted_runner(*_args):
-        raise AssertionError("completed Span science must not rerun on restart")
+        calls.append("restart")
+        return SpanScienceResult(
+            tree_count=1,
+            minimum_clearance_m=1.2,
+            risk_threshold_m=0.5,
+            risk_counts={},
+            diagnostics={"tree_backend": "crown_stem_hybrid"},
+        )
 
     second = BatchAnalysisScheduler(
         tmp_path,
@@ -329,8 +336,17 @@ def test_batch_scheduler_reuses_completed_span_on_restart(tmp_path: Path) -> Non
         source_access_enabled=False,
     )
     resumed = second.run(span_ids, analysis_run_id="analysis-restart-fixture")
-    assert calls == ["S001"]
+    # The injected fixture runner emits summary-only results and no exact tree
+    # or wire artifacts.  Its old summary must therefore be a cache miss, not
+    # an authority source for a production restart.
+    assert calls == ["S001", "restart"]
     assert resumed.span_statuses[span_ids[0]] is BatchSpanStatus.AUTO_ANALYZED
+    assert resumed.span_results[span_ids[0]].diagnostics["span_cache"] == {
+        "status": "UNAVAILABLE",
+        "reason": "SPAN_CACHE_INDEX_MISSING",
+        "publication_reason": "SPAN_CACHE_ARTIFACT_MISSING:tree",
+        "authoritative": False,
+    }
 
 
 def test_reconciled_original_index_is_exclusive_and_order_independent() -> None:

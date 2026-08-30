@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from algorithms.spans.clearance import SpanDangerPoint
 from algorithms.spans.project_adapter import (
     ScienceAdapterError,
     SourceSharedPreparation,
@@ -30,6 +31,15 @@ from core.stage_a.models import AnalysisRun, AnalysisRunStatus, Project, stable_
 from core.stage_a.persistence import save_project
 from core.stage_a.risk import RiskPolicy
 from core.stage_b.bridge import ProjectScienceBridge, SpanScienceBinding
+from core.stage_b.cache import (
+    SpanCacheUnavailable,
+    load_exact_span_cache,
+    load_span_clearance_payload,
+    publish_run_cache_index,
+    publish_span_cache_index,
+    validate_run_cache_index,
+)
+from core.stage_b.danger_points import load_final_danger_points
 from core.stage_b.failures import structured_failure
 
 
@@ -230,6 +240,107 @@ def _write_npz(path: Path, **arrays: np.ndarray) -> None:
     temporary.replace(path)
 
 
+def _hydrate_persisted_danger_points(
+    project_root: Path,
+    run_id: str,
+    clearance: Any | None,
+    global_reconciled: TreeReconciliationResult,
+) -> Any | None:
+    """Attach exact persisted danger XYZ to a restart-hydrated clearance.
+
+    ``batch.json`` intentionally stores bounded clearance records and omits the
+    potentially larger point list.  The editor persists that list separately;
+    when a record says that points exist, a missing or inconsistent sidecar is
+    a cache miss rather than a partially hydrated COMPLETE result.
+    """
+
+    if clearance is None:
+        return None
+    records = tuple(getattr(clearance, "records", ()) or ())
+    persistent_by_tree = {
+        int(record.global_tree_id): record.persistent_tree_id
+        for record in global_reconciled.global_tree_records
+    }
+    expected_by_tree: dict[int, int] = {}
+    try:
+        for record in records:
+            tree_id = int(record.global_tree_id)
+            if tree_id in expected_by_tree:
+                return None
+            if tree_id not in persistent_by_tree or (
+                record.persistent_tree_id != persistent_by_tree[tree_id]
+            ):
+                return None
+            expected_by_tree[tree_id] = int(getattr(record, "danger_point_count", 0) or 0)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if any(count < 0 for count in expected_by_tree.values()):
+        return None
+    expected_count = sum(expected_by_tree.values())
+    arrays = load_final_danger_points(project_root, run_id)
+    if expected_count == 0:
+        if arrays is not None and len(arrays[0]) != 0:
+            return None
+        return clearance
+    if arrays is None:
+        return None
+    original_index, tree_id, xyz = arrays
+    if len(original_index) != expected_count:
+        return None
+
+    final_index = np.asarray(global_reconciled.final_original_index, dtype=np.int64)
+    final_tree = np.asarray(global_reconciled.final_tree_id, dtype=np.int32)
+    final_xyz = np.asarray(global_reconciled.final_xyz_local_m, dtype=np.float64)
+    if (
+        final_index.ndim != 1
+        or final_tree.shape != final_index.shape
+        or final_xyz.shape != (len(final_index), 3)
+    ):
+        return None
+    order = np.argsort(final_index, kind="mergesort")
+    sorted_index = final_index[order]
+    if np.any(sorted_index[1:] == sorted_index[:-1]):
+        return None
+    positions = np.searchsorted(sorted_index, original_index)
+    if np.any(positions >= len(sorted_index)):
+        return None
+    if not np.array_equal(sorted_index[positions], original_index):
+        return None
+    member_positions = order[positions]
+    if not np.array_equal(final_tree[member_positions], tree_id):
+        return None
+    if not np.array_equal(final_xyz[member_positions], xyz):
+        return None
+    record_by_tree = {int(record.global_tree_id): record for record in records}
+    actual_by_tree: dict[int, int] = {}
+    points: list[SpanDangerPoint] = []
+    for source_index, global_tree_id, point_xyz in zip(
+        original_index, tree_id, xyz, strict=True
+    ):
+        source_key = int(source_index)
+        tree_key = int(global_tree_id)
+        record = record_by_tree.get(tree_key)
+        if record is None:
+            return None
+        values = tuple(float(value) for value in point_xyz)
+        if len(values) != 3 or not np.all(np.isfinite(values)):
+            return None
+        actual_by_tree[tree_key] = actual_by_tree.get(tree_key, 0) + 1
+        points.append(
+            SpanDangerPoint(
+                global_tree_id=tree_key,
+                persistent_tree_id=record.persistent_tree_id,
+                original_index=source_key,
+                xyz_local_m=values,
+            )
+        )
+    if any(actual_by_tree.get(tree_id, 0) != count for tree_id, count in expected_by_tree.items()):
+        return None
+    if any(tree_id not in expected_by_tree for tree_id in actual_by_tree):
+        return None
+    return replace(clearance, danger_points=tuple(points))
+
+
 class BatchAnalysisScheduler:
     """Execute selected logical Spans over one shared source preparation."""
 
@@ -256,6 +367,7 @@ class BatchAnalysisScheduler:
         self.bridge = ProjectScienceBridge(
             project, scan_id, risk_policy=self.risk_policy, config=self.config
         )
+        self._uses_default_science_runner = science_runner is None
         self.science_runner = science_runner or self._default_science_runner
         self._uses_default_source_preparer = source_preparer is None
         self.source_preparer = source_preparer or prepare_source_shared
@@ -368,6 +480,246 @@ class BatchAnalysisScheduler:
         except (OSError, ValueError, json.JSONDecodeError):
             return None
 
+    def _assert_previous_resume_allowed(
+        self, run_id: str, previous: Mapping[str, Any] | None
+    ) -> None:
+        """Reject immutable/editor-edited runs before any scheduler writes."""
+
+        manifest_path = (
+            self.project_root
+            / "artifacts"
+            / "project-runs"
+            / "batches"
+            / run_id
+            / "batch.json"
+        )
+        if previous is None and manifest_path.is_file():
+            raise ScienceAdapterError("BATCH_RUN_MANIFEST_INVALID")
+        if previous is not None:
+            if (
+                previous.get("schema") != "treeline-stage-batch-result-v1"
+                or previous.get("analysis_run_id") != run_id
+            ):
+                raise ScienceAdapterError("BATCH_RUN_MANIFEST_INVALID")
+            statuses = previous.get("span_statuses")
+            manifest_status = previous.get("status")
+            valid_manifest_statuses = {
+                "COMPLETE",
+                "PARTIAL_FAILURE",
+                "FAILED",
+                BatchSpanStatus.FINALIZED.value,
+            }
+            if (
+                not isinstance(manifest_status, str)
+                or manifest_status not in valid_manifest_statuses
+            ):
+                raise ScienceAdapterError("BATCH_RUN_MANIFEST_INVALID")
+            valid_span_statuses = {status.value for status in BatchSpanStatus}
+            if not isinstance(statuses, Mapping) or any(
+                not isinstance(value, str) or value not in valid_span_statuses
+                for value in statuses.values()
+            ):
+                raise ScienceAdapterError("BATCH_RUN_MANIFEST_INVALID")
+            if isinstance(statuses, Mapping) and any(
+                value == BatchSpanStatus.FINALIZED.value for value in statuses.values()
+            ):
+                raise ScienceAdapterError(
+                    "BATCH_RUN_IMMUTABLE_FINALIZED_REQUIRES_WORKFLOW_REHYDRATION"
+                )
+            if previous.get("status") == BatchSpanStatus.FINALIZED.value:
+                raise ScienceAdapterError(
+                    "BATCH_RUN_IMMUTABLE_FINALIZED_REQUIRES_WORKFLOW_REHYDRATION"
+                )
+
+        journal_path = (
+            self.project_root
+            / "artifacts"
+            / "project-runs"
+            / "batches"
+            / run_id
+            / "tree_edits.json"
+        )
+        if journal_path.is_file():
+            try:
+                journal = json.loads(journal_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                raise ScienceAdapterError(
+                    "BATCH_RUN_IMMUTABLE_EDIT_JOURNAL_INVALID"
+                ) from exc
+            if not isinstance(journal, Mapping):
+                raise ScienceAdapterError("BATCH_RUN_IMMUTABLE_EDIT_JOURNAL_INVALID")
+            if journal.get("schema") != "folder-to-excel-tree-edits-v1":
+                raise ScienceAdapterError("BATCH_RUN_IMMUTABLE_EDIT_JOURNAL_INVALID")
+            journal_run_id = journal.get("analysis_run_id")
+            if journal_run_id is not None and journal_run_id != run_id:
+                raise ScienceAdapterError("BATCH_RUN_IMMUTABLE_EDIT_JOURNAL_INVALID")
+            operations = journal.get("operations")
+            if not isinstance(operations, list):
+                raise ScienceAdapterError("BATCH_RUN_IMMUTABLE_EDIT_JOURNAL_INVALID")
+            if operations:
+                raise ScienceAdapterError(
+                    "BATCH_RUN_IMMUTABLE_EDITED_REQUIRES_WORKFLOW_REHYDRATION"
+                )
+
+        if previous is None:
+            return
+        global_payload = previous.get("global_reconciliation")
+        diagnostics = (
+            global_payload.get("diagnostics")
+            if isinstance(global_payload, Mapping)
+            else None
+        )
+        if not isinstance(diagnostics, Mapping):
+            return
+        editor_schema = diagnostics.get("editor_schema")
+        if editor_schema is not None and editor_schema != (
+            "treeline-stage-b-batch-editor-v1"
+        ):
+            raise ScienceAdapterError("BATCH_RUN_IMMUTABLE_EDIT_JOURNAL_INVALID")
+        if editor_schema == "treeline-stage-b-batch-editor-v1" and (
+            "editor_operation_count" not in diagnostics
+        ):
+            raise ScienceAdapterError("BATCH_RUN_IMMUTABLE_EDIT_JOURNAL_INVALID")
+        operation_count = diagnostics.get("editor_operation_count")
+        if operation_count is None:
+            return
+        if type(operation_count) is not int or operation_count < 0:
+            raise ScienceAdapterError("BATCH_RUN_IMMUTABLE_EDIT_JOURNAL_INVALID")
+        if operation_count:
+            raise ScienceAdapterError(
+                "BATCH_RUN_IMMUTABLE_EDITED_REQUIRES_WORKFLOW_REHYDRATION"
+            )
+
+    @staticmethod
+    def _telemetry_from_manifest(payload: Mapping[str, Any]) -> BatchTelemetry | None:
+        raw = payload.get("telemetry")
+        if not isinstance(raw, Mapping):
+            return None
+        try:
+            return BatchTelemetry(
+                source_point_count=int(raw.get("SOURCE_POINT_COUNT", 0) or 0),
+                span_count=int(raw.get("SPAN_COUNT", 0) or 0),
+                source_prep_count=int(raw.get("SOURCE_PREP_COUNT", 0) or 0),
+                source_full_pass_count=int(raw.get("SOURCE_FULL_PASS_COUNT", 0) or 0),
+                ground_prep_count=int(raw.get("GROUND_PREP_COUNT", 0) or 0),
+                span_local_read_count=int(raw.get("SPAN_LOCAL_READ_COUNT", 0) or 0),
+                cache_hit_count=int(raw.get("CACHE_HIT_COUNT", 0) or 0),
+                cache_miss_count=int(raw.get("CACHE_MISS_COUNT", 0) or 0),
+                peak_memory_bytes=(
+                    None
+                    if raw.get("PEAK_MEMORY_BYTES") is None
+                    else int(raw["PEAK_MEMORY_BYTES"])
+                ),
+                total_time_seconds=float(raw.get("TOTAL_TIME", 0.0) or 0.0),
+                per_span_time_seconds=dict(raw.get("PER_SPAN_TIME") or {}),
+                stage_time_seconds=dict(raw.get("STAGE_TIME") or {}),
+            )
+        except (TypeError, ValueError):
+            return None
+
+    def _resume_existing_complete(
+        self,
+        run_id: str,
+        selected: tuple[str, ...],
+        bindings: Mapping[str, SpanScienceBinding],
+        previous: Mapping[str, Any] | None,
+    ) -> BatchAnalysisResult | None:
+        """Hydrate a clean COMPLETE run without rewriting its artifacts."""
+
+        if previous is None or previous.get("status") != "COMPLETE":
+            return None
+        if previous.get("project_id") != self.project.project_id:
+            return None
+        if previous.get("scan_id") != self.bridge.scan.scan_id:
+            return None
+        statuses_raw = previous.get("span_statuses")
+        if not isinstance(statuses_raw, Mapping) or set(statuses_raw) != set(selected):
+            return None
+        if any(value == BatchSpanStatus.FAILED.value for value in statuses_raw.values()):
+            return None
+        canonical_order = self._canonical_span_order(selected, bindings)
+        previous_diagnostics = previous.get("batch_diagnostics")
+        if not isinstance(previous_diagnostics, Mapping):
+            return None
+        previous_order = previous_diagnostics.get("canonical_span_order")
+        if not isinstance(previous_order, list) or tuple(previous_order) != canonical_order:
+            return None
+        previous_policy = previous.get("risk_policy_snapshot")
+        if not isinstance(previous_policy, Mapping):
+            return None
+        if previous_policy.get("configuration_digest") != self.risk_policy_snapshot.get(
+            "configuration_digest"
+        ):
+            return None
+        run_proof_valid, _run_proof_reason = validate_run_cache_index(
+            self.project_root, run_id
+        )
+        if not run_proof_valid:
+            return None
+        telemetry = self._telemetry_from_manifest(previous)
+        if telemetry is None:
+            return None
+
+        exact_results: dict[str, SpanScienceResult] = {}
+        for span_id in canonical_order:
+            exact, _reason = load_exact_span_cache(
+                self.project_root,
+                run_id,
+                bindings[span_id],
+                self.config,
+            )
+            if exact is None:
+                return None
+            exact_results[span_id] = exact
+
+        global_reconciled = self._load_persisted_global(run_id)
+        if global_reconciled is None:
+            return None
+        global_payload = previous.get("global_reconciliation")
+        if not isinstance(global_payload, Mapping):
+            return None
+        try:
+            if int(global_payload.get("tree_count")) != global_reconciled.final_tree_count:
+                return None
+        except (TypeError, ValueError):
+            return None
+        final_clearance = load_span_clearance_payload(previous.get("final_clearance"))
+        if previous.get("final_clearance") is not None and final_clearance is None:
+            return None
+        if final_clearance is not None:
+            final_clearance = _hydrate_persisted_danger_points(
+                self.project_root,
+                run_id,
+                final_clearance,
+                global_reconciled,
+            )
+            if final_clearance is None:
+                return None
+        try:
+            statuses = {
+                span_id: BatchSpanStatus(str(statuses_raw[span_id]))
+                for span_id in canonical_order
+            }
+        except (KeyError, TypeError, ValueError):
+            return None
+        return BatchAnalysisResult(
+            analysis_run_id=run_id,
+            project_id=self.project.project_id,
+            scan_id=self.bridge.scan.scan_id,
+            status="COMPLETE",
+            span_statuses=statuses,
+            span_results=exact_results,
+            telemetry=telemetry,
+            risk_policy_snapshot=dict(previous_policy),
+            global_reconciled=global_reconciled,
+            final_clearance=final_clearance,
+            batch_diagnostics=dict(previous_diagnostics),
+            batch_manifest_reference=(
+                f"artifacts/project-runs/batches/{run_id}/batch.json"
+            ),
+            prediction_export_reference=previous.get("prediction_export_reference"),
+        )
+
     def _complete_telemetry(
         self,
         result: BatchAnalysisResult,
@@ -394,7 +746,6 @@ class BatchAnalysisScheduler:
             return None
         try:
             payload = json.loads(reconciliation_path.read_text(encoding="utf-8"))
-            arrays = np.load(membership_path, allow_pickle=False)
             records = tuple(
                 GlobalTreeRecord(
                     global_tree_id=int(raw["global_tree_id"]),
@@ -425,9 +776,10 @@ class BatchAnalysisScheduler:
                 )
                 for raw in payload.get("trees", [])
             )
-            original_index = np.asarray(arrays["original_index"], dtype=np.int64)
-            final_xyz = np.asarray(arrays["xyz_local_m"], dtype=np.float64)
-            final_tree = np.asarray(arrays["tree_id"], dtype=np.int32)
+            with np.load(membership_path, allow_pickle=False) as arrays:
+                original_index = np.asarray(arrays["original_index"], dtype=np.int64)
+                final_xyz = np.asarray(arrays["xyz_local_m"], dtype=np.float64)
+                final_tree = np.asarray(arrays["tree_id"], dtype=np.int32)
             if len(original_index) != len(final_xyz) or len(original_index) != len(final_tree):
                 return None
             if len(original_index) != len(np.unique(original_index)):
@@ -610,6 +962,11 @@ class BatchAnalysisScheduler:
             binding.product_span.span_id: binding.with_analysis_run(run_id)
             for binding in bindings_tuple
         }
+        self._assert_previous_resume_allowed(run_id, previous)
+        resumed = self._resume_existing_complete(run_id, selected, bindings, previous)
+        if resumed is not None:
+            self._latest_result = resumed
+            return resumed
         statuses = {span_id: BatchSpanStatus.WAITING for span_id in selected}
         results: dict[str, SpanScienceResult] = {}
         telemetry = BatchTelemetry(span_count=len(selected))
@@ -678,39 +1035,47 @@ class BatchAnalysisScheduler:
                 )
             result = self._finish(run_id, selected, statuses, results, telemetry)
             result = self._complete_telemetry(result, telemetry, started)
+            if result.status == "COMPLETE":
+                try:
+                    publish_run_cache_index(self.project_root, run_id)
+                except SpanCacheUnavailable:
+                    pass
             self._latest_result = result
             return result
 
         previous_statuses = (previous or {}).get("span_statuses") or {}
         for span_id in selected:
-            reused = (
-                previous_statuses.get(span_id)
-                in {
-                    BatchSpanStatus.AUTO_ANALYZED.value,
-                    BatchSpanStatus.REVIEW_REQUIRED.value,
-                    BatchSpanStatus.FINALIZED.value,
-                }
-                and self._reused_result(previous or {}, span_id) is not None
+            input_data = replace(
+                bindings[span_id].science_input,
+                validated_source_preparation_references=(preparation.manifest_reference,),
             )
-            if reused:
-                previous_status = previous_statuses.get(span_id)
-                statuses[span_id] = (
-                    BatchSpanStatus(previous_status)
-                    if previous_status in {
-                        BatchSpanStatus.USER_REVIEWED.value,
-                        BatchSpanStatus.FINALIZED.value,
-                    }
-                    else BatchSpanStatus.AUTO_ANALYZED
+            previous_status = previous_statuses.get(span_id)
+            reusable_status = previous_status in {
+                BatchSpanStatus.AUTO_ANALYZED.value,
+                BatchSpanStatus.REVIEW_REQUIRED.value,
+                BatchSpanStatus.USER_REVIEWED.value,
+            }
+            exact_cached = None
+            cache_miss_reason: str | None = None
+            if reusable_status:
+                exact_cached, cache_miss_reason = load_exact_span_cache(
+                    self.project_root,
+                    run_id,
+                    bindings[span_id],
+                    self.config,
+                    preparation=preparation,
                 )
-                results[span_id] = self._reused_result(previous or {}, span_id)  # type: ignore[assignment]
+                if exact_cached is None:
+                    telemetry.cache_miss_count += 1
+            if exact_cached is not None:
+                previous_status = previous_statuses.get(span_id)
+                statuses[span_id] = BatchSpanStatus(str(previous_status))
+                results[span_id] = exact_cached
+                telemetry.cache_hit_count += 1
                 continue
             statuses[span_id] = BatchSpanStatus.RUNNING
             span_started = time.perf_counter()
             try:
-                input_data = replace(
-                    bindings[span_id].science_input,
-                    validated_source_preparation_references=(preparation.manifest_reference,),
-                )
                 output_root = (
                     self.project_root
                     / "artifacts"
@@ -722,6 +1087,46 @@ class BatchAnalysisScheduler:
                 result = self.science_runner(input_data, preparation, output_root)
                 if type(result) is not SpanScienceResult:
                     raise ScienceAdapterError("SCIENCE_EXECUTOR_RETURNED_INVALID_RESULT")
+                if cache_miss_reason is not None:
+                    result = replace(
+                        result,
+                        diagnostics={
+                            **dict(result.diagnostics),
+                            "span_cache": {
+                                "status": "MISS_RECOMPUTED",
+                                "reason": cache_miss_reason,
+                                "authoritative": False,
+                            },
+                        },
+                    )
+                try:
+                    publish_span_cache_index(
+                        self.project_root,
+                        run_id,
+                        bindings[span_id],
+                        input_data,
+                        preparation,
+                        self.config,
+                        result,
+                        output_root,
+                    )
+                except SpanCacheUnavailable as exc:
+                    if self._uses_default_science_runner:
+                        raise ScienceAdapterError(
+                            f"SPAN_CACHE_PUBLICATION_FAILED:{exc}"
+                        ) from exc
+                    diagnostics = dict(result.diagnostics)
+                    span_cache = dict(diagnostics.get("span_cache") or {})
+                    if "reason" in span_cache:
+                        span_cache["publication_reason"] = str(exc)
+                    else:
+                        span_cache["reason"] = str(exc)
+                    span_cache.update({"status": "UNAVAILABLE", "authoritative": False})
+                    diagnostics["span_cache"] = span_cache
+                    result = replace(
+                        result,
+                        diagnostics=diagnostics,
+                    )
                 results[span_id] = result
                 telemetry.record_span_profile(result)
                 telemetry.span_local_read_count += 1
@@ -744,6 +1149,11 @@ class BatchAnalysisScheduler:
 
         result = self._finish(run_id, selected, statuses, results, telemetry, bindings)
         result = self._complete_telemetry(result, telemetry, started)
+        if result.status == "COMPLETE":
+            try:
+                publish_run_cache_index(self.project_root, run_id)
+            except SpanCacheUnavailable:
+                pass
         self._latest_result = result
         return result
 
@@ -780,7 +1190,7 @@ class BatchAnalysisScheduler:
         if not failed:
             reconciliation_started = time.perf_counter()
             try:
-                global_reconciled = self._global_reconcile(bindings, results)
+                global_reconciled = self._global_reconcile(bindings, ordered_results)
                 if global_reconciled is None:
                     global_reconciled = self._load_persisted_global(run_id)
                 if global_reconciled is not None and global_reconciled.review_tree_ids:
