@@ -1,4 +1,5 @@
-# -*- mode: python ; coding: utf-8 -*-
+# ruff: noqa: F821
+import ctypes
 import os
 import sys
 from collections import deque
@@ -6,12 +7,40 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
+_SPEC_DLL_HANDLES = []
+
+
 sys.path.insert(0, SPECPATH)
-from desktop.build_contract import (
+from desktop.build_contract import (  # noqa: E402
+    validate_lazrs_runtime,
+    validate_native_proj_data,
     validate_pdal_binding_abi,
     validate_pillow_runtime,
     validate_pyproj_runtime,
 )
+
+
+def _bootstrap_staged_sqlite() -> Path:
+    """Preload the approved SQLite ABI before PyInstaller imports extensions."""
+
+    configured = os.environ.get("TREELINE_PDAL_RUNTIME_ENV", "").strip()
+    if not configured:
+        raise SystemExit("TREELINE_PDAL_RUNTIME_ENV is required before native collectors run")
+    sqlite_path = Path(configured).resolve() / "Library" / "bin" / "sqlite3.dll"
+    if not sqlite_path.is_file():
+        raise SystemExit(f"approved staged sqlite3.dll is unavailable: {sqlite_path}")
+    if hasattr(os, "add_dll_directory"):
+        _SPEC_DLL_HANDLES.append(os.add_dll_directory(str(sqlite_path.parent)))
+    loader = getattr(ctypes, "WinDLL", None)
+    if loader is None:
+        raise SystemExit("the Windows build interpreter cannot preload sqlite3.dll")
+    try:
+        _SPEC_DLL_HANDLES.append(loader(str(sqlite_path)))
+    except OSError as exc:
+        raise SystemExit(f"approved staged sqlite3.dll failed to load: {sqlite_path}") from exc
+    return sqlite_path
+
+_bootstrap_staged_sqlite()
 
 if sys.version_info[:2] != (3, 11):
     raise SystemExit(
@@ -21,6 +50,7 @@ if sys.version_info[:2] != (3, 11):
 
 validate_pillow_runtime(python_version=sys.version_info[:2])
 validate_pyproj_runtime()
+validate_lazrs_runtime()
 
 hiddenimports = (
     collect_submodules("algorithms")
@@ -37,8 +67,16 @@ hiddenimports = (
         "desktop.work_order",
         "plotly",
         "plotly.offline",
+        "lazrs",
     ]
 )
+
+# The production PDAL stages (LAS reader/writer, SMRF, HAG-NN, and covariance
+# features) are built into pdalcpp.dll.  COPC is decoded by the vendored viewer
+# path, so no optional PDAL plugin is needed.  Keep this allowlist explicit so
+# an environment containing incomplete optional plugin closures cannot leak
+# those DLLs into a release package.
+_PDAL_OPTIONAL_PLUGIN_ALLOWLIST: frozenset[str] = frozenset()
 
 
 def _pdal_binaries() -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[str]]:
@@ -52,7 +90,8 @@ def _pdal_binaries() -> tuple[list[tuple[str, str]], list[tuple[str, str]], list
     root_value = os.environ.get("TREELINE_PDAL_RUNTIME_ENV", "").strip()
     if not root_value:
         raise SystemExit(
-            "TREELINE_PDAL_RUNTIME_ENV is required: a release must bundle the PDAL Ground/HAG runtime"
+            "TREELINE_PDAL_RUNTIME_ENV is required: a release must bundle the "
+            "PDAL Ground/HAG runtime"
         )
     root = Path(root_value).resolve()
     bin_root = root / "Library" / "bin"
@@ -95,19 +134,28 @@ def _pdal_binaries() -> tuple[list[tuple[str, str]], list[tuple[str, str]], list
         source = candidates[name]
         destination = "pdal" if source.suffix.lower() == ".pyd" else "pdal_runtime"
         native.append((str(source), destination))
+        binary = None
         try:
             binary = pefile.PE(str(source), fast_load=True)
             binary.parse_data_directories(
                 directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"]]
             )
-            imports = [entry.dll.decode(errors="replace") for entry in binary.DIRECTORY_ENTRY_IMPORT]
+            imports = [
+                entry.dll.decode(errors="replace")
+                for entry in binary.DIRECTORY_ENTRY_IMPORT
+            ]
         except Exception:
             imports = []
+        finally:
+            if binary is not None:
+                binary.close()
         queue.extend(import_name for import_name in imports if import_name.lower() in candidates)
 
+    plugin_candidates = (*bin_root.glob("libpdal_plugin_*.dll"), *plugin_root.glob("*.dll"))
     plugin_binaries = [
         (str(path), "pdal_plugins")
-        for path in (*bin_root.glob("libpdal_plugin_*.dll"), *plugin_root.glob("*.dll"))
+        for path in plugin_candidates
+        if path.name.lower() in _PDAL_OPTIONAL_PLUGIN_ALLOWLIST
     ]
     return native + plugin_binaries, collect_data_files("pdal", include_py_files=True), [
         *collect_submodules("pdal"),
@@ -141,8 +189,24 @@ def _required_compat_binaries() -> list[tuple[str, str]]:
     return collected
 
 
+def _pdal_proj_data() -> list[tuple[str, str]]:
+    """Collect the PROJ database paired with the staged native PDAL DLL."""
+
+    configured = os.environ.get("TREELINE_PDAL_PROJ_DATA_ROOT", "").strip()
+    if not configured:
+        raise SystemExit(
+            "TREELINE_PDAL_PROJ_DATA_ROOT is required: a release must bundle "
+            "the PROJ database compatible with native PDAL"
+        )
+    data_root = validate_native_proj_data(
+        Path(configured), native_runtime_root=Path(os.environ["TREELINE_PDAL_RUNTIME_ENV"])
+    )
+    return [(str(data_root), "pdal_proj_data")]
+
+
 pdal_binaries, pdal_datas, pdal_hiddenimports = _pdal_binaries()
 compat_binaries = _required_compat_binaries()
+pdal_proj_datas = _pdal_proj_data()
 pillow_binaries = collect_dynamic_libs("PIL")
 pyproj_binaries = collect_dynamic_libs("pyproj")
 pyproj_datas = collect_data_files("pyproj")
@@ -188,9 +252,10 @@ optional_gpu_dlls = {
     "nvjitlink_120_0.dll",
 }
 datas = [
-    ("viewer_poc", "viewer_poc"),
+    ("viewer_poc/giro3d", "viewer_poc/giro3d"),
     ("scripts/serve_p3a_giro3d.py", "scripts"),
     *pdal_datas,
+    *pdal_proj_datas,
     *pyproj_datas,
 ]
 
@@ -206,6 +271,33 @@ a = Analysis(
     excludes=optional_excludes,
     noarchive=False,
 )
+
+
+def _retain_staged_sqlite(entries):
+    """Make every collected sqlite3.dll use the staged PDAL ABI."""
+
+    configured = os.environ.get("TREELINE_PDAL_RUNTIME_ENV", "").strip()
+    approved = (
+        Path(configured).resolve() / "Library" / "bin" / "sqlite3.dll"
+        if configured
+        else None
+    )
+    retained = []
+    found = False
+    for entry in entries:
+        destination, source, *metadata = entry
+        if Path(destination).name.casefold() != "sqlite3.dll":
+            retained.append(entry)
+            continue
+        if approved is None:
+            raise SystemExit("TREELINE_PDAL_RUNTIME_ENV is required for sqlite3.dll collection")
+        found = True
+        retained.append((destination, str(approved), *metadata))
+    if not found:
+        raise SystemExit("release TOC does not contain the approved staged sqlite3.dll")
+    return retained
+
+
 # Some conda scientific wheels advertise optional CUDA imports while importing
 # their CPU paths.  The desktop workflow is CPU/PDAL-only; remove only these
 # known optional GPU libraries from the generated TOC, leaving the PDAL import
@@ -214,6 +306,7 @@ a.binaries = [
     entry for entry in a.binaries
     if Path(entry[0]).name.lower() not in optional_gpu_dlls
 ]
+a.binaries = _retain_staged_sqlite(a.binaries)
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="TreeLineWarning", console=False)
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="TreeLineWarning")

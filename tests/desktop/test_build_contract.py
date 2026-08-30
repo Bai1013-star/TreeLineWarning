@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pytest
 from desktop.build_contract import (
+    validate_lazrs_runtime,
+    validate_native_proj_data,
     validate_pdal_binding_abi,
     validate_pillow_runtime,
     validate_pyproj_runtime,
@@ -38,8 +40,29 @@ def test_pyproj_runtime_build_contract_is_offline_and_transformable() -> None:
     validate_pyproj_runtime()
 
 
+def test_lazrs_runtime_build_contract_detects_the_pinned_backend() -> None:
+    validate_lazrs_runtime()
+
+
+def test_native_proj_data_build_contract_matches_staged_database() -> None:
+    snapshot = REPO_ROOT / ".build-pdal-proj-data-final-20260830-02"
+    if not snapshot.is_dir():
+        pytest.skip("materialized native PROJ data snapshot is not present")
+    data_dir = validate_native_proj_data(snapshot)
+    assert (data_dir / "proj.db").is_file()
+
+
 def test_survey_release_spec_does_not_require_prediction_model_assets() -> None:
     spec = (REPO_ROOT / "desktop_build.spec").read_text(encoding="utf-8")
 
     assert "models/species_growth.json" not in spec
     assert "models/temporal_attention.npz" not in spec
+
+
+def test_release_spec_limits_viewer_assets_and_optional_pdal_plugins() -> None:
+    spec = (REPO_ROOT / "desktop_build.spec").read_text(encoding="utf-8")
+
+    assert '("viewer_poc/giro3d", "viewer_poc/giro3d")' in spec
+    assert '("viewer_poc", "viewer_poc")' not in spec
+    assert "_PDAL_OPTIONAL_PLUGIN_ALLOWLIST: frozenset[str] = frozenset()" in spec
+    assert "TREELINE_PDAL_PROJ_DATA_ROOT" in spec

@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     "Pillow>=12.3",
     "laspy==2.7.0",
+    "lazrs==0.8.2",
     "numpy>=1.26,<3",
     "openpyxl>=3.1",
     "pyproj>=3.6,<4",
