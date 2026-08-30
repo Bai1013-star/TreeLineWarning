@@ -253,6 +253,9 @@ def test_cross_span_tree_has_one_stable_owner_and_halo_is_context_only():
     assert shared.full_resolution_point_count == 3
     assert shared.core_point_count == 3
     assert len(shared.merged_span_tree_keys) == 2
+    assert shared.merged_span_tree_keys == ((4, 1), (5, 0))
+    assert set(forward.span_tree_to_global) == {(4, 0), (4, 1), (5, 0), (5, 1)}
+    assert set(forward.span_tree_to_global).isdisjoint({(0, 0), (0, 1), (1, 0), (1, 1)})
     # A selected S006 run observes the old crown as context but cannot allocate it.
     assert (
         reconcile_trees(
@@ -267,3 +270,12 @@ def test_cross_span_tree_has_one_stable_owner_and_halo_is_context_only():
         (record.span_id, record.apex_xy_local_m, record.full_resolution_point_count)
         for record in reverse.global_tree_records
     ]
+    assert np.array_equal(forward.final_original_index, reverse.final_original_index)
+    assert np.array_equal(forward.final_xyz_local_m, reverse.final_xyz_local_m)
+    assert np.array_equal(forward.final_tree_id, reverse.final_tree_id)
+    assert [record.merged_span_tree_keys for record in forward.global_tree_records] == [
+        record.merged_span_tree_keys for record in reverse.global_tree_records
+    ]
+    assert forward.span_tree_to_global == reverse.span_tree_to_global
+    assert forward.diagnostics["duplicate_final_original_index"] == 0
+    assert reverse.diagnostics["duplicate_final_original_index"] == 0

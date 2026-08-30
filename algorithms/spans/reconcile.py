@@ -132,7 +132,10 @@ class TreeReconciliationResult:
     final_xyz_local_m: np.ndarray  # float64 (N, 3) scene-local
     final_tree_id: np.ndarray  # int32 global ids (-1 unassigned)
     review_tree_ids: tuple[int, ...]
-    span_tree_to_global: dict[tuple[int, int], int]  # (span_index, tree_id) -> global
+    # Multi-span results publish authoritative ``(span_id, tree_id)`` keys;
+    # the single-span fast path intentionally retains its legacy ``(0, tree_id)``
+    # contract for persistent-ID compatibility.
+    span_tree_to_global: dict[tuple[int, int], int]
     diagnostics: dict[str, Any]
 
     @property
@@ -469,9 +472,21 @@ def reconcile_trees(
     )
     if duplicate_final_count != 0:
         raise ValueError("DUPLICATE_FINAL_ORIGINAL_INDEX")
-    remapped_span_tree: dict[tuple[int, int], int] = {
+    # Keep the local positional map for all reconciliation internals.  Only
+    # after global IDs are dense and stable do we publish keys with the
+    # authoritative Span identity carried by each outcome.
+    remapped_internal_span_tree: dict[tuple[int, int], int] = {
         key: remap[value] for key, value in span_tree_to_global.items()
     }
+    published_span_tree: dict[tuple[int, int], int] = dict(
+        sorted(
+            (
+                (int(outcomes[span_index].span.span_id), int(tree_id)),
+                global_id,
+            )
+            for (span_index, tree_id), global_id in remapped_internal_span_tree.items()
+        )
+    )
 
     records: list[GlobalTreeRecord] = []
     review_ids: list[int] = []
@@ -503,7 +518,9 @@ def reconcile_trees(
         if review:
             review_ids.append(new_id)
         external_name = f"{span.line_name}-Span{span.span_id + 1:03d}-Tree{new_id + 1:03d}"
-        merged_keys = tuple(key for key, value in remapped_span_tree.items() if value == new_id)
+        merged_keys = tuple(
+            sorted(key for key, value in published_span_tree.items() if value == new_id)
+        )
         records.append(
             GlobalTreeRecord(
                 global_tree_id=new_id,
@@ -531,7 +548,7 @@ def reconcile_trees(
         final_xyz_local_m=final_xyz_array,
         final_tree_id=final_tree_remapped,
         review_tree_ids=tuple(review_ids),
-        span_tree_to_global=remapped_span_tree,
+        span_tree_to_global=published_span_tree,
         diagnostics={
             "schema": RECONCILE_SCHEMA,
             "span_count": len(outcomes),

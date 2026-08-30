@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from algorithms.spans.project_adapter import SourceSharedPreparation, SpanScienceResult
 from core.stage_a import (
     CoordinateDeclaration,
@@ -85,6 +86,59 @@ def _preparation(_root: Path, input_data) -> SourceSharedPreparation:
         ground_preparation={"coarse_ground_reference": "ground.npy"},
         telemetry={"source_prep_count": 1, "cache_miss_count": 1, "ground_prep_count": 1},
     )
+
+
+def _lineage_outcome(
+    span_id: int,
+    tree_records: tuple[dict[str, object], ...],
+    original_index: tuple[int, ...],
+    tree_id: tuple[int, ...],
+    in_core: tuple[bool, ...],
+) -> SimpleNamespace:
+    span = SimpleNamespace(
+        line_id=0,
+        line_name="TowerLine",
+        span_id=span_id,
+        span_name=f"S{span_id + 1:03d}",
+        start_xyz_absolute_m=(0.0 if span_id == 4 else 10.0, 0.0, 0.0),
+        end_xyz_absolute_m=(10.0 if span_id == 4 else 20.0, 0.0, 0.0),
+        length_m=10.0,
+        half_width_m=9.0,
+    )
+    return SimpleNamespace(
+        span=span,
+        tree_records=tree_records,
+        raw_original_index=np.asarray(original_index, dtype=np.int64),
+        raw_xyz_local_m=np.asarray(
+            [[float(index), 0.0, 10.0] for index in original_index], dtype=np.float64
+        ),
+        raw_tree_id=np.asarray(tree_id, dtype=np.int32),
+        in_core=np.asarray(in_core, dtype=bool),
+    )
+
+
+def _mixed_nonzero_span_outcomes() -> tuple[SimpleNamespace, SimpleNamespace]:
+    left = _lineage_outcome(
+        4,
+        (
+            {"tree_id": 0, "apex_xy_local_m": [3.0, 0.0, 12.0], "apex_height_m": 12.0},
+            {"tree_id": 1, "apex_xy_local_m": [9.5, 0.0, 13.0], "apex_height_m": 13.0},
+        ),
+        (100, 101, 102, 200, 201, 202),
+        (0, 0, 0, 1, 1, 1),
+        (True, True, True, True, True, True),
+    )
+    right = _lineage_outcome(
+        5,
+        (
+            {"tree_id": 0, "apex_xy_local_m": [9.5, 0.0, 13.0], "apex_height_m": 13.0},
+            {"tree_id": 1, "apex_xy_local_m": [15.0, 0.0, 11.0], "apex_height_m": 11.0},
+        ),
+        (200, 201, 202, 300, 301, 302),
+        (0, 0, 0, 1, 1, 1),
+        (False, False, False, True, True, True),
+    )
+    return left, right
 
 
 def test_project_science_bridge_preserves_product_identity_and_policy(tmp_path: Path) -> None:
@@ -322,19 +376,118 @@ def test_reconciled_original_index_is_exclusive_and_order_independent() -> None:
     ]
 
 
+def test_batch_lineage_and_product_span_map_use_stable_nonzero_span_ids(tmp_path: Path) -> None:
+    project, scan_id, span_ids = _project(tmp_path, span_count=6)
+    scheduler = BatchAnalysisScheduler(tmp_path, project, scan_id)
+    left, right = _mixed_nonzero_span_outcomes()
+
+    def science(outcome: SimpleNamespace) -> SpanScienceResult:
+        return SpanScienceResult(
+            tree_count=2,
+            minimum_clearance_m=1.0,
+            risk_threshold_m=0.5,
+            risk_counts={},
+            tree_outcome=outcome,
+        )
+
+    forward_results = {
+        span_ids[4]: science(left),
+        span_ids[5]: science(right),
+    }
+    reverse_results = {
+        span_ids[5]: science(right),
+        span_ids[4]: science(left),
+    }
+    forward = scheduler._global_reconcile({}, forward_results)
+    reverse = scheduler._global_reconcile({}, reverse_results)
+
+    assert forward is not None
+    assert reverse is not None
+    expected_original_index = np.asarray(
+        (100, 101, 102, 200, 201, 202, 300, 301, 302), dtype=np.int64
+    )
+    expected_tree_id = np.asarray((0, 0, 0, 1, 1, 1, 2, 2, 2), dtype=np.int32)
+    np.testing.assert_array_equal(forward.final_original_index, expected_original_index)
+    np.testing.assert_array_equal(forward.final_tree_id, expected_tree_id)
+    np.testing.assert_array_equal(reverse.final_original_index, expected_original_index)
+    np.testing.assert_array_equal(reverse.final_tree_id, expected_tree_id)
+    assert np.array_equal(forward.final_original_index, reverse.final_original_index)
+    assert np.array_equal(forward.final_xyz_local_m, reverse.final_xyz_local_m)
+    assert np.array_equal(forward.final_tree_id, reverse.final_tree_id)
+    assert [
+        (
+            record.span_id,
+            record.primary_span_tree_id,
+            record.merged_span_tree_keys,
+            record.persistent_tree_id,
+            record.identity_state,
+        )
+        for record in forward.global_tree_records
+    ] == [
+        (
+            record.span_id,
+            record.primary_span_tree_id,
+            record.merged_span_tree_keys,
+            record.persistent_tree_id,
+            record.identity_state,
+        )
+        for record in reverse.global_tree_records
+    ]
+    assert [record.merged_span_tree_keys for record in forward.global_tree_records] == [
+        ((4, 0),),
+        ((4, 1), (5, 0)),
+        ((5, 1),),
+    ]
+    persistent_ids = [
+        record.persistent_tree_id for record in forward.global_tree_records
+    ]
+    assert all(persistent_ids)
+    assert len(set(persistent_ids)) == len(persistent_ids)
+    assert all(
+        record.identity_state == "BATCH_LINEAGE_DERIVED"
+        for record in forward.global_tree_records
+    )
+    assert set(forward.span_tree_to_global) == {(4, 0), (4, 1), (5, 0), (5, 1)}
+    assert set(forward.span_tree_to_global).isdisjoint({(0, 0), (0, 1), (1, 0), (1, 1)})
+
+    def batch_result(
+        reconciled: object, results: dict[str, SpanScienceResult]
+    ) -> BatchAnalysisResult:
+        return BatchAnalysisResult(
+            analysis_run_id="analysis-lineage-fixture",
+            project_id=project.project_id,
+            span_statuses={
+                span_id: BatchSpanStatus.AUTO_ANALYZED for span_id in results
+            },
+            scan_id=scan_id,
+            status="COMPLETE",
+            span_results=results,
+            telemetry=BatchTelemetry(span_count=2),
+            risk_policy_snapshot=scheduler.risk_policy_snapshot,
+            global_reconciled=reconciled,
+        )
+
+    expected_span_map = {span_ids[4]: (0, 1), span_ids[5]: (1, 2)}
+    assert scheduler._tree_ids_by_span(batch_result(forward, forward_results)) == expected_span_map
+    assert scheduler._tree_ids_by_span(batch_result(reverse, reverse_results)) == expected_span_map
+    assert forward.diagnostics["duplicate_final_original_index"] == 0
+    assert reverse.diagnostics["duplicate_final_original_index"] == 0
+
+
+@pytest.mark.parametrize("span_id", (0, 4))
 def test_single_span_global_reconciliation_reuses_canonical_result(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path, monkeypatch, span_id: int,
 ) -> None:
     from algorithms.spans.reconcile import reconcile_trees
     from core.config.fast_baseline import FastBaselineConfig
 
-    project, scan_id, _span_ids = _project(tmp_path, span_count=1)
+    project, scan_id, span_ids = _project(tmp_path, span_count=6)
     scheduler = BatchAnalysisScheduler(tmp_path, project, scan_id)
     span = SimpleNamespace(
         line_id=1,
         line_name="Line",
-        span_id=0,
-        span_name="S001",
+        span_id=span_id,
+        span_name=f"S{span_id + 1:03d}",
         start_xyz_absolute_m=(0.0, 0.0, 0.0),
         end_xyz_absolute_m=(10.0, 0.0, 0.0),
         length_m=10.0,
@@ -374,11 +527,92 @@ def test_single_span_global_reconciliation_reuses_canonical_result(
             AssertionError("single-Span membership must not be reconciled twice")
         ),
     )
-    reused = scheduler._global_reconcile({}, {"span-0": science})
+    reused = scheduler._global_reconcile({}, {span_ids[span_id]: science})
 
     assert reused is not None
     assert np.array_equal(reused.final_original_index, canonical.final_original_index)
     assert reused.diagnostics["duplicate_final_original_index"] == 0
+    assert reused.global_tree_records[0].span_id == span_id
+    assert reused.global_tree_records[0].primary_span_tree_id == 0
+    assert reused.global_tree_records[0].merged_span_tree_keys == ((0, 0),)
+    assert reused.global_tree_records[0].identity_state == "BATCH_LINEAGE_DERIVED"
+    assert reused.global_tree_records[0].persistent_tree_id is not None
+
+
+@pytest.mark.parametrize("span_id", (0, 4))
+def test_single_span_persistent_id_matches_fresh_and_cached_legacy_result(
+    tmp_path: Path, span_id: int,
+) -> None:
+    from algorithms.spans.reconcile import reconcile_trees
+    from core.config.fast_baseline import FastBaselineConfig, canonical_digest
+
+    project, scan_id, span_ids = _project(tmp_path, span_count=6)
+    scheduler = BatchAnalysisScheduler(tmp_path, project, scan_id)
+    span = SimpleNamespace(
+        line_id=1,
+        line_name="Line",
+        span_id=span_id,
+        span_name=f"S{span_id + 1:03d}",
+        start_xyz_absolute_m=(0.0, 0.0, 0.0),
+        end_xyz_absolute_m=(10.0, 0.0, 0.0),
+        length_m=10.0,
+        half_width_m=9.0,
+    )
+    outcome = SimpleNamespace(
+        span=span,
+        raw_original_index=np.asarray((10, 11, 12), dtype=np.int64),
+        raw_xyz_local_m=np.asarray(
+            ((1.0, 0.0, 3.0), (2.0, 0.0, 4.0), (3.0, 0.0, 5.0))
+        ),
+        raw_tree_id=np.zeros(3, dtype=np.int32),
+        in_core=np.ones(3, dtype=bool),
+        tree_records=(
+            {
+                "tree_id": 0,
+                "apex_xy_local_m": [2.0, 0.0, 4.0],
+                "apex_height_m": 4.0,
+            },
+        ),
+    )
+    canonical = reconcile_trees(
+        [outcome], FastBaselineConfig(), origin_xyz=(0.0, 0.0, 0.0)
+    )
+    science = SpanScienceResult(
+        tree_count=1,
+        minimum_clearance_m=1.0,
+        risk_threshold_m=0.5,
+        risk_counts={},
+        tree_outcome=outcome,
+        reconciled=canonical,
+    )
+
+    cached = scheduler._global_reconcile({}, {span_ids[span_id]: science})
+    fresh = scheduler._global_reconcile(
+        {}, {span_ids[span_id]: replace(science, reconciled=None)}
+    )
+
+    assert cached is not None
+    assert fresh is not None
+    cached_record = cached.global_tree_records[0]
+    fresh_record = fresh.global_tree_records[0]
+    assert cached_record.span_id == fresh_record.span_id == span_id
+    assert cached_record.primary_span_tree_id == fresh_record.primary_span_tree_id == 0
+    assert cached_record.merged_span_tree_keys == ((0, 0),)
+    assert fresh_record.merged_span_tree_keys == ((0, 0),)
+    assert cached_record.persistent_tree_id == fresh_record.persistent_tree_id
+    assert cached_record.identity_state == fresh_record.identity_state == (
+        "BATCH_LINEAGE_DERIVED"
+    )
+    expected_material = {
+        "source": canonical_digest(scheduler.bridge.source_identity),
+        "line_id": 1,
+        "primary_span_id": span_id,
+        "primary_span_tree_id": 0,
+        "merged_span_tree_keys": [[0, 0]],
+    }
+    assert cached_record.persistent_tree_id == (
+        "tree-" + canonical_digest(expected_material)[:24]
+    )
 
 
 def test_batch_tree_editor_isolates_span_delete_and_restores_with_undo(tmp_path: Path) -> None:
