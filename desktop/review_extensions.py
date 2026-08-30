@@ -112,6 +112,7 @@ def install_review_extensions() -> None:
         *,
         display_budget: int | None = None,
         span_id: str | None = None,
+        persist_display_evidence: bool = True,
     ) -> dict[str, Any]:
         display = original_editor_data(
             self,
@@ -140,7 +141,8 @@ def install_review_extensions() -> None:
                 "authority": "STALE_AFTER_TREE_EDIT",
             }
         else:
-            _persist_optional_danger_sidecar(self.project_root, result)
+            if persist_display_evidence:
+                _persist_optional_danger_sidecar(self.project_root, result)
             display["danger_points"] = build_danger_point_display(
                 self.project_root,
                 result,
@@ -187,8 +189,10 @@ def install_review_extensions() -> None:
         return preview
 
     @wraps(original_final_projection)
-    def final_projection_with_metrics(self: Any) -> dict[str, Any]:
-        projection = original_final_projection(self)
+    def final_projection_with_metrics(
+        self: Any, *args: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        projection = original_final_projection(self, *args, **kwargs)
         editor = self._ensure_editor()
         if editor is None:
             return projection

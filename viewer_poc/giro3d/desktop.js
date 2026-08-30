@@ -152,8 +152,8 @@
     const completed = spans.filter(span => ['AUTO_ANALYZED', 'REVIEW_REQUIRED', 'USER_REVIEWED', 'FINALIZED'].includes(span.status));
     $('batchBox').className = `notice ${failed.length ? 'bad' : ''}`;
     $('batchBox').innerHTML = `${batch.acceptance_mode === 'FIXTURE' ? '<b>测试模式</b> · ' : ''}任务状态：${esc(statusLabel(batch.status))}<br>已完成档距：${completed.length}/${spans.length}${failed.length ? `<br>失败：${failed.map(span => esc(spanName(span))).join('、')}` : ''}`;
-    const treeCount = completed.reduce((sum, span) => sum + Number(span.summary?.tree_count || 0), 0);
-    $('resultBox').innerHTML = completed.length ? `<b>已有 ${completed.length} 个档距结果</b><br>单木：${treeCount} · 预警净空阈值：${esc(batch.risk_policy?.warning_clearance_threshold_m)} m<br>导线或净空证据不足时保持“需复核”。` : '分析完成后显示结果。';
+    const treeCount = Number.isInteger(batch.final_tree_count) ? batch.final_tree_count : '—';
+    $('resultBox').innerHTML = completed.length ? `<b>已有 ${completed.length} 个档距结果</b><br>全局归并单木：${esc(treeCount)} · 预警净空阈值：${esc(batch.risk_policy?.warning_clearance_threshold_m)} m<br>计数来自最终全局归并发布；导线或净空证据不足时保持“需复核”。` : '分析完成后显示结果。';
     $('lineOverview').innerHTML = spans.map(span => {
       const cls = ['FAILED'].includes(span.status) ? 'failed' : (['REVIEW_REQUIRED'].includes(span.status) ? 'review' : (['AUTO_ANALYZED', 'USER_REVIEWED', 'FINALIZED'].includes(span.status) ? 'done' : ''));
       return `<button class="${cls} ${span.span_id === state.activeSpanId ? 'active' : ''}" data-line-span="${esc(span.span_id)}"><b>${esc(spanName(span))}</b><br>${esc(statusLabel(span.status))}</button>`;
@@ -230,7 +230,7 @@
       show('resultSection'); show('objectSection'); show('analysisOverview');
       $('pipelineStages').innerHTML = pipelineMarkup('done');
       const completed = (state.batch.spans || []).filter(span => span.status === 'FINALIZED').length;
-      $('stageHost').innerHTML = stageCard('步骤 6 / 6', '结果已完成', '单木复核和档距结果已定稿。现在可以查看结果或导出预测输入。', '<button data-action="open-viewer">打开复核视图</button><button class="primary" data-action="export-prediction">导出预测输入</button>', `<div class="result-summary"><div class="summary-tile"><span>已定稿档距</span><b>${completed}</b></div><div class="summary-tile"><span>风险阈值</span><b>${esc(state.batch.risk_policy?.warning_clearance_threshold_m)} m</b></div><div class="summary-tile"><span>结果状态</span><b class="status-good">已完成</b></div></div>`);
+      $('stageHost').innerHTML = stageCard('步骤 6 / 6', '结果已完成', '单木复核和档距结果已定稿。现在可以查看当前最终报告或导出预测输入。', '<button data-action="open-viewer">打开复核视图</button><button data-action="open-current-report">打开当前最终报告</button><button class="primary" data-action="export-prediction">导出预测输入</button>', `<div class="result-summary"><div class="summary-tile"><span>已定稿档距</span><b>${completed}</b></div><div class="summary-tile"><span>风险阈值</span><b>${esc(state.batch.risk_policy?.warning_clearance_threshold_m)} m</b></div><div class="summary-tile"><span>结果状态</span><b class="status-good">已完成</b></div></div>`);
     }
   }
 
@@ -539,6 +539,7 @@
     else if (action === 'focus-towers') $('lineName').focus();
     else if (action === 'start-analysis') startBatch('REAL');
     else if (action === 'open-viewer') loadViewer();
+    else if (action === 'open-current-report') window.location.href = '/step3';
     else if (action === 'export-prediction') exportPrediction();
   });
   window.addEventListener('error', event => {

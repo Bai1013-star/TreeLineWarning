@@ -149,11 +149,13 @@ def install_tree_display_numbering_extensions() -> None:
         *,
         display_budget: int | None = None,
         span_id: str | None = None,
+        persist_display_evidence: bool = True,
     ) -> dict[str, Any]:
         display = original_editor_data(
             self,
             display_budget=display_budget,
             span_id=span_id,
+            persist_display_evidence=persist_display_evidence,
         )
         editor = self._ensure_editor()
         if editor is None:
@@ -201,8 +203,10 @@ def install_tree_display_numbering_extensions() -> None:
         return state
 
     @wraps(original_final_projection)
-    def final_projection_with_display_ids(self: Any) -> dict[str, Any]:
-        projection = original_final_projection(self)
+    def final_projection_with_display_ids(
+        self: Any, *args: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        projection = original_final_projection(self, *args, **kwargs)
         trees = projection.get("trees")
         if not isinstance(trees, list) or not trees:
             return projection

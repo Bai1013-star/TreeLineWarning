@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from algorithms.folder_pipeline.html import step2_html, step3_html
+from algorithms.folder_pipeline.html import step2_html
 
 from desktop.pdal_runtime import dependency_health
 from desktop.project_management import create_empty_project, import_pointcloud
@@ -200,11 +200,20 @@ class _DesktopHandler(BaseHTTPRequestHandler):
         if path == "/tree-review-app.js":
             self._static("viewer_poc/giro3d/tree_review_app.js")
             return
+        if path == "/current-report.html":
+            self._static("viewer_poc/giro3d/current_report.html")
+            return
+        if path == "/current_report.css":
+            self._static("viewer_poc/giro3d/current_report.css")
+            return
+        if path == "/current_report.js":
+            self._static("viewer_poc/giro3d/current_report.js")
+            return
         if path == "/step2":
             self._send_bytes(step2_html().encode("utf-8"), content_type="text/html; charset=utf-8")
             return
         if path == "/step3":
-            self._send_bytes(step3_html().encode("utf-8"), content_type="text/html; charset=utf-8")
+            self._static("viewer_poc/giro3d/current_report.html")
             return
         if path == "/plotly.js":
             try:
@@ -250,6 +259,9 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/desktop/batch":
             self._send_json(self.workflow.batch_projection())
+            return
+        if path in {"/api/current-report", "/api/desktop/current-report"}:
+            self._send_json({"ok": True, **self.workflow.current_report()})
             return
         if path == "/api/desktop/dependency-health":
             self._send_json({"ok": True, "dependency": dependency_health()})

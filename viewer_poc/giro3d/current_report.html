@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>TreeLineWarning · 当前最终结果</title>
+  <link rel="stylesheet" href="/current_report.css">
+</head>
+<body>
+  <main class="report-shell">
+    <header class="report-header">
+      <div>
+        <p class="eyebrow">TreeLineWarning Survey · CURRENT</p>
+        <h1>当前最终结果</h1>
+        <p class="subtitle">只读报告 · 数据来自已定稿的全局归并与当前复核结果</p>
+      </div>
+      <div class="report-actions">
+        <button id="printReport" type="button">打印</button>
+        <a class="button primary" href="/download_prediction">下载 Prediction_Input.xlsx</a>
+        <a class="button" href="/">返回项目</a>
+      </div>
+    </header>
+
+    <section id="reportStatus" class="notice" aria-live="polite">正在读取当前最终结果…</section>
+    <section id="reportBody" class="hidden">
+      <div id="kpiGrid" class="kpi-grid"></div>
+      <section class="panel geometry-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">FINAL DISPLAY SAMPLE</p>
+            <h2>当前树木与当前导线拟合</h2>
+          </div>
+          <span id="geometrySource" class="source-pill"></span>
+        </div>
+        <div id="currentPlot" class="plot" aria-label="当前最终树木点与当前导线拟合三维图"></div>
+        <p id="geometryNote" class="hint"></p>
+      </section>
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">FINAL ROWS</p>
+            <h2>当前单木清单</h2>
+          </div>
+          <span id="rowCount" class="source-pill"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>树编号 / 持久 ID</th><th>高度 (m)</th><th>冠幅 (m)</th><th>冠幅面积 (m²)</th>
+                <th>DBH (cm)</th><th>最小净空 (m)</th><th>危险点</th><th>当前风险</th><th>状态</th><th>人工编辑</th>
+              </tr>
+            </thead>
+            <tbody id="treeRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </main>
+  <script src="/plotly.js"></script>
+  <script src="/current_report.js"></script>
+</body>
+</html>

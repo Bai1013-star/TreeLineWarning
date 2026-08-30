@@ -273,6 +273,7 @@ class DesktopWorkflow:
             "last_batch_id": manifest.get("last_batch_id"),
             "last_batch_status": manifest.get("last_batch_status"),
             "last_error": manifest.get("last_error"),
+            "finalize_state": dict(manifest.get("finalize_state") or {}),
             "updated_at": manifest.get("updated_at", _now()),
         }
         self._log("project_open", project_root=str(self._root))
@@ -501,12 +502,17 @@ class DesktopWorkflow:
         project = self.project_projection()
         capability = self.capability_projection()
         batch = self.batch_projection()
-        result = self._current_result()
-        tree_review_ready = bool(result and result.global_reconciled is not None)
-        statuses = [str(item.get("status")) for item in batch.get("spans", [])]
-        finalized = bool(statuses) and all(
-            status == BatchSpanStatus.FINALIZED.value for status in statuses
-        )
+        result = self._result
+        tree_review_ready = bool(
+            result and result.global_reconciled is not None
+        ) or batch.get("global_reconciliation_tree_count") is not None
+        # Keep the home-screen state aligned with the current selected batch
+        # publication.  The project can contain unselected WAITING spans, and
+        # process-local finalize flags do not survive a restart; the modern
+        # persisted gate covers both cases without rebuilding final arrays.
+        from desktop.current_report import current_finalized_gate
+
+        finalized = current_finalized_gate(self, hydrate_editor=False)["status"] == "PASS"
         ui_state = derive_workspace_state(
             project,
             capability,
@@ -874,6 +880,7 @@ class DesktopWorkflow:
                         "last_batch_status": result.status,
                         "last_error": None,
                         "selected_span_ids": list(selected),
+                        "finalize_state": {"run_id": run_id, "status": "IDLE"},
                     }
                 )
                 self._save_workflow()
@@ -925,9 +932,14 @@ class DesktopWorkflow:
                     "last_error": None,
                     "acceptance_mode": mode,
                     "source_cache_hint": source_cache_hint,
+                    "finalize_state": {"run_id": run_id, "status": "IDLE"},
                 }
             )
             self._batch_error = None
+            self._finalize_stage = "IDLE"
+            self._finalize_message = ""
+            self._finalize_error = None
+            self._finalize_detail = None
             self._save_workflow()
             self._thread = threading.Thread(
                 target=self._run_scheduler, args=(selected, mode, run_id), daemon=True
@@ -940,7 +952,7 @@ class DesktopWorkflow:
         if not manifest:
             raise ValueError("NO_BATCH_TO_RETRY")
         results = manifest.get("span_results") or {}
-        selected = []
+        recoverable_failed = []
         nonrecoverable = []
         for span_id, status in (manifest.get("span_statuses") or {}).items():
             if status != BatchSpanStatus.FAILED.value:
@@ -949,17 +961,37 @@ class DesktopWorkflow:
             if failure is not None and failure.get("recoverable") is False:
                 nonrecoverable.append(span_id)
             else:
-                selected.append(span_id)
-        if not selected:
+                recoverable_failed.append(span_id)
+        if not recoverable_failed:
             if nonrecoverable:
                 raise ValueError("当前失败由杆塔/档距证据不足导致，请返回杆塔选取重新确认。")
             raise ValueError("NO_FAILED_SPAN_TO_RETRY")
+        project = self._stage_project()
+        topology_order = [span.span_id for span in project.spans]
+        known = set(topology_order)
+        original_selected = set((manifest.get("span_statuses") or {}).keys())
+        unknown = sorted(original_selected - known)
+        if unknown:
+            raise ValueError("BATCH_RETRY_UNKNOWN_SPAN:" + ",".join(unknown))
+        selected = tuple(span_id for span_id in topology_order if span_id in original_selected)
+        if not selected:
+            raise ValueError("BATCH_RETRY_REQUIRES_ORIGINAL_SELECTION")
         mode = str(self._workflow.get("acceptance_mode") or "REAL").upper()
         with self._lock:
             if self._thread and self._thread.is_alive():
                 raise ValueError("BATCH_ALREADY_RUNNING")
             run_id = str(manifest["analysis_run_id"])
-            self._workflow["last_batch_status"] = "RUNNING"
+            self._finalize_stage = "IDLE"
+            self._finalize_message = ""
+            self._finalize_error = None
+            self._finalize_detail = None
+            self._workflow.update(
+                {
+                    "selected_span_ids": list(selected),
+                    "last_batch_status": "RUNNING",
+                    "finalize_state": {"run_id": run_id, "status": "IDLE"},
+                }
+            )
             self._save_workflow()
             self._thread = threading.Thread(
                 target=self._run_scheduler, args=(tuple(selected), mode, run_id), daemon=True
@@ -971,6 +1003,10 @@ class DesktopWorkflow:
         project = self._stage_project()
         manifest = self._latest_batch_manifest()
         statuses = dict((manifest or {}).get("span_statuses") or {})
+        global_reconciliation = (manifest or {}).get("global_reconciliation") or {}
+        global_tree_count = global_reconciliation.get("tree_count")
+        if type(global_tree_count) is not int or global_tree_count < 0:
+            global_tree_count = None
         selected = set(self._workflow.get("selected_span_ids") or [])
         spans = []
         source_preparation_failed = False
@@ -1021,6 +1057,12 @@ class DesktopWorkflow:
                 else "首次处理大型点云，正在建立可复用缓存。"
             ),
             "spans": spans,
+            # The per-Span summaries are pre-reconciliation diagnostics.  The
+            # dashboard must use the persisted global ownership count instead
+            # of adding those summaries together.
+            "global_reconciliation_tree_count": global_tree_count,
+            "final_tree_count": global_tree_count,
+            "tree_count_source": "PERSISTED_GLOBAL_RECONCILIATION",
             "error": self._batch_error or self._workflow.get("last_error"),
             "risk_policy": self._risk_policy().to_dict(),
             "stage_timings_seconds": dict(
@@ -1133,7 +1175,20 @@ class DesktopWorkflow:
         return self._editor_snapshot_cache[1]
 
     def _assert_editor_mutable(self) -> None:
-        if self._finalize_thread is not None and self._finalize_thread.is_alive():
+        batch_thread = getattr(self, "_thread", None)
+        workflow_state = getattr(self, "_workflow", {})
+        batch_status = (
+            workflow_state.get("last_batch_status")
+            if isinstance(workflow_state, Mapping)
+            else None
+        )
+        if batch_thread is not None and batch_thread.is_alive() and batch_status in {
+            None,
+            BatchSpanStatus.RUNNING.value,
+        }:
+            raise ValueError("批量分析正在运行，请完成后再修改单木。")
+        finalize_thread = getattr(self, "_finalize_thread", None)
+        if finalize_thread is not None and finalize_thread.is_alive():
             raise ValueError("正在生成复核结果，请完成后再修改单木。")
 
     def editor_state(self) -> dict[str, Any]:
@@ -1177,8 +1232,16 @@ class DesktopWorkflow:
         }
 
     def editor_data(
-        self, *, display_budget: int | None = None, span_id: str | None = None
+        self,
+        *,
+        display_budget: int | None = None,
+        span_id: str | None = None,
+        persist_display_evidence: bool = True,
     ) -> dict[str, Any]:
+        # ``persist_display_evidence`` is consumed by the review adapter.  It
+        # remains part of the base signature so wrapped and unwrapped desktop
+        # workflows share the same explicit read-only projection contract.
+        del persist_display_evidence
         editor = self._ensure_editor()
         if editor is None:
             return _empty_display()
@@ -1376,6 +1439,32 @@ class DesktopWorkflow:
             self._finalize_stage = stage
             self._finalize_message = message
 
+    def _set_persisted_finalize_state(
+        self,
+        status: str,
+        run_id: str | None,
+        *,
+        error: str | None = None,
+    ) -> None:
+        """Persist finalize lifecycle so a restart cannot present stale finals."""
+
+        state: dict[str, Any] = {"status": str(status).upper(), "run_id": run_id}
+        if error:
+            state["error"] = str(error)
+        with self._lock:
+            self._workflow["finalize_state"] = state
+            self._save_workflow()
+
+    def _finalize_run_id(self, editor: Any | None = None) -> str | None:
+        result = self._result
+        if result is None and editor is not None:
+            result = getattr(editor, "result", None)
+        if result is None:
+            result = self._current_result()
+        value = getattr(result, "analysis_run_id", None) if result is not None else None
+        value = value or self._workflow.get("last_batch_id")
+        return str(value) if value else None
+
     def _require_finalize_disk_space(self, editor: Any) -> None:
         """Fail early only when current temp/final artifacts plainly cannot fit."""
 
@@ -1396,17 +1485,26 @@ class DesktopWorkflow:
         editor = self._ensure_editor()
         if editor is None:
             raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
-        self._require_finalize_disk_space(editor)
-        editor.mark_reviewed()
-        self._result = editor.finalize()
-        self._final_tree_records = {
-            int(record.global_tree_id): record.to_dict()
-            for record in self._result.global_reconciled.global_tree_records
-        }
-        self._workflow["last_batch_status"] = self._result.status
-        self._save_workflow()
-        self._log("tree_editor_finalized", analysis_run_id=self._result.analysis_run_id)
-        return self.batch_projection()
+        run_id = self._finalize_run_id(editor)
+        self._set_persisted_finalize_state("RUNNING", run_id)
+        try:
+            self._require_finalize_disk_space(editor)
+            editor.mark_reviewed()
+            self._result = editor.finalize()
+            self._final_tree_records = {
+                int(record.global_tree_id): record.to_dict()
+                for record in self._result.global_reconciled.global_tree_records
+            }
+            self._workflow["last_batch_status"] = self._result.status
+            self._save_workflow()
+            self._set_persisted_finalize_state("DONE", run_id)
+            self._log("tree_editor_finalized", analysis_run_id=self._result.analysis_run_id)
+            return self.batch_projection()
+        except Exception as exc:
+            self._set_persisted_finalize_state(
+                "FAILED", run_id, error=f"{type(exc).__name__}: {exc}"
+            )
+            raise
 
     def _run_finalize(self) -> None:
         try:
@@ -1455,6 +1553,7 @@ class DesktopWorkflow:
                 analysis_run_id=self._result.analysis_run_id,
                 prediction_export=str(path),
             )
+            self._set_persisted_finalize_state("DONE", self._finalize_run_id(editor))
             self._set_finalize_stage("DONE", "完成")
         except Exception as exc:
             detail = f"{type(exc).__name__}: {exc}"
@@ -1469,12 +1568,14 @@ class DesktopWorkflow:
                 self._finalize_message = message
                 self._finalize_error = message
                 self._finalize_detail = detail
+            self._set_persisted_finalize_state("FAILED", self._finalize_run_id(), error=detail)
             self._log("tree_editor_finalize_failure", error=detail)
         finally:
             with self._lock:
                 self._finalize_thread = None
 
     def start_finalize(self) -> dict[str, Any]:
+        self._assert_editor_mutable()
         with self._lock:
             if self._finalize_thread is not None and self._finalize_thread.is_alive():
                 raise ValueError("复核结果正在生成，请稍候。")
@@ -1482,6 +1583,7 @@ class DesktopWorkflow:
             self._finalize_detail = None
             self._finalize_stage = "APPLYING_EDITS"
             self._finalize_message = "正在应用人工修改"
+            self._set_persisted_finalize_state("RUNNING", self._finalize_run_id())
             self._finalize_thread = threading.Thread(target=self._run_finalize, daemon=True)
             self._finalize_thread.start()
         return self.editor_state()
@@ -1644,7 +1746,14 @@ class DesktopWorkflow:
         self._log("prediction_export", path=str(path))
         return path
 
-    def final_projection(self) -> dict[str, Any]:
+    def current_report(self) -> dict[str, Any]:
+        """Return the read-only modern current-result projection."""
+
+        from desktop.current_report import build_current_report
+
+        return build_current_report(self)
+
+    def final_projection(self, *, persist_display_evidence: bool = True) -> dict[str, Any]:
         editor = self._ensure_editor()
         if editor is None:
             return {"trees": [], "display": _empty_display(), "metadata": {}}
@@ -1722,7 +1831,11 @@ class DesktopWorkflow:
             )
         return {
             "trees": rows,
-            "display": self.editor_data(),
+            "display": (
+                self.editor_data(persist_display_evidence=False)
+                if not persist_display_evidence
+                else self.editor_data()
+            ),
             "metadata": {
                 "tree_backend": "CROWN_STEM_HYBRID",
                 "wire_exclusion_policy": "EXACT_ORIGINAL_INDEX",
@@ -1747,6 +1860,7 @@ def ensure_desktop_manifest(root: Path, project_name: str | None = None) -> None
             "last_batch_id": None,
             "last_batch_status": None,
             "last_error": None,
+            "finalize_state": {},
             "updated_at": _now(),
         },
     )
