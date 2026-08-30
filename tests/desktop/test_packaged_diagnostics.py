@@ -447,6 +447,33 @@ def test_dependency_health_cli_writes_new_path_and_refuses_reuse(
     assert app.main(["--dependency-health", "--diagnostic-output", str(output)]) == 2
 
 
+def test_dependency_health_cli_failure_writes_nonzero_diagnostic_without_dialog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app, "resource_root", lambda: tmp_path)
+
+    def fail_report(_root: Path) -> dict:
+        raise RuntimeError("dependency probe failed")
+
+    monkeypatch.setattr(
+        app,
+        "dependency_report",
+        fail_report,
+    )
+    monkeypatch.setattr(
+        app,
+        "_show_gui_error",
+        lambda _message: pytest.fail("dependency-health CLI must not open a GUI error dialog"),
+    )
+    output = tmp_path / "dependency-failure.json"
+
+    assert app.main(["--dependency-health", "--diagnostic-output", str(output)]) == 5
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["status"] == "FAIL"
+    assert payload["mode"] == "dependency-health"
+    assert payload["error"] == "dependency probe failed"
+
+
 def test_launch_reports_missing_prerequisite_to_file_before_importing_webview(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -459,7 +459,14 @@ def prediction_smoke(project_root: Path | None) -> int:
 def dependency_health_smoke(diagnostic_output: Path | None = None) -> int:
     """Print or persist the native/frozen dependency report for release acceptance."""
 
-    report = dependency_report(resource_root())
+    try:
+        report = dependency_report(resource_root())
+    except Exception as exc:
+        return _diagnostic_failure(
+            diagnostic_output,
+            mode="dependency-health",
+            error=exc,
+        )
     output_status = _write_diagnostic(diagnostic_output, report)
     if output_status != 0:
         return output_status
