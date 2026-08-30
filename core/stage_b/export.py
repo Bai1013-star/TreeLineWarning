@@ -11,7 +11,7 @@ from algorithms.manual_span.metrics import CROWN_WIDTH_STATISTIC, TREE_HEIGHT_ST
 
 from core.stage_b.batch import BatchAnalysisResult, BatchSpanStatus
 from core.stage_b.contact import contact_evidence_from_clearance
-from core.stage_b.tree_display_id import assign_tree_display_ids
+from core.stage_b.tree_display_id import assign_tree_display_ids, ordered_product_spans
 from core.stage_b.tree_metrics import compute_stage_b_tree_metrics
 
 
@@ -32,11 +32,83 @@ def _project_for_output(output_path: Path) -> Any | None:
 def _automatic_display_identity(
     output_path: Path,
     reconciled: Any,
+    *,
+    project_id: str | None = None,
 ) -> dict[int, dict[str, Any]]:
     project = _project_for_output(output_path)
-    if project is None:
+    if project is None or (
+        project_id is not None and project.project_id != project_id
+    ):
         return {}
     return assign_tree_display_ids(project, reconciled.global_tree_records)
+
+
+def _topology_identity(
+    output_path: Path,
+    reconciled: Any,
+    *,
+    project_id: str | None = None,
+) -> dict[int, dict[str, str]]:
+    """Resolve each record's primary Span to persisted Tower identities.
+
+    Missing project metadata, malformed legacy records, or an out-of-range
+    internal Span ID produce no automatic identity.  This preserves the
+    historical fail-closed export behavior for old projects while allowing
+    current projects to recover the exact endpoint pair after restart.
+    """
+
+    project = _project_for_output(output_path)
+    if project is None or (
+        project_id is not None and project.project_id != project_id
+    ):
+        return {}
+    ordered_spans = ordered_product_spans(project)
+    result: dict[int, dict[str, str]] = {}
+    for record in getattr(reconciled, "global_tree_records", ()):
+        try:
+            tree_id = int(record.global_tree_id)
+            span_index = int(record.span_id)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if not 0 <= span_index < len(ordered_spans):
+            continue
+        span = ordered_spans[span_index]
+        result[tree_id] = {
+            "span_id": span.span_id,
+            "start_tower_id": span.start_tower_id,
+            "end_tower_id": span.end_tower_id,
+        }
+    return result
+
+
+def _merge_identity(
+    automatic: Mapping[str, Any],
+    override: Mapping[str, Any],
+    topology: Mapping[str, Any],
+    *,
+    display_span_id: Any = None,
+) -> dict[str, Any]:
+    """Merge presentation/caller metadata while enforcing persisted topology."""
+
+    extra = dict(automatic)
+    extra.update(dict(override))
+    authoritative_span_id = topology.get("span_id")
+    supplied_span_id = override.get("span_id")
+    if (
+        authoritative_span_id is not None
+        and supplied_span_id is not None
+        and supplied_span_id not in {authoritative_span_id, display_span_id}
+    ):
+        raise ValueError("EXPORT_IDENTITY_CONFLICTS_WITH_PROJECT_TOPOLOGY")
+    for key in ("start_tower_id", "end_tower_id"):
+        authoritative = topology.get(key)
+        if authoritative is None:
+            continue
+        supplied = override.get(key)
+        if supplied is not None and supplied != authoritative:
+            raise ValueError("EXPORT_IDENTITY_CONFLICTS_WITH_PROJECT_TOPOLOGY")
+        extra[key] = authoritative
+    return extra
 
 
 def export_batch_prediction(
@@ -79,13 +151,27 @@ def export_batch_prediction(
         record.global_tree_id: record
         for record in (result.final_clearance.records if result.final_clearance else ())
     }
-    automatic_identity = _automatic_display_identity(output_path, reconciled)
+    automatic_identity = _automatic_display_identity(
+        output_path,
+        reconciled,
+        project_id=result.project_id,
+    )
+    topology_identity = _topology_identity(
+        output_path,
+        reconciled,
+        project_id=result.project_id,
+    )
     if progress is not None:
         progress("RECALCULATING_RISK")
     rows: list[dict[str, Any]] = []
     for record in reconciled.global_tree_records:
-        extra = dict(automatic_identity.get(record.global_tree_id, {}))
-        extra.update(dict((identity_by_tree or {}).get(record.global_tree_id, {})))
+        automatic_for_record = dict(automatic_identity.get(record.global_tree_id, {}))
+        extra = _merge_identity(
+            automatic_for_record,
+            (identity_by_tree or {}).get(record.global_tree_id, {}),
+            topology_identity.get(record.global_tree_id, {}),
+            display_span_id=record.span_name,
+        )
         metric = metrics_by_tree.get(int(record.global_tree_id))
         identity_state = str(getattr(record, "identity_state", ""))
         if identity_state.startswith("HUMAN_"):

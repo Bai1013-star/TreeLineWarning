@@ -19,6 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
+from zipfile import BadZipFile
 
 import numpy as np
 from algorithms.folder_pipeline.tree_editor import load_edits_payload
@@ -1485,36 +1486,161 @@ class DesktopWorkflow:
             self._finalize_thread.start()
         return self.editor_state()
 
+    def _prediction_export_cache_matches_final(self, path: Path, result: Any) -> bool:
+        """Return whether a cached workbook matches the finalized publication."""
+
+        if not self._final_tree_records:
+            return False
+        from core.stage_b.export import _topology_identity
+
+        final_records = tuple(
+            SimpleNamespace(**raw) for raw in self._final_tree_records.values()
+        )
+        reconciled = SimpleNamespace(global_tree_records=final_records)
+        topology = _topology_identity(
+            path,
+            reconciled,
+            project_id=getattr(result, "project_id", None),
+        )
+        if not topology:
+            # Legacy projects/results without a resolvable topology retain the
+            # historical cache behavior; export itself remains fail-closed.
+            topology = {}
+        workbook = None
+        try:
+            from openpyxl import load_workbook
+
+            workbook = load_workbook(path, read_only=True, data_only=True)
+            metadata_sheet = workbook["Run_Metadata"]
+            metadata_rows = metadata_sheet.iter_rows(values_only=True)
+            metadata_headers = tuple(next(metadata_rows))
+            key_index = metadata_headers.index("Key")
+            value_index = metadata_headers.index("Value")
+            metadata = {
+                str(row[key_index]): row[value_index]
+                for row in metadata_rows
+                if len(row) > max(key_index, value_index)
+                and row[key_index] is not None
+            }
+            if any(
+                metadata.get(key) != expected
+                for key, expected in {
+                    "project_id": result.project_id,
+                    "science_run_id": result.analysis_run_id,
+                    "science_scope": "FINAL_GLOBAL_RECONCILED_POST_EDITOR",
+                }.items()
+            ):
+                return False
+
+            tree_sheet = workbook["Trees"]
+            tree_rows = tree_sheet.iter_rows(values_only=True)
+            headers = tuple(next(tree_rows))
+            indices = {
+                key: headers.index(key)
+                for key in (
+                    "persistent_tree_id",
+                    "project_id",
+                    "science_run_id",
+                    "analysis_tree_id",
+                    "start_tower_id",
+                    "end_tower_id",
+                )
+            }
+            data_rows = [
+                row for row in tree_rows if any(value is not None for value in row)
+            ]
+            expected_records = {
+                str(raw.get("persistent_tree_id")): raw
+                for raw in self._final_tree_records.values()
+                if raw.get("persistent_tree_id") is not None
+            }
+            if len(expected_records) != len(self._final_tree_records):
+                # A legacy result without durable IDs cannot support exact
+                # cache validation; force the normal exporter instead.
+                return False
+            if len(data_rows) != len(expected_records):
+                return False
+            actual_records: dict[str, tuple[Any, ...]] = {}
+            for row in data_rows:
+                if len(row) <= max(indices.values()):
+                    return False
+                persistent_id = row[indices["persistent_tree_id"]]
+                if persistent_id is None or str(persistent_id) in actual_records:
+                    return False
+                actual_records[str(persistent_id)] = row
+            if set(actual_records) != set(expected_records):
+                return False
+            for persistent_id, raw in expected_records.items():
+                row = actual_records[persistent_id]
+                if row[indices["project_id"]] != result.project_id:
+                    return False
+                if row[indices["science_run_id"]] != result.analysis_run_id:
+                    return False
+                expected_tree_id = f"analysis-tree-{int(raw['global_tree_id']):06d}"
+                if row[indices["analysis_tree_id"]] != expected_tree_id:
+                    return False
+                if topology:
+                    identity = topology.get(int(raw["global_tree_id"]))
+                    if identity is None or any(
+                        row[indices[key]] != identity[key]
+                        for key in ("start_tower_id", "end_tower_id")
+                    ):
+                        return False
+            return True
+        except (
+            BadZipFile,
+            KeyError,
+            StopIteration,
+            TypeError,
+            ValueError,
+            OSError,
+            ImportError,
+        ):
+            return False
+        finally:
+            if workbook is not None:
+                workbook.close()
+
     def export_prediction(self) -> Path:
+        self._assert_editor_mutable()
         editor = self._ensure_editor()
         if editor is None:
             raise ValueError("PREDICTION_EXPORT_REQUIRES_FINALIZED_BATCH")
+        if self._result is None:
+            self._result = getattr(editor, "result", None)
+        result = self._result
+        if result is None:
+            raise ValueError("PREDICTION_EXPORT_REQUIRES_FINALIZED_BATCH")
+        statuses = tuple(result.span_statuses.values())
+        if not statuses or any(status is not BatchSpanStatus.FINALIZED for status in statuses):
+            raise ValueError("PREDICTION_EXPORT_REQUIRES_FINALIZED_BATCH")
+        from desktop.review_extensions import _result_matches_editor_revision
+
+        if not _result_matches_editor_revision(editor, result):
+            raise ValueError("人工修改已更新，请先点击“完成复核并生成 Excel”。")
         path = self._root / "exports" / "Prediction_Input.xlsx"
         batch_path = editor.artifact_root / "batch.json"
         edits_path = editor.artifact_root / "tree_edits.json"
         source_times = [
             item.stat().st_mtime_ns for item in (batch_path, edits_path) if item.is_file()
         ]
-        if path.is_file() and source_times and path.stat().st_mtime_ns >= max(source_times):
-            return path
         if (
             batch_path.is_file()
             and edits_path.is_file()
             and edits_path.stat().st_mtime_ns > batch_path.stat().st_mtime_ns
         ):
             raise ValueError("人工修改已更新，请先点击“完成复核并生成 Excel”。")
-        if self._result is None:
-            self._result = editor.result
-        if any(
-            status not in {BatchSpanStatus.USER_REVIEWED, BatchSpanStatus.FINALIZED}
-            for status in self._result.span_statuses.values()
+        if (
+            path.is_file()
+            and source_times
+            and path.stat().st_mtime_ns >= max(source_times)
+            and self._prediction_export_cache_matches_final(path, result)
         ):
-            editor.mark_reviewed()
-            self._result = editor.finalize()
+            return path
         from core.stage_b.export import export_batch_prediction
 
         self._require_finalize_disk_space(editor)
-        export_batch_prediction(self._result, path, final_reconciled=editor.final_reconciled())
+        export_batch_prediction(result, path, final_reconciled=editor.final_reconciled())
         self._log("prediction_export", path=str(path))
         return path
 

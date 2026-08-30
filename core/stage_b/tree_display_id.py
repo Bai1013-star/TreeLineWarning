@@ -33,7 +33,7 @@ def _tower_number(tower: Tower) -> int | None:
     return None
 
 
-def _ordered_product_spans(project: Project) -> tuple[Span, ...]:
+def ordered_product_spans(project: Project) -> tuple[Span, ...]:
     """Reproduce the Stage-B bridge's deterministic product-span ordering."""
 
     spans_by_id = {span.span_id: span for span in project.spans}
@@ -95,7 +95,7 @@ def assign_tree_display_ids(
 
     if type(project) is not Project:
         raise TypeError("project must be a Stage-A Project")
-    ordered_spans = _ordered_product_spans(project)
+    ordered_spans = ordered_product_spans(project)
     towers = {tower.tower_id: tower for tower in project.towers}
     grouped: dict[int, list[Any]] = {}
     for record in records:
@@ -161,4 +161,9 @@ def assign_tree_display_ids(
     return result
 
 
-__all__ = ["TREE_DISPLAY_ID_SCHEMA", "assign_tree_display_ids"]
+# Keep the old private spelling available to downstream compatibility callers
+# while exposing the authoritative topology walk to export metadata code.
+_ordered_product_spans = ordered_product_spans
+
+
+__all__ = ["TREE_DISPLAY_ID_SCHEMA", "assign_tree_display_ids", "ordered_product_spans"]

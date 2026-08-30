@@ -498,7 +498,7 @@
   }
   async function exportPrediction() {
     try {
-      if (!state.finalized) await jsonPost('/api/desktop/batch/finalize');
+      if (!state.finalized) { setStatus('请先完成当前项目的单木复核', 'warn'); return; }
       window.open('/download_prediction', '_blank');
       await loadWorkspace();
       setStatus('已请求导出 Prediction_Input.xlsx', 'good');

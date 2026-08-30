@@ -49,6 +49,8 @@ def test_desktop_page_uses_existing_local_viewer_and_product_actions():
     assert "导出预测输入" in page
     assert "单木结果查看与复核" in page
     assert "/download_prediction" in script
+    assert "请先完成当前项目的单木复核" in script
+    assert "if (!state.finalized) await jsonPost('/api/desktop/batch/finalize');" not in script
 
 
 def test_desktop_bridge_exports_required_methods_without_public_object_graph():
