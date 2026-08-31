@@ -191,6 +191,14 @@ class _DesktopHandler(BaseHTTPRequestHandler):
         self._send_bytes(target.read_bytes(), content_type=mime)
 
     def _handle_get(self, path: str) -> None:
+        if path == "/api/viewer/runtime":
+            from desktop.viewer_diagnostics import runtime_report
+
+            self._send_json(runtime_report(self.application.resource_root))
+            return
+        if path == "/viewer-runtime.js":
+            self._static("viewer_poc/giro3d/viewer_runtime.js")
+            return
         if path == "/api/editor/mutation":
             self._send_json(editor_tasks(self.workflow).snapshot())
             return
@@ -354,6 +362,19 @@ class _DesktopHandler(BaseHTTPRequestHandler):
 
     def _handle_post(self, path: str) -> None:
         try:
+            if path == "/api/viewer/diagnostic":
+                from desktop.viewer_diagnostics import MAX_DIAGNOSTIC_BYTES, record_diagnostic
+
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                if length < 0 or length > MAX_DIAGNOSTIC_BYTES:
+                    self._error("VIEWER_DIAGNOSTIC_TOO_LARGE", status=413)
+                    return
+                origin = self.headers.get("Origin")
+                if origin and origin != "http://" + self.headers.get("Host", ""):
+                    self._error("VIEWER_DIAGNOSTIC_ORIGIN_MISMATCH", status=403)
+                    return
+                self._send_json(record_diagnostic(self.workflow, _json_body(self)))
+                return
             payload = _json_body(self)
             editor_tasks(self.workflow).assert_available()
             actions = {

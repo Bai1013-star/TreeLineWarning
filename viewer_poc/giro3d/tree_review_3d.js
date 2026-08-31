@@ -23,14 +23,40 @@
     return color;
   }
 
+  function viewerRuntime() {
+    return window.TreeLineViewerRuntime || null;
+  }
+
+  function errorRecord(error) {
+    return {
+      name: error && error.name ? String(error.name) : 'Error',
+      message: error && error.message ? String(error.message) : String(error || ''),
+      stack: error && error.stack ? String(error.stack) : '',
+    };
+  }
+
   class TreeReviewViewer3D {
     constructor(host, labelOverlay, options) {
       const G = window.P3AGiro3D;
-      if (!G || !G.THREE || !G.MapControls) throw new Error('本地 Giro3D / Three.js 渲染资源不可用');
+      const runtime = viewerRuntime();
+      if (!G || !G.THREE || !G.MapControls) {
+        const missing = new Error('本地 Giro3D / Three.js 渲染资源不可用');
+        if (runtime && typeof runtime.notifyFailure === 'function') {
+          throw runtime.notifyFailure(missing, {
+            phase: 'resource',
+            // A missing Three/Giro3D global means the packaged viewer script
+            // did not initialize, even when the browser has no script error
+            // event (for example a CSP or global-evaluation failure).
+            resourceMissing: true,
+          });
+        }
+        throw missing;
+      }
       this.THREE = G.THREE;
       this.host = host;
       this.labelOverlay = labelOverlay;
       this.options = options || {};
+      this.runtime = runtime;
       this.source = null;
       this.origin = [0, 0, 0];
       this.bounds = null;
@@ -48,39 +74,240 @@
       this.dampingActive = false;
       this.pointerStart = null;
       this.hoverPending = false;
+      this.renderer = null;
+      this.rendererContext = null;
+      this.canvas = null;
+      this.controls = null;
+      this.scene = null;
+      this.content = null;
+      this.camera = null;
+      this.raycaster = null;
+      this.resizeObserver = null;
+      this.rafId = null;
+      this.disposed = false;
+      this.runtimeFailure = null;
+      this.rendererAttempts = [];
+      this._contextLostHandler = null;
+      this._resizeHandler = null;
+      this._onPointerDown = null;
+      this._onPointerCancel = null;
+      this._onPointerUp = null;
+      this._onControlStart = null;
+      this._onControlChange = null;
+      this._onControlEnd = null;
 
-      host.textContent = '';
-      this.canvas = document.createElement('canvas');
-      this.canvas.className = 'tree-review-canvas';
-      this.canvas.setAttribute('aria-label', 'Giro3D 单木点云复核画布');
-      host.appendChild(this.canvas);
+      try {
+        host.textContent = '';
+        this.scene = new this.THREE.Scene();
+        this.scene.background = new this.THREE.Color(0x071015);
+        this.content = new this.THREE.Group();
+        this.scene.add(this.content);
+        this.camera = new this.THREE.PerspectiveCamera(52, 1, 0.01, 1000000);
+        this.camera.up.set(0, 0, 1);
+        this.initializeRenderer(G);
+        this.controls = new G.MapControls(this.camera, this.canvas);
+        this.controls.mouseButtons.LEFT = this.THREE.MOUSE.ROTATE;
+        this.controls.mouseButtons.MIDDLE = this.THREE.MOUSE.PAN;
+        this.controls.mouseButtons.RIGHT = this.THREE.MOUSE.PAN;
+        this.controls.enableDamping = true;
+        this.controls.dampingFactor = 0.11;
+        this.controls.screenSpacePanning = true;
+        this._onControlStart = () => { this.dampingActive = true; };
+        this._onControlChange = () => {
+          this.requestRender(true);
+          this.renderLabels();
+        };
+        this._onControlEnd = () => { this.dampingActive = true; this.requestRender(true); };
+        this.controls.addEventListener('start', this._onControlStart);
+        this.controls.addEventListener('change', this._onControlChange);
+        this.controls.addEventListener('end', this._onControlEnd);
+        this.raycaster = new this.THREE.Raycaster();
+        this.bindPicking();
+        this._contextLostHandler = event => {
+          if (event && typeof event.preventDefault === 'function') event.preventDefault();
+          this.handleRuntimeFailure(new Error(
+            `WebGL context lost${event && event.statusMessage ? `: ${event.statusMessage}` : ''}`
+          ), 'context-lost');
+        };
+        if (this.canvas && typeof this.canvas.addEventListener === 'function') {
+          this.canvas.addEventListener('webglcontextlost', this._contextLostHandler, false);
+        }
+        this._resizeHandler = () => {
+          try { this.resize(); }
+          catch (error) { this.handleRuntimeFailure(error, 'resize'); }
+        };
+        if (typeof ResizeObserver === 'function') {
+          this.resizeObserver = new ResizeObserver(this._resizeHandler);
+          this.resizeObserver.observe(host);
+        }
+        this.resize();
+      } catch (error) {
+        this.dispose();
+        const context = error && error.viewerFailureContext
+          ? error.viewerFailureContext
+          : {phase: error && error.viewerPhase || 'renderer'};
+        context.capabilities = context.capabilities || this.capabilities;
+        context.attempts = this.rendererAttempts;
+        const wrapped = runtime && typeof runtime.notifyFailure === 'function'
+          ? runtime.notifyFailure(error, context) : error;
+        if (wrapped && wrapped !== error && wrapped.viewerDiagnostic) this.runtimeFailure = wrapped;
+        throw wrapped;
+      }
+    }
 
-      this.scene = new this.THREE.Scene();
-      this.scene.background = new this.THREE.Color(0x071015);
-      this.content = new this.THREE.Group();
-      this.scene.add(this.content);
-      this.camera = new this.THREE.PerspectiveCamera(52, 1, 0.01, 1000000);
-      this.camera.up.set(0, 0, 1);
-      this.renderer = new this.THREE.WebGLRenderer({canvas: this.canvas, antialias: true, alpha: false});
-      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
-      this.controls = new G.MapControls(this.camera, this.canvas);
-      this.controls.mouseButtons.LEFT = this.THREE.MOUSE.ROTATE;
-      this.controls.mouseButtons.MIDDLE = this.THREE.MOUSE.PAN;
-      this.controls.mouseButtons.RIGHT = this.THREE.MOUSE.PAN;
-      this.controls.enableDamping = true;
-      this.controls.dampingFactor = 0.11;
-      this.controls.screenSpacePanning = true;
-      this.controls.addEventListener('start', () => { this.dampingActive = true; });
-      this.controls.addEventListener('change', () => {
-        this.requestRender(true);
-        this.renderLabels();
-      });
-      this.controls.addEventListener('end', () => { this.dampingActive = true; this.requestRender(true); });
-      this.raycaster = new this.THREE.Raycaster();
-      this.bindPicking();
-      this.resizeObserver = new ResizeObserver(() => this.resize());
-      this.resizeObserver.observe(host);
-      this.resize();
+    createCanvas() {
+      const canvas = document.createElement('canvas');
+      canvas.className = 'tree-review-canvas';
+      canvas.setAttribute('aria-label', 'Giro3D 单木点云复核画布');
+      this.host.appendChild(canvas);
+      return canvas;
+    }
+
+    initializeRenderer(G) {
+      const runtime = this.runtime;
+      const environment = runtime && typeof runtime.getCapabilities === 'function'
+        ? runtime.getCapabilities() : null;
+      const safeFirst = Boolean(runtime && runtime.isLowCapability && runtime.isLowCapability(environment));
+      // Weak devices stay on the compatibility configuration for both
+      // bounded attempts.  A successful normal attempt is kept at the normal
+      // pixel ratio; only an actual normal failure gets a fresh safe canvas.
+      const modes = safeFirst ? ['safe', 'safe'] : ['normal', 'safe'];
+      let lastError = null;
+      for (let index = 0; index < modes.length; index += 1) {
+        const mode = modes[index];
+        const canvas = this.createCanvas();
+        const options = runtime && typeof runtime.rendererOptions === 'function'
+          ? runtime.rendererOptions(mode, environment)
+          : {
+            antialias: mode === 'normal',
+            alpha: false,
+            depth: true,
+            pixelRatio: Math.min(window.devicePixelRatio || 1, mode === 'normal' ? 1.75 : 1),
+            mode,
+          };
+        const record = runtime && typeof runtime.probeCanvas === 'function'
+          ? runtime.probeCanvas(canvas, {
+            alpha: false,
+            antialias: Boolean(options.antialias),
+            depth: true,
+            stencil: false,
+          }) : null;
+        const capabilities = record && record.capabilities ? record.capabilities : record;
+        const webgl2 = capabilities && capabilities.webgl2;
+        const attempt = {mode, options: {...options}, contextCreationError: capabilities && capabilities.contextCreationError || null};
+        if (capabilities && capabilities.contextAttributes) {
+          attempt.actualContextAttributes = {...capabilities.contextAttributes};
+        }
+        if (webgl2 && !webgl2.contextAvailable) {
+          if (record && record.contextError) attempt.error = errorRecord(record.contextError);
+          attempt.code = runtime && runtime.classify
+            ? runtime.classify(null, {capabilities, phase: 'context'})
+            : 'WEBGL_CONTEXT_CREATION_FAILED';
+          this.rendererAttempts.push(attempt);
+          lastError = record && record.contextError
+            ? record.contextError : new Error('WebGL2 context creation failed');
+          lastError.viewerFailureContext = {phase: 'context', capabilities};
+          this.releaseRendererAttempt(canvas, null);
+          continue;
+        }
+        if (webgl2 && webgl2.contextAvailable && capabilities.contextAttributes
+          && mode === 'normal' && capabilities.contextAttributes.antialias === false) {
+          // Context attributes are immutable after creation.  A browser that
+          // ignores an antialias=true request must go through the explicit
+          // safe path with a fresh context rather than claiming normal mode.
+          attempt.code = 'CONTEXT_ATTRIBUTES_MISMATCH';
+          this.rendererAttempts.push(attempt);
+          lastError = new Error('WebGL2 context antialias attribute mismatch');
+          lastError.viewerFailureContext = {phase: 'context', capabilities};
+          this.releaseRendererAttempt(canvas, null);
+          continue;
+        }
+        try {
+          const rendererOptions = {
+            canvas,
+            antialias: Boolean(options.antialias),
+            alpha: false,
+            depth: true,
+          };
+          // Three.js r180 accepts an existing WebGL2 context.  Passing the
+          // retained probe context avoids creating a second context on clean
+          // machines while keeping context capability detection separate from
+          // renderer success.
+          if (record && record.context) rendererOptions.context = record.context;
+          this.renderer = new this.THREE.WebGLRenderer(rendererOptions);
+          this.renderer.setPixelRatio(options.pixelRatio);
+          this.canvas = canvas;
+          this.capabilities = runtime && typeof runtime.snapshot === 'function'
+            ? runtime.snapshot(record) : capabilities;
+          if (this.capabilities && this.capabilities.contextAttributes) {
+            attempt.actualContextAttributes = {...this.capabilities.contextAttributes};
+          }
+          this.rendererContext = record && record.context
+            ? record.context
+            : this.safeRendererContext();
+          this.setRendererSizeForInitialization();
+          if (!this.renderer || typeof this.renderer.render !== 'function') {
+            throw new Error('THREE.WebGLRenderer.render is unavailable');
+          }
+          // A successful context probe is not enough: exercise the actual
+          // Three.js constructor and one initial render before proceeding.
+          this.renderer.render(this.scene, this.camera);
+          attempt.code = 'OK';
+          this.rendererMode = mode;
+          this.rendererAttempts.push(attempt);
+          if (runtime && typeof runtime.reportSuccess === 'function') {
+            runtime.reportSuccess({
+              phase: 'initialization',
+              rendererMode: mode,
+              capabilities: this.capabilities,
+              attempts: this.rendererAttempts,
+            });
+          }
+          return;
+        } catch (error) {
+          attempt.error = errorRecord(error);
+          attempt.code = runtime && runtime.classify
+            ? runtime.classify(error, {capabilities, phase: 'renderer'})
+            : 'THREE_RENDERER_FAILED';
+          this.rendererAttempts.push(attempt);
+          lastError = error;
+          this.releaseRendererAttempt(canvas, this.renderer);
+          this.renderer = null;
+          this.canvas = null;
+          this.rendererContext = null;
+        }
+      }
+      if (!lastError) lastError = new Error('3D renderer initialization failed');
+      if (!lastError.viewerFailureContext) {
+        lastError.viewerFailureContext = {
+          phase: 'renderer', capabilities: this.capabilities || environment,
+        };
+      }
+      throw lastError;
+    }
+
+    safeRendererContext() {
+      if (!this.renderer || typeof this.renderer.getContext !== 'function') return null;
+      try { return this.renderer.getContext(); } catch (_) { return null; }
+    }
+
+    setRendererSizeForInitialization() {
+      const width = Math.max(1, Number(this.host.clientWidth) || 1);
+      const height = Math.max(1, Number(this.host.clientHeight) || 1);
+      this.renderer.setSize(width, height, false);
+      this.camera.aspect = width / height;
+      this.camera.updateProjectionMatrix();
+    }
+
+    releaseRendererAttempt(canvas, renderer) {
+      if (this.runtime && typeof this.runtime.releaseCanvas === 'function') {
+        this.runtime.releaseCanvas(canvas, renderer);
+        return;
+      }
+      try { if (renderer && typeof renderer.dispose === 'function') renderer.dispose(); } catch (_) {}
+      if (canvas && canvas.parentNode && typeof canvas.parentNode.removeChild === 'function') {
+        try { canvas.parentNode.removeChild(canvas); } catch (_) {}
+      }
     }
 
     disposeObject(object) {
@@ -93,6 +320,7 @@
     }
 
     clearContent() {
+      if (!this.scene || !this.content) return;
       this.scene.remove(this.content);
       this.disposeObject(this.content);
       this.content = new this.THREE.Group();
@@ -101,6 +329,7 @@
     }
 
     resize() {
+      if (this.disposed || !this.renderer || !this.camera) return;
       const width = Math.max(1, this.host.clientWidth);
       const height = Math.max(1, this.host.clientHeight);
       this.renderer.setSize(width, height, false);
@@ -111,19 +340,29 @@
     }
 
     requestRender(interacting) {
+      if (this.disposed || this.runtimeFailure || !this.renderer || !this.controls) return;
       if (interacting) this.dampingActive = true;
       if (this.renderPending) return;
       this.renderPending = true;
-      requestAnimationFrame(timestamp => {
+      const schedule = typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame
+        : callback => setTimeout(() => callback(performance.now()), 0);
+      this.rafId = schedule(timestamp => {
         const started = performance.now();
+        this.rafId = null;
         this.renderPending = false;
-        const changed = this.controls.enabled ? this.controls.update() : false;
-        this.renderer.render(this.scene, this.camera);
-        const elapsed = performance.now() - started;
-        if (this.dampingActive || changed) this.recordFrame(elapsed);
-        if (changed) this.requestRender(true);
-        else this.dampingActive = false;
-        if (typeof this.options.onRendered === 'function') this.options.onRendered(timestamp, elapsed);
+        try {
+          if (this.disposed || this.runtimeFailure || !this.renderer) return;
+          const changed = this.controls.enabled ? this.controls.update() : false;
+          this.renderer.render(this.scene, this.camera);
+          const elapsed = performance.now() - started;
+          if (this.dampingActive || changed) this.recordFrame(elapsed);
+          if (changed) this.requestRender(true);
+          else this.dampingActive = false;
+          if (typeof this.options.onRendered === 'function') this.options.onRendered(timestamp, elapsed);
+        } catch (error) {
+          this.handleRuntimeFailure(error, 'render');
+        }
       });
     }
 
@@ -399,9 +638,9 @@
     }
 
     bindPicking() {
-      this.canvas.addEventListener('pointerdown', event => { this.pointerStart = {x: event.clientX, y: event.clientY, button: event.button}; });
-      this.canvas.addEventListener('pointercancel', () => { this.pointerStart = null; });
-      this.canvas.addEventListener('pointerup', event => {
+      this._onPointerDown = event => { this.pointerStart = {x: event.clientX, y: event.clientY, button: event.button}; };
+      this._onPointerCancel = () => { this.pointerStart = null; };
+      this._onPointerUp = event => {
         const start = this.pointerStart;
         this.pointerStart = null;
         if (!this.controls.enabled || !start || start.button !== 0 || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
@@ -409,20 +648,98 @@
         if (!hit) return;
         if (typeof this.options.onPointPick === 'function' && this.options.onPointPick(hit) === true) return;
         if (typeof this.options.onTreePick === 'function') this.options.onTreePick(hit.treeId, true);
-      });
+      };
+      this.canvas.addEventListener('pointerdown', this._onPointerDown);
+      this.canvas.addEventListener('pointercancel', this._onPointerCancel);
+      this.canvas.addEventListener('pointerup', this._onPointerUp);
+    }
+
+    handleRuntimeFailure(error, phase) {
+      if (this.runtimeFailure || this.disposed) return this.runtimeFailure;
+      const context = {
+        phase: phase || 'renderer',
+        capabilities: this.capabilities,
+        attempts: this.rendererAttempts,
+      };
+      this.runtimeFailure = this.runtime && typeof this.runtime.notifyFailure === 'function'
+        ? this.runtime.notifyFailure(error, context) : error;
+      try {
+        if (typeof this.options.onInitFailure === 'function') this.options.onInitFailure(this.runtimeFailure);
+      } catch (_) {}
+      this.dispose();
+      return this.runtimeFailure;
+    }
+
+    disposeObjectTree(object) {
+      if (!object) return;
+      try { this.disposeObject(object); } catch (_) {}
+    }
+
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      this.renderPending = false;
+      if (this.rafId != null) {
+        try {
+          if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(this.rafId);
+          else clearTimeout(this.rafId);
+        } catch (_) {}
+        this.rafId = null;
+      }
+      if (this.resizeObserver && typeof this.resizeObserver.disconnect === 'function') {
+        try { this.resizeObserver.disconnect(); } catch (_) {}
+      }
+      this.resizeObserver = null;
+      if (this.controls) {
+        try {
+          if (this._onControlStart && typeof this.controls.removeEventListener === 'function') this.controls.removeEventListener('start', this._onControlStart);
+          if (this._onControlChange && typeof this.controls.removeEventListener === 'function') this.controls.removeEventListener('change', this._onControlChange);
+          if (this._onControlEnd && typeof this.controls.removeEventListener === 'function') this.controls.removeEventListener('end', this._onControlEnd);
+        } catch (_) {}
+        try { if (typeof this.controls.dispose === 'function') this.controls.dispose(); } catch (_) {}
+      }
+      this.controls = null;
+      if (this.canvas && typeof this.canvas.removeEventListener === 'function') {
+        try {
+          if (this._onPointerDown) this.canvas.removeEventListener('pointerdown', this._onPointerDown);
+          if (this._onPointerCancel) this.canvas.removeEventListener('pointercancel', this._onPointerCancel);
+          if (this._onPointerUp) this.canvas.removeEventListener('pointerup', this._onPointerUp);
+          if (this._contextLostHandler) this.canvas.removeEventListener('webglcontextlost', this._contextLostHandler);
+        } catch (_) {}
+      }
+      this.disposeObjectTree(this.content);
+      this.content = null;
+      if (this.renderer) {
+        try { if (typeof this.renderer.dispose === 'function') this.renderer.dispose(); } catch (_) {}
+        try { if (typeof this.renderer.forceContextLoss === 'function') this.renderer.forceContextLoss(); } catch (_) {}
+      }
+      const canvas = this.canvas;
+      const renderer = this.renderer;
+      if (this.runtime && typeof this.runtime.releaseCanvas === 'function') {
+        try { this.runtime.releaseCanvas(canvas, null); } catch (_) {}
+      }
+      this.renderer = null;
+      this.rendererContext = null;
+      this.canvas = null;
+      if (canvas && canvas.parentNode && typeof canvas.parentNode.removeChild === 'function') {
+        try { canvas.parentNode.removeChild(canvas); } catch (_) {}
+      }
+      this.scene = null;
+      this.camera = null;
+      this.raycaster = null;
     }
 
     rendererInfo() {
-      const gl = this.renderer.getContext();
-      const extension = gl.getExtension('WEBGL_debug_renderer_info');
+      const caps = this.capabilities || {};
       return {
         three_version: this.THREE.REVISION,
-        webgl_version:
-          typeof WebGL2RenderingContext !== 'undefined' &&
-          gl instanceof WebGL2RenderingContext
-            ? 2
-            : 1,
-        renderer: extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : 'masked',
+        webgl_version: caps.webgl2 && caps.webgl2.contextAvailable ? 2 : 1,
+        renderer: caps.renderer || 'masked',
+        vendor: caps.vendor || 'masked',
+        max_texture_size: caps.maxTextureSize == null ? null : caps.maxTextureSize,
+        device_pixel_ratio: caps.devicePixelRatio == null ? null : caps.devicePixelRatio,
+        capabilities: caps,
+        renderer_mode: this.rendererMode || 'unknown',
         visible_tree_points: this.visiblePointCount(),
         quality: this.qualityFraction,
       };

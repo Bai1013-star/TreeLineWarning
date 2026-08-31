@@ -830,6 +830,18 @@ def step2_html() -> str:
         <button id="btn-view-side" type="button">侧视</button>
       </div>
       <div id="viewer-renderer-status">正在初始化 Giro3D / Three.js…</div>
+      <section id="viewer-init-failure" role="alert" style="display:none;position:absolute;
+        z-index:20;inset:12px;padding:18px;overflow:auto;background:#fff;color:#182635;
+        border:2px solid #b42318;border-radius:6px">
+        <h3>3D Viewer could not start on this device.</h3>
+        <p>此设备无法启动 3D 视图。项目和后台服务仍然可用；请复制诊断信息。</p>
+        <pre id="viewer-init-summary" style="white-space:pre-wrap"></pre>
+        <button id="btn-viewer-retry" type="button">Retry Viewer / 重试视图</button>
+        <button id="btn-viewer-copy" type="button">Copy diagnostic information / 复制诊断</button>
+        <textarea id="viewer-init-details" readonly aria-label="3D Viewer diagnostic information"
+          style="display:block;width:100%;height:200px;margin-top:12px;box-sizing:border-box">
+        </textarea>
+      </section>
     </div>
   </div>
   <div class="side">
@@ -869,6 +881,44 @@ def step2_html() -> str:
   </div>
 </main>
 """
+    # Install this before external scripts: even a missing diagnostic module must
+    # leave readable recovery controls rather than an unhandled black canvas.
+    body += """
+<script>
+(function () {
+  var failures = window.__treeViewerResourceFailures = [];
+  window.addEventListener('error', function (event) {
+    var target = event.target;
+    if (!target || target.tagName !== 'SCRIPT' || !target.src) return;
+    var url = new URL(target.src, window.location.href).pathname;
+    var allowed = ['/viewer-runtime.js', '/giro3d.bundle.js',
+      '/tree-review-3d.js', '/tree-review-app.js'];
+    if (allowed.indexOf(url) < 0) return;
+    failures.push({url: url, message: event.message || 'Script resource failed to load',
+      stack: event.error && event.error.stack || ''});
+    if (window.TreeLineViewerRuntime) return;
+    var panel = document.getElementById('viewer-init-failure');
+    if (!panel) return;
+    panel.style.display = 'block';
+    document.getElementById('viewer-init-summary').textContent =
+      'VIEWER_RESOURCE_MISSING: ' + url + '\\nWebGL/WebGL2: NOT_TESTED' +
+      '\\nWebView2: UNKNOWN; diagnostic module did not load.';
+    var details = document.getElementById('viewer-init-details');
+    details.value = JSON.stringify({failure_code: 'VIEWER_RESOURCE_MISSING',
+      userAgent: navigator.userAgent, resources: failures}, null, 2);
+    document.getElementById('btn-viewer-retry').onclick = function () {
+      window.location.reload();
+    };
+    document.getElementById('btn-viewer-copy').onclick = function () {
+      details.focus(); details.select();
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(details.value).catch(function () {});
+      }
+    };
+  }, true);
+})();
+</script>
+"""
     return _page_shell(
         "STEP 2 人工审核单木",
         "STEP 2 人工审核单木 · Giro3D / Three.js",
@@ -876,6 +926,7 @@ def step2_html() -> str:
         "window.TreeLineTreeReviewApp.start();",
         plotly=False,
         external_scripts=(
+            "/viewer-runtime.js",
             "/giro3d.bundle.js",
             "/tree-review-3d.js",
             "/tree-review-app.js",

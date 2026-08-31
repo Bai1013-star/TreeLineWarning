@@ -26,6 +26,10 @@
     workflowDone: false,
     showLabels: true,
     localPreviewXYZ: [],
+    latestViewerData: null,
+    viewerInitFailure: null,
+    viewerRetryPromise: null,
+    viewerRuntimeUnsubscribe: null,
     viewerState: {
       treeIdToMetadata: new Map(),
       activePreviewType: null,
@@ -49,8 +53,10 @@
   function displayBudget() {
     const cores = Number(navigator.hardwareConcurrency || 4);
     const memory = Number(navigator.deviceMemory || 4);
-    const probe = document.createElement('canvas');
-    const webgl2 = Boolean(probe.getContext('webgl2'));
+    const runtime = window.TreeLineViewerRuntime;
+    const capabilities = runtime && typeof runtime.getCapabilities === 'function'
+      ? runtime.getCapabilities() : null;
+    const webgl2 = Boolean(capabilities && capabilities.webgl2 && capabilities.webgl2.contextAvailable);
     if (!webgl2 || cores <= 4 || memory <= 4) return 12000;
     if (cores >= 12 && memory >= 12) return 50000;
     return 30000;
@@ -90,10 +96,18 @@
 
   function showFailure(error, prefix = '失败：') {
     restoreCameraControls();
+    if (error && error.viewerInitFailure) {
+      showViewerDiagnostic(error);
+      const editMessage = byId('editmsg');
+      if (editMessage) editMessage.textContent = prefix + (error.message || '3D Viewer 初始化失败');
+      return;
+    }
     const message = error && error.message ? error.message : String(error);
-    byId('editmsg').textContent = prefix + message;
+    const editMessage = byId('editmsg');
+    if (editMessage) editMessage.textContent = prefix + message;
     if (!state.viewer || !state.editorDisplay) {
-      byId('viewer-renderer-status').textContent = '3D复核视图初始化失败，请查看详情。';
+      const rendererStatus = byId('viewer-renderer-status');
+      if (rendererStatus) rendererStatus.textContent = '3D复核视图初始化失败，请查看详情。';
     }
     const details = byId('error-details');
     const text = byId('error-detail-text');
@@ -102,6 +116,95 @@
       text.textContent = technicalDetail;
       details.style.display = 'block';
     } else if (details) details.style.display = 'none';
+  }
+
+  function viewerRuntime() {
+    return window.TreeLineViewerRuntime || null;
+  }
+
+  function fallbackViewerDiagnostic(error) {
+    const message = error && error.message ? String(error.message) : String(error || '');
+    return {
+      schema: 'treeline-viewer-diagnostic-v1',
+      code: error && error.code ? String(error.code) : 'UNKNOWN_VIEWER_INIT_FAILURE',
+      phase: 'initialization',
+      message,
+      original: {
+        name: error && error.name ? String(error.name) : 'Error',
+        message,
+        stack: error && error.stack ? String(error.stack) : '',
+      },
+      capabilities: {},
+      nativeRuntime: null,
+      resources: [],
+      attempts: [],
+    };
+  }
+
+  function showViewerDiagnostic(error) {
+    const runtime = viewerRuntime();
+    const diagnostic = error && error.viewerDiagnostic
+      ? error.viewerDiagnostic : (error && error.code ? error : fallbackViewerDiagnostic(error));
+    state.viewerInitFailure = diagnostic;
+    if (runtime && typeof runtime.showFailure === 'function') runtime.showFailure(diagnostic);
+    const panel = byId('viewer-init-failure');
+    const summary = byId('viewer-init-summary');
+    const details = byId('viewer-init-details');
+    if (panel) {
+      panel.hidden = false;
+      if (panel.style) panel.style.display = 'block';
+    }
+    if (summary) summary.textContent = '3D Viewer could not start on this device.';
+    if (details) {
+      details.readOnly = true;
+      details.value = runtime && typeof runtime.diagnosticText === 'function'
+        ? runtime.diagnosticText(diagnostic)
+        : `3D Viewer could not start on this device.\nFailure code: ${diagnostic.code}\nOriginal exception: ${diagnostic.message}\n${diagnostic.original && diagnostic.original.stack || ''}`;
+    }
+    const status = byId('viewer-renderer-status');
+    if (status) status.textContent = `3D Viewer 初始化失败 · ${diagnostic.code}`;
+    bindViewerDiagnosticControls();
+  }
+
+  function clearViewerDiagnostic() {
+    state.viewerInitFailure = null;
+    const runtime = viewerRuntime();
+    if (runtime && typeof runtime.clearFailure === 'function') runtime.clearFailure();
+    const panel = byId('viewer-init-failure');
+    if (panel) {
+      panel.hidden = true;
+      if (panel.style) panel.style.display = 'none';
+    }
+  }
+
+  async function copyViewerDiagnostic() {
+    const runtime = viewerRuntime();
+    if (runtime && typeof runtime.copyDiagnostic === 'function') {
+      await runtime.copyDiagnostic(state.viewerInitFailure);
+      return;
+    }
+    const details = byId('viewer-init-details');
+    if (!details) return;
+    try {
+      details.readOnly = true;
+      if (typeof details.select === 'function') details.select();
+      if (document.execCommand) document.execCommand('copy');
+    } catch (_) {}
+  }
+
+  function bindViewerDiagnosticControls() {
+    const retry = byId('btn-viewer-retry');
+    if (retry && !retry.dataset) retry.dataset = {};
+    if (retry && !retry.dataset.viewerDiagnosticBound) {
+      retry.dataset.viewerDiagnosticBound = 'true';
+      retry.onclick = () => { void retryViewer(); };
+    }
+    const copy = byId('btn-viewer-copy');
+    if (copy && !copy.dataset) copy.dataset = {};
+    if (copy && !copy.dataset.viewerDiagnosticBound) {
+      copy.dataset.viewerDiagnosticBound = 'true';
+      copy.onclick = () => { void copyViewerDiagnostic(); };
+    }
   }
 
   const ASYNC_MUTATION_PATHS = new Set([
@@ -722,7 +825,7 @@
 
   function initializeViewer() {
     if (state.viewer) return;
-    state.viewer = new window.TreeLineTreeReview3D(byId('plot3d'), byId('tree-label-overlay'), {
+    const viewer = new window.TreeLineTreeReview3D(byId('plot3d'), byId('tree-label-overlay'), {
       onTreePick: treeId => selectTree(treeId, true, true),
       onPointPick: hit => {
         if (state.editingBusy || state.mutation) return true;
@@ -738,11 +841,13 @@
         metrics.quality_events.push(event);
         byId('viewer-renderer-status').textContent = `Giro3D / Three.js · 自适应 ${event.visible_points.toLocaleString()} 点 · P90 ${event.p90_ms.toFixed(1)} ms`;
       },
+      onInitFailure: error => showViewerDiagnostic(error),
     });
-    state.viewer.setLabelsVisible(state.showLabels);
-    byId('btn-view-reset').onclick = () => state.viewer.resetView();
-    byId('btn-view-top').onclick = () => state.viewer.topView();
-    byId('btn-view-side').onclick = () => state.viewer.sideView();
+    state.viewer = viewer;
+    viewer.setLabelsVisible(state.showLabels);
+    byId('btn-view-reset').onclick = () => { if (state.viewer) state.viewer.resetView(); };
+    byId('btn-view-top').onclick = () => { if (state.viewer) state.viewer.topView(); };
+    byId('btn-view-side').onclick = () => { if (state.viewer) state.viewer.sideView(); };
   }
 
   async function loadEditorData() {
@@ -760,6 +865,10 @@
       }
       const {response, result: data} = outcome;
       if (!response.ok) throw new Error('单木显示数据加载失败');
+      // Keep the latest display payload available for a Viewer-only retry. It
+      // is visualization data already returned by the display endpoint; retry
+      // never starts or repeats an editor/science operation.
+      state.latestViewerData = data;
       const previousDisplay = state.editorDisplay;
       const restorePreviousViewer = () => {
         if (!previousDisplay || !state.viewer) return;
@@ -786,6 +895,7 @@
         const dangerText = dangerCount ? ` · 危险点 ${dangerCount.toLocaleString()}` : '';
         byId('viewer-renderer-status').textContent = `Giro3D / Three.js r${info.three_version} · WebGL${info.webgl_version} · ${timing.visible_tree_points.toLocaleString()} 树点${dangerText}`;
         state.editorDisplay = data;
+        clearViewerDiagnostic();
         if (byId('editmsg').textContent.startsWith('正在加载')) byId('editmsg').textContent = '';
         return data;
       } catch (error) {
@@ -795,6 +905,43 @@
     })();
     try { return await state.editorLoadPromise; }
     finally { state.editorLoadPromise = null; }
+  }
+
+  async function retryViewer() {
+    if (state.viewerRetryPromise) return state.viewerRetryPromise;
+    if (state.mutation || state.editingBusy || state.displayRefreshUncertain) {
+      const message = 'Viewer retry is unavailable while an edit is running or its result is uncertain. Finish or resolve the edit before retrying.';
+      const editMessage = byId('editmsg');
+      if (editMessage) editMessage.textContent = message;
+      return state.viewer;
+    }
+    const retryButton = byId('btn-viewer-retry');
+    if (retryButton) retryButton.disabled = true;
+    state.viewerRetryPromise = (async () => {
+      const runtime = viewerRuntime();
+      if (runtime && typeof runtime.clearFailure === 'function') runtime.clearFailure();
+      // A context-loss viewer may still be referenced by the editor state.
+      // Dispose it before creating a fresh canvas/context; this leaves all
+      // selection, lasso, mutation, and journal locks untouched.
+      if (state.viewer) {
+        try { if (typeof state.viewer.dispose === 'function') state.viewer.dispose(); } catch (_) {}
+        state.viewer = null;
+      }
+      try {
+        await loadEditorData();
+        await refreshTrees();
+        if (!state.workflowDone && !state.refreshTimer) state.refreshTimer = setInterval(refreshTrees, 1500);
+        return state.viewer;
+      } catch (error) {
+        if (error && error.viewerInitFailure) showViewerDiagnostic(error);
+        else showFailure(error);
+        return null;
+      } finally {
+        if (retryButton) retryButton.disabled = false;
+      }
+    })();
+    try { return await state.viewerRetryPromise; }
+    finally { state.viewerRetryPromise = null; }
   }
 
   function committedDisplayRefreshError(error) {
@@ -991,4 +1138,20 @@
   }
 
   window.TreeLineTreeReviewApp = {start, state, selectTree, beginLasso, cancelTrim, metrics};
+  window.TreeLineTreeReviewApp.retryViewer = retryViewer;
+  window.TreeLineTreeReviewApp.showViewerDiagnostic = showViewerDiagnostic;
+  window.TreeLineTreeReviewApp.clearViewerDiagnostic = clearViewerDiagnostic;
+  installViewerRuntimeDiagnostics();
+
+  function installViewerRuntimeDiagnostics() {
+    bindViewerDiagnosticControls();
+    const runtime = viewerRuntime();
+    if (!runtime || typeof runtime.subscribe !== 'function') return;
+    if (state.viewerRuntimeUnsubscribe) state.viewerRuntimeUnsubscribe();
+    state.viewerRuntimeUnsubscribe = runtime.subscribe(error => showViewerDiagnostic(error));
+    if (typeof runtime.getLastFailure === 'function') {
+      const diagnostic = runtime.getLastFailure();
+      if (diagnostic) showViewerDiagnostic(diagnostic);
+    }
+  }
 })();

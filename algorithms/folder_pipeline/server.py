@@ -251,11 +251,13 @@ class FolderServer:
                         except Exception:  # noqa: BLE001
                             return self._send_error("plotly.js 不可用")
                     if path in {
+                        "/viewer-runtime.js",
                         "/giro3d.bundle.js",
                         "/tree-review-3d.js",
                         "/tree-review-app.js",
                     }:
                         relative = {
+                            "/viewer-runtime.js": Path("viewer_runtime.js"),
                             "/giro3d.bundle.js": Path("vendor/giro3d.bundle.js"),
                             "/tree-review-3d.js": Path("tree_review_3d.js"),
                             "/tree-review-app.js": Path("tree_review_app.js"),
