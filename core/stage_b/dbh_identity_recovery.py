@@ -107,7 +107,8 @@ def recover_finalized_dbh_v3(
     fixed = [
         _fixed_claim(row, old_arrays)
         for row in base["trees"]
-        if row["dbh_cm"] is not None and row["dbh_method"] in {"DIRECT_STEM", "RECOVERED_STEM"}
+        if row["dbh_cm"] is not None
+        and row["dbh_method"] in {"DIRECT_STEM", "RECOVERED_STEM", "REVIEW_CONFIRMED_STEM"}
     ]
     rows, jobs, claims = [], {}, []
     for old in sorted(base["trees"], key=lambda row: row["global_tree_id"]):
@@ -355,14 +356,19 @@ def recover_finalized_dbh_v3(
         "editor_excluded_index_count": len(removed),
         "editor_excluded_index_sha256": array_digest(removed),
         "current_member_hag_sha256": array_digest(member_hag),
-        "additional_input_hashes": [
-            {
-                "reference": (br / "tree_segmentation_original.npz").relative_to(root).as_posix(),
-                "sha256": original_hash,
-            }
-        ]
-        if original_hash is not None
-        else [],
+        "additional_input_hashes": base.get("additional_input_hashes", [])
+        + (
+            [
+                {
+                    "reference": (br / "tree_segmentation_original.npz")
+                    .relative_to(root)
+                    .as_posix(),
+                    "sha256": original_hash,
+                }
+            ]
+            if original_hash is not None
+            else []
+        ),
     }
     if persist:
         path = v1._persist(root, result, payload, arrays)

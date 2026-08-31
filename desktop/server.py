@@ -191,6 +191,17 @@ class _DesktopHandler(BaseHTTPRequestHandler):
         self._send_bytes(target.read_bytes(), content_type=mime)
 
     def _handle_get(self, path: str) -> None:
+        if path in {"/dbh-review", "/dbh_review.html"}:
+            self._static("viewer_poc/giro3d/dbh_review.html")
+            return
+        if path in {"/dbh_review.js", "/dbh_review.css"}:
+            self._static("viewer_poc/giro3d/" + path.lstrip("/"))
+            return
+        if path == "/api/dbh-review/trees":
+            from desktop.dbh_review import list_trees
+
+            self._send_json(list_trees(self.workflow))
+            return
         if path == "/api/viewer/runtime":
             from desktop.viewer_diagnostics import runtime_report
 
@@ -362,6 +373,42 @@ class _DesktopHandler(BaseHTTPRequestHandler):
 
     def _handle_post(self, path: str) -> None:
         try:
+            if path in {"/api/dbh-review/prepare", "/api/dbh-review/confirm"}:
+                from desktop.dbh_review import confirm, prepare
+
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                origin = self.headers.get("Origin")
+                if length < 0 or length > 4096:
+                    self._error("DBH_REVIEW_REQUEST_TOO_LARGE", status=413)
+                    return
+                if origin and origin != "http://" + self.headers.get("Host", ""):
+                    self._error("DBH_REVIEW_ORIGIN_MISMATCH", status=403)
+                    return
+                payload = _json_body(self)
+                asynchronous = payload.pop("async", False)
+                request_id = payload.pop("request_id", None)
+
+                def callback():
+                    return (prepare if path.endswith("prepare") else confirm)(
+                        self.workflow, payload
+                    )
+
+                if asynchronous is True:
+                    if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+                        raise ValueError("DBH_REVIEW_REQUEST_ID_REQUIRED")
+                    self._send_json(
+                        editor_tasks(self.workflow).submit(
+                            "DBH_REVIEW_PREVIEW"
+                            if path.endswith("prepare")
+                            else "DBH_REVIEW_CONFIRM",
+                            callback,
+                            request_id,
+                        ),
+                        status=HTTPStatus.ACCEPTED,
+                    )
+                else:
+                    self._send_json(callback())
+                return
             if path == "/api/viewer/diagnostic":
                 from desktop.viewer_diagnostics import MAX_DIAGNOSTIC_BYTES, record_diagnostic
 

@@ -12,7 +12,7 @@
   function dbhCell(row) {
     const number = row.dbh_cm ?? row.diameter_cm;
     if (number === null || number === undefined || number === '') return '—';
-    const labels = { DIRECT_STEM: '点云', RECOVERED_STEM: '恢复', ALLOMETRIC_ESTIMATE: '估算' };
+    const labels = { DIRECT_STEM: '点云', RECOVERED_STEM: '恢复', REVIEW_CONFIRMED_STEM: '人工确认点云', ALLOMETRIC_ESTIMATE: '估算' };
     const label = labels[row.dbh_method] || '';
     const detail = [row.dbh_method, row.dbh_quality,
       row.dbh_point_count == null ? '' : `${row.dbh_point_count} 点`,

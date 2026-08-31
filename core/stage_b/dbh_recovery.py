@@ -173,6 +173,7 @@ def load_finalized_dbh(root: Path, result: Any, reconciled: Any) -> dict[int, di
             if method not in {
                 "DIRECT_STEM",
                 "RECOVERED_STEM",
+                "REVIEW_CONFIRMED_STEM",
                 "ALLOMETRIC_ESTIMATE",
                 "UNAVAILABLE",
             }:
@@ -185,6 +186,20 @@ def load_finalized_dbh(root: Path, result: Any, reconciled: Any) -> dict[int, di
                 raise ValueError("DBH_INVALID_DIAMETER")
             if (value is None) != (method == "UNAVAILABLE"):
                 raise ValueError("DBH_VALUE_METHOD_MISMATCH")
+            if method == "REVIEW_CONFIRMED_STEM":
+                review = row.get("dbh_review", {})
+                decision = confined(root, row["dbh_review_decision_reference"])
+                if (
+                    sha256(decision) != row["dbh_review_decision_sha256"]
+                    or read_json(decision) != review
+                ):
+                    raise ValueError("DBH_REVIEW_DECISION_PROOF_MISMATCH")
+                if (
+                    review.get("identity_confirmed") is not True
+                    or review.get("persistent_tree_id") != row["persistent_tree_id"]
+                    or review.get("editor_revision") != payload["binding"]["editor_revision"]
+                ):
+                    raise ValueError("DBH_INVALID_REVIEW_CONFIRMATION")
         return {int(row["global_tree_id"]): row for row in rows}
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return {

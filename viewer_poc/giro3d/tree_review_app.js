@@ -87,7 +87,7 @@
     state.refreshGeneration += 1;
     state.editingBusy = Boolean(busy);
     if (!state.editingBusy) state.refreshPaused = false;
-    ['btn-prev', 'btn-next', 'btn-delete', 'btn-merge', 'btn-trim-component', 'btn-trim-lasso', 'btn-trim-cancel', 'btn-undo', 'btn-trim-confirm', 'btn-confirm'].forEach(id => {
+    ['btn-prev', 'btn-next', 'btn-delete', 'btn-merge', 'btn-trim-component', 'btn-trim-lasso', 'btn-trim-cancel', 'btn-undo', 'btn-trim-confirm', 'btn-confirm', 'btn-dbh-review'].forEach(id => {
       const element = byId(id);
       if (element) element.disabled = state.editingBusy;
     });
@@ -1029,6 +1029,11 @@
   }
 
   function bindControls() {
+    const dbhReview = byId('btn-dbh-review');
+    if (dbhReview) dbhReview.onclick = () => {
+      if (state.editingBusy || state.mutation || state.displayRefreshUncertain) return;
+      window.location.href = '/dbh-review';
+    };
     byId('btn-trim-component').onclick = () => { if (requireOneTree() != null) setTrimMode('COMPONENT', '请点击需要从当前单木中剔除的误分点团。'); };
     byId('btn-trim-lasso').textContent = '区域套索剔除';
     byId('btn-trim-lasso').title = '框选区域后，剔除框内所有树木点（跨多棵树）';

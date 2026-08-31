@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TreeLineWarning · 胸径复核 / DBH Review</title>
+  <link rel="stylesheet" href="/dbh_review.css">
+</head>
+<body>
+  <header class="dbh-header">
+    <div>
+      <p class="eyebrow">TREELINEWARNING · HUMAN DBH REVIEW</p>
+      <h1>胸径复核 <span>/ DBH Review</span></h1>
+      <p class="subtitle">只复核已定稿且当前胸径不可用的单木。胸径由后台点云几何计算，页面不接受手工输入。</p>
+    </div>
+    <a class="back-link" href="/step2">返回树木复核</a>
+  </header>
+
+  <main class="dbh-layout">
+    <aside class="panel tree-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">UNAVAILABLE TREES</p>
+          <h2>待复核单木</h2>
+        </div>
+        <span id="tree-count" class="pill">读取中</span>
+      </div>
+      <p id="tree-list-note" class="hint" aria-live="polite">仅显示当前胸径不可用的单木。</p>
+      <div id="tree-list" class="tree-list" role="list"></div>
+    </aside>
+
+    <section class="panel review-panel" aria-live="polite">
+      <div id="review-empty" class="empty-state">
+        <h2>请选择一棵待复核单木</h2>
+        <p>选择左侧单木后，先准备当前编辑版本的原始点云证据。</p>
+      </div>
+
+      <div id="review-content" class="hidden">
+        <div class="review-heading">
+          <div>
+            <p class="eyebrow">CURRENT EDITOR REVISION</p>
+            <h2 id="review-tree-title">胸径复核</h2>
+            <p id="review-tree-meta" class="hint"></p>
+          </div>
+          <div class="review-actions">
+            <button id="btn-prepare" class="primary" type="button">准备点云复核</button>
+            <button id="btn-reset-review" class="secondary" type="button">重新准备</button>
+          </div>
+        </div>
+        <div id="review-status" class="notice" role="status">请选择“准备点云复核”。</div>
+
+        <div id="review-workspace" class="hidden">
+          <div class="viewer-card">
+            <div id="dbh-stage" class="dbh-stage">
+              <div id="dbh-plot3d"></div>
+              <div id="dbh-tree-label-overlay" aria-label="胸径复核点云标签"></div>
+              <svg id="dbh-axis-overlay" class="dbh-axis-overlay" aria-label="候选胸径轴"></svg>
+              <div id="dbh-viewer-toolbar" aria-label="三维视图控制">
+                <button id="btn-view-reset" type="button">重置</button>
+                <button id="btn-view-top" type="button">俯视</button>
+                <button id="btn-view-side" type="button">侧视</button>
+              </div>
+              <div id="dbh-renderer-status">等待点云…</div>
+              <div id="dbh-viewer-error" class="viewer-error hidden" role="alert"></div>
+            </div>
+            <div class="viewer-legend">
+              <span><i class="legend-dot raw-dot"></i>当前原始点（显示行保留精确 original_index）</span>
+              <span><i class="legend-dot crown-dot"></i>当前树冠上下文</span>
+              <span><i class="legend-dot selected-dot"></i>已选复核点</span>
+            </div>
+            <div id="dbh-context-label" class="context-label">当前树冠上下文：—</div>
+          </div>
+
+          <aside class="review-controls">
+            <section class="control-section">
+              <div class="section-heading">
+                <h3>候选轴</h3>
+                <span class="hint">全部候选都保留</span>
+              </div>
+              <p class="hint">候选轴仅用于人工确认身份；胸径仍由后台独立几何质量门计算。</p>
+              <div id="axis-candidates" class="axis-candidates"></div>
+            </section>
+
+            <section class="control-section seed-section">
+              <div class="section-heading">
+                <h3>种子点模式</h3>
+                <span id="seed-mode-label" class="mode-pill">未选择</span>
+              </div>
+              <p class="hint">没有可信候选轴时，可点击当前显示的可选原始点。点选绑定到该行的 exact original_index，不使用树冠覆盖层。</p>
+              <button id="btn-pick-seed" class="secondary" type="button">点击树干 / Pick stem</button>
+              <button id="btn-cancel-seed" class="text-button" type="button">取消点选</button>
+              <div id="seed-selection" class="selection-readout">尚未选择原始种子点。</div>
+              <div id="point-detail" class="point-detail"></div>
+            </section>
+
+            <section class="control-section confirm-section">
+              <label id="identity-confirm-label" class="identity-check">
+                <input id="identity-confirmed" type="checkbox">
+                <span>我确认这是该树的点云身份；胸径由后台几何计算。</span>
+              </label>
+              <button id="btn-confirm" class="confirm-button" type="button" disabled>确认人工身份并计算胸径</button>
+              <div id="confirm-message" class="confirm-message" role="status"></div>
+            </section>
+
+            <details id="review-diagnostics" class="diagnostics">
+              <summary>查看候选与编辑版本诊断</summary>
+              <pre id="diagnostics-text"></pre>
+            </details>
+          </aside>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/viewer-runtime.js"></script>
+  <script src="/giro3d.bundle.js"></script>
+  <script src="/tree-review-3d.js"></script>
+  <script src="/dbh_review.js"></script>
+  <script>window.TreeLineDbhReview.start();</script>
+</body>
+</html>

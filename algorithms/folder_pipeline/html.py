@@ -858,6 +858,7 @@ def step2_html() -> str:
         <button id="btn-trim-component">剔除误分团块</button>
         <button id="btn-trim-lasso">套索剔除</button>
         <button id="btn-undo" class="gray">撤销</button>
+        <button id="btn-dbh-review" class="gray" type="button">胸径复核 / DBH Review</button>
       </div>
       <div id="selection-state" style="font-size:12px;color:#5f6b7a;margin-top:7px">未选择单木</div>
       <div id="lasso-mode-indicator" style="display:none;margin-top:8px;padding:8px;border-radius:4px;background:#fff3cd;color:#6b4f00;font-weight:600;white-space:pre-line"></div>
