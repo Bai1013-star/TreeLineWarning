@@ -24,7 +24,7 @@ const original = fs.readFileSync(appPath, 'utf8');
 const exposed = original.replace(
   'window.TreeLineTreeReviewApp = {start, state, selectTree, beginLasso, cancelTrim, metrics};',
   'window.TreeLineTreeReviewApp = {start, state, selectTree, beginLasso, cancelTrim, '
-    + 'metrics, post, setEditingBusy, updateJournalCount};'
+    + 'metrics, post, setEditingBusy, updateJournalCount, bindControls};'
 );
 if (exposed === original) throw new Error('test hook replacement did not match the app export');
 
@@ -41,6 +41,7 @@ function response(status, value, broken = false) {
 
 function load(fetchImpl, options = {}) {
   const elements = new Map();
+  const tbody = {innerHTML: '', appendChild: () => {}};
   const document = {
     getElementById(id) {
       if (!elements.has(id)) {
@@ -48,13 +49,13 @@ function load(fetchImpl, options = {}) {
       }
       return elements.get(id);
     },
-    querySelector: () => null,
+    querySelector: selector => selector === '#treetable tbody' ? tbody : null,
     querySelectorAll: () => [],
-    createElement: () => ({getContext: () => null}),
+    createElement: () => ({getContext: () => null, dataset: {}, style: {}}),
     addEventListener: () => {},
   };
   const window = {
-    location: {search: ''},
+    location: {search: options.search || ''},
     crypto: options.crypto,
     addEventListener: () => {},
   };
@@ -79,6 +80,36 @@ function load(fetchImpl, options = {}) {
 }
 
 async function main() {
+  {
+    const scoped = {trees: [{tree_id: 7, point_count: 3, display_tree_id: 'T-S001-007'}]};
+    const globalSnapshot = {operations: [], trees: [
+      {tree_id: 7, point_count: 3}, {tree_id: 8, point_count: 4}]};
+    let displayed;
+    const app = load(async path => {
+      if (path.startsWith('/api/editor_data')) {
+        assert.ok(path.includes('span_id=S001'));
+        return response(200, scoped);
+      }
+      if (path === '/api/undo') return response(202, {
+        state: 'RUNNING', request_id: 'request-1'});
+      return response(200, {state: 'COMMITTED', request_id: 'request-1',
+        result: globalSnapshot});
+    }, {crypto: {randomUUID: () => 'request'}, search: '?span_id=S001'});
+    app.state.viewer = {
+      setData: data => { displayed = data; return {visible_tree_points: 3}; },
+      setLabelsVisible: () => {}, setSelection: () => {},
+      rendererInfo: () => ({three_version: 'test', webgl_version: 2}),
+    };
+    app.updateJournalCount({tree_edit_count: 1});
+    app.bindControls();
+    await app.elements.get('btn-undo').onclick();
+    assert.strictEqual(displayed, scoped);
+    assert.strictEqual(app.state.treeMap.size, 1, 'global journal must not replace scoped rows');
+    assert.strictEqual(app.state.treeMap.get(7).display_tree_id, 'T-S001-007');
+    assert.strictEqual(app.state.editingBusy, false);
+    assert.strictEqual(app.elements.get('btn-undo').disabled, true);
+  }
+
   {
     const calls = [];
     let index = 0;

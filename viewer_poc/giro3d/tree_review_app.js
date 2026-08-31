@@ -813,7 +813,8 @@
     byId('editmsg').textContent = '编辑已提交，正在刷新3D复核显示...';
     try {
       await loadEditorData();
-      renderTrees(snapshot, false);
+      // Display rows and labels come from the same scoped editor_data response.
+      // The mutation snapshot describes the whole journal/project, not this view.
       updatePlotSelection();
     } catch (error) {
       throw committedDisplayRefreshError(error);
@@ -872,7 +873,6 @@
       const snapshot = await post(path, {});
       await refreshCommittedDisplay(snapshot);
       state.selected.clear();
-      renderTrees(snapshot, false);
       updatePlotSelection();
       byId('editmsg').textContent = successMessage;
     } catch (error) { showFailure(error); }
@@ -902,7 +902,6 @@
         setTrimMode('IDLE', '已剔除框内树木点，可使用撤销精确恢复整个区域操作。');
         await refreshCommittedDisplay(snapshot);
         state.selected.clear();
-        renderTrees(snapshot, false);
         updatePlotSelection();
         byId('editmsg').textContent = '已剔除框内树木点，可使用撤销精确恢复整个区域操作。';
       } catch (error) { showFailure(error); }
@@ -934,7 +933,6 @@
         const snapshot = await post('/api/undo', {});
         await refreshCommittedDisplay(snapshot);
         state.selected.clear();
-        renderTrees(snapshot, false);
         updatePlotSelection();
         const journalCountAfter = journalCountFrom(snapshot);
         byId('editmsg').textContent = journalCountAfter != null && journalCountAfter >= journalCountBefore
