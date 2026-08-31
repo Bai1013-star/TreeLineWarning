@@ -382,10 +382,10 @@ class BatchTreeEditor:
         # Additive geometry only: DBH failure must not undo successful Survey
         # finalization or change crown/clearance membership. Reports only read
         # the resulting provenance-bound sidecar; they never trigger recovery.
-        from core.stage_b.dbh_recovery import recover_finalized_dbh
+        from core.stage_b.dbh_raw_recovery import finalize_dbh
 
         try:
-            recovered = recover_finalized_dbh(self.project_root, self.result, final)
+            recovered = finalize_dbh(self.project_root, self.result, final)
             self.dbh_recovery_status = {
                 "status": "COMPLETE", "tree_count": len(recovered["trees"])
             }

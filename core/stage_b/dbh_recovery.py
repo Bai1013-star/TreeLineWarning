@@ -156,6 +156,9 @@ def load_finalized_dbh(root: Path, result: Any, reconciled: Any) -> dict[int, di
         evidence = confined(root, payload["evidence_reference"])
         if sha256(evidence) != payload["evidence_sha256"]:
             raise ValueError("DBH_EVIDENCE_HASH_MISMATCH")
+        for proof in payload.get("additional_input_hashes", []):
+            if sha256(confined(root, proof["reference"])) != proof["sha256"]:
+                raise ValueError("DBH_ADDITIONAL_INPUT_HASH_MISMATCH")
         rows = payload["trees"]
         expected = {
             int(r.global_tree_id): r.persistent_tree_id for r in reconciled.global_tree_records

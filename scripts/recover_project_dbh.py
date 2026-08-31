@@ -85,6 +85,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, required=True)
     parser.add_argument(
+        "--version",
+        choices=("v1", "v2"),
+        default="v2",
+        help="V2 requires a valid finalized DBH base; V1 remains available for older projects",
+    )
+    parser.add_argument(
         "--write", action="store_true", help="Publish a new DBH-only geometry generation"
     )
     parser.add_argument(
@@ -104,7 +110,12 @@ def main() -> int:
         output = confined(root, "exports/" + args.export_name)
         if output.exists():
             parser.error("export destination already exists; preserve it")
-    payload = recover_finalized_dbh(root, result, reconciled, persist=args.write)
+    recovery = recover_finalized_dbh
+    if args.version == "v2":
+        from core.stage_b.dbh_raw_recovery import recover_finalized_dbh_v2
+
+        recovery = recover_finalized_dbh_v2
+    payload = recovery(root, result, reconciled, persist=args.write)
     if output is not None:
         from core.stage_b.export import export_batch_prediction
 
