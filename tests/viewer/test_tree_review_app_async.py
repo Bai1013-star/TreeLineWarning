@@ -23,7 +23,8 @@ const appPath = process.argv[1];
 const original = fs.readFileSync(appPath, 'utf8');
 const exposed = original.replace(
   'window.TreeLineTreeReviewApp = {start, state, selectTree, beginLasso, cancelTrim, metrics};',
-  'window.TreeLineTreeReviewApp = {start, state, selectTree, beginLasso, cancelTrim, metrics, post, setEditingBusy, updateJournalCount};'
+  'window.TreeLineTreeReviewApp = {start, state, selectTree, beginLasso, cancelTrim, '
+    + 'metrics, post, setEditingBusy, updateJournalCount};'
 );
 if (exposed === original) throw new Error('test hook replacement did not match the app export');
 
@@ -42,7 +43,9 @@ function load(fetchImpl, options = {}) {
   const elements = new Map();
   const document = {
     getElementById(id) {
-      if (!elements.has(id)) elements.set(id, {textContent: '', disabled: false, style: {}, dataset: {}});
+      if (!elements.has(id)) {
+        elements.set(id, {textContent: '', disabled: false, style: {}, dataset: {}});
+      }
       return elements.get(id);
     },
     querySelector: () => null,
@@ -82,9 +85,12 @@ async function main() {
     const app = load(async (path, init) => {
       calls.push({path, init});
       return [
-        response(202, {state: 'RUNNING', status: 'EDIT_RUNNING', request_id: 'request-1', job_id: 'job'}),
-        response(200, {state: 'RUNNING', status: 'EDIT_RUNNING', request_id: 'request-1', job_id: 'job'}),
-        response(200, {state: 'IDLE', status: 'EDIT_PREVIEW_READY', request_id: 'request-1', result: {preview_id: 'p1'}}),
+        response(202, {
+          state: 'RUNNING', status: 'EDIT_RUNNING', request_id: 'request-1', job_id: 'job'}),
+        response(200, {
+          state: 'RUNNING', status: 'EDIT_RUNNING', request_id: 'request-1', job_id: 'job'}),
+        response(200, {state: 'IDLE', status: 'EDIT_PREVIEW_READY',
+          request_id: 'request-1', result: {preview_id: 'p1'}}),
       ][index++];
     }, {crypto: {randomUUID: () => 'request'}});
     const result = await app.post('/api/trim/lasso-preview', {tree_id: -1});
@@ -104,7 +110,8 @@ async function main() {
       if (index++ === 0) throw new Error('connection reset');
       return response(200, index === 2
         ? {state: 'RUNNING', status: 'EDIT_RUNNING', request_id: 'request-1', job_id: 'job'}
-        : {state: 'COMMITTED', status: 'EDIT_COMMITTED', request_id: 'request-1', result: {trees: []}});
+        : {state: 'COMMITTED', status: 'EDIT_COMMITTED',
+          request_id: 'request-1', result: {trees: []}});
     }, {crypto: {randomUUID: () => 'request'}});
     const result = await app.post('/api/delete', {});
     assert.deepStrictEqual(result, {trees: []});
@@ -116,14 +123,16 @@ async function main() {
     let index = 0;
     const app = load(async () => [
       response(202, null, true),
-      response(200, {state: 'COMMITTED', status: 'EDIT_COMMITTED', request_id: 'request-1', result: {trees: []}}),
+      response(200, {state: 'COMMITTED', status: 'EDIT_COMMITTED',
+        request_id: 'request-1', result: {trees: []}}),
     ][index++], {crypto: {randomUUID: () => 'request'}});
     assert.deepStrictEqual(await app.post('/api/merge', {}), {trees: []});
     assert.strictEqual(app.state.mutation, null);
   }
 
   {
-    const app = load(async () => response(200, null, true), {crypto: {randomUUID: () => 'request'}});
+    const app = load(async () => response(200, null, true), {
+      crypto: {randomUUID: () => 'request'}});
     await assert.rejects(
       app.post('/api/select', {tree_ids: []}),
       error => error.recoverable === true && error.responseParse === true,
@@ -145,8 +154,10 @@ async function main() {
   }
 
   {
-    const timeoutSource = exposed.replace('const MUTATION_RECOVERY_MS = 60000;', 'const MUTATION_RECOVERY_MS = 0;');
-    const app = load(async () => response(202, {state: 'RUNNING', status: 'EDIT_RUNNING', request_id: 'request-1'}), {
+    const timeoutSource = exposed.replace(
+      'const MUTATION_RECOVERY_MS = 60000;', 'const MUTATION_RECOVERY_MS = 0;');
+    const app = load(async () => response(202, {
+      state: 'RUNNING', status: 'EDIT_RUNNING', request_id: 'request-1'}), {
       crypto: {randomUUID: () => 'request'},
       source: timeoutSource,
     });
@@ -164,7 +175,8 @@ async function main() {
     let posts = 0;
     const hungStatusSource = exposed
       .replace('const MUTATION_RECOVERY_MS = 60000;', 'const MUTATION_RECOVERY_MS = 10;')
-      .replace('const MUTATION_REQUEST_TIMEOUT_MS = 15000;', 'const MUTATION_REQUEST_TIMEOUT_MS = 1;');
+      .replace('const MUTATION_REQUEST_TIMEOUT_MS = 15000;',
+        'const MUTATION_REQUEST_TIMEOUT_MS = 1;');
     const app = load(async (path, init) => {
       if (init && init.method === 'POST') {
         posts += 1;
