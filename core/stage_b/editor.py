@@ -379,6 +379,18 @@ class BatchTreeEditor:
             self.artifact_root / "batch.json",
             self.result.to_dict(),
         )
+        # Additive geometry only: DBH failure must not undo successful Survey
+        # finalization or change crown/clearance membership. Reports only read
+        # the resulting provenance-bound sidecar; they never trigger recovery.
+        from core.stage_b.dbh_recovery import recover_finalized_dbh
+
+        try:
+            recovered = recover_finalized_dbh(self.project_root, self.result, final)
+            self.dbh_recovery_status = {
+                "status": "COMPLETE", "tree_count": len(recovered["trees"])
+            }
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+            self.dbh_recovery_status = {"status": "UNAVAILABLE", "reason": str(exc)}
         return self.result
 
 

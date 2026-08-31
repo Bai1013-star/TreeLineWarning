@@ -85,7 +85,8 @@ def test_stage_b_export_adds_display_id_without_replacing_persistent_id(tmp_path
     assert row["start_tower_id"] == "tower-107"
     assert row["end_tower_id"] == "tower-108"
     assert headers[0] == "persistent_tree_id"
-    assert headers[-1] == "display_tree_id"
+    assert headers[33] == "display_tree_id"
+    assert headers[34:37] == ["dbh_cm", "dbh_method", "dbh_quality"]
 
     mismatched_data = vars(result).copy()
     mismatched_data["project_id"] = "unrelated-project"

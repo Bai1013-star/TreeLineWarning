@@ -9,6 +9,17 @@
     return Number.isFinite(number) ? number.toFixed(digits) : esc(item);
   };
 
+  function dbhCell(row) {
+    const number = row.dbh_cm ?? row.diameter_cm;
+    if (number === null || number === undefined || number === '') return '—';
+    const labels = { DIRECT_STEM: '点云', RECOVERED_STEM: '恢复', ALLOMETRIC_ESTIMATE: '估算' };
+    const label = labels[row.dbh_method] || '';
+    const detail = [row.dbh_method, row.dbh_quality,
+      row.dbh_point_count == null ? '' : `${row.dbh_point_count} 点`,
+      row.dbh_fit_rmse == null ? '' : `RMSE ${value(row.dbh_fit_rmse, 4)} m`].filter(Boolean).join(' · ');
+    return `<span title="${esc(detail)}">${value(number)}${label ? ` · ${label}` : ''}</span>`;
+  }
+
   function showStatus(message, kind = '') {
     const node = $('reportStatus');
     node.className = `notice ${kind}`;
@@ -31,7 +42,7 @@
       const risk = String(row.current_risk || 'UNKNOWN');
       const displayId = row.display_tree_id || row.persistent_tree_id || '—';
       const persistentId = row.persistent_tree_id || '—';
-      return `<tr><td title="持久 ID：${esc(persistentId)}"><b>${esc(displayId)}</b><small> · ${esc(persistentId)}</small></td><td>${value(row.height_m)}</td><td>${value(row.crown_width_m)}</td><td>${value(row.crown_area_m2)}</td><td>${value(row.diameter_cm)}</td><td>${value(row.minimum_clearance_m, 3)}</td><td>${value(row.danger_point_count, 0)}</td><td data-risk="${esc(risk)}">${esc(risk)}</td><td>${esc(row.quality_state || '—')}</td><td>${row.human_edited ? '是' : '否'}</td></tr>`;
+      return `<tr><td title="持久 ID：${esc(persistentId)}"><b>${esc(displayId)}</b><small> · ${esc(persistentId)}</small></td><td>${value(row.height_m)}</td><td>${value(row.crown_width_m)}</td><td>${value(row.crown_area_m2)}</td><td>${dbhCell(row)}</td><td>${value(row.minimum_clearance_m, 3)}</td><td>${value(row.danger_point_count, 0)}</td><td data-risk="${esc(risk)}">${esc(risk)}</td><td>${esc(row.quality_state || '—')}</td><td>${row.human_edited ? '是' : '否'}</td></tr>`;
     }).join('') || '<tr><td colspan="10">没有当前最终单木记录</td></tr>';
   }
 

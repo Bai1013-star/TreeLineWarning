@@ -226,6 +226,13 @@ def install_review_extensions() -> None:
             str(record.persistent_tree_id): metrics.get(int(record.global_tree_id))
             for record in reconciled.global_tree_records
         }
+        from core.stage_b.dbh_recovery import load_finalized_dbh, publication_fields
+
+        recovered = load_finalized_dbh(self.project_root, result, reconciled)
+        dbh_by_persistent = {
+            str(record.persistent_tree_id): recovered.get(int(record.global_tree_id))
+            for record in reconciled.global_tree_records
+        }
         for row in projection.get("trees", []):
             metric = persistent_to_metric.get(str(row.get("persistent_tree_id")))
             if metric is None:
@@ -247,6 +254,9 @@ def install_review_extensions() -> None:
             row["diameter_source"] = (
                 f"BREAST_HEIGHT_1P30M_{metric.dbh.dbh_quality}"
             )
+            dbh = dbh_by_persistent.get(str(row.get("persistent_tree_id")))
+            if dbh is not None:
+                row.update(publication_fields(dbh))
         projection.setdefault("metadata", {})["tree_metrics_source"] = (
             "CANONICAL_FULLRES_POST_EDITOR"
         )

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import numpy as np
-
 from algorithms.spans.clearance import (
     SpanClearanceResult,
     SpanDangerPoint,
@@ -212,3 +211,20 @@ def test_no_tree_edit_keeps_existing_clearance_when_runtime_wires_are_unavailabl
     assert finalized.final_clearance is clearance
     assert stages == ["APPLYING_EDITS", "VALIDATING_CLEARANCE"]
     assert "clearance_state" not in finalized.global_reconciled.diagnostics
+
+
+def test_dbh_failure_does_not_roll_back_finalized_clearance(tmp_path, monkeypatch) -> None:
+    from core.stage_b import dbh_recovery
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("TEST_DBH_RECOVERY_FAILURE")
+
+    monkeypatch.setattr(dbh_recovery, "recover_finalized_dbh", fail)
+    clearance = _clearance()
+    editor = BatchTreeEditor(tmp_path, _result(clearance), tree_ids_by_span={"span-a": (0, 1)})
+    finalized = editor.finalize()
+    assert finalized.final_clearance is clearance
+    assert set(finalized.span_statuses.values()) == {BatchSpanStatus.FINALIZED}
+    assert editor.dbh_recovery_status == {
+        "status": "UNAVAILABLE", "reason": "TEST_DBH_RECOVERY_FAILURE"
+    }

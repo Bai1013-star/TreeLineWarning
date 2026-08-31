@@ -11,6 +11,7 @@ from algorithms.manual_span.metrics import CROWN_WIDTH_STATISTIC, TREE_HEIGHT_ST
 
 from core.stage_b.batch import BatchAnalysisResult, BatchSpanStatus
 from core.stage_b.contact import contact_evidence_from_clearance
+from core.stage_b.dbh_recovery import load_finalized_dbh, publication_fields
 from core.stage_b.tree_display_id import assign_tree_display_ids, ordered_product_spans
 from core.stage_b.tree_metrics import compute_stage_b_tree_metrics
 
@@ -147,6 +148,7 @@ def export_batch_prediction(
     if reconciled.diagnostics.get("editor_schema") != "treeline-stage-b-batch-editor-v1":
         raise ValueError("PREDICTION_EXPORT_REQUIRES_POST_EDITOR_MEMBERSHIP")
     metrics_by_tree = compute_stage_b_tree_metrics(result, reconciled, output_path)
+    dbh_rows = load_finalized_dbh(output_path.parent.parent, result, reconciled)
     clearance_by_tree = {
         record.global_tree_id: record
         for record in (result.final_clearance.records if result.final_clearance else ())
@@ -262,6 +264,10 @@ def export_batch_prediction(
                 "edit_provenance": extra.get("edit_provenance", "TREE_EDITOR_FINAL"),
             }
         )
+    for row in rows:
+        tree_id = int(str(row["analysis_tree_id"]).removeprefix("analysis-tree-"))
+        if tree_id in dbh_rows:
+            row.update(publication_fields(dbh_rows[tree_id]))
     metadata = {
         "project_id": result.project_id,
         "science_run_id": result.analysis_run_id,

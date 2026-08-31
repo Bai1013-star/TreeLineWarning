@@ -75,6 +75,17 @@ _TREE_COLUMNS = [
     # Human-facing presentation identity is appended to preserve Prediction
     # consumers that depend on the established leading-column contract.
     "display_tree_id",
+    # Additive finalized DBH contract; retain every established column position.
+    "dbh_cm",
+    "dbh_method",
+    "dbh_quality",
+    "dbh_point_count",
+    "dbh_fit_rmse",
+    "dbh_slice_count",
+    "dbh_fit_status",
+    "dbh_source",
+    "dbh_model_version",
+    "dbh_uncertainty_cm",
 ]
 
 _NUMERIC_COLUMNS = {
@@ -91,6 +102,11 @@ _NUMERIC_COLUMNS = {
     "minimum_clearance_m",
     "danger_point_count",
     "warning_threshold_used_m",
+    "dbh_cm",
+    "dbh_point_count",
+    "dbh_fit_rmse",
+    "dbh_slice_count",
+    "dbh_uncertainty_cm",
 }
 
 _METADATA_ROWS = [
