@@ -1,7 +1,8 @@
-# TreeLineWarning Survey-only Windows 用户指南
+# TreeLineWarning Windows 用户指南
 
-本文档对应当前 **Survey-only** 桌面基线。发行包不包含 Parallel 或 Preview
-（预览）分析路径；不要把本包当作这两项功能的交付承诺。
+本发行版以 **Survey Core** 为验收范围。分析请选择 AUTO 或 SERIAL；Parallel 未启用。
+保留的本地未来点云预览是实验性示意功能，未纳入发行验收，不是预测或安全结论。
+独立 Windows 计算机验收尚待完成。
 
 ## 使用前准备
 

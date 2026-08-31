@@ -257,6 +257,8 @@ def test_prepare_writes_manifest_and_rejects_reuse(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     listed = {item["path"]: item for item in manifest["files"]}
     assert "VERSION.txt" in listed
+    assert "QUICK_START.md" in listed
+    assert manifest["preview"] == "EXPERIMENTAL_NOT_ACCEPTED"
     assert "PACKAGED_ACCEPTANCE_CONTRACT.md" in listed
     assert "release_file_manifest.json" not in listed
     for relative, item in listed.items():

@@ -545,12 +545,12 @@ def _render_version(
     proj_data: ProjData | None,
 ) -> str:
     lines = [
-        "TreeLineWarning Survey-only baseline",
+        "TreeLineWarning Windows release candidate",
         f"version = {version}",
         f"status = {status}",
-        "baseline = Survey-only",
+        "baseline = Survey Core",
         "parallel = NOT_INCLUDED",
-        "preview = NOT_INCLUDED",
+        "preview = EXPERIMENTAL_NOT_ACCEPTED",
         f"source_head = {source['head']}",
         f"tracked_source_sha256 = {source['tracked_source_sha256']}",
         f"native_runtime_manifest_sha256 = {native.manifest_sha256}",
@@ -575,13 +575,13 @@ def _render_contract(
     lines = [
         "# TreeLineWarning packaged acceptance contract",
         "",
-        "This package is a Survey-only baseline prepared by the bounded release harness.",
+        "This package targets Survey Core; local preview is experimental and not accepted.",
         "It is not a clean-PC acceptance result and carries no legal clearance claim.",
         "",
         f"- package_status: {status}",
-        "- baseline: Survey-only",
+        "- baseline: Survey Core",
         "- parallel: NOT_INCLUDED",
-        "- preview: NOT_INCLUDED",
+        "- preview: EXPERIMENTAL_NOT_ACCEPTED",
         f"- source_head: {source['head']}",
         f"- tracked_source_sha256: {source['tracked_source_sha256']}",
         f"- native_runtime_manifest_sha256: {native.manifest_sha256}",
@@ -647,9 +647,9 @@ def _package_manifest(package_root: Path, *, status: str) -> dict[str, Any]:
     return {
         "schema": MANIFEST_SCHEMA,
         "package_status": status,
-        "baseline": "Survey-only",
+        "baseline": "Survey Core",
         "parallel": "NOT_INCLUDED",
-        "preview": "NOT_INCLUDED",
+        "preview": "EXPERIMENTAL_NOT_ACCEPTED",
         "self_entry": "EXCLUDED_AFTER_WRITE",
         "files": entries,
     }
@@ -800,6 +800,23 @@ def _copy_package_metadata(
 ) -> dict[str, Any]:
     package_root.mkdir(parents=True, exist_ok=True)
     _copy_exact(options.guide_path, package_root / options.guide_path.name)
+    (package_root / "QUICK_START.md").write_text(
+        "# TreeLineWarning Quick Start\n\n"
+        "1. Extract the entire folder to a writable local Windows x64 directory.\n"
+        "2. Double-click TreeLineWarning.exe; retain _internal and all adjacent files.\n"
+        "3. No Python, Conda, PDAL, PYTHONPATH or repository checkout is required.\n"
+        "4. WebView2 and .NET Framework 4.6.2+ are Windows prerequisites. If needed,\n"
+        "   ask IT to run webview2_offline_prerequisite/offline_verified/"
+        "MicrosoftEdgeWebView2RuntimeInstallerX64.exe manually. No automatic install.\n"
+        "5. New/Open Project > import LAS/LAZ > confirm units > towers/spans >\n"
+        "   analyze (AUTO or SERIAL) > Tree Review > Finalize > current report/export.\n"
+        "6. Close and restart, reopen the project, and verify finalized state/export.\n\n"
+        "Independent clean-PC acceptance is PENDING. Parallel is unavailable.\n"
+        "Local future preview is experimental, not a validated forecast or safety result.\n"
+        "See WINDOWS_USER_GUIDE.zh-CN.md and THIRD_PARTY_NOTICES.txt.\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     _copy_exact(options.notice_text, package_root / "THIRD_PARTY_NOTICES.txt")
     _copy_exact(options.notice_json, package_root / "THIRD_PARTY_NOTICES.json")
     (package_root / "VERSION.txt").write_text(
@@ -919,10 +936,10 @@ def run_release(options: ReleaseOptions) -> dict[str, Any]:
     receipt = {
         "schema": BUILD_SCHEMA,
         "package_status": status,
-        "baseline": "Survey-only",
+        "baseline": "Survey Core",
         "project_version": version,
         "parallel": "NOT_INCLUDED",
-        "preview": "NOT_INCLUDED",
+        "preview": "EXPERIMENTAL_NOT_ACCEPTED",
         "started_utc": started_at,
         "finished_utc": _utc_now(),
         "source_start": source_start,

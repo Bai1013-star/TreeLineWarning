@@ -4,6 +4,7 @@ import json
 import time
 from pathlib import Path
 
+import pytest
 from algorithms.spans.project_adapter import SpanScienceResult
 from core.stage_b.batch import BatchTelemetry
 from desktop.project_management import create_empty_project, import_pointcloud
@@ -57,10 +58,13 @@ def test_stage_c_manual_topology_is_ordered_logical_and_safe(tmp_path: Path) -> 
     )
 
 
-def test_stage_c_fixture_batch_reconciles_and_resumes_without_rerun(tmp_path: Path) -> None:
+@pytest.mark.parametrize("execution_mode", ["AUTO", "SERIAL"])
+def test_stage_c_fixture_batch_reconciles_and_resumes_without_rerun(
+    tmp_path: Path, execution_mode: str
+) -> None:
     workflow = _workflow(tmp_path)
     span_ids = [item["span_id"] for item in workflow.project_projection()["span_records"]]
-    workflow.start_batch(span_ids, mode="FIXTURE")
+    workflow.start_batch(span_ids, mode="FIXTURE", execution_mode=execution_mode)
     for _ in range(100):
         batch = workflow.batch_projection()
         if batch["status"] != "RUNNING":
@@ -286,3 +290,17 @@ def test_failed_span_projection_surfaces_chinese_reason_and_retry_policy(tmp_pat
         assert "返回杆塔选取" in str(exc)
     else:
         raise AssertionError("non-recoverable evidence failure must not retry endlessly")
+
+
+def test_serial_release_rejects_parallel_before_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    import desktop.workflow as workflow_module
+
+    class SerialScheduler:
+        def __init__(self, root, project, scan_id, *, risk_policy=None):
+            raise AssertionError("validation must not construct the scheduler")
+
+    monkeypatch.setattr(workflow_module, "BatchAnalysisScheduler", SerialScheduler)
+    assert DesktopWorkflow._validate_execution_mode("AUTO") == "AUTO"
+    assert DesktopWorkflow._validate_execution_mode("SERIAL") == "SERIAL"
+    with pytest.raises(ValueError, match="PARALLEL_UNAVAILABLE"):
+        DesktopWorkflow._validate_execution_mode("PARALLEL")

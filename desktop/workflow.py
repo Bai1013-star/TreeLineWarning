@@ -8,6 +8,7 @@ runner exists solely for offline UI acceptance and is always labelled as such.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import shutil
@@ -847,8 +848,14 @@ class DesktopWorkflow:
                     raise ValueError("POINT_CLOUD_NOT_IMPORTED")
                 kwargs: dict[str, Any] = {
                     "risk_policy": self._risk_policy(),
-                    "execution_mode": self._workflow.get("execution_mode", "AUTO"),
                 }
+                execution_mode = self._validate_execution_mode(
+                    self._workflow.get("execution_mode", "AUTO")
+                )
+                # The released serial scheduler predates the optional mode API.
+                # Never depend on an uncommitted parallel scheduler to start a batch.
+                if "execution_mode" in inspect.signature(BatchAnalysisScheduler).parameters:
+                    kwargs["execution_mode"] = execution_mode
                 if mode == "FIXTURE":
                     kwargs.update(
                         {
@@ -959,6 +966,11 @@ class DesktopWorkflow:
         mode = str(value).upper()
         if mode not in {"AUTO", "SERIAL", "PARALLEL"}:
             raise ValueError("execution_mode must be AUTO, SERIAL, or PARALLEL")
+        if (
+            mode == "PARALLEL"
+            and "execution_mode" not in inspect.signature(BatchAnalysisScheduler).parameters
+        ):
+            raise ValueError("PARALLEL_UNAVAILABLE: use AUTO or SERIAL in this release")
         return mode
 
     def retry_failed(self, *, execution_mode: str | None = None) -> dict[str, Any]:
