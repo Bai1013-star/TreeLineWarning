@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>TreeLineWarning · 预测与模拟</title>
+  <link rel="stylesheet" href="/future_preview.css">
+</head>
+<body>
+  <main class="preview-shell">
+    <header class="preview-header">
+      <div>
+        <p class="eyebrow">TreeLineWarning Survey · LOCAL_SCENARIO</p>
+        <h1 id="futureTitle">预测与模拟</h1>
+        <p class="subtitle">基于当前最终单木几何的本地场景预览 · 只读实验功能</p>
+      </div>
+      <div class="preview-actions">
+        <a class="button" href="/step3">当前最终报告</a>
+        <a class="button" href="/">返回项目</a>
+      </div>
+    </header>
+
+    <section class="notice">实验性预测 · 不替代当前正式勘察结果。仅为本地几何场景，不是经验证的长期生物学预测。</section>
+    <section id="futureStatus" class="notice" aria-live="polite">正在读取预测状态…</section>
+
+    <section id="futureControls" class="panel hidden" aria-label="预测场景控制">
+      <div class="control-row">
+        <div class="mode-block">
+          <span class="control-label">预测模式</span>
+          <strong id="predictionMode">✓ 本地基础预测</strong>
+          <small id="modelInfo">仅使用本机已发布的当前几何</small>
+        </div>
+        <div class="horizon-group" role="group" aria-label="预测时间范围">
+          <button type="button" id="currentViewButton" data-view="current">当前</button>
+          <button type="button" data-horizon="1">+1 年</button>
+          <button type="button" data-horizon="3">+3 年</button>
+          <button type="button" data-horizon="5">+5 年</button>
+        </div>
+      </div>
+      <div class="status-row">
+        <span id="scenarioStatus" class="status-chip">当前几何</span>
+        <span class="status-chip muted-chip">未来净空：未实现</span>
+        <span class="status-chip muted-chip">未来导线：未实现</span>
+      </div>
+    </section>
+
+    <section id="futureBody" class="hidden">
+      <section class="panel geometry-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">CURRENT WIRES · SCENARIO TREES</p>
+            <h2>当前树木与场景树冠</h2>
+          </div>
+          <span id="geometrySource" class="source-pill"></span>
+        </div>
+        <div id="futurePlot" class="plot" aria-label="当前导线与当前或未来场景树木三维图"></div>
+        <div class="legend" aria-label="图例">
+          <span><i class="legend-dot current-dot"></i>当前树木</span>
+          <span><i class="legend-dot future-dot"></i>场景树木</span>
+          <span><i class="legend-line"></i>当前 W1 导线</span>
+        </div>
+        <p id="geometryNote" class="hint"></p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">TREE SCENARIO VALUES</p>
+            <h2>单木场景指标</h2>
+          </div>
+          <span id="rowCount" class="source-pill"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>树编号 / 持久 ID</th><th>档距</th><th>高度 (m)</th><th>冠幅长 (m)</th>
+                <th>冠幅短 (m)</th><th>DBH (cm)</th><th>父点数</th><th>显示点数</th>
+              </tr>
+            </thead>
+            <tbody id="treeRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel assumptions-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">EXPERIMENTAL NOTICE</p>
+            <h2>假设与边界</h2>
+          </div>
+        </div>
+        <p id="assumptions" class="hint">实验性预测、不替代当前正式勘察结果。此页面不作生物学准确性声明。</p>
+        <p class="hint">页面只叠加当前 W1 导线；未来导线和未来净空尚未实现。</p>
+      </section>
+    </section>
+  </main>
+  <script src="/plotly.js"></script>
+  <script src="/future_preview.js"></script>
+</body>
+</html>

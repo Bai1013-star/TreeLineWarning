@@ -14,9 +14,11 @@
     towerTimings: null,
     treeReviewReady: false,
     finalized: false,
+    canPredict: false,
     testMode: false,
     viewerLoaded: false,
     activeSpanId: null,
+    executionMode: 'AUTO',
   };
   const browserAcceptance = new URLSearchParams(window.location.search).has('browser-test');
   const $ = id => document.getElementById(id);
@@ -39,6 +41,60 @@
     REVIEW_REQUIRED: '需要复核', USER_REVIEWED: '已复核', FINALIZED: '已定稿', AVAILABLE: '已有结果',
   };
   const statusLabel = value => statusLabels[value] || value || '未开始';
+  const executionModes = new Set(['AUTO', 'SERIAL', 'PARALLEL']);
+  const normalizeExecutionMode = value => {
+    const mode = String(value || '').toUpperCase();
+    return executionModes.has(mode) ? mode : 'AUTO';
+  };
+  function selectedExecutionMode() {
+    const select = $('executionMode');
+    const mode = normalizeExecutionMode(select?.value || state.executionMode);
+    state.executionMode = mode;
+    return mode;
+  }
+  function executionTelemetry(batch) {
+    return batch?.telemetry?.EXECUTION ?? batch?.EXECUTION ?? batch?.execution ?? batch?.execution_status ?? null;
+  }
+  function executionTelemetryText(value) {
+    if (value === null || value === undefined || value === '') return '';
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value)) return value.map(item => executionTelemetryText(item)).filter(Boolean).join(' · ');
+    if (typeof value === 'object') {
+      const fields = [
+        ['mode', value.effective_mode || value.actual_mode || value.mode || value.execution_mode],
+        ['状态', value.status],
+        ['worker', value.worker_count ?? value.workers ?? value.max_workers],
+        ['原因', value.reason || value.fallback_reason || value.message],
+      ].filter(([, item]) => item !== undefined && item !== null && item !== '');
+      if (fields.length) return fields.map(([label, item]) => `${label}=${item}`).join(' · ');
+      try {
+        const serialized = JSON.stringify(value);
+        return serialized && serialized !== '{}' ? serialized : '';
+      } catch (_) { return ''; }
+    }
+    return String(value);
+  }
+  function renderFuturePreviewLink() {
+    const button = $('openFuturePreview');
+    const note = $('futurePreviewNote');
+    if (!button) return;
+    const allowed = Boolean(state.canPredict);
+    button.disabled = !allowed;
+    button.textContent = allowed ? '预测与模拟' : '预测与模拟 🔒';
+    button.classList.toggle('future-preview-locked', !allowed);
+    button.title = allowed ? '打开本地场景预测' : '请先完成当前项目的单木复核。';
+    if (note) {
+      note.textContent = allowed
+        ? '✓ 本地基础预测仅用于实验性场景预览，不替代当前正式勘察结果。'
+        : '请先完成当前项目的单木复核。';
+      note.classList.toggle('status-good', allowed);
+      note.classList.toggle('status-warn', !allowed);
+    }
+  }
+  function openFuturePreview() {
+    if (state.canPredict) window.location.href = '/future-preview.html';
+    else setStatus('请先完成当前项目的单木复核', 'warn');
+  }
   const userError = (error, fallback) => {
     console.error(fallback, error);
     return /[\u3400-\u9fff]/.test(error?.message || '') ? error.message : fallback;
@@ -141,6 +197,12 @@
   function renderBatch(batch) {
     state.batch = batch;
     $('footerBatch').textContent = `分析任务：${statusLabel(batch.status)}`;
+    const requestedExecutionMode = batch.execution_mode || batch.execution_mode_requested;
+    const executionSelect = $('executionMode');
+    if (requestedExecutionMode && executionSelect && !executionSelect.dataset.userSelected) {
+      state.executionMode = normalizeExecutionMode(requestedExecutionMode);
+      executionSelect.value = state.executionMode;
+    }
     const spans = batch.spans || [];
     if (!state.activeSpanId || !spans.some(span => span.span_id === state.activeSpanId)) state.activeSpanId = spans[0]?.span_id || null;
     $('spanChecks').innerHTML = spans.length ? spans.map(span => {
@@ -151,9 +213,13 @@
     const failed = spans.filter(span => span.status === 'FAILED');
     const completed = spans.filter(span => ['AUTO_ANALYZED', 'REVIEW_REQUIRED', 'USER_REVIEWED', 'FINALIZED'].includes(span.status));
     $('batchBox').className = `notice ${failed.length ? 'bad' : ''}`;
-    $('batchBox').innerHTML = `${batch.acceptance_mode === 'FIXTURE' ? '<b>测试模式</b> · ' : ''}任务状态：${esc(statusLabel(batch.status))}<br>已完成档距：${completed.length}/${spans.length}${failed.length ? `<br>失败：${failed.map(span => esc(spanName(span))).join('、')}` : ''}`;
+    const executionRequested = normalizeExecutionMode(batch.execution_mode || batch.execution_mode_requested || state.executionMode);
+    const executionActual = executionTelemetryText(executionTelemetry(batch));
+    const executionMarkup = `<br>执行模式：${esc(executionRequested)}${executionActual ? `<br>EXECUTION：${esc(executionActual)}` : ''}`;
+    $('batchBox').innerHTML = `${batch.acceptance_mode === 'FIXTURE' ? '<b>测试模式</b> · ' : ''}任务状态：${esc(statusLabel(batch.status))}<br>已完成档距：${completed.length}/${spans.length}${failed.length ? `<br>失败：${failed.map(span => esc(spanName(span))).join('、')}` : ''}${executionMarkup}`;
     const treeCount = Number.isInteger(batch.final_tree_count) ? batch.final_tree_count : '—';
     $('resultBox').innerHTML = completed.length ? `<b>已有 ${completed.length} 个档距结果</b><br>全局归并单木：${esc(treeCount)} · 预警净空阈值：${esc(batch.risk_policy?.warning_clearance_threshold_m)} m<br>计数来自最终全局归并发布；导线或净空证据不足时保持“需复核”。` : '分析完成后显示结果。';
+    renderFuturePreviewLink();
     $('lineOverview').innerHTML = spans.map(span => {
       const cls = ['FAILED'].includes(span.status) ? 'failed' : (['REVIEW_REQUIRED'].includes(span.status) ? 'review' : (['AUTO_ANALYZED', 'USER_REVIEWED', 'FINALIZED'].includes(span.status) ? 'done' : ''));
       return `<button class="${cls} ${span.span_id === state.activeSpanId ? 'active' : ''}" data-line-span="${esc(span.span_id)}"><b>${esc(spanName(span))}</b><br>${esc(statusLabel(span.status))}</button>`;
@@ -230,7 +296,10 @@
       show('resultSection'); show('objectSection'); show('analysisOverview');
       $('pipelineStages').innerHTML = pipelineMarkup('done');
       const completed = (state.batch.spans || []).filter(span => span.status === 'FINALIZED').length;
-      $('stageHost').innerHTML = stageCard('步骤 6 / 6', '结果已完成', '单木复核和档距结果已定稿。现在可以查看当前最终报告或导出预测输入。', '<button data-action="open-viewer">打开复核视图</button><button data-action="open-current-report">打开当前最终报告</button><button class="primary" data-action="export-prediction">导出预测输入</button>', `<div class="result-summary"><div class="summary-tile"><span>已定稿档距</span><b>${completed}</b></div><div class="summary-tile"><span>风险阈值</span><b>${esc(state.batch.risk_policy?.warning_clearance_threshold_m)} m</b></div><div class="summary-tile"><span>结果状态</span><b class="status-good">已完成</b></div></div>`);
+      const futureAction = state.canPredict
+        ? '<button data-action="open-future-preview">预测与模拟</button>'
+        : '<button data-action="open-future-preview" disabled>预测与模拟 🔒</button>';
+      $('stageHost').innerHTML = stageCard('步骤 6 / 6', '结果已完成', '单木复核和档距结果已定稿。现在可以查看当前最终报告、实验性场景预览或导出预测输入。', `<button data-action="open-viewer">打开复核视图</button><button data-action="open-current-report">打开当前最终报告</button>${futureAction}<button class="primary" data-action="export-prediction">导出预测输入</button>`, `<div class="result-summary"><div class="summary-tile"><span>已定稿档距</span><b>${completed}</b></div><div class="summary-tile"><span>风险阈值</span><b>${esc(state.batch.risk_policy?.warning_clearance_threshold_m)} m</b></div><div class="summary-tile"><span>结果状态</span><b class="status-good">已完成</b></div></div>`);
     }
   }
 
@@ -240,6 +309,7 @@
       state.uiState = payload.ui_state;
       state.treeReviewReady = Boolean(payload.tree_review_ready);
       state.finalized = Boolean(payload.finalized);
+      state.canPredict = payload.can_predict === undefined ? state.finalized : Boolean(payload.can_predict);
       state.testMode = Boolean(payload.test_mode);
       renderProject(payload.project);
       renderCapability(payload.capability);
@@ -426,7 +496,8 @@
     try {
       const spanIds = selectedSpanIds();
       if (!spanIds.length) { setStatus('请先勾选至少一个逻辑档距', 'warn'); return; }
-      const started = await jsonPost('/api/desktop/batch/start', {span_ids: spanIds, mode});
+      const execution_mode = selectedExecutionMode();
+      const started = await jsonPost('/api/desktop/batch/start', {span_ids: spanIds, mode, execution_mode});
       renderBatch(started);
       state.uiState = started.status === 'RUNNING' ? 'ANALYSIS_RUNNING' : state.uiState;
       renderWorkspace();
@@ -452,7 +523,7 @@
     } catch (error) { setStatus(userError(error, '暂时无法读取分析进度。'), 'bad'); }
   }
   async function retryBatch() {
-    try { await jsonPost('/api/desktop/batch/retry'); await loadWorkspace(); pollBatch(); }
+    try { await jsonPost('/api/desktop/batch/retry', {execution_mode: selectedExecutionMode()}); await loadWorkspace(); pollBatch(); }
     catch (error) { setStatus(userError(error, '重试失败任务未能启动。'), 'bad'); }
   }
   function loadViewer(force = false) {
@@ -519,11 +590,16 @@
   $('saveTowers').addEventListener('click', saveTowers);
   $('removeTower').addEventListener('click', () => { if (state.towerRows.length) { state.towerRows.pop(); renderTowerRows(); } });
   $('startFixture').addEventListener('click', () => startBatch('FIXTURE'));
+  $('executionMode').addEventListener('change', event => {
+    state.executionMode = normalizeExecutionMode(event.target.value);
+    event.target.dataset.userSelected = 'yes';
+  });
   $('startCurrent').addEventListener('click', () => startCurrentSpan('REAL'));
   $('startSelected').addEventListener('click', () => startBatch('REAL'));
   $('startAll').addEventListener('click', () => startAllSpans('REAL'));
   $('retryBatch').addEventListener('click', retryBatch);
   $('openViewer').addEventListener('click', () => loadViewer());
+  $('openFuturePreview').addEventListener('click', openFuturePreview);
   $('refreshViewer').addEventListener('click', () => loadViewer(true));
   $('viewer').addEventListener('load', localizeViewerFrame);
   $('finalizeBatch').addEventListener('click', finalizeBatch);
@@ -540,6 +616,7 @@
     else if (action === 'start-analysis') startBatch('REAL');
     else if (action === 'open-viewer') loadViewer();
     else if (action === 'open-current-report') window.location.href = '/step3';
+    else if (action === 'open-future-preview') openFuturePreview();
     else if (action === 'export-prediction') exportPrediction();
   });
   window.addEventListener('error', event => {

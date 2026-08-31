@@ -203,6 +203,10 @@ class _DesktopHandler(BaseHTTPRequestHandler):
         if path == "/current-report.html":
             self._static("viewer_poc/giro3d/current_report.html")
             return
+        if path in {"/future-preview.html", "/future_preview.js", "/future_preview.css"}:
+            name = "future_preview.html" if path.endswith(".html") else path.lstrip("/")
+            self._static("viewer_poc/giro3d/" + name)
+            return
         if path == "/current_report.css":
             self._static("viewer_poc/giro3d/current_report.css")
             return
@@ -262,6 +266,23 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             return
         if path in {"/api/current-report", "/api/desktop/current-report"}:
             self._send_json({"ok": True, **self.workflow.current_report()})
+            return
+        if path == "/api/future-preview/gate":
+            from desktop.current_report import current_finalized_gate
+
+            self._send_json(
+                {"ok": True, "gate": current_finalized_gate(self.workflow, hydrate_editor=False)}
+            )
+            return
+        if path in {"/api/future-preview", "/api/desktop/future-preview"}:
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            try:
+                values = query.get("horizon", ["1"])
+                if len(values) != 1 or values[0] not in {"1", "3", "5"}:
+                    raise ValueError("horizon must be 1, 3, or 5 years")
+                self._send_json({"ok": True, **self.workflow.future_preview(int(values[0]))})
+            except ValueError as exc:
+                self._exception_error(exc, status=HTTPStatus.BAD_REQUEST)
             return
         if path == "/api/desktop/dependency-health":
             self._send_json({"ok": True, "dependency": dependency_health()})
@@ -354,12 +375,16 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             if path == "/api/desktop/batch/start":
                 self._send_json(
                     self.workflow.start_batch(
-                        list(payload.get("span_ids") or []), mode=str(payload.get("mode", "REAL"))
+                        list(payload.get("span_ids") or []),
+                        mode=str(payload.get("mode", "REAL")),
+                        execution_mode=str(payload.get("execution_mode", "AUTO")),
                     )
                 )
                 return
             if path == "/api/desktop/batch/retry":
-                self._send_json(self.workflow.retry_failed())
+                self._send_json(
+                    self.workflow.retry_failed(execution_mode=payload.get("execution_mode"))
+                )
                 return
             if path == "/api/desktop/batch/finalize" or path == "/api/confirm_trees":
                 self._send_json(self.workflow.start_finalize())

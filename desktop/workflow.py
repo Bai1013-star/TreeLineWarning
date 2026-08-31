@@ -845,7 +845,10 @@ class DesktopWorkflow:
                 scan = self._scan(project)
                 if scan is None:
                     raise ValueError("POINT_CLOUD_NOT_IMPORTED")
-                kwargs: dict[str, Any] = {"risk_policy": self._risk_policy()}
+                kwargs: dict[str, Any] = {
+                    "risk_policy": self._risk_policy(),
+                    "execution_mode": self._workflow.get("execution_mode", "AUTO"),
+                }
                 if mode == "FIXTURE":
                     kwargs.update(
                         {
@@ -901,10 +904,13 @@ class DesktopWorkflow:
             with self._lock:
                 self._thread = None
 
-    def start_batch(self, span_ids: list[str], *, mode: str = "REAL") -> dict[str, Any]:
+    def start_batch(
+        self, span_ids: list[str], *, mode: str = "REAL", execution_mode: str = "AUTO"
+    ) -> dict[str, Any]:
         mode = str(mode).upper()
         if mode not in {"REAL", "FIXTURE"}:
             raise ValueError("batch mode must be REAL or FIXTURE")
+        execution_mode = self._validate_execution_mode(execution_mode)
         with self._lock:
             if self._thread and self._thread.is_alive():
                 raise ValueError("BATCH_ALREADY_RUNNING")
@@ -931,6 +937,7 @@ class DesktopWorkflow:
                     "last_batch_status": "RUNNING",
                     "last_error": None,
                     "acceptance_mode": mode,
+                    "execution_mode": execution_mode,
                     "source_cache_hint": source_cache_hint,
                     "finalize_state": {"run_id": run_id, "status": "IDLE"},
                 }
@@ -947,7 +954,19 @@ class DesktopWorkflow:
             self._thread.start()
             return self.batch_projection()
 
-    def retry_failed(self) -> dict[str, Any]:
+    @staticmethod
+    def _validate_execution_mode(value: str) -> str:
+        mode = str(value).upper()
+        if mode not in {"AUTO", "SERIAL", "PARALLEL"}:
+            raise ValueError("execution_mode must be AUTO, SERIAL, or PARALLEL")
+        return mode
+
+    def retry_failed(self, *, execution_mode: str | None = None) -> dict[str, Any]:
+        execution_mode = self._validate_execution_mode(
+            self._workflow.get("execution_mode", "AUTO")
+            if execution_mode is None
+            else execution_mode
+        )
         manifest = self._latest_batch_manifest()
         if not manifest:
             raise ValueError("NO_BATCH_TO_RETRY")
@@ -989,6 +1008,7 @@ class DesktopWorkflow:
                 {
                     "selected_span_ids": list(selected),
                     "last_batch_status": "RUNNING",
+                    "execution_mode": execution_mode,
                     "finalize_state": {"run_id": run_id, "status": "IDLE"},
                 }
             )
@@ -1047,6 +1067,8 @@ class DesktopWorkflow:
             or self._workflow.get("last_batch_status")
             or "NOT_STARTED",
             "acceptance_mode": self._workflow.get("acceptance_mode"),
+            "execution_mode": self._workflow.get("execution_mode", "AUTO"),
+            "execution": dict(((manifest or {}).get("telemetry") or {}).get("EXECUTION") or {}),
             "source_preparation": (
                 "FAILED" if source_preparation_failed else "DONE" if manifest else "WAITING"
             ),
@@ -1752,6 +1774,13 @@ class DesktopWorkflow:
         from desktop.current_report import build_current_report
 
         return build_current_report(self)
+
+    def future_preview(self, horizon_years: int = 1) -> dict[str, Any]:
+        """Build a detached experimental view; never publish current science."""
+
+        from desktop.future_preview import build_future_preview
+
+        return build_future_preview(self, horizon_years=horizon_years)
 
     def final_projection(self, *, persist_display_evidence: bool = True) -> dict[str, Any]:
         editor = self._ensure_editor()

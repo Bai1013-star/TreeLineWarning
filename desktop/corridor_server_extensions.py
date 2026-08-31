@@ -127,6 +127,7 @@ def install_corridor_server_extensions() -> None:
                         **self.workflow.start_ready_batch(
                             selected,
                             mode=str(payload.get("mode", "REAL")),
+                            execution_mode=str(payload.get("execution_mode", "AUTO")),
                         ),
                     }
                 )

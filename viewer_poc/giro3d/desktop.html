@@ -104,6 +104,13 @@
 
       <section class="section contextual hidden" id="batchSection">
         <h3>批量分析</h3>
+        <label class="execution-mode-field">执行模式
+          <select id="executionMode" aria-label="分析执行模式">
+            <option value="AUTO" selected>AUTO · 自动选择</option>
+            <option value="SERIAL">SERIAL · 串行</option>
+            <option value="PARALLEL">PARALLEL · 并行</option>
+          </select>
+        </label>
         <div class="row batch-actions">
           <button id="startCurrent" class="small primary">分析当前档</button>
           <button id="startSelected" class="small primary">分析选中档</button>
@@ -122,9 +129,11 @@
         <div id="resultBox" class="notice">分析完成后显示结果。</div>
         <div class="row result-actions">
           <button id="openViewer" class="small">打开复核视图</button>
+          <button id="openFuturePreview" class="small" type="button">预测与模拟 🔒</button>
           <button id="finalizeBatch" class="small success">完成复核</button>
           <button id="exportPrediction" class="small primary grow">导出预测输入</button>
         </div>
+        <div id="futurePreviewNote" class="hint">请先完成当前项目的单木复核。</div>
         <div class="hint">证据不足的导线或净空结果继续标记为“需复核 / 无可用距离”，不会显示虚假安全结论。</div>
       </section>
 
