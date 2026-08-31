@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -56,12 +57,25 @@ def _write_epsg_las(path: Path) -> None:
     cloud.write(path)
 
 
-def _run_staged_probe(code: str, *arguments: Path) -> subprocess.CompletedProcess[str]:
+def _require_staged_runtime() -> None:
     site = RUNTIME_ROOT / "Lib" / "site-packages"
     runtime = RUNTIME_ROOT / "Library" / "bin"
     proj_data = PROJ_DATA_ROOT / "Library" / "share" / "proj"
-    if not (site.is_dir() and runtime.is_dir() and (proj_data / "proj.db").is_file()):
+    if os.name != "nt" or not (
+        site.is_dir()
+        and all((runtime / name).is_file() for name in (
+            "pdalcpp.dll", "proj_9.dll", "gdal.dll", "sqlite3.dll"
+        ))
+        and (proj_data / "proj.db").is_file()
+    ):
         pytest.skip("materialized PDAL/PROJ runtime is not present")
+
+
+def _run_staged_probe(code: str, *arguments: Path) -> subprocess.CompletedProcess[str]:
+    _require_staged_runtime()
+    site = RUNTIME_ROOT / "Lib" / "site-packages"
+    runtime = RUNTIME_ROOT / "Library" / "bin"
+    proj_data = PROJ_DATA_ROOT / "Library" / "share" / "proj"
     environment = os.environ.copy()
     environment["PATH"] = os.pathsep.join([str(runtime), environment.get("PATH", "")])
     environment["PYTHONPATH"] = os.pathsep.join(
@@ -71,6 +85,7 @@ def _run_staged_probe(code: str, *arguments: Path) -> subprocess.CompletedProces
     environment["TREELINE_TEST_PDAL_STAGE"] = str(RUNTIME_ROOT)
     environment["TREELINE_PDAL_RUNTIME_ENV"] = str(RUNTIME_ROOT)
     environment["TREELINE_TEST_PDAL_PROJ_DATA"] = str(proj_data)
+    environment["TREELINE_PDAL_PROJ_DATA_ROOT"] = str(PROJ_DATA_ROOT)
     environment["PROJ_DATA"] = str(proj_data)
     probe_python = REPO_ROOT / ".venv311" / "Scripts" / "python.exe"
     if not probe_python.is_file():
@@ -245,6 +260,173 @@ print(json.dumps({
     payload = json.loads(result.stdout.strip().splitlines()[-1])
     assert payload["sqlite_version"] == "3.53.3"
     assert payload["pdal_version"] == "2.10.2"
+
+
+@pytest.mark.parametrize("layout", ["staged", "frozen"])
+def test_staged_runtime_configures_unicode_proj_for_native_and_threaded_pdal(
+    tmp_path: Path, layout: str,
+) -> None:
+    _require_staged_runtime()
+    unicode_root = tmp_path / "中文 目录"
+    native_proj_data = (
+        unicode_root / "pdal_proj_data"
+        if layout == "frozen"
+        else unicode_root / "Library" / "share" / "proj"
+    )
+    shutil.copytree(PROJ_DATA_ROOT / "Library" / "share" / "proj", native_proj_data)
+    if layout == "frozen":
+        shutil.copytree(RUNTIME_ROOT / "Library" / "bin", unicode_root / "pdal_runtime")
+    io_root = unicode_root / "输入 输出"
+    io_root.mkdir()
+    input_path = io_root / "输入.las"
+    main_output_path = io_root / "主线程输出.las"
+    worker_output_path = io_root / "工作线程输出.las"
+    _write_epsg_las(input_path)
+
+    result = _run_staged_probe(
+        """
+import concurrent.futures
+import ctypes
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+stage = Path(os.environ["TREELINE_TEST_PDAL_STAGE"])
+site = stage / "Lib" / "site-packages"
+runtime = stage / "Library" / "bin"
+unicode_root = Path(sys.argv[3]).resolve()
+native_proj_data = unicode_root / "Library" / "share" / "proj"
+if sys.argv[5] == "frozen":
+    runtime = unicode_root / "pdal_runtime"
+    native_proj_data = unicode_root / "pdal_proj_data"
+    sys._MEIPASS = str(unicode_root)
+    sys.frozen = True
+os.environ["TREELINE_PDAL_PROJ_DATA_ROOT"] = str(unicode_root)
+os.environ["PROJ_DATA"] = str(native_proj_data)
+os.environ["PROJ_NETWORK"] = "OFF"
+sys.path.insert(0, str(site))
+import pyproj
+
+pyproj_data_before = Path(pyproj.datadir.get_data_dir()).resolve()
+pyproj_db_hash_before = hashlib.sha256((pyproj_data_before / "proj.db").read_bytes()).hexdigest()
+from desktop import pdal_runtime
+
+configured_runtime, _ = pdal_runtime._configure_bundled_runtime()
+assert configured_runtime == runtime
+assert os.environ["PROJ_DATA"] == str(native_proj_data)
+get_environment = ctypes.WinDLL("kernel32", use_last_error=True).GetEnvironmentVariableW
+get_environment.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+get_environment.restype = ctypes.c_uint32
+environment_buffer = ctypes.create_unicode_buffer(32768)
+assert get_environment("PROJ_DATA", environment_buffer, len(environment_buffer)) > 0
+assert environment_buffer.value == str(native_proj_data)
+configured_again, _ = pdal_runtime._configure_bundled_runtime()
+assert configured_again == runtime
+
+import laspy
+import pdal
+
+pyproj.network.set_network_enabled(False)
+pyproj_data = Path(pyproj.datadir.get_data_dir()).resolve()
+assert pyproj_data != native_proj_data
+assert pyproj_data == pyproj_data_before
+assert (pyproj_data / "proj.db").is_file(), pyproj_data
+transformer = pyproj.Transformer.from_crs(
+    "EPSG:4326", "EPSG:3857", always_xy=True, allow_ballpark=False, only_best=True
+)
+pyproj_x, pyproj_y = transformer.transform(120.0, 30.0, errcheck=True)
+assert abs(pyproj_x - 13358338.8952) < 0.05
+assert abs(pyproj_y - 3503549.8435) < 0.05
+
+def run_pipeline(output_path, input_path=None):
+    pipeline = {
+        "pipeline": [
+            {"type": "readers.las", "filename": str(input_path or sys.argv[1])},
+            {"type": "filters.reprojection", "in_srs": "EPSG:4326", "out_srs": "EPSG:3857"},
+            {"type": "writers.las", "filename": str(output_path)},
+        ]
+    }
+    return int(pdal.Pipeline(json.dumps(pipeline)).execute())
+
+main_processed = run_pipeline(Path(sys.argv[2]))
+with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+    worker_processed = executor.submit(run_pipeline, Path(sys.argv[4])).result()
+assert main_processed == worker_processed == 1
+output_paths = [Path(sys.argv[2]), Path(sys.argv[4])]
+laz_processed = None
+if laspy.LazBackend.detect_available():
+    laz_path = Path(sys.argv[1]).with_suffix(".laz")
+    laspy.read(sys.argv[1]).write(laz_path)
+    laz_output = Path(sys.argv[4]).with_suffix(".laz")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        laz_processed = executor.submit(run_pipeline, laz_output, laz_path).result()
+    assert laz_processed == 1
+    output_paths.append(laz_output)
+for output_path in output_paths:
+    point = laspy.read(output_path)
+    assert len(point.points) == 1
+    assert abs(float(point.x[0]) - 13358338.8952) < 0.05
+    assert abs(float(point.y[0]) - 3503549.8435) < 0.05
+proj = ctypes.CDLL(str(runtime / "proj_9.dll"))
+gdal = ctypes.CDLL(str(runtime / "gdal.dll"))
+proj.proj_context_is_network_enabled.argtypes = [ctypes.c_void_p]
+proj.proj_context_is_network_enabled.restype = ctypes.c_int
+gdal.OSRGetPROJEnableNetwork.argtypes = []
+gdal.OSRGetPROJEnableNetwork.restype = ctypes.c_int
+assert proj.proj_context_is_network_enabled(None) == 0
+assert gdal.OSRGetPROJEnableNetwork() == 0
+assert pyproj.network.is_network_enabled() is False
+assert Path(pyproj.datadir.get_data_dir()).resolve() == pyproj_data_before
+assert hashlib.sha256((pyproj_data / "proj.db").read_bytes()).hexdigest() == pyproj_db_hash_before
+get_module_filename = ctypes.WinDLL("kernel32", use_last_error=True).GetModuleFileNameW
+get_module_filename.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32]
+get_module_filename.restype = ctypes.c_uint32
+module_paths = []
+for library in (proj, gdal, ctypes.WinDLL(str(runtime / "sqlite3.dll"))):
+    buffer = ctypes.create_unicode_buffer(32768)
+    assert get_module_filename(library._handle, buffer, len(buffer)) > 0
+    actual_path = Path(buffer.value).resolve()
+    assert actual_path.parent == runtime.resolve(), actual_path
+    module_paths.append(str(actual_path))
+print(json.dumps({
+    "native_proj_data": str(native_proj_data),
+    "pyproj_data": str(pyproj_data),
+    "main_processed": main_processed,
+    "worker_processed": worker_processed,
+    "laz_processed": laz_processed,
+    "pyproj_database_unchanged": True,
+    "wide_environment_preserved": True,
+    "native_modules": module_paths,
+    "configured": pdal_runtime._NATIVE_PROJ_CONFIGURED,
+}, sort_keys=True), flush=True)
+""",
+        input_path,
+        main_output_path,
+        unicode_root,
+        worker_output_path,
+        Path(layout),
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["main_processed"] == payload["worker_processed"] == 1
+    assert Path(payload["native_proj_data"]) == native_proj_data
+    assert payload["pyproj_data"] != payload["native_proj_data"]
+    assert payload["configured"] is True
+
+
+def test_unicode_runtime_skips_before_copying_missing_native_fixtures(tmp_path, monkeypatch):
+    monkeypatch.setitem(globals(), "RUNTIME_ROOT", tmp_path / "missing native")
+
+    def unexpected_copy(*_args, **_kwargs):
+        raise AssertionError("native fixture must be checked before copying")
+
+    monkeypatch.setattr(shutil, "copytree", unexpected_copy)
+    with pytest.raises(pytest.skip.Exception, match="runtime is not present"):
+        test_staged_runtime_configures_unicode_proj_for_native_and_threaded_pdal(
+            tmp_path, "frozen"
+        )
 
 
 def test_materialized_native_core_and_offline_proj_health(tmp_path: Path) -> None:

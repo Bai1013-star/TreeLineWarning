@@ -16,6 +16,7 @@ import math
 import os
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,9 @@ import laspy
 import numpy as np
 
 _DLL_HANDLES: list[Any] = []
+_NATIVE_RUNTIME_PAIR: tuple[Path, Path] | None = None
+_NATIVE_PROJ_CONFIGURED = False
+_NATIVE_RUNTIME_LOCK = threading.RLock()
 
 
 def resource_root() -> Path:
@@ -70,7 +74,89 @@ def _preload_native_sqlite(runtime_dir: Path) -> None:
         raise RuntimeError(f"bundled native SQLite failed to load: {sqlite_path}") from exc
 
 
+def _configure_native_proj_search_path(proj_data_dir: Path, runtime_dir: Path) -> None:
+    """Configure UTF-8 resource paths for PROJ and GDAL before importing PDAL."""
+
+    global _NATIVE_RUNTIME_PAIR, _NATIVE_PROJ_CONFIGURED
+    proj_data_dir = Path(proj_data_dir).resolve()
+    runtime_dir = Path(runtime_dir).resolve()
+    pair = (runtime_dir, proj_data_dir)
+    with _NATIVE_RUNTIME_LOCK:
+        if _NATIVE_RUNTIME_PAIR is not None and _NATIVE_RUNTIME_PAIR != pair:
+            raise RuntimeError("native runtime/PROJ data cannot be switched in this process")
+        if _NATIVE_PROJ_CONFIGURED:
+            return
+        database_path = proj_data_dir / "proj.db"
+        if not proj_data_dir.is_dir() or not database_path.is_file():
+            raise RuntimeError(
+                f"bundled native PROJ data is unavailable: {database_path}"
+            )
+        proj_path = runtime_dir / "proj_9.dll"
+        if not proj_path.is_file():
+            raise RuntimeError(f"bundled native PROJ library is unavailable: {proj_path}")
+        gdal_path = runtime_dir / "gdal.dll"
+        if not gdal_path.is_file():
+            raise RuntimeError(f"bundled native GDAL library is unavailable: {gdal_path}")
+        loader = getattr(ctypes, "CDLL", None)
+        if loader is None:
+            raise RuntimeError("the runtime cannot load the native PROJ library")
+        # Even a partially failed load must not permit switching native runtimes.
+        _NATIVE_RUNTIME_PAIR = pair
+        try:
+            proj = loader(str(proj_path))
+            set_search_paths = proj.proj_context_set_search_paths
+            set_enable_network = proj.proj_context_set_enable_network
+        except (AttributeError, OSError) as exc:
+            raise RuntimeError(
+                f"bundled native PROJ library does not expose the required API: {proj_path}"
+            ) from exc
+        set_search_paths.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_char_p),
+        ]
+        set_search_paths.restype = None
+        set_enable_network.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        set_enable_network.restype = ctypes.c_int
+        try:
+            gdal = loader(str(gdal_path))
+            gdal_set_search_paths = gdal.OSRSetPROJSearchPaths
+            gdal_set_enable_network = gdal.OSRSetPROJEnableNetwork
+        except (AttributeError, OSError) as exc:
+            raise RuntimeError(
+                f"bundled native GDAL library does not expose the required API: {gdal_path}"
+            ) from exc
+        gdal_set_search_paths.argtypes = [ctypes.POINTER(ctypes.c_char_p)]
+        gdal_set_search_paths.restype = None
+        gdal_set_enable_network.argtypes = [ctypes.c_int]
+        gdal_set_enable_network.restype = None
+        encoded_path = str(proj_data_dir).encode("utf-8")
+        search_paths = (ctypes.c_char_p * 2)(encoded_path, None)
+        try:
+            # A NULL context updates PROJ's default context.  PROJ documents
+            # that subsequently created contexts inherit these search paths.
+            set_search_paths(None, 1, search_paths)
+            set_enable_network(None, 0)
+            # GDAL maintains its own thread-local contexts and otherwise replaces
+            # inherited paths with PROJ_DATA read through Windows' narrow getenv.
+            # Its API copies a NULL-terminated UTF-8 list for current/future threads.
+            gdal_set_search_paths(search_paths)
+            gdal_set_enable_network(0)
+        except Exception as exc:
+            raise RuntimeError(
+                f"bundled native PROJ search-path configuration failed: {proj_path}"
+            ) from exc
+        _DLL_HANDLES.extend((proj, gdal))
+        _NATIVE_PROJ_CONFIGURED = True
+
+
 def _configure_bundled_runtime() -> tuple[Path | None, list[Path]]:
+    with _NATIVE_RUNTIME_LOCK:
+        return _configure_bundled_runtime_locked()
+
+
+def _configure_bundled_runtime_locked() -> tuple[Path | None, list[Path]]:
+    global _NATIVE_RUNTIME_PAIR
     runtime_dir = bundled_runtime_dir()
     configured_runtime = os.environ.get("TREELINE_PDAL_RUNTIME_ENV", "").strip()
     if (
@@ -81,6 +167,9 @@ def _configure_bundled_runtime() -> tuple[Path | None, list[Path]]:
     ):
         runtime_dir = Path(configured_runtime).resolve() / "Library" / "bin"
     proj_data_dir = bundled_proj_data_dir()
+    pair = (runtime_dir.resolve(), proj_data_dir.resolve()) if proj_data_dir else None
+    if _NATIVE_RUNTIME_PAIR is not None and _NATIVE_RUNTIME_PAIR != pair:
+        raise RuntimeError("native runtime/PROJ data cannot be switched in this process")
     os.environ["PROJ_NETWORK"] = "OFF"
     if proj_data_dir is not None:
         # Native PDAL/PROJ consumes this path.  pyproj keeps its wheel data in
@@ -89,15 +178,21 @@ def _configure_bundled_runtime() -> tuple[Path | None, list[Path]]:
     if not runtime_dir.is_dir():
         return None, []
 
-    _preload_native_sqlite(runtime_dir)
     plugin_dirs = [
         path for path in (resource_root() / "pdal_plugins", runtime_dir) if path.is_dir()
     ]
+    if proj_data_dir is None:
+        raise RuntimeError("bundled native PROJ data snapshot is unavailable")
+    if _NATIVE_PROJ_CONFIGURED:
+        return runtime_dir, plugin_dirs
+    _NATIVE_RUNTIME_PAIR = pair
+    _preload_native_sqlite(runtime_dir)
     os.environ["PATH"] = os.pathsep.join(
         [str(runtime_dir), os.environ.get("PATH", "")]
     ).rstrip(os.pathsep)
     if hasattr(os, "add_dll_directory"):
         _DLL_HANDLES.append(os.add_dll_directory(str(runtime_dir)))
+    _configure_native_proj_search_path(proj_data_dir, runtime_dir)
     existing = os.environ.get("PDAL_DRIVER_PATH", "")
     values = [str(path) for path in plugin_dirs]
     if existing:
