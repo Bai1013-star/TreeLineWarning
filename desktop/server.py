@@ -15,6 +15,7 @@ from typing import Any
 
 from algorithms.folder_pipeline.html import step2_html
 
+from desktop.editor_tasks import EditorTaskError, editor_tasks
 from desktop.pdal_runtime import dependency_health
 from desktop.project_management import create_empty_project, import_pointcloud
 from desktop.workflow import DesktopWorkflow, ensure_desktop_manifest
@@ -153,6 +154,17 @@ class _DesktopHandler(BaseHTTPRequestHandler):
 
     def _exception_error(self, exc: Exception, *, status: int = HTTPStatus.CONFLICT) -> None:
         details = f"{type(exc).__name__}: {exc}"
+        if isinstance(exc, EditorTaskError):
+            code = str(exc).split(":", 1)[0]
+            self._send_json(
+                {
+                    "ok": False,
+                    "status": code,
+                    "error": {"code": code, "message": str(exc), "details": details},
+                },
+                status=HTTPStatus.CONFLICT,
+            )
+            return
         if isinstance(exc, OSError) and getattr(exc, "errno", None) == 28:
             self._error(
                 "磁盘剩余空间不足，无法完成复核结果生成。请释放 E 盘空间后重试。",
@@ -179,6 +191,24 @@ class _DesktopHandler(BaseHTTPRequestHandler):
         self._send_bytes(target.read_bytes(), content_type=mime)
 
     def _handle_get(self, path: str) -> None:
+        if path == "/api/editor/mutation":
+            self._send_json(editor_tasks(self.workflow).snapshot())
+            return
+        if path in {
+            "/api/editor_data",
+            "/api/desktop/review",
+            "/api/state",
+            "/state",
+            "/api/current-report",
+            "/api/desktop/current-report",
+            "/api/final",
+            "/api/future-preview",
+        }:
+            try:
+                editor_tasks(self.workflow).assert_available()
+            except EditorTaskError as exc:
+                self._exception_error(exc)
+                return
         if path in {"/", "/desktop.html"}:
             self._static("viewer_poc/giro3d/desktop.html")
             return
@@ -325,6 +355,38 @@ class _DesktopHandler(BaseHTTPRequestHandler):
     def _handle_post(self, path: str) -> None:
         try:
             payload = _json_body(self)
+            editor_tasks(self.workflow).assert_available()
+            actions = {
+                "/api/delete": ("DELETE", lambda: self.workflow.delete_selected()),
+                "/api/merge": ("MERGE", lambda: self.workflow.merge_selected()),
+                "/api/undo": ("UNDO", lambda: self.workflow.undo_editor()),
+                "/api/trim/commit": (
+                    "TRIM_COMMIT",
+                    lambda: self.workflow.commit_trim(str(payload.get("preview_id") or "")),
+                ),
+                "/api/trim/lasso-preview": (
+                    "LASSO_PREVIEW",
+                    lambda: self.workflow.preview_trim_lasso(
+                        int(payload.get("tree_id")),
+                        list(payload.get("view_projection") or []),
+                        list(payload.get("polygon_ndc") or []),
+                    ),
+                ),
+                "/api/trim/component-preview": (
+                    "COMPONENT_PREVIEW",
+                    lambda: self.workflow.preview_trim_component(
+                        int(payload.get("tree_id")), list(payload.get("seed_xyz") or [])
+                    ),
+                ),
+            }
+            if payload.get("async") is True and path in actions:
+                kind, callback = actions[path]
+                request_id = str(payload.get("request_id") or "")[:128] or None
+                self._send_json(
+                    editor_tasks(self.workflow).submit(kind, callback, request_id),
+                    status=HTTPStatus.ACCEPTED,
+                )
+                return
             if path == "/api/desktop/create":
                 parent = (
                     Path(str(payload.get("parent") or self.workflow.project_root.parent))
@@ -428,8 +490,11 @@ class _DesktopHandler(BaseHTTPRequestHandler):
                 self._send_json(self.workflow.cancel_trim(str(payload.get("preview_id") or "")))
                 return
             self._error("未找到本地操作", status=HTTPStatus.NOT_FOUND)
-        except (ValueError, KeyError, TypeError, OSError, RuntimeError) as exc:
-            self.workflow._log("api_failure", path=path, error=f"{type(exc).__name__}: {exc}")
+        except Exception as exc:
+            try:
+                self.workflow._log("api_failure", path=path, error=f"{type(exc).__name__}: {exc}")
+            except Exception:
+                pass
             self._exception_error(exc)
 
     def _create_fixture_source(self) -> Path:
@@ -455,7 +520,12 @@ class _DesktopHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         path = urllib.parse.urlsplit(self.path).path
-        self._handle_get(path)
+        try:
+            self._handle_get(path)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # The client disconnected; do not terminate the local service.
+        except Exception as exc:
+            self._exception_error(exc)
 
     def do_POST(self) -> None:  # noqa: N802
         path = urllib.parse.urlsplit(self.path).path
@@ -464,7 +534,10 @@ class _DesktopHandler(BaseHTTPRequestHandler):
     do_HEAD = do_GET
 
     def log_message(self, fmt: str, *args: Any) -> None:  # noqa: N802
-        self.workflow._log("http", method=self.command, path=self.path, message=fmt % args)
+        try:
+            self.workflow._log("http", method=self.command, path=self.path, message=fmt % args)
+        except Exception:
+            pass  # Logging failure must not abort send_response before JSON headers.
 
 
 __all__ = ["DesktopApplication"]

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 from algorithms.folder_pipeline.tree_editor import build_original_trees
@@ -85,13 +87,18 @@ class BatchTreeEditor:
 
     def _write_json(self, path: Path, payload: Mapping[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(path.name + ".tmp")
-        temporary.write_text(
-            json.dumps(dict(payload), ensure_ascii=False, sort_keys=True, indent=2)
-            + "\n",
-            encoding="utf-8",
-        )
-        temporary.replace(path)
+        temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")
+        try:
+            temporary.write_text(
+                json.dumps(dict(payload), ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(path)
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass  # An abandoned temp is never an authoritative journal.
 
     def _write_npz(self, path: Path, **arrays: np.ndarray) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -121,7 +128,9 @@ class BatchTreeEditor:
                 },
             }
         )
+        started = time.perf_counter()
         self._write_json(self.artifact_root / "tree_edits.json", edits)
+        self.last_journal_write_seconds = time.perf_counter() - started
 
     def persist(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[int, dict[str, Any]]]:
         """Persist clean/original, edit-log, current/final membership and display evidence."""

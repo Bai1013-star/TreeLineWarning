@@ -8,11 +8,13 @@ runner exists solely for offline UI acceptance and is always labelled as such.
 
 from __future__ import annotations
 
+import copy
 import inspect
 import json
 import logging
 import shutil
 import threading
+import time
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -45,6 +47,7 @@ from core.stage_a.risk import RiskPolicy
 from core.stage_b import BatchAnalysisResult, BatchAnalysisScheduler, BatchSpanStatus
 from core.stage_b.failures import failure_details
 
+from desktop.editor_tasks import editor_action, editor_tasks
 from desktop.project_management import (
     describe_project,
 )
@@ -279,6 +282,7 @@ class DesktopWorkflow:
         }
         self._log("project_open", project_root=str(self._root))
 
+    @editor_action("PROJECT_CHANGE")
     def configure_root(self, project_root: Path) -> dict[str, Any]:
         with self._lock:
             self._root = project_root.resolve()
@@ -1209,17 +1213,21 @@ class DesktopWorkflow:
         return self._editor_snapshot_cache[1]
 
     def _assert_editor_mutable(self) -> None:
+        editor_tasks(self).assert_available()
         batch_thread = getattr(self, "_thread", None)
         workflow_state = getattr(self, "_workflow", {})
         batch_status = (
-            workflow_state.get("last_batch_status")
-            if isinstance(workflow_state, Mapping)
-            else None
+            workflow_state.get("last_batch_status") if isinstance(workflow_state, Mapping) else None
         )
-        if batch_thread is not None and batch_thread.is_alive() and batch_status in {
-            None,
-            BatchSpanStatus.RUNNING.value,
-        }:
+        if (
+            batch_thread is not None
+            and batch_thread.is_alive()
+            and batch_status
+            in {
+                None,
+                BatchSpanStatus.RUNNING.value,
+            }
+        ):
             raise ValueError("批量分析正在运行，请完成后再修改单木。")
         finalize_thread = getattr(self, "_finalize_thread", None)
         if finalize_thread is not None and finalize_thread.is_alive():
@@ -1363,6 +1371,7 @@ class DesktopWorkflow:
         self._editor_display_cache = (key, display)
         return display
 
+    @editor_action("SELECT")
     def select_editor_trees(self, tree_ids: list[int]) -> dict[str, Any]:
         self._assert_editor_mutable()
         editor = self._ensure_editor()
@@ -1371,35 +1380,75 @@ class DesktopWorkflow:
         editor.session.select([int(value) for value in tree_ids])
         return editor.snapshot()
 
+    def _commit_editor_change(self, kind: str, action: Any) -> dict[str, Any]:
+        """Prepare on a detached journal; atomic journal replacement is the commit point."""
+        self._assert_editor_mutable()
+        editor = self._ensure_editor()
+        if editor is None:
+            raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
+        working = copy.copy(editor)
+        working.session = copy.copy(editor.session)
+        working.session.operations = list(editor.session.operations)
+        working.session.selected_ids = list(editor.session.selected_ids)
+        working.session._previews = dict(editor.session._previews)
+        working.session._source_rows_cache = dict(editor.session._source_rows_cache)
+        timings = dict.fromkeys(
+            [
+                "selection_decode",
+                "candidate_lookup",
+                "geometric_inclusion",
+                "membership_mutation",
+                "journal_write",
+                "viewer_artifact_rebuild",
+                "persist",
+            ],
+            0.0,
+        )
+        started = time.perf_counter()
+        action(working)
+        timings["membership_mutation"] = time.perf_counter() - started
+        started = time.perf_counter()
+        snapshot = working.snapshot()
+        # Build the bounded viewer sample before any journal publication. A failure
+        # leaves live membership, its viewer and the previous journal untouched.
+        working.session.display_sample(_DEFAULT_DISPLAY_POINTS)
+        from desktop.tree_display_numbering_extensions import _current_display_identities
+
+        _current_display_identities(self, working)
+        timings["viewer_artifact_rebuild"] = time.perf_counter() - started
+        started = time.perf_counter()
+        working.persist_edits()
+        timings["persist"] = time.perf_counter() - started
+        timings["journal_write"] = getattr(
+            working, "last_journal_write_seconds", timings["persist"]
+        )
+        # No fallible rebuild follows the durable commit point.
+        editor.session = working.session
+        self._editor_snapshot_cache = None
+        self._editor_display_cache = None
+        snapshot["timings_seconds"] = timings
+        try:
+            self._log(
+                "tree_editor_" + kind.lower(),
+                tree_edit_count=len(editor.session.operations),
+                timings_seconds=timings,
+                state="COMMITTED",
+            )
+        except Exception:
+            pass  # An auxiliary log failure cannot undo a durable journal commit.
+        return snapshot
+
+    @editor_action("DELETE")
     def delete_selected(self) -> dict[str, Any]:
-        self._assert_editor_mutable()
-        editor = self._ensure_editor()
-        if editor is None:
-            raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
-        editor.session.delete_selected()
-        editor.persist_edits()
-        self._log("tree_editor_delete", tree_edit_count=len(editor.session.operations))
-        return self._editor_snapshot(editor)
+        return self._commit_editor_change("DELETE", lambda editor: editor.session.delete_selected())
 
+    @editor_action("MERGE")
     def merge_selected(self) -> dict[str, Any]:
-        self._assert_editor_mutable()
-        editor = self._ensure_editor()
-        if editor is None:
-            raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
-        editor.session.merge_selected()
-        editor.persist_edits()
-        self._log("tree_editor_merge", tree_edit_count=len(editor.session.operations))
-        return self._editor_snapshot(editor)
+        return self._commit_editor_change("MERGE", lambda editor: editor.session.merge_selected())
 
+    @editor_action("UNDO")
     def undo_editor(self) -> dict[str, Any]:
-        self._assert_editor_mutable()
-        editor = self._ensure_editor()
-        if editor is None:
-            raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
-        editor.session.undo()
-        editor.persist_edits()
-        self._log("tree_editor_undo", tree_edit_count=len(editor.session.operations))
-        return self._editor_snapshot(editor)
+        return self._commit_editor_change("UNDO", lambda editor: editor.session.undo())
 
     def _trim_binding(self) -> str:
         editor = self._ensure_editor()
@@ -1407,6 +1456,7 @@ class DesktopWorkflow:
             raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
         return f"{self._root}|{editor.result.analysis_run_id}"
 
+    @editor_action("COMPONENT_PREVIEW")
     def preview_trim_component(self, tree_id: int, seed_xyz: list[float]) -> dict[str, Any]:
         self._assert_editor_mutable()
         editor = self._ensure_editor()
@@ -1419,6 +1469,7 @@ class DesktopWorkflow:
         preview["preview_xyz"] = preview.pop("xyz")
         return preview
 
+    @editor_action("LASSO_PREVIEW")
     def preview_trim_lasso(
         self, tree_id: int, view_projection: list[list[float]], polygon_ndc: list[list[float]]
     ) -> dict[str, Any]:
@@ -1433,20 +1484,19 @@ class DesktopWorkflow:
         preview["preview_xyz"] = preview.pop("xyz")
         return preview
 
+    @editor_action("TRIM_COMMIT")
     def commit_trim(self, preview_id: str) -> dict[str, Any]:
-        self._assert_editor_mutable()
-        editor = self._ensure_editor()
-        if editor is None:
-            raise ValueError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
-        editor.session.commit_trim(
-            preview_id,
-            binding=self._trim_binding(),
-            minimum_remaining_points=int(editor.config.tree_min_final_members),
+        binding = self._trim_binding()
+        return self._commit_editor_change(
+            "TRIM",
+            lambda editor: editor.session.commit_trim(
+                preview_id,
+                binding=binding,
+                minimum_remaining_points=int(editor.config.tree_min_final_members),
+            ),
         )
-        editor.persist_edits()
-        self._log("tree_editor_trim", tree_edit_count=len(editor.session.operations))
-        return self._editor_snapshot(editor)
 
+    @editor_action("CANCEL")
     def cancel_trim(self, preview_id: str) -> dict[str, Any]:
         self._assert_editor_mutable()
         editor = self._ensure_editor()
@@ -1608,6 +1658,7 @@ class DesktopWorkflow:
             with self._lock:
                 self._finalize_thread = None
 
+    @editor_action("FINALIZE_START")
     def start_finalize(self) -> dict[str, Any]:
         self._assert_editor_mutable()
         with self._lock:

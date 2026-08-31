@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import threading
 from functools import wraps
+from pathlib import Path
 from typing import Any
 
 from core.stage_b.tree_display_id import TREE_DISPLAY_ID_SCHEMA, assign_tree_display_ids
@@ -11,6 +13,37 @@ _INSTALLED = False
 
 
 def _current_display_identities(self: Any, editor: Any) -> dict[int, dict[str, Any]]:
+    """Reuse unchanged display labels; never rebuild final arrays on every status poll."""
+    session = getattr(editor, "session", None)
+    root = getattr(self, "project_root", None)
+    if session is None or root is None:
+        return _compute_display_identities(self, editor)
+    manifest = Path(root) / "stage-a-project.json"
+    try:
+        stat = manifest.stat()
+    except OSError:
+        return _compute_display_identities(self, editor)
+    key = (str(manifest), stat.st_mtime_ns, stat.st_size)
+    operations = tuple(session.operations)
+    lock = self.__dict__.setdefault("_editor_identity_lock", threading.RLock())
+    with lock:
+        cached = getattr(self, "_editor_identity_cache", None)
+        if (
+            cached is not None
+            and cached[0] is session
+            and cached[2] == key
+            and len(cached[1]) == len(operations)
+            and all(a is b for a, b in zip(cached[1], operations, strict=True))
+        ):
+            return cached[3]
+        identities = _compute_display_identities(self, editor)
+        # Keep operation references, not just len/id values: Undo + a replacement
+        # edit must not accidentally reuse an earlier revision's display labels.
+        self._editor_identity_cache = (session, operations, key, identities)
+        return identities
+
+
+def _compute_display_identities(self: Any, editor: Any) -> dict[int, dict[str, Any]]:
     """Build presentation IDs from the current exact editor membership.
 
     Legacy/folder-only projections do not own a Stage-A project sidecar. Tree

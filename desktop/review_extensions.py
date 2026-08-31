@@ -155,6 +155,9 @@ def install_review_extensions() -> None:
             )
         return display
 
+    from desktop.editor_tasks import editor_action
+
+    @editor_action("LASSO_PREVIEW")
     @wraps(original_preview_trim_lasso)
     def preview_trim_lasso_bounded(
         self: Any,
