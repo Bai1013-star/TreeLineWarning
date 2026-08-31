@@ -86,9 +86,9 @@ def main() -> int:
     parser.add_argument("--project-root", type=Path, required=True)
     parser.add_argument(
         "--version",
-        choices=("v1", "v2"),
-        default="v2",
-        help="V2 requires a valid finalized DBH base; V1 remains available for older projects",
+        choices=("v1", "v2", "v3"),
+        default="v3",
+        help="V2/V3 require a valid finalized DBH base; V1 remains available for older projects",
     )
     parser.add_argument(
         "--write", action="store_true", help="Publish a new DBH-only geometry generation"
@@ -115,6 +115,10 @@ def main() -> int:
         from core.stage_b.dbh_raw_recovery import recover_finalized_dbh_v2
 
         recovery = recover_finalized_dbh_v2
+    elif args.version == "v3":
+        from core.stage_b.dbh_identity_recovery import recover_finalized_dbh_v3
+
+        recovery = recover_finalized_dbh_v3
     payload = recovery(root, result, reconciled, persist=args.write)
     if output is not None:
         from core.stage_b.export import export_batch_prediction
