@@ -12,7 +12,6 @@ tree, wire, reconciliation, or clearance mathematics.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -34,6 +33,7 @@ from algorithms.spans.tree_runner import load_span_tree_outcome
 from algorithms.spans.wire import load_span_wire_result
 
 from core.config.fast_baseline import FastBaselineConfig, canonical_digest
+from core.integrity import sha256_file
 from core.stage_b.bridge import SpanScienceBinding
 
 SPAN_CACHE_SCHEMA = "treeline-stage-b-span-cache-v1"
@@ -106,11 +106,7 @@ def _resolve_runner_artifact(
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return sha256_file(path)
 
 
 def _artifact_reference(project_root: Path, path: Path, role: str) -> dict[str, Any]:
@@ -152,7 +148,7 @@ def source_fingerprint(input_data: SpanAnalysisInput) -> dict[str, Any] | None:
         ),
         None,
     )
-    actual_hash = _sha256(path) if configured_hash is not None else None
+    actual_hash = sha256_file(path, reusable=True) if configured_hash is not None else None
     if configured_hash is not None and actual_hash != configured_hash:
         return None
     return {

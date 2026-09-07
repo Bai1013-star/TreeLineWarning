@@ -27,6 +27,7 @@ from algorithms.spans.reconcile import (
 )
 
 from core.config.fast_baseline import FastBaselineConfig, canonical_digest
+from core.integrity import validation_session
 from core.stage_a.models import AnalysisRun, AnalysisRunStatus, Project, stable_id
 from core.stage_a.persistence import save_project
 from core.stage_a.risk import RiskPolicy
@@ -945,6 +946,7 @@ class BatchAnalysisScheduler:
             config=self.config,
         )
 
+    @validation_session()
     def run(
         self,
         span_ids: tuple[str, ...] | list[str] | None = None,

@@ -20,6 +20,7 @@ from typing import Any
 
 import numpy as np
 from core.config.fast_baseline import canonical_digest
+from core.integrity import sha256_file
 
 from algorithms.vegetation.coarse_to_fine import RawRegion
 
@@ -217,11 +218,7 @@ class _RoleTileWriter:
 
 
 def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return sha256_file(path, reusable=True)
 
 
 def _tile_key(xyz: np.ndarray, origin_xy: tuple[float, float], cell_size_m: float) -> np.ndarray:
