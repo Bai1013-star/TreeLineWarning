@@ -193,6 +193,71 @@ def _adjacent_spans(
     return pairs
 
 
+def _exclusive_membership(
+    sorted_original: np.ndarray,
+    sorted_xyz: np.ndarray,
+    sorted_span: np.ndarray,
+    sorted_global: np.ndarray,
+    sorted_core: np.ndarray,
+    outcomes: list[SpanTreeOutcome],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Resolve one owner per source row without a Python loop per point."""
+
+    if not len(sorted_original):
+        return (
+            np.empty(0, dtype=np.int64),
+            np.empty((0, 3), dtype=np.float64),
+            np.empty(0, dtype=np.int32),
+            0,
+        )
+    starts = np.flatnonzero(
+        np.r_[True, sorted_original[1:] != sorted_original[:-1]]
+    )
+    stops = np.r_[starts[1:], len(sorted_original)]
+    lengths = stops - starts
+    group_original = sorted_original[starts]
+    chosen = np.minimum.reduceat(sorted_global, starts).astype(np.int32, copy=False)
+    maximum = np.maximum.reduceat(sorted_global, starts)
+    conflict_group = chosen != maximum
+    conflict_count = int(np.count_nonzero(conflict_group))
+    if conflict_count:
+        conflict_row = np.repeat(conflict_group, lengths)
+        candidate_rows = np.flatnonzero(conflict_row & sorted_core)
+        if len(candidate_rows):
+            span_positions = sorted_span[candidate_rows]
+            line_by_span = np.asarray(
+                [outcome.span.line_id for outcome in outcomes], dtype=np.int64
+            )
+            span_id_by_span = np.asarray(
+                [outcome.span.span_id for outcome in outcomes], dtype=np.int64
+            )
+            candidate_order = np.lexsort(
+                (
+                    candidate_rows,
+                    span_positions,
+                    span_id_by_span[span_positions],
+                    line_by_span[span_positions],
+                    sorted_original[candidate_rows],
+                )
+            )
+            ordered_rows = candidate_rows[candidate_order]
+            winning = ordered_rows[
+                np.r_[
+                    True,
+                    sorted_original[ordered_rows[1:]]
+                    != sorted_original[ordered_rows[:-1]],
+                ]
+            ]
+            groups = np.searchsorted(group_original, sorted_original[winning])
+            chosen[groups] = sorted_global[winning]
+    return (
+        group_original.astype(np.int64, copy=False),
+        sorted_xyz[starts].astype(np.float64, copy=False),
+        chosen,
+        conflict_count,
+    )
+
+
 def _reconcile_single_span(
     outcome: SpanTreeOutcome,
     config: FastBaselineConfig,
@@ -245,9 +310,7 @@ def _reconcile_single_span(
     final_core = raw_core[keep]
     tree_ids = np.unique(final_tree)
     tree_to_global = {int(tree_id): index for index, tree_id in enumerate(tree_ids)}
-    final_global = np.asarray(
-        [tree_to_global[int(tree_id)] for tree_id in final_tree], dtype=np.int32
-    )
+    final_global = np.searchsorted(tree_ids, final_tree).astype(np.int32, copy=False)
     span = outcome.span
     records: list[GlobalTreeRecord] = []
     review_ids: list[int] = []
@@ -385,6 +448,7 @@ def reconcile_trees(
     parts_xyz: list[np.ndarray] = []
     parts_span: list[np.ndarray] = []
     parts_tree: list[np.ndarray] = []
+    parts_core: list[np.ndarray] = []
     for span_index, outcome in enumerate(outcomes):
         global_ids = np.array(
             [span_tree_to_global[(span_index, int(tree))] for tree in outcome.raw_tree_id],
@@ -394,62 +458,32 @@ def reconcile_trees(
         parts_xyz.append(outcome.raw_xyz_local_m)
         parts_span.append(np.full(len(outcome.raw_original_index), span_index, dtype=np.int32))
         parts_tree.append(global_ids)
+        parts_core.append(np.asarray(outcome.in_core, dtype=bool))
     all_original = np.concatenate(parts_original)
     all_xyz = np.concatenate(parts_xyz)
     all_span = np.concatenate(parts_span)
     all_global = np.concatenate(parts_tree)
-    duplicate_input_count = int(len(all_original) - len(np.unique(all_original)))
+    all_core = np.concatenate(parts_core)
     order = np.argsort(all_original, kind="stable")
     sorted_original = all_original[order]
     sorted_xyz = all_xyz[order]
     sorted_span = all_span[order]
     sorted_global = all_global[order]
-
-    final_original: list[int] = []
-    final_xyz: list[np.ndarray] = []
-    final_global: list[int] = []
-    position = 0
-    count = len(sorted_original)
-    while position < count:
-        stop = position + 1
-        while stop < count and sorted_original[stop] == sorted_original[position]:
-            stop += 1
-        group_globals = sorted_global[position:stop]
-        group_spans = sorted_span[position:stop]
-        group_xyz = sorted_xyz[position]
-        distinct = np.unique(group_globals)
-        if len(distinct) == 1:
-            final_global.append(int(distinct[0]))
-        else:
-            # Resolve conflicts by core ownership (smallest core span).
-            in_core = np.zeros(len(group_globals), dtype=bool)
-            for offset in range(len(group_globals)):
-                span_index = int(group_spans[offset])
-                outcome = outcomes[span_index]
-                matches = np.flatnonzero(outcome.raw_original_index == sorted_original[position])
-                if len(matches):
-                    in_core[offset] = bool(outcome.in_core[matches[0]])
-            core_positions = np.flatnonzero(in_core)
-            if len(core_positions):
-                chosen_position = min(
-                    core_positions,
-                    key=lambda offset: (
-                        int(outcomes[int(group_spans[offset])].span.line_id),
-                        int(outcomes[int(group_spans[offset])].span.span_id),
-                        int(group_spans[offset]),
-                    ),
-                )
-                chosen = int(group_globals[int(chosen_position)])
-            else:
-                chosen = int(distinct[0])
-            final_global.append(chosen)
-        final_original.append(int(sorted_original[position]))
-        final_xyz.append(group_xyz)
-        position = stop
-
-    final_original_array = np.asarray(final_original, dtype=np.int64)
-    final_xyz_array = np.asarray(final_xyz, dtype=np.float64)
-    final_global_array = np.asarray(final_global, dtype=np.int32)
+    sorted_core = all_core[order]
+    (
+        final_original_array,
+        final_xyz_array,
+        final_global_array,
+        conflict_group_count,
+    ) = _exclusive_membership(
+        sorted_original,
+        sorted_xyz,
+        sorted_span,
+        sorted_global,
+        sorted_core,
+        outcomes,
+    )
+    duplicate_input_count = int(len(all_original) - len(final_original_array))
 
     # Deterministic global tree ordering by (line, span, primary tree id).
     ordered_globals = sorted(
@@ -464,12 +498,11 @@ def reconcile_trees(
     remap: dict[int, int] = {}
     for new_id, old_id in enumerate(ordered_globals):
         remap[old_id] = new_id
-    final_tree_remapped = np.asarray(
-        [remap.get(int(value), -1) for value in final_global_array], dtype=np.int32
-    )
-    duplicate_final_count = int(
-        len(final_original_array) - len(np.unique(final_original_array))
-    )
+    remap_array = np.full(next_global, -1, dtype=np.int32)
+    for old_id, new_id in remap.items():
+        remap_array[old_id] = new_id
+    final_tree_remapped = remap_array[final_global_array]
+    duplicate_final_count = 0
     if duplicate_final_count != 0:
         raise ValueError("DUPLICATE_FINAL_ORIGINAL_INDEX")
     # Keep the local positional map for all reconciliation internals.  Only
@@ -490,17 +523,23 @@ def reconcile_trees(
 
     records: list[GlobalTreeRecord] = []
     review_ids: list[int] = []
+    total_by_tree = np.bincount(
+        final_tree_remapped, minlength=len(ordered_globals)
+    )
+    core_count_by_span: dict[int, np.ndarray] = {}
     for new_id, old_id in enumerate(ordered_globals):
         _core, line_id, span_id, span_index, primary_tree = core_count[old_id]
         outcome = outcomes[span_index]
         span = outcome.span
-        rows = np.flatnonzero(final_tree_remapped == new_id)
-        total = int(len(rows))
-        core_rows = np.flatnonzero(
-            (final_tree_remapped == new_id)
-            & _in_core_of_span(final_original_array, final_xyz_array, outcome)
-        )
-        core_points = int(len(core_rows))
+        total = int(total_by_tree[new_id])
+        if span_index not in core_count_by_span:
+            core_mask = _in_core_of_span(
+                final_original_array, final_xyz_array, outcome
+            )
+            core_count_by_span[span_index] = np.bincount(
+                final_tree_remapped[core_mask], minlength=len(ordered_globals)
+            )
+        core_points = int(core_count_by_span[span_index][new_id])
         halo_points = total - core_points
         primary_record = next(
             (record for record in outcome.tree_records if record["tree_id"] == primary_tree),
@@ -557,6 +596,9 @@ def reconcile_trees(
             "final_raw_member_count": int(len(final_original_array)),
             "duplicate_input_original_index_count": duplicate_input_count,
             "duplicate_final_original_index": duplicate_final_count,
+            "exclusive_group_count": int(len(final_original_array)),
+            "conflict_group_count": conflict_group_count,
+            "ownership_resolution": "VECTORIZED_STABLE_GLOBAL_INDEX_V1",
             "runtime_seconds": time.perf_counter() - started,
         },
     )

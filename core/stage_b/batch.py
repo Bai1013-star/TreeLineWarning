@@ -872,10 +872,13 @@ class BatchAnalysisScheduler:
             )
         diagnostics = dict(reconciled.diagnostics)
         validated_duplicate_final = diagnostics.get("duplicate_final_original_index")
-        if reused_single_span and type(validated_duplicate_final) is int:
+        final_index = np.asarray(reconciled.final_original_index, dtype=np.int64)
+        strictly_ordered = not len(final_index) or bool(
+            np.all(final_index[1:] > final_index[:-1])
+        )
+        if type(validated_duplicate_final) is int and strictly_ordered:
             duplicate_final = validated_duplicate_final
         else:
-            final_index = np.asarray(reconciled.final_original_index, dtype=np.int64)
             duplicate_final = int(len(final_index) - len(np.unique(final_index)))
         diagnostics["duplicate_final_original_index"] = duplicate_final
         if duplicate_final != 0:
