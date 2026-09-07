@@ -22,6 +22,12 @@ from core.stage_b.tree_metrics import compute_stage_b_tree_metrics
 from desktop.review_risk_frontend import TREE_REVIEW_RISK_EXTENSION_JS
 
 _INSTALLED = False
+_RISK_TREE_COLORS = {
+    "DANGER": "#ff1744",
+    "WARNING": "#ffa000",
+    "REVIEW_REQUIRED": "#ab47bc",
+    "SAFE": "#90a4ae",
+}
 
 
 def _stale_layer(authority: str) -> dict[str, Any]:
@@ -34,6 +40,34 @@ def _stale_layer(authority: str) -> dict[str, Any]:
         "authority": authority,
         "display_only_sampling": False,
     }
+
+
+def _apply_risk_tree_colors(
+    display: dict[str, Any], clearance_evidence: dict[str, Any]
+) -> None:
+    """Colour the bounded tree sample from current policy classifications."""
+
+    records = clearance_evidence.get("records") or []
+    risk_by_tree = {
+        int(record["global_tree_id"]): str(
+            record.get("risk") or record.get("display_class") or ""
+        )
+        for record in records
+        if isinstance(record, dict) and record.get("global_tree_id") is not None
+    }
+    trees3d = display.get("trees3d")
+    if not isinstance(trees3d, dict):
+        return
+    tree_ids = trees3d.get("tree_id_by_index")
+    if not isinstance(tree_ids, list):
+        return
+    existing = trees3d.get("color")
+    if not isinstance(existing, list) or len(existing) != len(tree_ids):
+        existing = ["#90a4ae"] * len(tree_ids)
+    trees3d["color"] = [
+        _RISK_TREE_COLORS.get(risk_by_tree.get(int(tree_id), ""), existing[index])
+        for index, tree_id in enumerate(tree_ids)
+    ]
 
 
 def _result_matches_editor_revision(editor: Any, result: Any) -> bool:
@@ -153,6 +187,7 @@ def install_review_extensions() -> None:
                 result,
                 visible_tree_ids=visible_tree_ids,
             )
+            _apply_risk_tree_colors(display, display["clearance_evidence"])
         return display
 
     from desktop.editor_tasks import editor_action

@@ -30,6 +30,7 @@
     const cards = [
       ['最终全局单木', value(kpis.tree_count, 0)],
       ['全局最小净空 (m)', value(kpis.minimum_clearance_m, 3)],
+      ['当前预警阈值 (m)', value(kpis.warning_threshold_m, 2)],
       ['最终成员点数', value(kpis.final_member_point_count, 0)],
       ['风险分类', Object.entries(kpis.risk_counts || {}).map(([key, count]) => `${key} ${count}`).join(' · ') || '—'],
     ];

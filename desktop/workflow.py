@@ -27,6 +27,7 @@ from zipfile import BadZipFile
 import numpy as np
 from algorithms.folder_pipeline.tree_editor import load_edits_payload
 from algorithms.spans.project_adapter import SourceSharedPreparation, SpanScienceResult
+from core.config.fast_baseline import canonical_digest
 from core.stage_a import (
     CapabilityState,
     CoordinateDeclaration,
@@ -110,6 +111,60 @@ def _load_json(path: Path) -> dict[str, Any] | None:
     except (OSError, ValueError, json.JSONDecodeError):
         return None
     return value if isinstance(value, dict) else None
+
+
+def _dynamic_risk_snapshot(policy: RiskPolicy) -> dict[str, Any]:
+    """Return the versioned product-policy snapshot, separate from science."""
+
+    snapshot = policy.to_dict()
+    snapshot["configuration_digest"] = canonical_digest(snapshot)
+    return snapshot
+
+
+def _risk_counts_from_saved_clearance(
+    records: Any,
+    policy: RiskPolicy,
+) -> tuple[dict[str, int], int]:
+    """Reclassify saved per-tree minima without invoking clearance science."""
+
+    from core.stage_b.contact import ContactState, contact_evidence_from_clearance
+
+    counts = {"DANGER": 0, "WARNING": 0, "SAFE": 0}
+    unavailable = 0
+    for record in records or ():
+        value = (
+            record.get("minimum_clearance_m")
+            if isinstance(record, Mapping)
+            else getattr(record, "minimum_clearance_m", None)
+        )
+        status = (
+            record.get("status", "UNKNOWN")
+            if isinstance(record, Mapping)
+            else getattr(record, "status", "UNKNOWN")
+        )
+        explicit_contact = (
+            record.get("contact_state")
+            if isinstance(record, Mapping)
+            else getattr(record, "contact_state", None)
+        )
+        if value is None:
+            unavailable += 1
+            continue
+        evidence = contact_evidence_from_clearance(
+            value,
+            clearance_status=str(status),
+        )
+        contact = (
+            True
+            if explicit_contact == ContactState.CONTACT_CONFIRMED.value
+            else False
+            if explicit_contact == ContactState.CONTACT_NOT_CONFIRMED.value
+            or evidence.state is ContactState.CONTACT_NOT_CONFIRMED
+            else None
+        )
+        assessment = policy.classify(clearance_m=float(value), contact=contact)
+        counts[assessment.risk.value] += 1
+    return counts, unavailable
 
 
 def _load_final_clearance(payload: Mapping[str, Any] | None) -> Any | None:
@@ -588,12 +643,77 @@ class DesktopWorkflow:
         return self.capability_projection()
 
     def set_risk_policy(self, threshold_m: float) -> dict[str, Any]:
+        started = time.perf_counter()
         threshold = float(threshold_m)
         policy = RiskPolicy(warning_clearance_threshold_m=threshold)
-        self._workflow["risk_policy"] = policy.to_dict()
-        self._save_workflow()
-        self._log("risk_policy_updated", threshold_m=threshold)
-        return policy.to_dict()
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                raise ValueError("分析正在运行，完成后才能调整风险阈值。")
+            if self._finalize_thread is not None and self._finalize_thread.is_alive():
+                raise ValueError("正在生成复核结果，完成后才能调整风险阈值。")
+
+            result = self._current_result()
+            records = (
+                getattr(getattr(result, "final_clearance", None), "records", ())
+                if result is not None
+                else ()
+            )
+            risk_counts, unavailable = _risk_counts_from_saved_clearance(records, policy)
+            snapshot = _dynamic_risk_snapshot(policy)
+            reclassification = {
+                "source": "SAVED_EXACT_MINIMUM_CLEARANCE",
+                "risk_counts": risk_counts,
+                "reclassified_tree_count": int(sum(risk_counts.values())),
+                "unavailable_tree_count": int(unavailable),
+                "science_recomputed": False,
+                "ground_rerun": False,
+                "wire_rerun": False,
+                "tree_rerun": False,
+                "dbh_rerun": False,
+                "clearance_rerun": False,
+            }
+
+            updated_result = result
+            if result is not None:
+                diagnostics = dict(result.batch_diagnostics)
+                diagnostics["risk_reclassification"] = dict(reclassification)
+                updated_result = replace(
+                    result,
+                    risk_policy_snapshot=snapshot,
+                    batch_diagnostics=diagnostics,
+                )
+
+            manifest_path = self._latest_batch_path()
+            manifest = _load_json(manifest_path) if manifest_path is not None else None
+            if (
+                updated_result is not None
+                and manifest_path is not None
+                and manifest is not None
+                and manifest.get("analysis_run_id") == updated_result.analysis_run_id
+            ):
+                _atomic_json(manifest_path, updated_result.to_dict())
+
+            self._result = updated_result
+            if self._editor is not None and updated_result is not None:
+                self._editor.result = updated_result
+            self._editor_display_cache = None
+            self._workflow["risk_policy"] = policy.to_dict()
+            self._save_workflow()
+
+        elapsed = time.perf_counter() - started
+        self._log(
+            "risk_policy_updated",
+            threshold_m=threshold,
+            elapsed_seconds=elapsed,
+            **reclassification,
+        )
+        return {
+            **policy.to_dict(),
+            "reclassification": {
+                **reclassification,
+                "elapsed_seconds": elapsed,
+            },
+        }
 
     def save_manual_towers(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         project = self._stage_project()
@@ -1038,6 +1158,12 @@ class DesktopWorkflow:
     def batch_projection(self) -> dict[str, Any]:
         project = self._stage_project()
         manifest = self._latest_batch_manifest()
+        policy = self._risk_policy()
+        final_clearance = (manifest or {}).get("final_clearance") or {}
+        risk_counts, unavailable_risk_count = _risk_counts_from_saved_clearance(
+            final_clearance.get("records") if isinstance(final_clearance, Mapping) else (),
+            policy,
+        )
         statuses = dict((manifest or {}).get("span_statuses") or {})
         global_reconciliation = (manifest or {}).get("global_reconciliation") or {}
         global_tree_count = global_reconciliation.get("tree_count")
@@ -1102,7 +1228,9 @@ class DesktopWorkflow:
             "final_tree_count": global_tree_count,
             "tree_count_source": "PERSISTED_GLOBAL_RECONCILIATION",
             "error": self._batch_error or self._workflow.get("last_error"),
-            "risk_policy": self._risk_policy().to_dict(),
+            "risk_policy": policy.to_dict(),
+            "risk_counts": risk_counts,
+            "risk_unavailable_tree_count": unavailable_risk_count,
             "stage_timings_seconds": dict(
                 ((manifest or {}).get("telemetry") or {}).get("STAGE_TIME") or {}
             ),

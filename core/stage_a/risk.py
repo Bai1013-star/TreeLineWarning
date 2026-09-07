@@ -71,9 +71,11 @@ class RiskPolicy:
             reason = "clearance is above the configured warning threshold"
         else:
             # Unknown contact evidence is never promoted to SAFE.  The risk
-            # class remains a conservative product result while quality state
-            # tells the user that scientific review is still needed.
-            risk = RiskClass.DANGER if clearance <= 0.0 else RiskClass.WARNING
+            # class remains a conservative WARNING while quality state tells
+            # the user that scientific review is still needed.  DANGER is
+            # reserved exclusively for confirmed CONTACT evidence; a zero or
+            # tie-level geometric clearance is not itself proof of contact.
+            risk = RiskClass.WARNING
             reason = "CONTACT evidence is unavailable; final claim requires review"
             review_required = True
         return RiskAssessment(

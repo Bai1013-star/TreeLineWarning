@@ -605,6 +605,9 @@ def _kpis(rows: list[dict[str, Any]], result: Any) -> dict[str, Any]:
     return {
         "tree_count": len(rows),
         "minimum_clearance_m": minimum,
+        "warning_threshold_m": (
+            getattr(result, "risk_policy_snapshot", {}) or {}
+        ).get("warning_clearance_threshold_m"),
         "risk_counts": dict(
             Counter(str(row.get("current_risk") or "UNKNOWN") for row in rows)
         ),

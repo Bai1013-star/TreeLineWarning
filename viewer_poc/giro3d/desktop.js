@@ -218,7 +218,8 @@
     const executionMarkup = `<br>执行模式：${esc(executionRequested)}${executionActual ? `<br>EXECUTION：${esc(executionActual)}` : ''}`;
     $('batchBox').innerHTML = `${batch.acceptance_mode === 'FIXTURE' ? '<b>测试模式</b> · ' : ''}任务状态：${esc(statusLabel(batch.status))}<br>已完成档距：${completed.length}/${spans.length}${failed.length ? `<br>失败：${failed.map(span => esc(spanName(span))).join('、')}` : ''}${executionMarkup}`;
     const treeCount = Number.isInteger(batch.final_tree_count) ? batch.final_tree_count : '—';
-    $('resultBox').innerHTML = completed.length ? `<b>已有 ${completed.length} 个档距结果</b><br>全局归并单木：${esc(treeCount)} · 预警净空阈值：${esc(batch.risk_policy?.warning_clearance_threshold_m)} m<br>计数来自最终全局归并发布；导线或净空证据不足时保持“需复核”。` : '分析完成后显示结果。';
+    const riskCounts = batch.risk_counts || {};
+    $('resultBox').innerHTML = completed.length ? `<b>已有 ${completed.length} 个档距结果</b><br>全局归并单木：${esc(treeCount)} · 预警净空阈值：${esc(batch.risk_policy?.warning_clearance_threshold_m)} m · WARNING：${esc(riskCounts.WARNING ?? 0)} · DANGER：${esc(riskCounts.DANGER ?? 0)} · SAFE：${esc(riskCounts.SAFE ?? 0)}<br>计数来自已保存的最终净空即时重分类；导线或净空证据不足时保持“需复核”。` : '分析完成后显示结果。';
     renderFuturePreviewLink();
     $('lineOverview').innerHTML = spans.map(span => {
       const cls = ['FAILED'].includes(span.status) ? 'failed' : (['REVIEW_REQUIRED'].includes(span.status) ? 'review' : (['AUTO_ANALYZED', 'USER_REVIEWED', 'FINALIZED'].includes(span.status) ? 'done' : ''));
@@ -578,7 +579,7 @@
   async function saveRisk() {
     const value = Number($('riskThreshold').value);
     if (!(value > 0)) { setStatus('预警净空阈值必须大于 0', 'warn'); return; }
-    try { await jsonPost('/api/desktop/risk-policy', {warning_clearance_threshold_m: value}); await loadWorkspace(); setStatus('风险阈值已保存', 'good'); }
+    try { await jsonPost('/api/desktop/risk-policy', {warning_clearance_threshold_m: value}); state.viewerLoaded = false; await loadWorkspace(); setStatus('风险阈值已保存，结果已即时重分类', 'good'); }
     catch (error) { setStatus(userError(error, '风险阈值保存失败。'), 'bad'); }
   }
 
