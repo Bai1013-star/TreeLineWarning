@@ -83,7 +83,8 @@ def test_step2_uses_one_typed_tree_buffer_and_explicit_ids() -> None:
     assert "new this.THREE.BufferGeometry()" in viewer
     assert "new this.THREE.Points(" in viewer
     assert "new this.THREE.BufferAttribute" in viewer
-    assert "new this.THREE.Uint32BufferAttribute(rows, 1)" in viewer
+    assert "new this.THREE.Uint32BufferAttribute(new Uint32Array(capacity), 1)" in viewer
+    assert "geometry.setDrawRange(0, rows.length)" in viewer
     assert "this.treeIds[sourceIndex]" in viewer
     assert "treeIdToMetadata: new Map()" in app
     assert "treeIdToMetadata.set(treeId, tree)" in app
@@ -163,7 +164,9 @@ def test_display_budget_and_frame_adaptation_are_display_only() -> None:
     assert "SLOW_FRAME_MS = 27" in viewer
     assert "this.qualityFraction * 0.72" in viewer
     assert "rebuildTrees()" in viewer
-    assert "original_index" not in viewer
+    assert "original_index_by_index" in viewer
+    assert "applyDelta(delta)" in viewer
+    assert "EDITOR_DISPLAY_DELTA_REVISION_MISMATCH" in viewer
     assert "display_budget=${displayBudget()}" in app
 
 

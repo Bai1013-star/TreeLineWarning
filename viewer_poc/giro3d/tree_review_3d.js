@@ -63,8 +63,15 @@
       this.maxDim = 1;
       this.treePoints = null;
       this.treeIds = [];
+      this.treeSourceIds = [];
+      this.treeOriginalIndices = [];
+      this.treeVisible = [];
       this.treeXYZ = [];
       this.treeBaseColors = null;
+      this.treeInitialColors = null;
+      this.displayBaseId = null;
+      this.editorRevision = 0;
+      this.activeTreeBufferRows = 0;
       this.previewKeys = new Set();
       this.previewTreeId = null;
       this.selection = new Set();
@@ -383,7 +390,7 @@
     }
 
     visiblePointCount() {
-      return this.treePoints ? this.treePoints.geometry.getAttribute('position').count : 0;
+      return this.treePoints ? this.activeTreeBufferRows : 0;
     }
 
     computeBounds(data) {
@@ -478,7 +485,16 @@
       const trees = this.source.trees3d || {};
       this.treeXYZ = Array.isArray(trees.xyz) ? trees.xyz : [];
       this.treeIds = Array.isArray(trees.tree_id_by_index) ? trees.tree_id_by_index.map(Number) : [];
+      this.treeSourceIds = Array.isArray(trees.source_tree_id_by_index)
+        ? trees.source_tree_id_by_index.map(Number) : [...this.treeIds];
+      this.treeOriginalIndices = Array.isArray(trees.original_index_by_index)
+        ? trees.original_index_by_index.map(Number) : this.treeXYZ.map((_, index) => index);
+      this.treeVisible = Array.isArray(trees.visible_by_index)
+        ? trees.visible_by_index.map(Boolean) : this.treeIds.map(treeId => Number(treeId) >= 0);
       this.treeBaseColors = (Array.isArray(trees.color) ? trees.color : []).map(value => parseColor(this.THREE, value, 0x62d96b));
+      this.treeInitialColors = this.treeBaseColors.map(color => color.clone());
+      this.displayBaseId = data && data.display_base_id ? String(data.display_base_id) : null;
+      this.editorRevision = Number(data && data.editor_revision || 0);
       this.rebuildTrees();
       this.camera.near = Math.max(0.01, this.maxDim / 100000);
       this.camera.far = this.maxDim * 100;
@@ -490,29 +506,48 @@
 
     sampledRows() {
       const count = Math.min(this.treeXYZ.length, this.treeIds.length);
-      if (this.qualityFraction >= 0.999 || count < 2) return Array.from({length: count}, (_, index) => index);
-      const target = Math.max(1, Math.floor(count * this.qualityFraction));
+      const visible = [];
+      for (let index = 0; index < count; index += 1) {
+        if (this.treeVisible[index] !== false && Number(this.treeIds[index]) >= 0) visible.push(index);
+      }
+      if (this.qualityFraction >= 0.999 || visible.length < 2) return visible;
+      const target = Math.max(1, Math.floor(visible.length * this.qualityFraction));
       const rows = new Array(target);
-      for (let index = 0; index < target; index += 1) rows[index] = Math.min(count - 1, Math.floor(index * count / target));
+      for (let index = 0; index < target; index += 1) {
+        rows[index] = visible[Math.min(visible.length - 1, Math.floor(index * visible.length / target))];
+      }
       return rows;
     }
 
     rebuildTrees() {
-      if (this.treePoints) {
-        this.content.remove(this.treePoints);
-        this.disposeObject(this.treePoints);
-      }
       const rows = this.sampledRows();
-      if (!rows.length) { this.treePoints = null; this.requestRender(); return; }
-      const geometry = new this.THREE.BufferGeometry();
-      geometry.setAttribute('position', new this.THREE.BufferAttribute(this.positions(this.treeXYZ, rows), 3));
-      geometry.setAttribute('sourceIndex', new this.THREE.Uint32BufferAttribute(rows, 1));
-      geometry.setAttribute('color', new this.THREE.BufferAttribute(new Float32Array(rows.length * 3), 3));
-      geometry.computeBoundingSphere();
-      const material = new this.THREE.PointsMaterial({size: 2.1, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.96, depthTest: true, depthWrite: true});
-      this.treePoints = new this.THREE.Points(geometry, material);
-      this.treePoints.userData.role = 'TREE';
-      this.content.add(this.treePoints);
+      const capacity = Math.max(1, this.treeXYZ.length);
+      let geometry = this.treePoints && this.treePoints.geometry;
+      const existing = geometry && geometry.getAttribute('sourceIndex');
+      if (!geometry || !existing || existing.count < capacity) {
+        if (this.treePoints) {
+          this.content.remove(this.treePoints);
+          this.disposeObject(this.treePoints);
+        }
+        geometry = new this.THREE.BufferGeometry();
+        geometry.setAttribute('position', new this.THREE.BufferAttribute(new Float32Array(capacity * 3), 3));
+        geometry.setAttribute('sourceIndex', new this.THREE.Uint32BufferAttribute(new Uint32Array(capacity), 1));
+        geometry.setAttribute('color', new this.THREE.BufferAttribute(new Float32Array(capacity * 3), 3));
+        const material = new this.THREE.PointsMaterial({size: 2.1, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.96, depthTest: true, depthWrite: true});
+        this.treePoints = new this.THREE.Points(geometry, material);
+        this.treePoints.userData.role = 'TREE';
+        this.content.add(this.treePoints);
+      }
+      const positions = this.positions(this.treeXYZ, rows);
+      const positionAttr = geometry.getAttribute('position');
+      const sourceAttr = geometry.getAttribute('sourceIndex');
+      positionAttr.array.set(positions, 0);
+      sourceAttr.array.set(rows, 0);
+      positionAttr.needsUpdate = true;
+      sourceAttr.needsUpdate = true;
+      geometry.setDrawRange(0, rows.length);
+      this.activeTreeBufferRows = rows.length;
+      if (rows.length) geometry.computeBoundingSphere();
       this.updateTreeColors();
       this.requestRender();
     }
@@ -531,7 +566,7 @@
       const fallback = new this.THREE.Color(0x62d96b);
       const muted = new this.THREE.Color();
       const previewAllTrees = Number(this.previewTreeId) < 0;
-      for (let index = 0; index < colorAttr.count; index += 1) {
+      for (let index = 0; index < this.activeTreeBufferRows; index += 1) {
         const sourceIndex = sourceAttr.getX(index);
         const treeId = Number(this.treeIds[sourceIndex]);
         const point = this.treeXYZ[sourceIndex];
@@ -543,6 +578,58 @@
       }
       colorAttr.needsUpdate = true;
       this.requestRender();
+    }
+
+    applyDelta(delta) {
+      const started = performance.now();
+      if (!delta || delta.available !== true || String(delta.base_id || '') !== String(this.displayBaseId || '')) {
+        throw new Error('EDITOR_DISPLAY_DELTA_BASE_MISMATCH');
+      }
+      if (Number(delta.from_revision) !== Number(this.editorRevision)) {
+        throw new Error('EDITOR_DISPLAY_DELTA_REVISION_MISMATCH');
+      }
+      const mapping = delta.tree_id_by_source || {};
+      const removed = new Set((delta.removed_original_index || []).map(Number));
+      const clearanceCurrent = delta.clearance_current === true;
+      for (let index = 0; index < this.treeXYZ.length; index += 1) {
+        const sourceId = Number(this.treeSourceIds[index]);
+        const mapped = Object.prototype.hasOwnProperty.call(mapping, String(sourceId))
+          ? Number(mapping[String(sourceId)]) : -1;
+        this.treeIds[index] = mapped;
+        this.treeVisible[index] = mapped >= 0 && !removed.has(Number(this.treeOriginalIndices[index]));
+        this.treeBaseColors[index] = clearanceCurrent && this.treeInitialColors[index]
+          ? this.treeInitialColors[index].clone()
+          : parseColor(this.THREE, `hsl(${(Math.max(0, mapped) * 137) % 360},72%,58%)`, 0x62d96b);
+      }
+      this.editorRevision = Number(delta.revision);
+      if (this.source) {
+        this.source.editor_revision = this.editorRevision;
+        this.source.trees = Array.isArray(delta.trees) ? delta.trees : [];
+        this.source.operations = Array.isArray(delta.operations) ? delta.operations : [];
+        if (this.source.trees3d) {
+          this.source.trees3d.tree_id_by_index = this.treeIds;
+          this.source.trees3d.visible_by_index = this.treeVisible;
+          this.source.trees3d.labels = Array.isArray(delta.labels) ? delta.labels : [];
+        }
+      }
+      if (this.content) {
+        this.content.children.forEach(object => {
+          if (object.userData && object.userData.role === 'DANGER_POINT') {
+            object.visible = clearanceCurrent;
+          }
+        });
+      }
+      const currentIds = new Set((delta.trees || []).map(tree => Number(tree.tree_id)));
+      this.selection = new Set([...this.selection].filter(treeId => currentIds.has(Number(treeId))));
+      this.previewKeys.clear();
+      this.previewTreeId = null;
+      this.rebuildTrees();
+      this.renderLabels();
+      return {
+        delta_apply_ms: performance.now() - started,
+        visible_tree_points: this.visiblePointCount(),
+        buffer_reused: true,
+      };
     }
 
     setSelection(treeIds) {

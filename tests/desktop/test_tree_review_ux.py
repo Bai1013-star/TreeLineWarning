@@ -30,7 +30,7 @@ def _bare_workflow(tmp_path: Path) -> DesktopWorkflow:
     return workflow
 
 
-def test_editor_display_is_cached_until_committed_revision_changes(tmp_path: Path) -> None:
+def test_editor_display_reuses_stable_basis_across_committed_revisions(tmp_path: Path) -> None:
     workflow = _bare_workflow(tmp_path)
 
     class Session:
@@ -66,7 +66,7 @@ def test_editor_display_is_cached_until_committed_revision_changes(tmp_path: Pat
 
     session.operations.append({"type": "DELETE", "tree_ids": [1]})
     workflow.editor_data()
-    assert session.build_calls == 2
+    assert session.build_calls == 1
 
 
 def test_display_sample_tracks_exact_committed_membership_without_full_final_build() -> None:

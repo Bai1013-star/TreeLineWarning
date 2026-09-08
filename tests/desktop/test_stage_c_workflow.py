@@ -76,8 +76,19 @@ def test_stage_c_fixture_batch_reconciles_and_resumes_without_rerun(
     assert batch["duplicate_final_original_index"] == 0
     editor_data = workflow.editor_data()
     assert isinstance(editor_data["trees"], list)
-    assert set(editor_data["trees3d"]) == {"xyz", "color", "tree_id_by_index", "labels"}
+    assert set(editor_data["trees3d"]) == {
+        "xyz",
+        "color",
+        "tree_id_by_index",
+        "source_tree_id_by_index",
+        "original_index_by_index",
+        "visible_by_index",
+        "labels",
+    }
     assert len(editor_data["trees3d"]["xyz"]) == len(editor_data["trees3d"]["tree_id_by_index"])
+    assert len(editor_data["trees3d"]["xyz"]) == len(
+        editor_data["trees3d"]["original_index_by_index"]
+    )
     span_editor_data = workflow.editor_data(span_id=span_ids[0])
     assert span_editor_data["review_span_id"] == span_ids[0]
     assert {

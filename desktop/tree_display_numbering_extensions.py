@@ -52,6 +52,19 @@ def _compute_display_identities(self: Any, editor: Any) -> dict[int, dict[str, A
     of turning a display enhancement into a hard dependency.
     """
 
+    records = None
+    if callable(getattr(editor, "display_identity_records", None)):
+        try:
+            records = editor.display_identity_records()
+        except (RuntimeError, TypeError, ValueError, KeyError):
+            records = None
+    if records is not None:
+        try:
+            project = self._stage_project()
+        except (FileNotFoundError, OSError, TypeError, ValueError):
+            return {}
+        return assign_tree_display_ids(project, records)
+
     reconciled = None
     if callable(getattr(editor, "final_reconciled", None)):
         try:

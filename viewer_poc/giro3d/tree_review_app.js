@@ -959,9 +959,26 @@
     updateJournalCount(snapshot);
     byId('editmsg').textContent = '编辑已提交，正在刷新3D复核显示...';
     try {
-      await loadEditorData();
-      // Display rows and labels come from the same scoped editor_data response.
-      // The mutation snapshot describes the whole journal/project, not this view.
+      const delta = snapshot && snapshot.display_delta;
+      if (state.viewer && delta && delta.available === true
+        && typeof state.viewer.applyDelta === 'function') {
+        try {
+          const timing = state.viewer.applyDelta(delta);
+          const trees = Array.isArray(delta.trees) ? delta.trees : [];
+          if (state.editorDisplay) {
+            state.editorDisplay.trees = trees;
+            state.editorDisplay.operations = Array.isArray(delta.operations) ? delta.operations : [];
+            state.editorDisplay.editor_revision = Number(delta.revision);
+          }
+          renderTrees({trees, operations: delta.operations, tree_edit_count: delta.revision}, false);
+          const info = state.viewer.rendererInfo();
+          byId('viewer-renderer-status').textContent = `Giro3D / Three.js r${info.three_version} · 增量刷新 ${timing.delta_apply_ms.toFixed(1)} ms · ${timing.visible_tree_points.toLocaleString()} 树点`;
+        } catch (_) {
+          await loadEditorData();
+        }
+      } else {
+        await loadEditorData();
+      }
       updatePlotSelection();
     } catch (error) {
       throw committedDisplayRefreshError(error);

@@ -253,7 +253,15 @@ def _coordinate_from_scan(scan: Any) -> CoordinateDeclaration:
 def _empty_display() -> dict[str, Any]:
     return {
         "trees": [],
-        "trees3d": {"xyz": [], "color": [], "tree_id_by_index": []},
+        "trees3d": {
+            "xyz": [],
+            "color": [],
+            "tree_id_by_index": [],
+            "source_tree_id_by_index": [],
+            "original_index_by_index": [],
+            "visible_by_index": [],
+            "labels": [],
+        },
         "background": {"xyz": [], "rgb": []},
         "wire": {"xyz": []},
         "wires3d": {"xyz": []},
@@ -279,6 +287,7 @@ class DesktopWorkflow:
         self._result: BatchAnalysisResult | None = None
         self._editor_snapshot_cache: tuple[tuple[Any, ...], dict[str, Any]] | None = None
         self._editor_display_cache: tuple[tuple[Any, ...], dict[str, Any]] | None = None
+        self._editor_display_basis_cache: tuple[tuple[Any, ...], dict[str, Any]] | None = None
         self._finalize_thread: threading.Thread | None = None
         self._finalize_stage = "IDLE"
         self._finalize_message = ""
@@ -315,6 +324,7 @@ class DesktopWorkflow:
         self._batch_error = None
         self._editor_snapshot_cache = None
         self._editor_display_cache = None
+        self._editor_display_basis_cache = None
         self._finalize_thread = None
         self._finalize_stage = "IDLE"
         self._finalize_message = ""
@@ -1340,6 +1350,129 @@ class DesktopWorkflow:
             self._editor_snapshot_cache = (key, editor.snapshot())
         return self._editor_snapshot_cache[1]
 
+    def _editor_display_basis(
+        self,
+        editor: Any,
+        budget: int,
+        selected_span: str | None,
+    ) -> dict[str, Any]:
+        """Return one immutable display LOD shared by all editor revisions."""
+
+        key = (id(editor), int(budget), selected_span)
+        cached = getattr(self, "_editor_display_basis_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        if callable(getattr(editor.session, "display_basis", None)):
+            original_index, source_tree_ids, xyz = editor.session.display_basis(budget)
+        else:  # Compatibility for lightweight adapters and older fixtures.
+            original_index, source_tree_ids, xyz = editor.session.display_sample(budget)
+        if selected_span is not None:
+            allowed = np.asarray(editor.tree_ids_by_span[selected_span], dtype=np.int32)
+            keep = np.isin(source_tree_ids, allowed)
+            original_index = original_index[keep]
+            source_tree_ids = source_tree_ids[keep]
+            xyz = xyz[keep]
+        basis = {
+            "base_id": uuid4().hex,
+            "original_index": np.asarray(original_index, dtype=np.int64),
+            "source_tree_id": np.asarray(source_tree_ids, dtype=np.int32),
+            "xyz": np.asarray(xyz, dtype=np.float64),
+            "budget": int(budget),
+            "span_id": selected_span,
+        }
+        self._editor_display_basis_cache = (key, basis)
+        return basis
+
+    @staticmethod
+    def _project_editor_display(
+        editor: Any, basis: Mapping[str, Any]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if callable(getattr(editor.session, "project_display_basis", None)):
+            return editor.session.project_display_basis(
+                basis["original_index"], basis["source_tree_id"]
+            )
+        tree_ids = np.asarray(basis["source_tree_id"], dtype=np.int32)
+        return tree_ids, np.ones(len(tree_ids), dtype=bool)
+
+    @staticmethod
+    def _display_labels(
+        trees: list[dict[str, Any]],
+        tree_ids: np.ndarray,
+        xyz: np.ndarray,
+        visible: np.ndarray,
+    ) -> list[dict[str, Any]]:
+        labels: list[dict[str, Any]] = []
+        for tree in trees:
+            tree_id = int(tree["tree_id"])
+            rows = visible & (tree_ids == tree_id)
+            if np.any(rows):
+                point = np.mean(xyz[rows], axis=0).tolist()
+            else:
+                apex = tree.get("apex_xy_local_m")
+                if not isinstance(apex, (list, tuple)) or len(apex) < 3:
+                    continue
+                point = [float(value) for value in apex[:3]]
+            labels.append({"tree_id": tree_id, "text": str(tree_id), "xyz": point})
+        return labels
+
+    def _editor_display_delta(
+        self,
+        editor: Any,
+        snapshot: dict[str, Any],
+        *,
+        from_revision: int,
+    ) -> dict[str, Any]:
+        cached = getattr(self, "_editor_display_basis_cache", None)
+        if cached is None or cached[0][0] != id(editor):
+            return {
+                "schema": "treeline-editor-display-delta-v1",
+                "available": False,
+                "from_revision": int(from_revision),
+                "revision": int(editor.session.revision),
+            }
+        basis = cached[1]
+        tree_ids, visible = self._project_editor_display(editor, basis)
+        trees = [dict(item) for item in snapshot.get("trees", [])]
+        identities: dict[int, dict[str, Any]] = {}
+        try:
+            from desktop.tree_display_numbering_extensions import _current_display_identities
+
+            identities = _current_display_identities(self, editor)
+        except (OSError, RuntimeError, TypeError, ValueError, KeyError):
+            pass
+        for tree in trees:
+            identity = identities.get(int(tree["tree_id"]))
+            if identity is not None:
+                tree["display_tree_id"] = identity["display_tree_id"]
+        labels = self._display_labels(trees, tree_ids, basis["xyz"], visible)
+        for label in labels:
+            identity = identities.get(int(label["tree_id"]))
+            if identity is not None:
+                label["text"] = identity["display_tree_id"]
+        mapping = editor.session.display_source_mapping()
+        removed_in_basis = basis["original_index"][(tree_ids >= 0) & ~visible]
+        result = getattr(editor, "result", None)
+        clearance_current = False
+        try:
+            from desktop.review_extensions import _result_matches_editor_revision
+
+            clearance_current = bool(_result_matches_editor_revision(editor, result))
+        except (AttributeError, TypeError, ValueError):
+            pass
+        return {
+            "schema": "treeline-editor-display-delta-v1",
+            "available": True,
+            "base_id": basis["base_id"],
+            "from_revision": int(from_revision),
+            "revision": int(editor.session.revision),
+            "tree_id_by_source": {str(key): value for key, value in sorted(mapping.items())},
+            "removed_original_index": removed_in_basis.tolist(),
+            "trees": trees,
+            "operations": list(snapshot.get("operations", [])),
+            "labels": labels,
+            "clearance_current": clearance_current,
+        }
+
     def _assert_editor_mutable(self) -> None:
         editor_tasks(self).assert_available()
         batch_thread = getattr(self, "_thread", None)
@@ -1423,7 +1556,11 @@ class DesktopWorkflow:
         key = (*self._editor_revision_key(editor), budget, selected_span)
         if self._editor_display_cache is not None and self._editor_display_cache[0] == key:
             return self._editor_display_cache[1]
-        _final_index, tree_ids, display_xyz = editor.session.display_sample(budget)
+        basis = self._editor_display_basis(editor, budget, selected_span)
+        tree_ids, visible = self._project_editor_display(editor, basis)
+        display_xyz = basis["xyz"]
+        source_tree_ids = basis["source_tree_id"]
+        original_index = basis["original_index"]
         snapshot_trees = [dict(item) for item in self._editor_snapshot(editor).get("trees", [])]
         if selected_span is not None:
             source_ids = set(editor.tree_ids_by_span[selected_span])
@@ -1432,12 +1569,12 @@ class DesktopWorkflow:
                 for item in snapshot_trees
                 if source_ids.intersection(int(value) for value in item.get("source_tree_ids", []))
             }
-            keep = np.isin(tree_ids, np.fromiter(visible_ids, dtype=np.int32))
-            tree_ids, display_xyz = tree_ids[keep], display_xyz[keep]
             snapshot_trees = [
                 item for item in snapshot_trees if int(item["tree_id"]) in visible_ids
             ]
-        colors = [f"hsl({(int(tree_id) * 137) % 360},72%,58%)" for tree_id in tree_ids]
+        colors = [
+            f"hsl({(max(0, int(tree_id)) * 137) % 360},72%,58%)" for tree_id in tree_ids
+        ]
         project = self._stage_project()
         tower_xyz: list[list[float]] = []
         labels: list[str] = []
@@ -1475,27 +1612,24 @@ class DesktopWorkflow:
                 )
         display = _empty_display()
         display["trees"] = snapshot_trees
-        label_rows: dict[int, list[np.ndarray]] = {}
-        for tree_id, point in zip(tree_ids.tolist(), display_xyz, strict=True):
-            label_rows.setdefault(int(tree_id), []).append(point)
-        labels_3d = [
-            {
-                "tree_id": tree_id,
-                "text": str(tree_id),
-                "xyz": np.mean(points, axis=0).tolist(),
-            }
-            for tree_id, points in sorted(label_rows.items())
-        ]
+        labels_3d = self._display_labels(snapshot_trees, tree_ids, display_xyz, visible)
         display["trees3d"] = {
             "xyz": display_xyz.tolist(),
             "color": colors,
             "tree_id_by_index": tree_ids.tolist(),
+            "source_tree_id_by_index": source_tree_ids.tolist(),
+            "original_index_by_index": original_index.tolist(),
+            "visible_by_index": visible.tolist(),
             "labels": labels_3d,
         }
         display["tower"] = {"xyz": tower_xyz, "labels": labels}
         display["wire"] = {"xyz": wire_xyz}
         display["wires3d"] = {"xyz": wire_xyz}
         display["review_span_id"] = selected_span
+        display["editor_revision"] = int(
+            getattr(editor.session, "revision", len(editor.session.operations))
+        )
+        display["display_base_id"] = basis["base_id"]
         self._editor_display_cache = (key, display)
         return display
 
@@ -1520,6 +1654,7 @@ class DesktopWorkflow:
         working.session.selected_ids = list(editor.session.selected_ids)
         working.session._previews = dict(editor.session._previews)
         working.session._source_rows_cache = dict(editor.session._source_rows_cache)
+        working.session._removed_indices_cache = editor.session._removed_indices_cache
         timings = dict.fromkeys(
             [
                 "selection_decode",
@@ -1532,17 +1667,15 @@ class DesktopWorkflow:
             ],
             0.0,
         )
+        from_revision = int(editor.session.revision)
         started = time.perf_counter()
         action(working)
         timings["membership_mutation"] = time.perf_counter() - started
         started = time.perf_counter()
         snapshot = working.snapshot()
-        # Build the bounded viewer sample before any journal publication. A failure
-        # leaves live membership, its viewer and the previous journal untouched.
-        working.session.display_sample(_DEFAULT_DISPLAY_POINTS)
-        from desktop.tree_display_numbering_extensions import _current_display_identities
-
-        _current_display_identities(self, working)
+        # The viewer owns a fixed display-only LOD basis.  A commit publishes a
+        # revision delta after the durable journal write, so no XYZ/final-array
+        # reconstruction is required at this boundary.
         timings["viewer_artifact_rebuild"] = time.perf_counter() - started
         started = time.perf_counter()
         working.persist_edits()
@@ -1554,6 +1687,20 @@ class DesktopWorkflow:
         editor.session = working.session
         self._editor_snapshot_cache = None
         self._editor_display_cache = None
+        delta_started = time.perf_counter()
+        try:
+            snapshot["display_delta"] = self._editor_display_delta(
+                editor, snapshot, from_revision=from_revision
+            )
+        except Exception:  # noqa: BLE001 - committed edit can recover via full display fetch
+            snapshot["display_delta"] = {
+                "schema": "treeline-editor-display-delta-v1",
+                "available": False,
+                "from_revision": from_revision,
+                "revision": int(editor.session.revision),
+            }
+        timings["viewer_artifact_rebuild"] = time.perf_counter() - delta_started
+        snapshot["editor_revision"] = int(editor.session.revision)
         snapshot["timings_seconds"] = timings
         try:
             self._log(

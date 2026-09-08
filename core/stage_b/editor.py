@@ -85,6 +85,37 @@ class BatchTreeEditor:
     def snapshot(self) -> dict[str, Any]:
         return self.session.snapshot()
 
+    def display_identity_records(self) -> tuple[dict[str, Any], ...]:
+        """Return the exact fields used by presentation tree numbering.
+
+        Display numbering depends only on the surviving/merged entity graph,
+        authoritative span ownership and longitudinal position.  Rebuilding
+        full-resolution final arrays here was unnecessary and made every local
+        editor action scan millions of rows.
+        """
+
+        by_id = {
+            int(record.global_tree_id): record
+            for record in self.original_reconciled.global_tree_records
+        }
+        records: list[dict[str, Any]] = []
+        for tree in self.snapshot().get("trees", []):
+            source_ids = [int(value) for value in tree.get("source_tree_ids", [])]
+            if not source_ids:
+                continue
+            base = min(
+                (by_id[source_id] for source_id in source_ids),
+                key=lambda item: item.global_tree_id,
+            )
+            records.append(
+                {
+                    "global_tree_id": int(tree["tree_id"]),
+                    "span_id": int(base.span_id),
+                    "longitudinal_s_m": base.longitudinal_s_m,
+                }
+            )
+        return tuple(records)
+
     def _write_json(self, path: Path, payload: Mapping[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")

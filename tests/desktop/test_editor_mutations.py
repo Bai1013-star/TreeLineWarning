@@ -82,11 +82,9 @@ def test_exact_lasso_undo_and_reopen_without_raw_access(tmp_path: Path, monkeypa
     assert raw.read_bytes() == raw_before
 
 
-@pytest.mark.parametrize("failure_at", ["viewer", "journal"])
-def test_failed_commit_preserves_live_membership_journal_and_preview(
+def test_failed_journal_commit_preserves_live_membership_and_preview(
     tmp_path: Path,
     monkeypatch,
-    failure_at,
 ):
     workflow, matrix, polygon = ready(tmp_path)
     editor = workflow._ensure_editor()
@@ -98,10 +96,7 @@ def test_failed_commit_preserves_live_membership_journal_and_preview(
     def fail(*args, **kwargs):
         raise OSError("injected disk or viewer failure")
 
-    if failure_at == "journal":
-        monkeypatch.setattr(type(editor), "_write_json", fail)
-    else:
-        monkeypatch.setattr(type(editor.session), "display_sample", fail)
+    monkeypatch.setattr(type(editor), "_write_json", fail)
     with pytest.raises(OSError, match="injected"):
         workflow.commit_trim(preview["preview_id"])
     assert_membership(membership(workflow), before)
@@ -156,13 +151,14 @@ def test_display_label_cache_tracks_commit_undo_and_topology(tmp_path: Path, mon
     first = _current_display_identities(workflow, editor)
     for _ in range(5):
         assert _current_display_identities(workflow, editor) == first
-    assert len(calls) == 1
+    assert len(calls) == 0
     preview = workflow.preview_trim_lasso(-1, matrix, polygon)
     workflow.commit_trim(preview["preview_id"])
     count = len(calls)
     cached = _current_display_identities(workflow, editor)
     assert len(calls) == count  # rebuilt inside the task, not on viewer refresh
     assert cached == _compute_display_identities(workflow, editor)
+    assert len(calls) == 0
     workflow.undo_editor()
     count = len(calls)
     assert _current_display_identities(workflow, editor) == first
@@ -170,7 +166,53 @@ def test_display_label_cache_tracks_commit_undo_and_topology(tmp_path: Path, mon
     manifest = workflow.project_root / "stage-a-project.json"
     manifest.write_text(manifest.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     _current_display_identities(workflow, editor)
-    assert len(calls) == count + 1
+    assert len(calls) == count
+
+
+def test_revision_delta_replays_delete_merge_trim_and_undo_on_stable_basis(tmp_path: Path):
+    workflow, matrix, polygon = ready(tmp_path)
+    initial = workflow.editor_data(display_budget=1_500)
+    base_id = initial["display_base_id"]
+    initial_xyz = initial["trees3d"]["xyz"]
+
+    workflow.select_editor_trees([0])
+    deleted = workflow.delete_selected()["display_delta"]
+    assert deleted["available"] is True
+    assert deleted["base_id"] == base_id
+    assert deleted["from_revision"] == 0 and deleted["revision"] == 1
+    assert "0" not in deleted["tree_id_by_source"]
+
+    restored = workflow.undo_editor()["display_delta"]
+    assert restored["from_revision"] == 1 and restored["revision"] == 0
+    assert restored["tree_id_by_source"]["0"] == 0
+
+    preview = workflow.preview_trim_lasso(-1, matrix, polygon)
+    trimmed = workflow.commit_trim(preview["preview_id"])["display_delta"]
+    assert trimmed["revision"] == 1
+    assert trimmed["removed_original_index"]
+    assert workflow.editor_data(display_budget=1_500)["trees3d"]["xyz"] == initial_xyz
+
+    workflow.undo_editor()
+    workflow.select_editor_trees([0, 1])
+    merged = workflow.merge_selected()["display_delta"]
+    merged_id = merged["trees"][0]["tree_id"]
+    assert set(merged["tree_id_by_source"].values()) == {merged_id}
+
+
+def test_lightweight_display_numbering_matches_full_reconciliation(tmp_path: Path):
+    from core.stage_b.tree_display_id import assign_tree_display_ids
+    from desktop.tree_display_numbering_extensions import _current_display_identities
+
+    workflow, _matrix, _polygon = ready(tmp_path)
+    editor = workflow._ensure_editor()
+    workflow.select_editor_trees([0, 1])
+    workflow.merge_selected()
+
+    lightweight = _current_display_identities(workflow, editor)
+    full = assign_tree_display_ids(
+        workflow._stage_project(), editor.final_reconciled().global_tree_records
+    )
+    assert lightweight == full
 
 
 def request(base, path, payload=None):

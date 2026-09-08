@@ -70,18 +70,18 @@ class RegionTreeEditSession(TreeEditSession):
 
     @staticmethod
     def _polygon_rows(points: np.ndarray, polygon: np.ndarray) -> np.ndarray:
-        """Exact even/odd rule, evaluating only points crossing each edge's Y range."""
-        order = np.argsort(points[:, 1], kind="stable")
-        x, y = points[order, 0], points[order, 1]
+        """Exact even/odd rule without an unnecessary O(N log N) Y sort."""
+        x, y = points[:, 0], points[:, 1]
         inside = np.zeros(len(points), dtype=bool)
         xj, yj = polygon[-1]
         for xi, yi in polygon:
             if yi != yj:
-                lo, hi = np.searchsorted(y, [min(yi, yj), max(yi, yj)], side="left")
-                boundary = (xj - xi) * (y[lo:hi] - yi) / (yj - yi) + xi
-                inside[lo:hi] ^= x[lo:hi] < boundary
+                crossing = (yi > y) != (yj > y)
+                rows = np.flatnonzero(crossing)
+                boundary = (xj - xi) * (y[rows] - yi) / (yj - yi) + xi
+                inside[rows] ^= x[rows] < boundary
             xj, yj = xi, yi
-        return order[inside]
+        return np.flatnonzero(inside)
 
     @staticmethod
     def _selected_rows_chunked(
@@ -115,7 +115,7 @@ class RegionTreeEditSession(TreeEditSession):
                 selected.append(rows[chosen] + start)
             if diagnostics is not None:
                 diagnostics["geometric_inclusion"] += time.perf_counter() - t
-        return np.sort(np.concatenate(selected)) if selected else np.empty(0, dtype=np.int64)
+        return np.concatenate(selected) if selected else np.empty(0, dtype=np.int64)
 
     def _membership_blocks(self, scope: list[int]):
         """Visit compact editor identity rows once, without reading raw LAS or copying all XYZ."""
@@ -135,7 +135,9 @@ class RegionTreeEditSession(TreeEditSession):
             positions = np.minimum(positions, len(keys) - 1)
             keep = keys[positions] == source_ids
             if len(removed):
-                keep &= ~np.isin(self.original.original_index[start:stop], removed)
+                keep &= ~_base._isin_sorted(
+                    self.original.original_index[start:stop], removed
+                )
             local = np.flatnonzero(keep)
             if len(local):
                 yield local + start, values[positions[local]]
@@ -201,7 +203,9 @@ class RegionTreeEditSession(TreeEditSession):
 
         if not selected_chunks:
             raise TreeEditorError("套索内没有树木点")
-        removed = np.unique(np.concatenate(selected_chunks))
+        removed = np.concatenate(selected_chunks)
+        if len(removed) > 1 and not np.all(removed[1:] > removed[:-1]):
+            removed = np.unique(removed)
         total_scope_points = int(sum(per_tree_current.values()))
         fully_removed = sorted(
             tree_id
@@ -275,7 +279,7 @@ class RegionTreeEditSession(TreeEditSession):
         removed_counts: dict[int, int] = {}
         for rows, final_ids in self._membership_blocks(affected_ids):
             indices = self.original.original_index[rows]
-            selected = np.isin(indices, removed)
+            selected = _base._isin_sorted(indices, removed)
             validated_chunks.append(indices[selected])
             for ids, target in ((final_ids, current_counts), (final_ids[selected], removed_counts)):
                 trees, counts = np.unique(ids, return_counts=True)
@@ -292,9 +296,9 @@ class RegionTreeEditSession(TreeEditSession):
                     f"区域剔除后树 {tree_id} 仅剩 {remaining} 个点，"
                     "不足以形成有效单木；请调整套索后重试。"
                 )
-        validated = (
-            np.unique(np.concatenate(validated_chunks)) if validated_chunks else np.array([])
-        )
+        validated = np.concatenate(validated_chunks) if validated_chunks else np.array([])
+        if len(validated) > 1 and not np.all(validated[1:] > validated[:-1]):
+            validated = np.unique(validated)
         if not np.array_equal(validated, removed):
             raise TreeEditorError("预览已过期，请重新选择")
 

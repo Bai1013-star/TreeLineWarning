@@ -187,6 +187,21 @@ def _apply_ops(
     return tree_members, merges
 
 
+def _isin_sorted(values: np.ndarray, sorted_candidates: np.ndarray) -> np.ndarray:
+    """Exact membership against unique sorted candidates without re-sorting."""
+
+    source = np.asarray(values)
+    candidates = np.asarray(sorted_candidates)
+    if not len(candidates):
+        return np.zeros(source.shape, dtype=bool)
+    positions = np.searchsorted(candidates, source)
+    bounded = positions < len(candidates)
+    result = np.zeros(source.shape, dtype=bool)
+    rows = np.flatnonzero(bounded)
+    result.flat[rows] = candidates[positions.flat[rows]] == source.flat[rows]
+    return result
+
+
 class TreeEditSession:
     """Thread-safe, log-driven tree edit session over one immutable original."""
 
@@ -196,6 +211,7 @@ class TreeEditSession:
         self.selected_ids: list[int] = []
         self._previews: dict[str, dict[str, Any]] = {}
         self._source_rows_cache: dict[int, np.ndarray] = {}
+        self._removed_indices_cache: tuple[tuple[int, ...], np.ndarray] | None = None
 
     @property
     def revision(self) -> int:
@@ -204,14 +220,24 @@ class TreeEditSession:
         return len(self.operations)
 
     def _removed_original_indices(self) -> np.ndarray:
+        key = tuple(id(operation) for operation in self.operations)
+        if self._removed_indices_cache is not None and self._removed_indices_cache[0] == key:
+            return self._removed_indices_cache[1]
         chunks = [
             _decode_indices(operation["removed_indices_b64"])
             for operation in self.operations
             if operation.get("type") == "REMOVE_POINTS"
         ]
         if not chunks:
-            return np.empty(0, dtype=np.int64)
-        return np.unique(np.concatenate(chunks))
+            result = np.empty(0, dtype=np.int64)
+        elif len(chunks) == 1 and (
+            len(chunks[0]) < 2 or np.all(chunks[0][1:] > chunks[0][:-1])
+        ):
+            result = chunks[0]
+        else:
+            result = np.unique(np.concatenate(chunks))
+        self._removed_indices_cache = (key, result)
+        return result
 
     def _source_rows(self, source_id: int) -> np.ndarray:
         rows = self._source_rows_cache.get(source_id)
@@ -236,7 +262,11 @@ class TreeEditSession:
         rows = chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
         indices = self.original.original_index[rows]
         removed = self._removed_original_indices()
-        keep = np.ones(len(rows), dtype=bool) if not len(removed) else ~np.isin(indices, removed)
+        keep = (
+            np.ones(len(rows), dtype=bool)
+            if not len(removed)
+            else ~_isin_sorted(indices, removed)
+        )
         if not np.any(keep):
             raise TreeEditorError(f"当前不存在单木 id: {tree_id}")
         return indices[keep], np.asarray(self.original.xyz_local_m[rows[keep]], dtype=np.float64)
@@ -279,7 +309,7 @@ class TreeEditSession:
             # loop rescanned the compact multi-million-row editor artifact for
             # every tree, making a single historical trim slow all later UI
             # refreshes.  This remains exact and never touches the raw source.
-            removed_rows = np.isin(self.original.original_index, removed)
+            removed_rows = _isin_sorted(self.original.original_index, removed)
             source_ids, source_counts = np.unique(
                 self.original.tree_id[removed_rows], return_counts=True
             )
@@ -367,7 +397,7 @@ class TreeEditSession:
         keep = final_ids >= 0
         removed = self._removed_original_indices()
         if len(removed):
-            keep &= ~np.isin(self.original.original_index[candidate_rows], removed)
+            keep &= ~_isin_sorted(self.original.original_index[candidate_rows], removed)
         candidate_rows = candidate_rows[keep]
         final_ids = final_ids[keep]
         if len(candidate_rows) > maximum:
@@ -379,6 +409,70 @@ class TreeEditSession:
             final_ids,
             np.asarray(self.original.xyz_local_m[candidate_rows], dtype=np.float64),
         )
+
+    def display_basis(
+        self, limit: int
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return a stable, revision-independent display-only LOD basis.
+
+        The fixed basis lets the browser apply DELETE/MERGE/REMOVE_POINTS and
+        their exact journal inverses without transferring XYZ again.  It is a
+        visualization sample only; editing and publication continue to use
+        authoritative full-resolution ``original_index`` membership.
+        """
+
+        maximum = max(0, int(limit))
+        count = min(len(self.original.original_index), maximum)
+        if count == 0:
+            return (
+                np.empty(0, dtype=np.int64),
+                np.empty(0, dtype=np.int32),
+                np.empty((0, 3), dtype=np.float64),
+            )
+        rows = np.linspace(0, len(self.original.original_index) - 1, count, dtype=np.int64)
+        return (
+            np.asarray(self.original.original_index[rows], dtype=np.int64),
+            np.asarray(self.original.tree_id[rows], dtype=np.int32),
+            np.asarray(self.original.xyz_local_m[rows], dtype=np.float64),
+        )
+
+    def display_source_mapping(self) -> dict[int, int]:
+        """Map immutable source-tree ids to their current journal tree ids."""
+
+        members, _merges = _apply_ops(self.original, self.operations)
+        return {
+            int(source_id): int(final_id)
+            for final_id, source_ids in members.items()
+            for source_id in source_ids
+        }
+
+    def project_display_basis(
+        self,
+        original_index: np.ndarray,
+        source_tree_id: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Project a stable LOD basis through the exact current edit journal."""
+
+        indices = np.asarray(original_index, dtype=np.int64)
+        sources = np.asarray(source_tree_id, dtype=np.int32)
+        if indices.shape != sources.shape:
+            raise TreeEditorError("DISPLAY_BASIS_SHAPE_MISMATCH")
+        mapping = self.display_source_mapping()
+        keys = np.asarray(sorted(mapping), dtype=np.int32)
+        final_ids = np.full(len(sources), -1, dtype=np.int32)
+        if len(keys):
+            values = np.asarray([mapping[int(key)] for key in keys], dtype=np.int32)
+            positions = np.searchsorted(keys, sources)
+            bounded = positions < len(keys)
+            rows = np.flatnonzero(bounded)
+            matching = keys[positions[rows]] == sources[rows]
+            rows = rows[matching]
+            final_ids[rows] = values[positions[rows]]
+        visible = final_ids >= 0
+        removed = self._removed_original_indices()
+        if len(removed):
+            visible &= ~_isin_sorted(indices, removed)
+        return final_ids, visible
 
     def edits_payload(self) -> dict[str, Any]:
         return {
@@ -638,7 +732,7 @@ class TreeEditSession:
                 final_ids[mask] = final_id
         removed = self._removed_original_indices()
         if len(removed):
-            keep &= ~np.isin(original_index, removed)
+            keep &= ~_isin_sorted(original_index, removed)
             final_ids[~keep] = -1
         final_index = original_index[keep]
         final_tree = final_ids[keep]
