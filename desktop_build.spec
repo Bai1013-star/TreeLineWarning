@@ -57,6 +57,7 @@ hiddenimports = (
     + collect_submodules("core")
     + collect_submodules("pyproj")
     + collect_submodules("cupy")
+    + collect_submodules("cupy_backends")
     + collect_submodules("cuda")
     + [
         "scripts",
