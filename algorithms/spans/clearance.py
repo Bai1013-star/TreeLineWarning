@@ -526,7 +526,8 @@ def _nearest_edges(
     *,
     backend: str,
     candidate_workers: int = 1,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, dict[str, int]]:
+    gpu_accelerator: Any | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, dict[str, Any]]:
     """Dispatch one tree's exact distance search to the selected backend."""
 
     if backend == "NUMPY_DIRECT":
@@ -535,6 +536,17 @@ def _nearest_edges(
         )
         return edge, distance, nearest, parameter, evaluated, {}
     if backend == "SCIPY_CANDIDATE_EXACT":
+        if gpu_accelerator is not None:
+            return gpu_accelerator.nearest(
+                points,
+                lambda values: _candidate_exact_nearest_edges(
+                    values,
+                    bvh,
+                    edge_bundle,
+                    tolerance,
+                    workers=candidate_workers,
+                ),
+            )
         return _candidate_exact_nearest_edges(
             points, bvh, edge_bundle, tolerance, workers=candidate_workers
         )
@@ -566,6 +578,7 @@ def run_span_tree_wire_clearance(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     cancellation_requested: Callable[[], bool] | None = None,
     candidate_workers: int = 1,
+    acceleration_mode: str = "AUTO",
 ) -> SpanClearanceResult:
     """Compute full-resolution tree-wire clearance per span, fail closed.
 
@@ -642,6 +655,28 @@ def run_span_tree_wire_clearance(
     selected_backend = backend or "SCIPY_CANDIDATE_EXACT"
     if selected_backend not in {"NUMPY_DIRECT", "PYTHON_BVH", "SCIPY_CANDIDATE_EXACT"}:
         raise ValueError(f"unknown clearance backend: {selected_backend}")
+    from algorithms.spans.gpu_clearance import create_gpu_accelerator, normalize_gpu_mode
+
+    requested_acceleration = normalize_gpu_mode(acceleration_mode)
+    if selected_backend != "SCIPY_CANDIDATE_EXACT" and requested_acceleration == "GPU":
+        raise ValueError("GPU acceleration requires SCIPY_CANDIDATE_EXACT backend")
+    gpu_accelerator = None
+    acceleration_diagnostics: dict[str, Any] = {
+        "requested_mode": requested_acceleration,
+        "effective_mode": "CPU",
+        "reason": "NON_CANDIDATE_BACKEND",
+    }
+    if selected_backend == "SCIPY_CANDIDATE_EXACT":
+        gpu_accelerator, acceleration_diagnostics = create_gpu_accelerator(
+            edge_bundle,
+            config.clearance_tie_tolerance_m,
+            mode=requested_acceleration,
+        )
+    processing_chunk_size = (
+        max(chunk_size, int(gpu_accelerator.chunk_size))
+        if gpu_accelerator is not None
+        else chunk_size
+    )
     # Group final members by global tree id (deterministic).
     final_tree = np.asarray(reconciled.final_tree_id, dtype=np.int32)
     final_xyz = np.asarray(reconciled.final_xyz_local_m, dtype=np.float64)
@@ -655,6 +690,7 @@ def run_span_tree_wire_clearance(
         "fallback_points": 0,
         "candidate_expansion_rounds": 0,
     }
+    maximum_processing_chunk_size = processing_chunk_size
     distance_started = time.perf_counter()
     for tree_ordinal, tree_id in enumerate(tree_ids_to_process, start=1):
         rows = np.flatnonzero(final_tree == tree_id)
@@ -666,26 +702,57 @@ def run_span_tree_wire_clearance(
         best_point: np.ndarray | None = None
         evaluated_total = 0
         danger_count = 0
-        for local_start in range(0, point_count, chunk_size):
+        local_start = 0
+        chunk_ordinal = 0
+        while local_start < point_count:
+            chunk_ordinal += 1
             if cancellation_requested is not None and cancellation_requested():
                 raise ClearanceCancelled("CLEARANCE_CANCELLED_AT_CHUNK_BOUNDARY")
-            local_stop = min(local_start + chunk_size, point_count)
+            local_stop = min(local_start + processing_chunk_size, point_count)
             chunk_rows = rows[local_start:local_stop]
-            (
-                edge_positions,
-                distances,
-                nearest_xyz,
-                _parameters,
-                evaluated,
-                backend_diagnostics,
-            ) = _nearest_edges(
-                final_xyz[chunk_rows],
-                bvh,
-                edge_bundle,
-                config.clearance_tie_tolerance_m,
-                backend=selected_backend,
-                candidate_workers=candidate_workers,
-            )
+            try:
+                (
+                    edge_positions,
+                    distances,
+                    nearest_xyz,
+                    _parameters,
+                    evaluated,
+                    backend_diagnostics,
+                ) = _nearest_edges(
+                    final_xyz[chunk_rows],
+                    bvh,
+                    edge_bundle,
+                    config.clearance_tie_tolerance_m,
+                    backend=selected_backend,
+                    candidate_workers=candidate_workers,
+                    gpu_accelerator=gpu_accelerator,
+                )
+            except Exception as exc:
+                if gpu_accelerator is None or requested_acceleration == "GPU":
+                    raise
+                acceleration_diagnostics = {
+                    "requested_mode": requested_acceleration,
+                    "effective_mode": "CPU",
+                    "reason": f"GPU_RUNTIME_FAILED:{type(exc).__name__}:{exc}",
+                    "capability": gpu_accelerator.capability.to_dict(),
+                }
+                gpu_accelerator = None
+                processing_chunk_size = chunk_size
+                (
+                    edge_positions,
+                    distances,
+                    nearest_xyz,
+                    _parameters,
+                    evaluated,
+                    backend_diagnostics,
+                ) = _nearest_edges(
+                    final_xyz[chunk_rows],
+                    bvh,
+                    edge_bundle,
+                    config.clearance_tie_tolerance_m,
+                    backend=selected_backend,
+                    candidate_workers=candidate_workers,
+                )
             evaluated_total += evaluated
             for name, value in backend_diagnostics.items():
                 candidate_diagnostics[name] = candidate_diagnostics.get(name, 0) + int(value)
@@ -762,12 +829,13 @@ def run_span_tree_wire_clearance(
                         "current_tree_id": tree_id,
                         "current_tree_ordinal": tree_ordinal,
                         "tree_count": len(tree_ids_to_process),
-                        "current_chunk": local_start // chunk_size + 1,
+                        "current_chunk": chunk_ordinal,
                         "elapsed_seconds": elapsed,
                         "recent_throughput_points_per_second": throughput,
                         "eta_seconds": eta,
                     }
                 )
+            local_start = local_stop
         tree_context = record_by_tree.get(tree_id, {})
         records.append(
             SpanTreeWireRecord(
@@ -798,6 +866,8 @@ def run_span_tree_wire_clearance(
         for record in records
         if record.minimum_clearance_m is not None
     ]
+    if gpu_accelerator is not None:
+        acceleration_diagnostics = dict(gpu_accelerator.diagnostics)
     return SpanClearanceResult(
         records=tuple(records),
         status=VALID,
@@ -811,8 +881,13 @@ def run_span_tree_wire_clearance(
             "edge_count": edge_count,
             "tree_count": len(records),
             "evaluated_edge_total": sum(record.evaluated_edge_count for record in records),
-            "backend": selected_backend,
-            "chunk_size": chunk_size,
+            "backend": (
+                "GPU_CERTIFIED_CPU_EXACT"
+                if acceleration_diagnostics.get("effective_mode")
+                == "GPU_CERTIFIED_CPU_EXACT"
+                else selected_backend
+            ),
+            "chunk_size": maximum_processing_chunk_size,
             "candidate_workers": (
                 candidate_workers if selected_backend == "SCIPY_CANDIDATE_EXACT" else None
             ),
@@ -825,6 +900,7 @@ def run_span_tree_wire_clearance(
             "index_build_seconds": index_runtime,
             "distance_evaluation_seconds": distance_runtime,
             "runtime_seconds": time.perf_counter() - started,
+            "acceleration": acceleration_diagnostics,
         },
         danger_points=tuple(danger_points),
     )
