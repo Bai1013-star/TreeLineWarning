@@ -88,7 +88,10 @@ WebView2 Runtime 和 .NET Framework。若包中有上述 `offline_verified` 安�
 
 ## 交付边界
 
-包内 `VERSION.txt` 和验收合同会标记 `Survey-only`、`parallel = NOT_INCLUDED` 和
-`preview = NOT_INCLUDED`。当前工作机已有 WebView2/.NET；干净计算机安装、启动和完整
+包内 `VERSION.txt` 和验收合同会标记 `Survey Core`、
+`parallel = BOUNDED_DETERMINISTIC_INCLUDED`、可选的 CuPy CUDA 13 认证筛选，以及
+`preview = EXPERIMENTAL_NOT_ACCEPTED`。GPU 路径仍由 CPU float64 做最终判定；无兼容
+NVIDIA GPU、驱动初始化失败或显存不足时使用 CPU。GPU 用户只需兼容 NVIDIA 驱动，包内
+已带运行组件，不要求安装完整 CUDA Toolkit。当前工作机已有 WebView2/.NET；干净计算机安装、启动和完整
 现场工作流仍标记为 **NOT_TESTED**，不能从开发机成功运行推断干净机已验收。第三方通知
 文件是工程审阅清单，不是法律许可；其中标出的原生二进制来源仍需发行方完成相应审阅。

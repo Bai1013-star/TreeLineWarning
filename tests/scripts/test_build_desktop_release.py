@@ -259,6 +259,9 @@ def test_prepare_writes_manifest_and_rejects_reuse(
     assert "VERSION.txt" in listed
     assert "QUICK_START.md" in listed
     assert manifest["preview"] == "EXPERIMENTAL_NOT_ACCEPTED"
+    assert manifest["package_type"] == "Windows x64 ONEDIR"
+    assert manifest["parallel"] == "BOUNDED_DETERMINISTIC_INCLUDED"
+    assert manifest["gpu"] == "OPTIONAL_CUPY_CUDA13_CERTIFIED_SCREEN_CPU_EXACT_AUTHORITY"
     assert "PACKAGED_ACCEPTANCE_CONTRACT.md" in listed
     assert "release_file_manifest.json" not in listed
     for relative, item in listed.items():
