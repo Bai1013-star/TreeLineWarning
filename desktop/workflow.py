@@ -1576,8 +1576,10 @@ class DesktopWorkflow:
         key = (*self._editor_revision_key(editor), budget, selected_span)
         if self._editor_display_cache is not None and self._editor_display_cache[0] == key:
             return self._editor_display_cache[1]
-        basis = self._editor_display_basis(editor, budget, selected_span)
-        tree_ids, visible = self._project_editor_display(editor, basis)
+        basis = DesktopWorkflow._editor_display_basis(
+            self, editor, budget, selected_span
+        )
+        tree_ids, visible = DesktopWorkflow._project_editor_display(editor, basis)
         display_xyz = basis["xyz"]
         source_tree_ids = basis["source_tree_id"]
         original_index = basis["original_index"]
@@ -1632,7 +1634,9 @@ class DesktopWorkflow:
                 )
         display = _empty_display()
         display["trees"] = snapshot_trees
-        labels_3d = self._display_labels(snapshot_trees, tree_ids, display_xyz, visible)
+        labels_3d = DesktopWorkflow._display_labels(
+            snapshot_trees, tree_ids, display_xyz, visible
+        )
         display["trees3d"] = {
             "xyz": display_xyz.tolist(),
             "color": colors,

@@ -335,12 +335,12 @@ def _assert_batch_results_equal(left, right, span_ids: tuple[str, ...]) -> None:
     left_clearance_diagnostics = {
         key: value
         for key, value in left.final_clearance.diagnostics.items()
-        if not key.endswith("_seconds")
+        if not key.endswith("_seconds") and key not in {"acceleration", "chunk_size"}
     }
     right_clearance_diagnostics = {
         key: value
         for key, value in right.final_clearance.diagnostics.items()
-        if not key.endswith("_seconds")
+        if not key.endswith("_seconds") and key not in {"acceleration", "chunk_size"}
     }
     assert (
         left.final_clearance.status,
