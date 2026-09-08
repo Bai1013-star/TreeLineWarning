@@ -56,6 +56,8 @@ hiddenimports = (
     collect_submodules("algorithms")
     + collect_submodules("core")
     + collect_submodules("pyproj")
+    + collect_submodules("cupy")
+    + collect_submodules("cuda")
     + [
         "scripts",
         "scripts.serve_p3a_giro3d",
@@ -70,6 +72,51 @@ hiddenimports = (
         "lazrs",
     ]
 )
+
+
+def _gpu_runtime() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Collect the pinned CuPy CUDA-component-wheel runtime for optional GPU use."""
+
+    import importlib.metadata
+
+    expected = {
+        "cupy-cuda13x": "14.2.0",
+        "cuda-pathfinder": "1.8.1",
+        "nvidia-cuda-runtime": "13.3.29",
+        "nvidia-cuda-nvrtc": "13.3.33",
+        "nvidia-nvjitlink": "13.3.33",
+    }
+    observed = {}
+    for name, version in expected.items():
+        try:
+            observed[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError as exc:
+            raise SystemExit(
+                f"release build requires {name}=={version}; install "
+                "desktop-release-gpu-requirements.txt"
+            ) from exc
+    mismatched = {
+        name: {"expected": expected[name], "observed": version}
+        for name, version in observed.items()
+        if version != expected[name]
+    }
+    if mismatched:
+        raise SystemExit(f"release GPU runtime version mismatch: {mismatched}")
+    binaries = collect_dynamic_libs("nvidia")
+    required = {"cudart64_13.dll", "nvrtc64_130_0.dll", "nvjitlink_130_0.dll"}
+    present = {Path(source).name.casefold() for source, _destination in binaries}
+    missing = sorted(name for name in required if name.casefold() not in present)
+    if missing:
+        raise SystemExit(f"release GPU runtime is missing required DLLs: {missing}")
+    datas = (
+        collect_data_files("cupy")
+        + collect_data_files("cuda")
+        + collect_data_files("nvidia")
+    )
+    return binaries, datas
+
+
+gpu_binaries, gpu_datas = _gpu_runtime()
 
 # The production PDAL stages (LAS reader/writer, SMRF, HAG-NN, and covariance
 # features) are built into pdalcpp.dll.  COPC is decoded by the vendored viewer
@@ -221,7 +268,6 @@ optional_excludes = [
     "torch",
     "torchvision",
     "tensorflow",
-    "cupy",
     "pandas",
     "pyarrow",
     "matplotlib",
@@ -243,26 +289,25 @@ optional_excludes = [
     "notebook",
     "pytest",
 ]
-optional_gpu_dlls = {
-    "cublas64_12.dll",
-    "cublaslt64_12.dll",
-    "cudart64_12.dll",
-    "cusolver64_11.dll",
-    "cusparse64_12.dll",
-    "nvjitlink_120_0.dll",
-}
 datas = [
     ("viewer_poc/giro3d", "viewer_poc/giro3d"),
     ("scripts/serve_p3a_giro3d.py", "scripts"),
     *pdal_datas,
     *pdal_proj_datas,
     *pyproj_datas,
+    *gpu_datas,
 ]
 
 a = Analysis(
     ["desktop/app.py"],
     pathex=["."],
-    binaries=[*pdal_binaries, *pillow_binaries, *pyproj_binaries, *compat_binaries],
+    binaries=[
+        *pdal_binaries,
+        *pillow_binaries,
+        *pyproj_binaries,
+        *compat_binaries,
+        *gpu_binaries,
+    ],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -298,14 +343,6 @@ def _retain_staged_sqlite(entries):
     return retained
 
 
-# Some conda scientific wheels advertise optional CUDA imports while importing
-# their CPU paths.  The desktop workflow is CPU/PDAL-only; remove only these
-# known optional GPU libraries from the generated TOC, leaving the PDAL import
-# closure collected above intact.
-a.binaries = [
-    entry for entry in a.binaries
-    if Path(entry[0]).name.lower() not in optional_gpu_dlls
-]
 a.binaries = _retain_staged_sqlite(a.binaries)
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="TreeLineWarning", console=False)

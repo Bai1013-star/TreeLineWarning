@@ -66,3 +66,17 @@ def test_release_spec_limits_viewer_assets_and_optional_pdal_plugins() -> None:
     assert '("viewer_poc", "viewer_poc")' not in spec
     assert "_PDAL_OPTIONAL_PLUGIN_ALLOWLIST: frozenset[str] = frozenset()" in spec
     assert "TREELINE_PDAL_PROJ_DATA_ROOT" in spec
+
+
+def test_release_spec_bundles_pinned_optional_gpu_runtime() -> None:
+    spec = (REPO_ROOT / "desktop_build.spec").read_text(encoding="utf-8")
+    requirements = (REPO_ROOT / "desktop-release-gpu-requirements.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'collect_submodules("cupy")' in spec
+    assert 'collect_dynamic_libs("nvidia")' in spec
+    assert 'collect_data_files("nvidia")' in spec
+    assert '"cupy"' not in spec[spec.index("optional_excludes = [") :]
+    assert "cupy-cuda13x==14.2.0" in requirements
+    assert "nvidia-cuda-runtime==13.3.29" in requirements

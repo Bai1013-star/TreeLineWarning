@@ -107,6 +107,8 @@ def module_origins() -> dict[str, dict[str, Any]]:
         "pyproj",
         "pdal",
         "webview",
+        "cupy",
+        "cuda.pathfinder",
     )
     return {name: _module_origin(name) for name in names}
 
@@ -688,6 +690,22 @@ def dependency_report(resource_root: Path | str) -> dict[str, Any]:
     webview_origin = origins.get("webview", {}).get("origin")
     loader = webview_loader_info(resource_root, webview_origin)
     prerequisites = webview2_prerequisites(resource_root)
+    try:
+        from algorithms.spans.gpu_clearance import probe_gpu
+
+        capability, _module = probe_gpu()
+        gpu = {
+            **capability.to_dict(),
+            "optional": True,
+            "cpu_fallback_available": True,
+        }
+    except Exception as exc:  # optional GPU diagnostics must not block CPU startup
+        gpu = {
+            "available": False,
+            "reason": f"GPU_PROBE_FAILED:{type(exc).__name__}:{exc}",
+            "optional": True,
+            "cpu_fallback_available": True,
+        }
     native_pass = all(
         bool(item.get("found") and item.get("minimal_operation_pass"))
         for item in (pillow, pdal)
@@ -699,6 +717,7 @@ def dependency_report(resource_root: Path | str) -> dict[str, Any]:
         "runtime": runtime_origins(resource_root),
         "module_origins": origins,
         "native_operations": {"pillow": pillow, "pdal": pdal},
+        "gpu_acceleration": gpu,
         "webview2_prerequisites": prerequisites,
         "webview_loader": loader,
         "native_operations_pass": native_pass,

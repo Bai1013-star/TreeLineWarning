@@ -77,6 +77,16 @@ RUNTIME_DISTRIBUTIONS = (
     "packaging",
     "certifi",
     "et_xmlfile",
+    "cupy-cuda13x",
+    "cuda-pathfinder",
+    "nvidia-cublas",
+    "nvidia-cuda-nvrtc",
+    "nvidia-cuda-runtime",
+    "nvidia-cufft",
+    "nvidia-curand",
+    "nvidia-cusolver",
+    "nvidia-cusparse",
+    "nvidia-nvjitlink",
 )
 BUILD_DISTRIBUTIONS = (
     "PyInstaller",
@@ -99,6 +109,15 @@ _PYTHON_BINARY_ROOTS: dict[str, tuple[str, ...]] = {
     "pythonnet": ("pythonnet",),
     "clr-loader": ("clr_loader",),
     "cffi": ("_cffi_backend*.pyd",),
+    "cupy-cuda13x": ("cupy",),
+    "nvidia-cublas": ("nvidia/cu13/bin",),
+    "nvidia-cuda-nvrtc": ("nvidia/cu13/bin",),
+    "nvidia-cuda-runtime": ("nvidia/cu13/bin",),
+    "nvidia-cufft": ("nvidia/cu13/bin",),
+    "nvidia-curand": ("nvidia/cu13/bin",),
+    "nvidia-cusolver": ("nvidia/cu13/bin",),
+    "nvidia-cusparse": ("nvidia/cu13/bin",),
+    "nvidia-nvjitlink": ("nvidia/cu13/bin",),
 }
 
 # Package metadata was read from the exact npm tarballs on 2026-08-30.  The
@@ -962,12 +981,15 @@ def collect_inventory(
     proj_data_root: Path = DEFAULT_PROJ_DATA_ROOT,
     viewer_root: Path = DEFAULT_VIEWER_ROOT,
     webview_root: Path = DEFAULT_WEBVIEW_ROOT,
+    conda_match_audit: Path = DEFAULT_CONDA_MATCH_AUDIT,
 ) -> dict[str, Any]:
     """Return a JSON-serialisable notice inventory for one release input set."""
 
     distributions = collect_python_distributions(venv_root)
     manifest_record, native_payload = _load_manifest(runtime_root.resolve())
-    conda_audit, conda_matches = _conda_match_inventory(runtime_root.resolve())
+    conda_audit, conda_matches = _conda_match_inventory(
+        runtime_root.resolve(), conda_match_audit
+    )
     proj_data = _proj_database_inventory(
         runtime_root.resolve(), venv_root.resolve(), proj_data_root
     )
@@ -1082,6 +1104,7 @@ def collect_inventory(
             "proj_data_root": _repo_path(proj_data_root),
             "viewer_root": _repo_path(viewer_root),
             "webview_root": _repo_path(webview_root),
+            "conda_match_audit": _repo_path(conda_match_audit),
             "build_spec": _repo_path(REPO_ROOT / "desktop_build.spec"),
         },
         "python": {
@@ -1483,6 +1506,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--proj-data-root", type=Path, default=DEFAULT_PROJ_DATA_ROOT)
     parser.add_argument("--viewer-root", type=Path, default=DEFAULT_VIEWER_ROOT)
     parser.add_argument("--webview-root", type=Path, default=DEFAULT_WEBVIEW_ROOT)
+    parser.add_argument(
+        "--conda-match-audit", type=Path, default=DEFAULT_CONDA_MATCH_AUDIT
+    )
     parser.add_argument("--output-text", type=Path, default=DEFAULT_OUTPUT_TEXT)
     parser.add_argument("--output-json", type=Path, default=DEFAULT_OUTPUT_JSON)
     parser.add_argument(
@@ -1501,6 +1527,7 @@ def main() -> int:
         proj_data_root=args.proj_data_root,
         viewer_root=args.viewer_root,
         webview_root=args.webview_root,
+        conda_match_audit=args.conda_match_audit,
     )
     if not args.overwrite and (args.output_text.exists() or args.output_json.exists()):
         raise SystemExit(
