@@ -58,7 +58,7 @@ def test_stage_c_manual_topology_is_ordered_logical_and_safe(tmp_path: Path) -> 
     )
 
 
-@pytest.mark.parametrize("execution_mode", ["AUTO", "SERIAL"])
+@pytest.mark.parametrize("execution_mode", ["AUTO", "SERIAL", "PARALLEL"])
 def test_stage_c_fixture_batch_reconciles_and_resumes_without_rerun(
     tmp_path: Path, execution_mode: str
 ) -> None:

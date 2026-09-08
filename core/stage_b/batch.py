@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
+import os
+import threading
 import time
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
@@ -53,6 +57,74 @@ class BatchSpanStatus(str, Enum):
     USER_REVIEWED = "USER_REVIEWED"
     FINALIZED = "FINALIZED"
     FAILED = "FAILED"
+
+
+_EXECUTION_MODES = frozenset({"AUTO", "SERIAL", "PARALLEL"})
+
+
+def _available_memory_bytes() -> int | None:
+    """Return current available physical memory without an optional dependency."""
+
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [
+                    ("length", ctypes.c_ulong),
+                    ("memory_load", ctypes.c_ulong),
+                    ("total_physical", ctypes.c_ulonglong),
+                    ("available_physical", ctypes.c_ulonglong),
+                    ("total_page_file", ctypes.c_ulonglong),
+                    ("available_page_file", ctypes.c_ulonglong),
+                    ("total_virtual", ctypes.c_ulonglong),
+                    ("available_virtual", ctypes.c_ulonglong),
+                    ("available_extended_virtual", ctypes.c_ulonglong),
+                ]
+
+            status = MemoryStatus()
+            status.length = ctypes.sizeof(status)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return int(status.available_physical)
+        except (AttributeError, OSError, TypeError, ValueError):
+            return None
+    try:
+        pages = int(os.sysconf("SC_AVPHYS_PAGES"))
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        return pages * page_size
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
+def _parallel_worker_plan(
+    span_count: int, source_point_count: int, available_memory_bytes: int | None = None
+) -> dict[str, Any]:
+    """Derive a bounded CPU producer count from workload and host capacity."""
+
+    cpu_count = max(1, os.cpu_count() or 1)
+    available = (
+        _available_memory_bytes()
+        if available_memory_bytes is None
+        else int(available_memory_bytes)
+    )
+    # Span-local science holds several coordinate/index/mask arrays.  The
+    # estimate scales with average source rows per selected Span and the actual
+    # array representation; it is a safety budget, not a scientific parameter.
+    average_rows = max(1, math.ceil(max(1, source_point_count) / max(1, span_count)))
+    estimated_worker_bytes = max(256 * 1024**2, average_rows * 48)
+    memory_workers = (
+        1
+        if available is None or available <= 0
+        else max(1, int((available * 0.60) // estimated_worker_bytes))
+    )
+    workers = max(1, min(span_count, cpu_count, memory_workers))
+    return {
+        "workers": workers,
+        "cpu_count": cpu_count,
+        "available_memory_bytes": available,
+        "estimated_worker_bytes": estimated_worker_bytes,
+        "memory_worker_capacity": memory_workers,
+    }
 
 
 @dataclass(slots=True)
@@ -359,6 +431,7 @@ class BatchAnalysisScheduler:
         source_preparer: Callable[[Path, SpanAnalysisInput], SourceSharedPreparation] | None = None,
         source_access_enabled: bool = False,
         acceleration_mode: str = "AUTO",
+        execution_mode: str = "AUTO",
     ) -> None:
         if type(project) is not Project:
             raise TypeError("project must be a Stage-A Project")
@@ -377,6 +450,12 @@ class BatchAnalysisScheduler:
         from algorithms.spans.gpu_clearance import normalize_gpu_mode
 
         self.acceleration_mode = normalize_gpu_mode(acceleration_mode)
+        selected_execution = str(execution_mode).strip().upper()
+        if selected_execution not in _EXECUTION_MODES:
+            raise ValueError(f"execution_mode must be one of {sorted(_EXECUTION_MODES)}")
+        self.execution_mode = selected_execution
+        self._worker_state = threading.local()
+        self._last_execution_plan: dict[str, Any] = {}
         self._latest_result: BatchAnalysisResult | None = None
 
     def _default_science_runner(
@@ -402,7 +481,9 @@ class BatchAnalysisScheduler:
             preparation,
             output_root,
             config=self.config,
-            acceleration_mode=self.acceleration_mode,
+            acceleration_mode=getattr(
+                self._worker_state, "acceleration_mode", self.acceleration_mode
+            ),
         )
 
     def _new_analysis_run(self, span_ids: tuple[str, ...], run_id: str) -> AnalysisRun:
@@ -423,6 +504,7 @@ class BatchAnalysisScheduler:
                 "tree_entrypoint": "algorithms.spans.tree_runner.run_span_tree_pipeline",
                 "offline_runtime": True,
                 "clearance_acceleration_mode": self.acceleration_mode,
+                "execution_mode": self.execution_mode,
             },
             risk_policy_snapshot=self.risk_policy_snapshot,
             status=AnalysisRunStatus.RUNNING,
@@ -1056,7 +1138,27 @@ class BatchAnalysisScheduler:
             return result
 
         previous_statuses = (previous or {}).get("span_statuses") or {}
-        for span_id in selected:
+        worker_plan = _parallel_worker_plan(
+            len(selected), max(0, telemetry.source_point_count)
+        )
+        requested_parallel = self.execution_mode in {"AUTO", "PARALLEL"} and len(selected) > 1
+        worker_count = int(worker_plan["workers"]) if requested_parallel else 1
+        effective_execution = "PARALLEL" if worker_count > 1 else "SERIAL"
+        self._last_execution_plan = {
+            "execution_requested": self.execution_mode,
+            "execution_effective": effective_execution,
+            "cpu_producer_workers": worker_count,
+            "single_gpu_queue": True,
+            "parallel_span_acceleration": (
+                "CPU_EXACT_SINGLE_GPU_RESERVED_FOR_GLOBAL_CLEARANCE"
+                if effective_execution == "PARALLEL"
+                else self.acceleration_mode
+            ),
+            "worker_plan": worker_plan,
+        }
+
+        def process_span(span_id: str) -> dict[str, Any]:
+            span_started = time.perf_counter()
             input_data = replace(
                 bindings[span_id].science_input,
                 validated_source_preparation_references=(preparation.manifest_reference,),
@@ -1077,16 +1179,16 @@ class BatchAnalysisScheduler:
                     self.config,
                     preparation=preparation,
                 )
-                if exact_cached is None:
-                    telemetry.cache_miss_count += 1
             if exact_cached is not None:
-                previous_status = previous_statuses.get(span_id)
-                statuses[span_id] = BatchSpanStatus(str(previous_status))
-                results[span_id] = exact_cached
-                telemetry.cache_hit_count += 1
-                continue
-            statuses[span_id] = BatchSpanStatus.RUNNING
-            span_started = time.perf_counter()
+                return {
+                    "span_id": span_id,
+                    "status": BatchSpanStatus(str(previous_status)),
+                    "result": exact_cached,
+                    "cache_hit": 1,
+                    "cache_miss": 0,
+                    "span_local_read": 0,
+                    "elapsed": time.perf_counter() - span_started,
+                }
             try:
                 output_root = (
                     self.project_root
@@ -1096,6 +1198,8 @@ class BatchAnalysisScheduler:
                     / run_id
                     / span_id
                 )
+                if effective_execution == "PARALLEL" and self._uses_default_science_runner:
+                    self._worker_state.acceleration_mode = "CPU"
                 result = self.science_runner(input_data, preparation, output_root)
                 if type(result) is not SpanScienceResult:
                     raise ScienceAdapterError("SCIENCE_EXECUTOR_RETURNED_INVALID_RESULT")
@@ -1139,25 +1243,55 @@ class BatchAnalysisScheduler:
                         result,
                         diagnostics=diagnostics,
                     )
-                results[span_id] = result
-                telemetry.record_span_profile(result)
-                telemetry.span_local_read_count += 1
-                statuses[span_id] = (
+                status = (
                     BatchSpanStatus.REVIEW_REQUIRED
                     if result.diagnostics.get("review_required")
                     else BatchSpanStatus.AUTO_ANALYZED
                 )
             except Exception as exc:
                 failure = structured_failure(exc, phase="SPAN_ANALYSIS")
-                results[span_id] = SpanScienceResult(
+                result = SpanScienceResult(
                     tree_count=0,
                     minimum_clearance_m=None,
                     risk_threshold_m=self.risk_policy.warning_clearance_threshold_m,
                     risk_counts={},
                     diagnostics={"failure": failure["technical_message"], **failure},
                 )
-                statuses[span_id] = BatchSpanStatus.FAILED
-            telemetry.per_span_time_seconds[span_id] = time.perf_counter() - span_started
+                status = BatchSpanStatus.FAILED
+            finally:
+                if hasattr(self._worker_state, "acceleration_mode"):
+                    del self._worker_state.acceleration_mode
+            return {
+                "span_id": span_id,
+                "status": status,
+                "result": result,
+                "cache_hit": 0,
+                "cache_miss": int(cache_miss_reason is not None),
+                "span_local_read": int(status is not BatchSpanStatus.FAILED),
+                "elapsed": time.perf_counter() - span_started,
+            }
+
+        for span_id in selected:
+            statuses[span_id] = BatchSpanStatus.RUNNING
+        if effective_execution == "PARALLEL":
+            with ThreadPoolExecutor(
+                max_workers=worker_count, thread_name_prefix="treeline-span-producer"
+            ) as pool:
+                futures = {span_id: pool.submit(process_span, span_id) for span_id in selected}
+                completed = [futures[span_id].result() for span_id in selected]
+        else:
+            completed = [process_span(span_id) for span_id in selected]
+        for item in completed:
+            span_id = str(item["span_id"])
+            result = item["result"]
+            statuses[span_id] = item["status"]
+            results[span_id] = result
+            telemetry.cache_hit_count += int(item["cache_hit"])
+            telemetry.cache_miss_count += int(item["cache_miss"])
+            telemetry.span_local_read_count += int(item["span_local_read"])
+            telemetry.per_span_time_seconds[span_id] = float(item["elapsed"])
+            if item["span_local_read"]:
+                telemetry.record_span_profile(result)
 
         result = self._finish(run_id, selected, statuses, results, telemetry, bindings)
         result = self._complete_telemetry(result, telemetry, started)
@@ -1198,7 +1332,9 @@ class BatchAnalysisScheduler:
         successful = [status is not BatchSpanStatus.FAILED for status in statuses.values()]
         failed = any(status is BatchSpanStatus.FAILED for status in statuses.values())
         global_reconciled = None
-        batch_diagnostics: dict[str, Any] = {}
+        batch_diagnostics: dict[str, Any] = dict(
+            getattr(self, "_last_execution_plan", {})
+        )
         if not failed:
             reconciliation_started = time.perf_counter()
             try:
@@ -1264,7 +1400,7 @@ class BatchAnalysisScheduler:
                             wire_results,
                             self.config,
                             danger_threshold_m=self.risk_policy.warning_clearance_threshold_m,
-                            acceleration_mode=self.acceleration_mode,
+                            acceleration_mode=getattr(self, "acceleration_mode", "AUTO"),
                         )
                 except Exception as exc:  # noqa: BLE001 - final review can retry
                     batch_diagnostics["final_clearance_failure"] = (

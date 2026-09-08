@@ -227,9 +227,14 @@ def _runner(calls: list[str], config: FastBaselineConfig, *, fail_span: str | No
 
 
 def _near_wire_clearance(
-    global_reconciled, _wire_results, _config, *, danger_threshold_m
+    global_reconciled,
+    _wire_results,
+    _config,
+    *,
+    danger_threshold_m,
+    acceleration_mode="AUTO",
 ) -> SpanClearanceResult:
-    del danger_threshold_m
+    del danger_threshold_m, acceleration_mode
     source_record = global_reconciled.global_tree_records[0]
     clearance_record = SpanTreeWireRecord(
         global_tree_id=source_record.global_tree_id,

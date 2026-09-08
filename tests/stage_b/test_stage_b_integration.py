@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,6 +30,7 @@ from core.stage_b import (
     ensure_ground_preparation,
     export_batch_prediction,
 )
+from core.stage_b.batch import _parallel_worker_plan
 from core.stage_b.failures import structured_failure
 
 
@@ -245,6 +247,46 @@ def test_batch_scheduler_prepares_source_once_and_keeps_partial_failures_isolate
     assert result.telemetry.source_full_pass_count == 0
     assert result.risk_policy_snapshot["warning_clearance_threshold_m"] == 0.5
     assert (tmp_path / "artifacts/project-runs/batches").is_dir()
+
+
+def test_parallel_scheduler_is_bounded_concurrent_and_publishes_topology_order(
+    tmp_path: Path,
+) -> None:
+    project, scan_id, span_ids = _project(tmp_path, span_count=2)
+    rendezvous = threading.Barrier(2, timeout=5.0)
+
+    def runner(input_data, _preparation, _output_root):
+        rendezvous.wait()
+        return SpanScienceResult(
+            tree_count=int(input_data.span_id[1:]),
+            minimum_clearance_m=1.0,
+            risk_threshold_m=0.5,
+            risk_counts={"safe": 1},
+        )
+
+    scheduler = BatchAnalysisScheduler(
+        tmp_path,
+        project,
+        scan_id,
+        science_runner=runner,
+        source_preparer=_preparation,
+        execution_mode="PARALLEL",
+    )
+    result = scheduler.run(tuple(reversed(span_ids)))
+
+    assert result.status == "COMPLETE"
+    assert tuple(result.span_results) == span_ids
+    assert result.batch_diagnostics["execution_effective"] == "PARALLEL"
+    assert result.batch_diagnostics["cpu_producer_workers"] == 2
+    assert result.batch_diagnostics["single_gpu_queue"] is True
+
+
+def test_parallel_worker_plan_uses_cpu_memory_and_workload_capacity(monkeypatch) -> None:
+    monkeypatch.setattr("core.stage_b.batch.os.cpu_count", lambda: 16)
+    constrained = _parallel_worker_plan(8, 100_000_000, 1_000_000_000)
+    capable = _parallel_worker_plan(8, 1_000, 8_000_000_000)
+    assert constrained["workers"] == 1
+    assert capable["workers"] == 8
 
 
 def test_batch_scheduler_persists_structured_ground_runtime_failure(tmp_path: Path) -> None:
