@@ -986,10 +986,15 @@ class DesktopWorkflow:
                 execution_mode = self._validate_execution_mode(
                     self._workflow.get("execution_mode", "AUTO")
                 )
+                acceleration_mode = self._validate_acceleration_mode(
+                    self._workflow.get("acceleration_mode", "AUTO")
+                )
                 # The released serial scheduler predates the optional mode API.
                 # Never depend on an uncommitted parallel scheduler to start a batch.
                 if "execution_mode" in inspect.signature(BatchAnalysisScheduler).parameters:
                     kwargs["execution_mode"] = execution_mode
+                if "acceleration_mode" in inspect.signature(BatchAnalysisScheduler).parameters:
+                    kwargs["acceleration_mode"] = acceleration_mode
                 if mode == "FIXTURE":
                     kwargs.update(
                         {
@@ -1046,12 +1051,18 @@ class DesktopWorkflow:
                 self._thread = None
 
     def start_batch(
-        self, span_ids: list[str], *, mode: str = "REAL", execution_mode: str = "AUTO"
+        self,
+        span_ids: list[str],
+        *,
+        mode: str = "REAL",
+        execution_mode: str = "AUTO",
+        acceleration_mode: str = "AUTO",
     ) -> dict[str, Any]:
         mode = str(mode).upper()
         if mode not in {"REAL", "FIXTURE"}:
             raise ValueError("batch mode must be REAL or FIXTURE")
         execution_mode = self._validate_execution_mode(execution_mode)
+        acceleration_mode = self._validate_acceleration_mode(acceleration_mode)
         with self._lock:
             if self._thread and self._thread.is_alive():
                 raise ValueError("BATCH_ALREADY_RUNNING")
@@ -1079,6 +1090,7 @@ class DesktopWorkflow:
                     "last_error": None,
                     "acceptance_mode": mode,
                     "execution_mode": execution_mode,
+                    "acceleration_mode": acceleration_mode,
                     "source_cache_hint": source_cache_hint,
                     "finalize_state": {"run_id": run_id, "status": "IDLE"},
                 }
@@ -1105,6 +1117,13 @@ class DesktopWorkflow:
             and "execution_mode" not in inspect.signature(BatchAnalysisScheduler).parameters
         ):
             raise ValueError("PARALLEL_UNAVAILABLE: use AUTO or SERIAL in this release")
+        return mode
+
+    @staticmethod
+    def _validate_acceleration_mode(value: str) -> str:
+        mode = str(value).upper()
+        if mode not in {"AUTO", "CPU", "GPU"}:
+            raise ValueError("acceleration_mode must be AUTO, CPU, or GPU")
         return mode
 
     def retry_failed(self, *, execution_mode: str | None = None) -> dict[str, Any]:
@@ -1220,6 +1239,7 @@ class DesktopWorkflow:
             or "NOT_STARTED",
             "acceptance_mode": self._workflow.get("acceptance_mode"),
             "execution_mode": self._workflow.get("execution_mode", "AUTO"),
+            "acceleration_mode": self._workflow.get("acceleration_mode", "AUTO"),
             "execution": dict(((manifest or {}).get("telemetry") or {}).get("EXECUTION") or {}),
             "source_preparation": (
                 "FAILED" if source_preparation_failed else "DONE" if manifest else "WAITING"

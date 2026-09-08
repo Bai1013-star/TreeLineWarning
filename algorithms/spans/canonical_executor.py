@@ -250,6 +250,7 @@ def run_tracked_canonical_span_science(
     *,
     cancellation_requested: Callable[[], bool] | None = None,
     config: FastBaselineConfig | None = None,
+    acceleration_mode: str = "AUTO",
 ) -> SpanScienceResult:
     """Run one project Span through the existing tracked science modules."""
 
@@ -434,6 +435,7 @@ def run_tracked_canonical_span_science(
         config,
         danger_threshold_m=policy.warning_clearance_threshold_m,
         cancellation_requested=cancellation_requested,
+        acceleration_mode=acceleration_mode,
     )
     clearance_runtime = time.perf_counter() - clearance_started
 
@@ -444,6 +446,7 @@ def run_tracked_canonical_span_science(
             config,
             danger_threshold_m=policy.warning_clearance_threshold_m,
             cancellation_requested=cancellation_requested,
+            acceleration_mode=acceleration_mode,
         )
         _write_json(output_root / "reconciliation.json", reconciliation_to_dict(assigned))
         _write_json(

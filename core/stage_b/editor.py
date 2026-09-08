@@ -33,6 +33,7 @@ class BatchTreeEditor:
         *,
         tree_ids_by_span: Mapping[str, tuple[int, ...]] | None = None,
         config: FastBaselineConfig | None = None,
+        acceleration_mode: str = "AUTO",
     ) -> None:
         reconciled = getattr(result, "global_reconciled", None)
         if reconciled is None:
@@ -40,6 +41,9 @@ class BatchTreeEditor:
         self.project_root = Path(project_root).expanduser().resolve()
         self.result = result
         self.config = config or FastBaselineConfig()
+        from algorithms.spans.gpu_clearance import normalize_gpu_mode
+
+        self.acceleration_mode = normalize_gpu_mode(acceleration_mode)
         self.original_reconciled = reconciled
         self.artifact_root = (
             self.project_root
@@ -371,6 +375,7 @@ class BatchTreeEditor:
                 danger_threshold_m=float(
                     self.result.risk_policy_snapshot["warning_clearance_threshold_m"]
                 ),
+                acceleration_mode=self.acceleration_mode,
             )
         elif operation_count > 0:
             # Partial wire geometry cannot be passed into the existing global

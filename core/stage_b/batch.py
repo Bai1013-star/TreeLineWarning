@@ -358,6 +358,7 @@ class BatchAnalysisScheduler:
         ] | None = None,
         source_preparer: Callable[[Path, SpanAnalysisInput], SourceSharedPreparation] | None = None,
         source_access_enabled: bool = False,
+        acceleration_mode: str = "AUTO",
     ) -> None:
         if type(project) is not Project:
             raise TypeError("project must be a Stage-A Project")
@@ -373,6 +374,9 @@ class BatchAnalysisScheduler:
         self._uses_default_source_preparer = source_preparer is None
         self.source_preparer = source_preparer or prepare_source_shared
         self.source_access_enabled = source_access_enabled
+        from algorithms.spans.gpu_clearance import normalize_gpu_mode
+
+        self.acceleration_mode = normalize_gpu_mode(acceleration_mode)
         self._latest_result: BatchAnalysisResult | None = None
 
     def _default_science_runner(
@@ -398,6 +402,7 @@ class BatchAnalysisScheduler:
             preparation,
             output_root,
             config=self.config,
+            acceleration_mode=self.acceleration_mode,
         )
 
     def _new_analysis_run(self, span_ids: tuple[str, ...], run_id: str) -> AnalysisRun:
@@ -417,6 +422,7 @@ class BatchAnalysisScheduler:
                 "wire_entrypoint": "algorithms.spans.wire.run_span_wire_pipeline",
                 "tree_entrypoint": "algorithms.spans.tree_runner.run_span_tree_pipeline",
                 "offline_runtime": True,
+                "clearance_acceleration_mode": self.acceleration_mode,
             },
             risk_policy_snapshot=self.risk_policy_snapshot,
             status=AnalysisRunStatus.RUNNING,
@@ -947,6 +953,7 @@ class BatchAnalysisScheduler:
             selected,
             tree_ids_by_span=self._tree_ids_by_span(selected),
             config=self.config,
+            acceleration_mode=self.acceleration_mode,
         )
 
     @validation_session()
@@ -1257,6 +1264,7 @@ class BatchAnalysisScheduler:
                             wire_results,
                             self.config,
                             danger_threshold_m=self.risk_policy.warning_clearance_threshold_m,
+                            acceleration_mode=self.acceleration_mode,
                         )
                 except Exception as exc:  # noqa: BLE001 - final review can retry
                     batch_diagnostics["final_clearance_failure"] = (

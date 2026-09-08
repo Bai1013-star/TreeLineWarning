@@ -116,6 +116,7 @@ def install_corridor_topology_extensions() -> None:
         *,
         mode: str = "REAL",
         execution_mode: str = "AUTO",
+        acceleration_mode: str = "AUTO",
     ) -> dict[str, Any]:
         execution_mode = self._validate_execution_mode(execution_mode)
         requested_mode = str(mode).upper()
@@ -125,7 +126,11 @@ def install_corridor_topology_extensions() -> None:
             if not registration.get("ready_for_science"):
                 raise ValueError("CORRIDOR_REGISTRATION_NOT_READY_FOR_SCIENCE")
         return original_start_batch(
-            self, span_ids, mode=requested_mode, execution_mode=execution_mode
+            self,
+            span_ids,
+            mode=requested_mode,
+            execution_mode=execution_mode,
+            acceleration_mode=acceleration_mode,
         )
 
     def start_ready_batch(
@@ -134,6 +139,7 @@ def install_corridor_topology_extensions() -> None:
         *,
         mode: str = "REAL",
         execution_mode: str = "AUTO",
+        acceleration_mode: str = "AUTO",
     ) -> dict[str, Any]:
         readiness = self.span_readiness_projection()
         requested = set(str(item) for item in span_ids) if span_ids else None
@@ -151,7 +157,12 @@ def install_corridor_topology_extensions() -> None:
         ]
         if not ready:
             raise ValueError("NO_READY_SPANS_FOR_BATCH")
-        batch = self.start_batch(ready, mode=mode, execution_mode=execution_mode)
+        batch = self.start_batch(
+            ready,
+            mode=mode,
+            execution_mode=execution_mode,
+            acceleration_mode=acceleration_mode,
+        )
         return {
             "batch": batch,
             "selected_ready_span_ids": ready,

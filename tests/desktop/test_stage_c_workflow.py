@@ -315,3 +315,8 @@ def test_serial_release_rejects_parallel_before_start(monkeypatch: pytest.Monkey
     assert DesktopWorkflow._validate_execution_mode("SERIAL") == "SERIAL"
     with pytest.raises(ValueError, match="PARALLEL_UNAVAILABLE"):
         DesktopWorkflow._validate_execution_mode("PARALLEL")
+    assert DesktopWorkflow._validate_acceleration_mode("auto") == "AUTO"
+    assert DesktopWorkflow._validate_acceleration_mode("cpu") == "CPU"
+    assert DesktopWorkflow._validate_acceleration_mode("gpu") == "GPU"
+    with pytest.raises(ValueError, match="acceleration_mode"):
+        DesktopWorkflow._validate_acceleration_mode("CUDA")

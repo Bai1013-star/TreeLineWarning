@@ -508,6 +508,7 @@ class _DesktopHandler(BaseHTTPRequestHandler):
                         list(payload.get("span_ids") or []),
                         mode=str(payload.get("mode", "REAL")),
                         execution_mode=str(payload.get("execution_mode", "AUTO")),
+                        acceleration_mode=str(payload.get("acceleration_mode", "AUTO")),
                     )
                 )
                 return

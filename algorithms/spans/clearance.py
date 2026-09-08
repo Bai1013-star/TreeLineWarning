@@ -527,6 +527,7 @@ def _nearest_edges(
     backend: str,
     candidate_workers: int = 1,
     gpu_accelerator: Any | None = None,
+    cancellation_requested: Callable[[], bool] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, dict[str, Any]]:
     """Dispatch one tree's exact distance search to the selected backend."""
 
@@ -546,6 +547,7 @@ def _nearest_edges(
                     tolerance,
                     workers=candidate_workers,
                 ),
+                cancellation_requested=cancellation_requested,
             )
         return _candidate_exact_nearest_edges(
             points, bvh, edge_bundle, tolerance, workers=candidate_workers
@@ -655,7 +657,11 @@ def run_span_tree_wire_clearance(
     selected_backend = backend or "SCIPY_CANDIDATE_EXACT"
     if selected_backend not in {"NUMPY_DIRECT", "PYTHON_BVH", "SCIPY_CANDIDATE_EXACT"}:
         raise ValueError(f"unknown clearance backend: {selected_backend}")
-    from algorithms.spans.gpu_clearance import create_gpu_accelerator, normalize_gpu_mode
+    from algorithms.spans.gpu_clearance import (
+        GpuClearanceCancelled,
+        create_gpu_accelerator,
+        normalize_gpu_mode,
+    )
 
     requested_acceleration = normalize_gpu_mode(acceleration_mode)
     if selected_backend != "SCIPY_CANDIDATE_EXACT" and requested_acceleration == "GPU":
@@ -726,7 +732,10 @@ def run_span_tree_wire_clearance(
                     backend=selected_backend,
                     candidate_workers=candidate_workers,
                     gpu_accelerator=gpu_accelerator,
+                    cancellation_requested=cancellation_requested,
                 )
+            except GpuClearanceCancelled as exc:
+                raise ClearanceCancelled("CLEARANCE_CANCELLED_AT_GPU_BLOCK_BOUNDARY") from exc
             except Exception as exc:
                 if gpu_accelerator is None or requested_acceleration == "GPU":
                     raise

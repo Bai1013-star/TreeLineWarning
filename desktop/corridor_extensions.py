@@ -413,7 +413,12 @@ def install_corridor_extensions() -> None:
 
     @wraps(original_start_batch)
     def start_batch_with_readiness(
-        self: Any, span_ids: list[str], *, mode: str = "REAL", execution_mode: str = "AUTO"
+        self: Any,
+        span_ids: list[str],
+        *,
+        mode: str = "REAL",
+        execution_mode: str = "AUTO",
+        acceleration_mode: str = "AUTO",
     ) -> Any:
         execution_mode = self._validate_execution_mode(execution_mode)
         project = self._stage_project()
@@ -427,7 +432,13 @@ def install_corridor_extensions() -> None:
             raise ValueError(
                 "SPAN_ENDPOINT_CONFIRMATION_REQUIRED:" + ",".join(blocked)
             )
-        return original_start_batch(self, span_ids, mode=mode, execution_mode=execution_mode)
+        return original_start_batch(
+            self,
+            span_ids,
+            mode=mode,
+            execution_mode=execution_mode,
+            acceleration_mode=acceleration_mode,
+        )
 
     DesktopWorkflow.corridor_registration_projection = corridor_registration_projection
     DesktopWorkflow.prepare_corridor_registration = prepare_corridor_registration

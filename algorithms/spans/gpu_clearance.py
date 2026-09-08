@@ -11,6 +11,9 @@ falls back to the existing CPU oracle in AUTO mode.
 from __future__ import annotations
 
 import math
+import os
+import queue
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -47,6 +50,10 @@ class GpuCapability:
             "runtime_version": self.runtime_version,
             "driver_version": self.driver_version,
         }
+
+
+class GpuClearanceCancelled(RuntimeError):
+    """Cancellation observed at a bounded GPU pipeline block boundary."""
 
 
 def normalize_gpu_mode(mode: str) -> str:
@@ -325,9 +332,10 @@ class CertifiedGpuClearance:
         self,
         points: np.ndarray,
         cpu_fallback: Callable[[np.ndarray], tuple[Any, ...]],
+        *,
+        cancellation_requested: Callable[[], bool] | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, dict[str, Any]]:
         xyz = np.asarray(points, dtype=np.float64)
-        cp = self.cp
         output_edge = np.empty(len(xyz), dtype=np.int64)
         output_distance = np.empty(len(xyz), dtype=np.float64)
         output_nearest = np.empty((len(xyz), 3), dtype=np.float64)
@@ -335,110 +343,135 @@ class CertifiedGpuClearance:
         evaluated_total = 0
         certificate_before = int(self.diagnostics["certificate_success_points"])
         fallback_before = int(self.diagnostics["fallback_points"])
-        for start in range(0, len(xyz), self.chunk_size):
-            stop = min(len(xyz), start + self.chunk_size)
-            block = xyz[start:stop]
-            transferred = time.perf_counter()
-            gpu_points = cp.asarray(block)
-            gpu_winner = cp.empty(len(block), dtype=cp.int64)
-            cp.cuda.Stream.null.synchronize()
-            self.diagnostics["point_h2d_seconds"] += time.perf_counter() - transferred
-            event_start, event_end = cp.cuda.Event(), cp.cuda.Event()
-            event_start.record()
-            self.screen_kernel(
-                ((len(block) + 255) // 256,),
-                (256,),
-                (
-                    gpu_points,
-                    np.int64(len(block)),
-                    self.gpu_a,
-                    self.gpu_d,
-                    self.gpu_denominator,
-                    np.int64(len(self.order)),
-                    gpu_winner,
-                ),
+        if not len(xyz):
+            return (
+                output_edge,
+                output_distance,
+                output_nearest,
+                output_parameter,
+                0,
+                {
+                    "certificate_success_points": 0,
+                    "fallback_points": 0,
+                    "candidate_expansion_rounds": 0,
+                },
             )
-            event_end.record()
-            event_end.synchronize()
-            self.diagnostics["screen_kernel_seconds"] += (
-                float(cp.cuda.get_elapsed_time(event_start, event_end)) / 1000.0
-            )
-            transferred = time.perf_counter()
-            canonical_winner = cp.asnumpy(gpu_winner)
-            self.diagnostics["upper_d2h_seconds"] += time.perf_counter() - transferred
-            judged = time.perf_counter()
-            winner_edge = self.order[canonical_winner]
-            exact_upper, _nearest, _parameter = _exact_selected_edges(
-                block, winner_edge, self.edge_bundle
-            )
-            self.diagnostics["cpu_upper_judge_seconds"] += time.perf_counter() - judged
+        # Split a device-safe allocation into a workload/CPU-derived number of
+        # bounded blocks.  A maxsize=1 queue allows GPU preparation of block N+1
+        # to overlap the CPU exact judge of block N without unbounded buffers or
+        # additional CUDA contexts.
+        pipeline_blocks = min(8, max(2, os.cpu_count() or 1), len(xyz))
+        execution_chunk_size = min(
+            self.chunk_size, max(1, math.ceil(len(xyz) / pipeline_blocks))
+        )
+        batches: queue.Queue[Any] = queue.Queue(maxsize=1)
+        sentinel = object()
+        pipeline_error: list[BaseException] = []
+        stop_requested = threading.Event()
+        timed_fields = (
+            "point_h2d_seconds",
+            "screen_kernel_seconds",
+            "upper_d2h_seconds",
+            "cpu_upper_judge_seconds",
+            "certificate_kernel_seconds",
+            "candidate_d2h_seconds",
+            "cpu_exact_judge_seconds",
+        )
+        timing_before = {
+            name: float(self.diagnostics.get(name, 0.0)) for name in timed_fields
+        }
 
-            transferred = time.perf_counter()
-            gpu_exact_upper = cp.asarray(exact_upper)
-            gpu_count = cp.empty(len(block), dtype=cp.int32)
-            gpu_candidates = cp.empty((len(block), self.candidate_cap), dtype=cp.int32)
-            cp.cuda.Stream.null.synchronize()
-            self.diagnostics["point_h2d_seconds"] += time.perf_counter() - transferred
-            event_start, event_end = cp.cuda.Event(), cp.cuda.Event()
-            event_start.record()
-            self.certificate_kernel(
-                ((len(block) + 255) // 256,),
-                (256,),
-                (
-                    gpu_points,
-                    np.int64(len(block)),
-                    self.gpu_lower,
-                    self.gpu_upper,
-                    gpu_exact_upper,
-                    np.int64(len(self.order)),
-                    np.float64(self.tolerance),
-                    np.int32(self.candidate_cap),
-                    gpu_count,
-                    gpu_candidates,
-                ),
-            )
-            event_end.record()
-            event_end.synchronize()
-            self.diagnostics["certificate_kernel_seconds"] += (
-                float(cp.cuda.get_elapsed_time(event_start, event_end)) / 1000.0
-            )
-            transferred = time.perf_counter()
-            candidate_count = cp.asnumpy(gpu_count).astype(np.int64, copy=False)
-            canonical_candidates = cp.asnumpy(gpu_candidates).astype(np.int64, copy=False)
-            self.diagnostics["candidate_d2h_seconds"] += time.perf_counter() - transferred
+        def enqueue(value: Any) -> bool:
+            while not stop_requested.is_set():
+                try:
+                    batches.put(value, timeout=0.05)
+                    return True
+                except queue.Full:
+                    continue
+            return False
 
-            certified = (candidate_count > 0) & (candidate_count <= self.candidate_cap)
-            certified_rows = np.flatnonzero(certified)
-            judged = time.perf_counter()
-            if len(certified_rows):
-                edge, distance, nearest, parameter, evaluated = _judge_candidates(
-                    block[certified_rows],
-                    canonical_candidates[certified_rows],
-                    candidate_count[certified_rows],
-                    self.order,
-                    self.edge_bundle,
-                    self.tolerance,
+        def produce() -> None:
+            try:
+                for start in range(0, len(xyz), execution_chunk_size):
+                    if cancellation_requested is not None and cancellation_requested():
+                        raise GpuClearanceCancelled("GPU_CLEARANCE_CANCELLED_AT_BLOCK_BOUNDARY")
+                    stop = min(len(xyz), start + execution_chunk_size)
+                    count, candidates = self._gpu_candidates(xyz[start:stop])
+                    if not enqueue((start, stop, count, candidates)):
+                        return
+            except BaseException as exc:  # transported to the authority thread
+                pipeline_error.append(exc)
+            finally:
+                enqueue(sentinel)
+
+        pipeline_started = time.perf_counter()
+        producer = threading.Thread(
+            target=produce, name="treeline-gpu-clearance", daemon=True
+        )
+        producer.start()
+        try:
+            while True:
+                item = batches.get()
+                if item is sentinel:
+                    break
+                start, stop, candidate_count, canonical_candidates = item
+                block = xyz[start:stop]
+                certified = (candidate_count > 0) & (
+                    candidate_count <= self.candidate_cap
                 )
-                targets = start + certified_rows
-                output_edge[targets] = edge
-                output_distance[targets] = distance
-                output_nearest[targets] = nearest
-                output_parameter[targets] = parameter
-                evaluated_total += evaluated
-            fallback_rows = np.flatnonzero(~certified)
-            if len(fallback_rows):
-                edge, distance, nearest, parameter, evaluated, _diagnostics = cpu_fallback(
-                    block[fallback_rows]
+                certified_rows = np.flatnonzero(certified)
+                judged = time.perf_counter()
+                if len(certified_rows):
+                    edge, distance, nearest, parameter, evaluated = _judge_candidates(
+                        block[certified_rows],
+                        canonical_candidates[certified_rows],
+                        candidate_count[certified_rows],
+                        self.order,
+                        self.edge_bundle,
+                        self.tolerance,
+                    )
+                    targets = start + certified_rows
+                    output_edge[targets] = edge
+                    output_distance[targets] = distance
+                    output_nearest[targets] = nearest
+                    output_parameter[targets] = parameter
+                    evaluated_total += evaluated
+                fallback_rows = np.flatnonzero(~certified)
+                if len(fallback_rows):
+                    edge, distance, nearest, parameter, evaluated, _diagnostics = (
+                        cpu_fallback(block[fallback_rows])
+                    )
+                    targets = start + fallback_rows
+                    output_edge[targets] = edge
+                    output_distance[targets] = distance
+                    output_nearest[targets] = nearest
+                    output_parameter[targets] = parameter
+                    evaluated_total += evaluated
+                self.diagnostics["cpu_exact_judge_seconds"] += (
+                    time.perf_counter() - judged
                 )
-                targets = start + fallback_rows
-                output_edge[targets] = edge
-                output_distance[targets] = distance
-                output_nearest[targets] = nearest
-                output_parameter[targets] = parameter
-                evaluated_total += evaluated
-            self.diagnostics["cpu_exact_judge_seconds"] += time.perf_counter() - judged
-            self.diagnostics["certificate_success_points"] += len(certified_rows)
-            self.diagnostics["fallback_points"] += len(fallback_rows)
+                self.diagnostics["certificate_success_points"] += len(certified_rows)
+                self.diagnostics["fallback_points"] += len(fallback_rows)
+        finally:
+            stop_requested.set()
+            producer.join()
+        if pipeline_error:
+            raise pipeline_error[0]
+        pipeline_wall = time.perf_counter() - pipeline_started
+        self.diagnostics["pipeline_block_count"] = math.ceil(
+            len(xyz) / execution_chunk_size
+        )
+        self.diagnostics["pipeline_execution_chunk_size"] = execution_chunk_size
+        self.diagnostics["pipeline_wall_seconds"] = float(
+            self.diagnostics.get("pipeline_wall_seconds", 0.0)
+        ) + pipeline_wall
+        serialized_seconds = sum(
+            float(self.diagnostics.get(name, 0.0)) - timing_before[name]
+            for name in timed_fields
+        )
+        self.diagnostics["pipeline_overlap_saved_seconds"] = float(
+            self.diagnostics.get("pipeline_overlap_saved_seconds", 0.0)
+        ) + max(0.0, serialized_seconds - pipeline_wall)
         return (
             output_edge,
             output_distance,
@@ -455,6 +488,80 @@ class CertifiedGpuClearance:
                 "candidate_expansion_rounds": 0,
             },
         )
+
+    def _gpu_candidates(self, block: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Prepare one certified candidate batch; final judging stays on the caller CPU."""
+
+        cp = self.cp
+        transferred = time.perf_counter()
+        gpu_points = cp.asarray(block)
+        gpu_winner = cp.empty(len(block), dtype=cp.int64)
+        cp.cuda.Stream.null.synchronize()
+        self.diagnostics["point_h2d_seconds"] += time.perf_counter() - transferred
+        event_start, event_end = cp.cuda.Event(), cp.cuda.Event()
+        event_start.record()
+        self.screen_kernel(
+            ((len(block) + 255) // 256,),
+            (256,),
+            (
+                gpu_points,
+                np.int64(len(block)),
+                self.gpu_a,
+                self.gpu_d,
+                self.gpu_denominator,
+                np.int64(len(self.order)),
+                gpu_winner,
+            ),
+        )
+        event_end.record()
+        event_end.synchronize()
+        self.diagnostics["screen_kernel_seconds"] += (
+            float(cp.cuda.get_elapsed_time(event_start, event_end)) / 1000.0
+        )
+        transferred = time.perf_counter()
+        canonical_winner = cp.asnumpy(gpu_winner)
+        self.diagnostics["upper_d2h_seconds"] += time.perf_counter() - transferred
+        judged = time.perf_counter()
+        winner_edge = self.order[canonical_winner]
+        exact_upper, _nearest, _parameter = _exact_selected_edges(
+            block, winner_edge, self.edge_bundle
+        )
+        self.diagnostics["cpu_upper_judge_seconds"] += time.perf_counter() - judged
+
+        transferred = time.perf_counter()
+        gpu_exact_upper = cp.asarray(exact_upper)
+        gpu_count = cp.empty(len(block), dtype=cp.int32)
+        gpu_candidates = cp.empty((len(block), self.candidate_cap), dtype=cp.int32)
+        cp.cuda.Stream.null.synchronize()
+        self.diagnostics["point_h2d_seconds"] += time.perf_counter() - transferred
+        event_start, event_end = cp.cuda.Event(), cp.cuda.Event()
+        event_start.record()
+        self.certificate_kernel(
+            ((len(block) + 255) // 256,),
+            (256,),
+            (
+                gpu_points,
+                np.int64(len(block)),
+                self.gpu_lower,
+                self.gpu_upper,
+                gpu_exact_upper,
+                np.int64(len(self.order)),
+                np.float64(self.tolerance),
+                np.int32(self.candidate_cap),
+                gpu_count,
+                gpu_candidates,
+            ),
+        )
+        event_end.record()
+        event_end.synchronize()
+        self.diagnostics["certificate_kernel_seconds"] += (
+            float(cp.cuda.get_elapsed_time(event_start, event_end)) / 1000.0
+        )
+        transferred = time.perf_counter()
+        candidate_count = cp.asnumpy(gpu_count).astype(np.int64, copy=False)
+        canonical_candidates = cp.asnumpy(gpu_candidates).astype(np.int64, copy=False)
+        self.diagnostics["candidate_d2h_seconds"] += time.perf_counter() - transferred
+        return candidate_count, canonical_candidates
 
 
 def create_gpu_accelerator(
