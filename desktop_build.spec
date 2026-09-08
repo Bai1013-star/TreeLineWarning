@@ -71,6 +71,8 @@ hiddenimports = (
         "plotly",
         "plotly.offline",
         "lazrs",
+        # Imported dynamically by CuPy's JIT dependency resolver.
+        "graphlib",
     ]
 )
 
