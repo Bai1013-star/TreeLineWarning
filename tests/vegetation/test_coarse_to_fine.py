@@ -22,6 +22,7 @@ import numpy as np
 import pytest
 from algorithms.vegetation.coarse_to_fine import (
     RawRegion,
+    _first_unclaimed_rows,
     _RawRegionWriter,
     build_fine_representatives,
     build_fine_vegetation_v4_input,
@@ -241,6 +242,13 @@ def test_recovery_rejects_out_of_range_representative(tmp_path: Path) -> None:
 
 
 class TestFineRepresentatives:
+    def test_first_unclaimed_rows_matches_stable_unique_semantics(self) -> None:
+        positions = np.asarray((4, 2, 4, 1, 2, 5, 1), dtype=np.int64)
+        claimed = np.asarray((False, False, True, False, False, True), dtype=bool)
+        voxel_ids, rows = _first_unclaimed_rows(positions, claimed)
+        np.testing.assert_array_equal(voxel_ids, (1, 4))
+        np.testing.assert_array_equal(rows, (3, 0))
+
     def test_raw_count_and_original_index_conservation(self, tmp_path: Path) -> None:
         xyz = np.asarray(
             (

@@ -458,14 +458,13 @@ def build_fine_representatives(
             unique_keys[positions] != keys_chunk
         ):
             raise FastResearchError("COARSE_TO_FINE_FINE_KEY_MISMATCH")
-        new = ~claimed[positions]
-        if np.any(new):
+        first_positions, rows = _first_unclaimed_rows(positions, claimed)
+        if len(first_positions):
             # Keep the FIRST raw row per voxel: because the region is streamed
             # in raw row order, the first occurrence is the lowest original
-            # index.  Fancy assignment with repeated targets would keep the
-            # last occurrence, so deduplicate by first occurrence explicitly.
-            first_positions, first_occurrence = np.unique(positions[new], return_index=True)
-            rows = np.flatnonzero(new)[first_occurrence]
+            # index.  ``minimum.at`` avoids sorting the million-row chunk only
+            # to locate that first occurrence; it has identical duplicate and
+            # cross-chunk semantics to ``np.unique(..., return_index=True)``.
             representative_xyz[first_positions] = xyz[start:stop][rows]
             representative_original[first_positions] = original_index[start:stop][rows]
             representative_classification[first_positions] = classification[start:stop][rows]
@@ -492,6 +491,24 @@ def build_fine_representatives(
     }
     _write_npz_atomic(output_path, **arrays)
     return arrays
+
+
+def _first_unclaimed_rows(
+    positions: np.ndarray, claimed: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return unclaimed voxel ids and their first row without an O(N log N) sort."""
+
+    position = np.asarray(positions, dtype=np.int64)
+    is_claimed = np.asarray(claimed, dtype=bool)
+    new_rows = np.flatnonzero(~is_claimed[position])
+    if not len(new_rows):
+        empty = np.empty(0, dtype=np.int64)
+        return empty, empty
+    sentinel = np.int64(len(position))
+    first_row = np.full(len(is_claimed), sentinel, dtype=np.int64)
+    np.minimum.at(first_row, position[new_rows], new_rows)
+    first_positions = np.flatnonzero(first_row != sentinel)
+    return first_positions, first_row[first_positions]
 
 
 def map_region_rows_to_tree(
