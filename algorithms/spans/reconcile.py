@@ -268,7 +268,15 @@ def _reconcile_single_span(
 
     raw_tree = np.asarray(outcome.raw_tree_id, dtype=np.int32)
     raw_original_all = np.asarray(outcome.raw_original_index, dtype=np.int64)
-    duplicate_input_count = int(len(raw_original_all) - len(np.unique(raw_original_all)))
+    # NumPy's hash-backed ``unique`` is disproportionately expensive for the
+    # multi-million-row int64 source identities seen here.  A sorted copy is
+    # both exact and substantially cheaper, and the copy is released before
+    # the owned-membership arrays are materialised below.
+    sorted_input_identity = np.sort(raw_original_all, kind="quicksort")
+    duplicate_input_count = int(
+        np.count_nonzero(sorted_input_identity[1:] == sorted_input_identity[:-1])
+    )
+    del sorted_input_identity
     # A one-span execution sees neighbouring crowns in its halo, but those
     # observations are context only.  The stable tree-top anchor determines
     # whether this Span owns the entity; a halo-only tree may never allocate a
@@ -302,8 +310,11 @@ def _reconcile_single_span(
     raw_core = np.asarray(outcome.in_core, dtype=bool)[valid]
     order = np.argsort(raw_original, kind="stable")
     sorted_original = raw_original[order]
-    unique = np.r_[True, sorted_original[1:] != sorted_original[:-1]]
-    keep = order[unique]
+    if len(sorted_original):
+        unique = np.r_[True, sorted_original[1:] != sorted_original[:-1]]
+        keep = order[unique]
+    else:
+        keep = order
     final_original = raw_original[keep]
     final_xyz = raw_xyz[keep]
     final_tree = raw_tree[keep]
@@ -371,9 +382,10 @@ def _reconcile_single_span(
             "review_tree_count": len(review_ids),
             "final_raw_member_count": int(len(final_original)),
             "duplicate_input_original_index_count": duplicate_input_count,
-            "duplicate_final_original_index": int(
-                len(final_original) - len(np.unique(final_original))
-            ),
+            # ``keep`` contains the first row of each sorted identity group,
+            # so uniqueness is guaranteed by construction without rescanning
+            # the multi-million-row output.
+            "duplicate_final_original_index": 0,
             "runtime_seconds": time.perf_counter() - started,
             "single_span_fast_path": True,
         },

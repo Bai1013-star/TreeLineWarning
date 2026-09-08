@@ -27,7 +27,7 @@ REGION_LASSO_SENTINEL_TREE_ID = -1
 # Projection intermediates are display-geometry math over exact membership,
 # not science state.  Keep them bounded so a multi-million-point crown cannot
 # create one giant (N, 4) homogeneous matrix during a UI edit.
-REGION_LASSO_PROJECTION_CHUNK = 250_000
+REGION_LASSO_PROJECTION_CHUNK = 125_000
 
 
 class RegionTreeEditSession(TreeEditSession):
@@ -70,14 +70,23 @@ class RegionTreeEditSession(TreeEditSession):
 
     @staticmethod
     def _polygon_rows(points: np.ndarray, polygon: np.ndarray) -> np.ndarray:
-        """Exact even/odd rule without an unnecessary O(N log N) Y sort."""
+        """Exact even/odd rule with edge visits bounded by their Y intervals."""
         x, y = points[:, 0], points[:, 1]
         inside = np.zeros(len(points), dtype=bool)
+        # A freehand lasso can contain hundreds of vertices.  Testing every
+        # point against every edge made broad, multi-million-point selections
+        # scale as O(points * vertices).  Sorting row identities once lets each
+        # edge visit exactly the rows for which the existing half-open crossing
+        # predicate can be true; the boundary equation and even/odd rule remain
+        # bit-for-bit the same.
+        y_order = np.argsort(y, kind="quicksort")
+        sorted_y = y[y_order]
         xj, yj = polygon[-1]
         for xi, yi in polygon:
             if yi != yj:
-                crossing = (yi > y) != (yj > y)
-                rows = np.flatnonzero(crossing)
+                lower = int(np.searchsorted(sorted_y, min(yi, yj), side="left"))
+                upper = int(np.searchsorted(sorted_y, max(yi, yj), side="left"))
+                rows = y_order[lower:upper]
                 boundary = (xj - xi) * (y[rows] - yi) / (yj - yi) + xi
                 inside[rows] ^= x[rows] < boundary
             xj, yj = xi, yi

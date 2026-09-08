@@ -135,6 +135,30 @@ def _xyz(payload: dict[str, Any], key: str) -> tuple[float, float, float]:
     return tuple(float(item) for item in value)
 
 
+def _count_values_in_sorted_candidates(
+    values: np.ndarray,
+    sorted_candidates: np.ndarray,
+    *,
+    chunk_size: int = 1_000_000,
+) -> int:
+    """Count exact membership with bounded temporaries and no full-array hash."""
+
+    if not len(values) or not len(sorted_candidates):
+        return 0
+    total = 0
+    for start in range(0, len(values), chunk_size):
+        block = np.asarray(values[start : start + chunk_size], dtype=np.int64)
+        positions = np.searchsorted(sorted_candidates, block)
+        bounded = positions < len(sorted_candidates)
+        rows = np.flatnonzero(bounded)
+        total += int(
+            np.count_nonzero(
+                sorted_candidates[positions[rows]] == block[rows]
+            )
+        )
+    return total
+
+
 def _span_record(input_data: SpanAnalysisInput, config: FastBaselineConfig) -> SpanRecord:
     geometry = dict(input_data.span_geometry)
     start_endpoint = dict(input_data.from_endpoint_geometry)
@@ -342,22 +366,30 @@ def run_tracked_canonical_span_science(
     confirmed_wire_indices = np.asarray(wire_result.confirmed_member_source_index, dtype=np.int64)
     if confirmed_wire_indices.ndim != 1 or np.any(confirmed_wire_indices < 0):
         raise ScienceAdapterError("CONFIRMED_CONDUCTOR_SOURCE_IDENTITY_INVALID")
-    if len(confirmed_wire_indices) != len(np.unique(confirmed_wire_indices)):
+    sorted_confirmed_wire_indices = np.sort(confirmed_wire_indices, kind="quicksort")
+    if np.any(
+        sorted_confirmed_wire_indices[1:] == sorted_confirmed_wire_indices[:-1]
+    ):
         raise ScienceAdapterError("CONFIRMED_CONDUCTOR_SOURCE_IDENTITY_DUPLICATE")
     vegetation_source_index_before = np.asarray(
         vegetation_query.region.original_index(), dtype=np.int64
     )
-    if len(vegetation_source_index_before) != len(np.unique(vegetation_source_index_before)):
-        raise ScienceAdapterError("TREE_INPUT_SOURCE_IDENTITY_DUPLICATE")
-    confirmed_wire_excluded_count = int(
-        np.intersect1d(
-            confirmed_wire_indices, vegetation_source_index_before, assume_unique=True
-        ).size
+    sorted_vegetation_source_index = np.sort(
+        vegetation_source_index_before, kind="quicksort"
     )
+    if np.any(
+        sorted_vegetation_source_index[1:] == sorted_vegetation_source_index[:-1]
+    ):
+        raise ScienceAdapterError("TREE_INPUT_SOURCE_IDENTITY_DUPLICATE")
+    confirmed_wire_excluded_count = _count_values_in_sorted_candidates(
+        sorted_confirmed_wire_indices,
+        sorted_vegetation_source_index,
+    )
+    del sorted_vegetation_source_index
     if len(confirmed_wire_indices):
         filtered_vegetation_region = subset_raw_region_excluding_source_indices(
             vegetation_query.region,
-            confirmed_wire_indices,
+            sorted_confirmed_wire_indices,
             output_root / "regions" / "vegetation_after_confirmed_wire",
         )
         confirmed_wire_members_removed = int(
@@ -376,12 +408,9 @@ def run_tracked_canonical_span_science(
     else:
         confirmed_wire_members_removed = 0
     vegetation_after_confirmed_wire_exclusion = int(vegetation_query.region.count)
-    wire_vegetation_source_overlap_in_tree_input = int(
-        np.intersect1d(
-            confirmed_wire_indices,
-            vegetation_query.region.original_index(),
-            assume_unique=False,
-        ).size
+    wire_vegetation_source_overlap_in_tree_input = _count_values_in_sorted_candidates(
+        vegetation_query.region.original_index(),
+        sorted_confirmed_wire_indices,
     )
     # This accounting covers the boundary immediately before the frozen tree
     # core.  There is deliberately no broad wire, tile, or proximity exclusion:

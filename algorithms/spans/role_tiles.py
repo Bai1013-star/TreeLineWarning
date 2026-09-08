@@ -12,7 +12,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import threading
 import time
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -241,6 +243,93 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
 
 
 _ROLE_TILE_VALIDATION_CACHE: dict[tuple[Any, ...], tuple[int, int, int | None, int | None]] = {}
+
+
+@dataclass(frozen=True, slots=True)
+class _RoleTileLoadReuse:
+    cache: Any
+    snapshots: tuple[tuple[str, tuple[int, int, int, int, int]], ...]
+
+
+_ROLE_TILE_LOAD_CACHE: OrderedDict[tuple[Any, ...], _RoleTileLoadReuse] = OrderedDict()
+_ROLE_TILE_LOAD_CACHE_LOCK = threading.RLock()
+_ROLE_TILE_LOAD_CACHE_MAX_ENTRIES = 16
+
+
+def _artifact_snapshot(path: Path) -> tuple[int, int, int, int, int]:
+    stat = path.stat()
+    return (
+        int(stat.st_dev),
+        int(stat.st_ino),
+        int(stat.st_size),
+        int(stat.st_mtime_ns),
+        int(stat.st_ctime_ns),
+    )
+
+
+def _artifact_snapshots(
+    paths: tuple[Path, ...],
+) -> tuple[tuple[str, tuple[int, int, int, int, int]], ...]:
+    return tuple((str(path), _artifact_snapshot(path)) for path in paths)
+
+
+def _snapshots_still_match(
+    snapshots: tuple[tuple[str, tuple[int, int, int, int, int]], ...],
+) -> bool:
+    try:
+        return all(_artifact_snapshot(Path(path)) == expected for path, expected in snapshots)
+    except OSError:
+        return False
+
+
+def _role_tile_load_key(
+    root: Path,
+    *,
+    role: str,
+    source_identity: Mapping[str, Any],
+    config_digest: str,
+    source_point_count: int | None,
+    expected_source_index_exclusion: Mapping[str, Any] | None,
+    expected_cell_size_m: float | None,
+) -> tuple[Any, ...]:
+    exclusion = expected_source_index_exclusion or {}
+    return (
+        str(root),
+        role,
+        role_source_binding_digest(source_identity),
+        config_digest,
+        source_point_count,
+        exclusion.get("role"),
+        exclusion.get("source_index_digest"),
+        expected_cell_size_m,
+    )
+
+
+def _reuse_validated_role_tile_cache(key: tuple[Any, ...]) -> Any | None:
+    with _ROLE_TILE_LOAD_CACHE_LOCK:
+        entry = _ROLE_TILE_LOAD_CACHE.get(key)
+    if entry is None:
+        return None
+    if not _snapshots_still_match(entry.snapshots):
+        with _ROLE_TILE_LOAD_CACHE_LOCK:
+            _ROLE_TILE_LOAD_CACHE.pop(key, None)
+        return None
+    with _ROLE_TILE_LOAD_CACHE_LOCK:
+        if key in _ROLE_TILE_LOAD_CACHE:
+            _ROLE_TILE_LOAD_CACHE.move_to_end(key)
+    return entry.cache
+
+
+def _remember_validated_role_tile_cache(
+    key: tuple[Any, ...],
+    cache: Any,
+    snapshots: tuple[tuple[str, tuple[int, int, int, int, int]], ...],
+) -> None:
+    with _ROLE_TILE_LOAD_CACHE_LOCK:
+        _ROLE_TILE_LOAD_CACHE[key] = _RoleTileLoadReuse(cache, snapshots)
+        _ROLE_TILE_LOAD_CACHE.move_to_end(key)
+        while len(_ROLE_TILE_LOAD_CACHE) > _ROLE_TILE_LOAD_CACHE_MAX_ENTRIES:
+            _ROLE_TILE_LOAD_CACHE.popitem(last=False)
 
 
 def _validate_persisted_source_indices(
@@ -551,6 +640,22 @@ class RoleSpecificTileCache:
         index_path = root / "tiles" / "index.json"
         if not metadata_path.is_file() or not index_path.is_file():
             raise RoleTileCacheError("ROLE_TILE_CACHE_METADATA_MISSING")
+        load_key = _role_tile_load_key(
+            root,
+            role=role,
+            source_identity=source_identity,
+            config_digest=config_digest,
+            source_point_count=source_point_count,
+            expected_source_index_exclusion=expected_source_index_exclusion,
+            expected_cell_size_m=expected_cell_size_m,
+        )
+        reused = _reuse_validated_role_tile_cache(load_key)
+        if reused is not None:
+            return reused
+        try:
+            header_snapshots = _artifact_snapshots((metadata_path, index_path))
+        except OSError as exc:
+            raise RoleTileCacheError("ROLE_TILE_CACHE_METADATA_INVALID") from exc
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             index_payload = json.loads(index_path.read_text(encoding="utf-8"))
@@ -638,6 +743,23 @@ class RoleSpecificTileCache:
         if not isinstance(tiles, dict):
             raise RoleTileCacheError("ROLE_TILE_CACHE_INDEX_INVALID")
         tiles_root = (root / "tiles").resolve()
+        tile_artifact_paths: list[Path] = []
+        for item in tiles.values():
+            if not isinstance(item, dict) or not isinstance(item.get("file"), str):
+                raise RoleTileCacheError("ROLE_TILE_CACHE_TILE_REFERENCE_INVALID")
+            tile_path = root / "tiles" / item["file"]
+            try:
+                tile_path.resolve().relative_to(tiles_root)
+            except ValueError as exc:
+                raise RoleTileCacheError("ROLE_TILE_CACHE_TILE_REFERENCE_INVALID") from exc
+            tile_artifact_paths.append(tile_path)
+        artifact_paths = (metadata_path, index_path, *tile_artifact_paths)
+        try:
+            validation_snapshots = _artifact_snapshots(artifact_paths)
+        except OSError as exc:
+            raise RoleTileCacheError("ROLE_TILE_CACHE_TILE_REFERENCE_INVALID") from exc
+        if validation_snapshots[:2] != header_snapshots:
+            raise RoleTileCacheError("ROLE_TILE_CACHE_CHANGED_DURING_VALIDATION")
         total_points = 0
         for _tile_id, item in tiles.items():
             if not isinstance(item, dict) or not isinstance(item.get("file"), str):
@@ -721,7 +843,7 @@ class RoleSpecificTileCache:
                 or metadata.get("source_index_validation") != "UNIQUE_SOURCE_INDEXES_V1"
             ):
                 raise RoleTileCacheError("ROLE_TILE_CACHE_SOURCE_INDEX_VALIDATION_INVALID")
-        return cls(
+        cache = cls(
             root,
             role=role,
             source_identity=source_identity,
@@ -729,6 +851,13 @@ class RoleSpecificTileCache:
             metadata=metadata,
             index=tiles,
         )
+        try:
+            if _artifact_snapshots(artifact_paths) != validation_snapshots:
+                raise RoleTileCacheError("ROLE_TILE_CACHE_CHANGED_DURING_VALIDATION")
+        except OSError as exc:
+            raise RoleTileCacheError("ROLE_TILE_CACHE_CHANGED_DURING_VALIDATION") from exc
+        _remember_validated_role_tile_cache(load_key, cache, validation_snapshots)
+        return cache
 
     def query(
         self,

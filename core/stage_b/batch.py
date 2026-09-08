@@ -97,7 +97,11 @@ def _available_memory_bytes() -> int | None:
 
 
 def _parallel_worker_plan(
-    span_count: int, source_point_count: int, available_memory_bytes: int | None = None
+    span_count: int,
+    source_point_count: int,
+    available_memory_bytes: int | None = None,
+    *,
+    maximum_planned_role_rows: int | None = None,
 ) -> dict[str, Any]:
     """Derive a bounded CPU producer count from workload and host capacity."""
 
@@ -111,7 +115,11 @@ def _parallel_worker_plan(
     # estimate scales with average source rows per selected Span and the actual
     # array representation; it is a safety budget, not a scientific parameter.
     average_rows = max(1, math.ceil(max(1, source_point_count) / max(1, span_count)))
-    estimated_worker_bytes = max(256 * 1024**2, average_rows * 48)
+    uses_planned_rows = (
+        maximum_planned_role_rows is not None and maximum_planned_role_rows > 0
+    )
+    estimate_rows = int(maximum_planned_role_rows) if uses_planned_rows else average_rows
+    estimated_worker_bytes = max(256 * 1024**2, estimate_rows * 48)
     memory_workers = (
         1
         if available is None or available <= 0
@@ -123,8 +131,67 @@ def _parallel_worker_plan(
         "cpu_count": cpu_count,
         "available_memory_bytes": available,
         "estimated_worker_bytes": estimated_worker_bytes,
+        "estimate_basis": (
+            "MAXIMUM_METADATA_PLANNED_ROLE_ROWS"
+            if uses_planned_rows
+            else "SOURCE_AVERAGE_FALLBACK"
+        ),
+        "estimated_role_rows_per_worker": estimate_rows,
         "memory_worker_capacity": memory_workers,
     }
+
+
+def _planned_role_rows_by_span(
+    project_root: Path,
+    preparation: SourceSharedPreparation,
+    inputs: Mapping[str, SpanAnalysisInput],
+    config: FastBaselineConfig,
+) -> dict[str, int]:
+    """Estimate private worker rows from validated role-tile metadata only."""
+
+    from algorithms.spans.canonical_executor import (
+        _read_preparation,
+        _span_record,
+        _tile_cache_from_preparation,
+    )
+    from algorithms.spans.region import SpanLocalFrame, SpanRegionSpec
+
+    if not inputs:
+        return {}
+    first = next(iter(inputs.values()))
+    payload = _read_preparation(project_root, preparation, first)
+    origin = payload.get("origin_xyz")
+    if not isinstance(origin, (list, tuple)) or len(origin) != 3:
+        return {}
+    vegetation = _tile_cache_from_preparation(
+        project_root, payload, first, "vegetation"
+    )
+    wire = _tile_cache_from_preparation(project_root, payload, first, "wire")
+    if vegetation is None or wire is None:
+        return {}
+    planned: dict[str, int] = {}
+    for span_id, input_data in inputs.items():
+        span = _span_record(input_data, config)
+        frame = SpanLocalFrame.from_endpoints(
+            span.start_xyz_absolute_m,
+            span.end_xyz_absolute_m,
+            tuple(float(value) for value in origin),
+        )
+        spec = SpanRegionSpec(
+            role="scheduler-memory-plan",
+            half_width_m=config.span_half_width_m,
+            longitudinal_before_m=config.span_halo_m,
+            longitudinal_after_m=config.span_halo_m,
+            z_min_m=float(span.halo_bounds_min_xyz[2]),
+            z_max_m=float(span.halo_bounds_max_xyz[2]),
+        )
+        _vegetation_total, vegetation_tiles = vegetation.plan_oriented_query(frame, spec)
+        _wire_total, wire_tiles = wire.plan_oriented_query(frame, spec)
+        planned[span_id] = sum(
+            int(vegetation.index[tile_id]["point_count"])
+            for tile_id in vegetation_tiles
+        ) + sum(int(wire.index[tile_id]["point_count"]) for tile_id in wire_tiles)
+    return planned
 
 
 @dataclass(slots=True)
@@ -1138,9 +1205,26 @@ class BatchAnalysisScheduler:
             return result
 
         previous_statuses = (previous or {}).get("span_statuses") or {}
+        try:
+            planned_role_rows = _planned_role_rows_by_span(
+                self.project_root,
+                preparation,
+                {
+                    span_id: bindings[span_id].science_input
+                    for span_id in selected
+                },
+                self.config,
+            )
+        except Exception:  # metadata planning is advisory; retain the safe legacy budget
+            planned_role_rows = {}
         worker_plan = _parallel_worker_plan(
-            len(selected), max(0, telemetry.source_point_count)
+            len(selected),
+            max(0, telemetry.source_point_count),
+            maximum_planned_role_rows=(
+                max(planned_role_rows.values()) if planned_role_rows else None
+            ),
         )
+        worker_plan["planned_role_rows_by_span"] = dict(planned_role_rows)
         requested_parallel = self.execution_mode in {"AUTO", "PARALLEL"} and len(selected) > 1
         worker_count = int(worker_plan["workers"]) if requested_parallel else 1
         effective_execution = "PARALLEL" if worker_count > 1 else "SERIAL"

@@ -285,8 +285,17 @@ def test_parallel_worker_plan_uses_cpu_memory_and_workload_capacity(monkeypatch)
     monkeypatch.setattr("core.stage_b.batch.os.cpu_count", lambda: 16)
     constrained = _parallel_worker_plan(8, 100_000_000, 1_000_000_000)
     capable = _parallel_worker_plan(8, 1_000, 8_000_000_000)
+    metadata_planned = _parallel_worker_plan(
+        8,
+        100_000_000,
+        4_000_000_000,
+        maximum_planned_role_rows=10_000_000,
+    )
     assert constrained["workers"] == 1
     assert capable["workers"] == 8
+    assert metadata_planned["estimated_worker_bytes"] == 480_000_000
+    assert metadata_planned["estimate_basis"] == "MAXIMUM_METADATA_PLANNED_ROLE_ROWS"
+    assert metadata_planned["workers"] == 5
 
 
 def test_batch_scheduler_persists_structured_ground_runtime_failure(tmp_path: Path) -> None:
@@ -673,7 +682,9 @@ def test_single_span_persistent_id_matches_fresh_and_cached_legacy_result(
     )
 
 
-def test_batch_tree_editor_isolates_span_delete_and_restores_with_undo(tmp_path: Path) -> None:
+def test_batch_tree_editor_isolates_span_delete_and_restores_with_undo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from algorithms.spans.reconcile import reconcile_trees
     from core.config.fast_baseline import FastBaselineConfig
 
@@ -739,7 +750,13 @@ def test_batch_tree_editor_isolates_span_delete_and_restores_with_undo(tmp_path:
     assert np.array_equal(editor.original.members_of(1), np.asarray([11, 12, 13]))
     editor.undo()
     assert editor.session.current_tree_ids() == [0, 1]
-    editor.persist()
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            editor.session,
+            "build_final",
+            lambda: pytest.fail("unedited publication must reuse original membership"),
+        )
+        editor.persist()
     edit_path = (
         tmp_path
         / "artifacts/project-runs/batches/analysis-editor-fixture/tree_edits.json"

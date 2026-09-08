@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Mapping
 from dataclasses import replace
@@ -171,13 +172,39 @@ class BatchTreeEditor:
         """Persist clean/original, edit-log, current/final membership and display evidence."""
 
         self.persist_edits()
-        final_index, final_tree, final_xyz, summary = self.session.build_final()
-        self._write_npz(
-            self.artifact_root / "tree_segmentation_final.npz",
-            original_index=final_index,
-            xyz_local_m=final_xyz,
-            tree_id=final_tree,
-        )
+        final_path = self.artifact_root / "tree_segmentation_final.npz"
+        if not self.session.operations:
+            # Before the first edit the final membership is byte-for-byte the
+            # immutable original membership.  Rebuilding three multi-million
+            # row arrays and serialising a duplicate NPZ added seconds to every
+            # analysis.  A same-directory hard link publishes those exact bytes
+            # in O(1); later edited publications use atomic replacement, which
+            # leaves the original inode untouched.
+            final_index = self.original.original_index
+            final_tree = self.original.tree_id
+            final_xyz = self.original.xyz_local_m
+            summary: dict[int, dict[str, Any]] = {}
+            original_path = self.artifact_root / "tree_segmentation_original.npz"
+            temporary = final_path.with_name(final_path.name + "." + uuid4().hex + ".tmp")
+            try:
+                os.link(original_path, temporary)
+                os.replace(temporary, final_path)
+            except OSError:
+                temporary.unlink(missing_ok=True)
+                self._write_npz(
+                    final_path,
+                    original_index=final_index,
+                    xyz_local_m=final_xyz,
+                    tree_id=final_tree,
+                )
+        else:
+            final_index, final_tree, final_xyz, summary = self.session.build_final()
+            self._write_npz(
+                final_path,
+                original_index=final_index,
+                xyz_local_m=final_xyz,
+                tree_id=final_tree,
+            )
         # BatchAnalysisScheduler._finish() already calls this method immediately
         # after exact clearance is produced.  Persist its exact danger XYZ here
         # so a close/reopen before the user first opens Step-2 does not discard
