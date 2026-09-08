@@ -72,10 +72,8 @@ _TREE_COLUMNS = [
     "contact_evidence",
     "warning_threshold_used_m",
     "review_status",
-    # Human-facing presentation identity is appended to preserve Prediction
-    # consumers that depend on the established leading-column contract.
-    "display_tree_id",
-    # Additive finalized DBH contract; retain every established column position.
+    # Additive finalized measurement contract; retain every established column
+    # position, including the terminal human-facing presentation identity.
     "dbh_cm",
     "dbh_method",
     "dbh_quality",
@@ -89,6 +87,7 @@ _TREE_COLUMNS = [
     "horizontal_clearance_m",
     "vertical_clearance_m",
     "clearance_component_source",
+    "display_tree_id",
 ]
 
 _NUMERIC_COLUMNS = {
