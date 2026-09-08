@@ -1,0 +1,4317 @@
+{
+  "datasets": {
+    "human_field_batch": {
+      "operations": [
+        {
+          "point_count": 10000089,
+          "selection_method": "REGION_LASSO",
+          "sequence": 1,
+          "timestamp": "2026-08-31T16:00:07",
+          "tree_ids": [
+            0,
+            1,
+            5,
+            9,
+            10,
+            12,
+            13,
+            14
+          ],
+          "type": "REMOVE_POINTS"
+        }
+      ],
+      "source_sha256_in_journal": null,
+      "span_manifests": [
+        {
+          "path": "E:\\2026.8.31-2\\2026.08.31-2\\2026.08.31-2\\artifacts\\project-runs\\batches\\analysis-d434dfe375814b2d9b8a1d765a3e4d13\\span-f6378f292e5f42ed81e48bc802711c08\\tree\\span_tree_manifest.json",
+          "sha256": "c48b968cef1c3895399dd54910e4029f3873af521f73474a57c7fbf12a8ac2b8",
+          "trees": [
+            {
+              "apex_height_m": 10.510199546813965,
+              "apex_xy_local_m": [
+                -33.55830383300781,
+                -19.716293334960938
+              ],
+              "fine_representative_count": 27463,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 2285682,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 46.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 17.845280237814183,
+                "fine_point_count": 27463,
+                "full_res_point_count": 2285682,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 15,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9252670261958043,
+                "stem_hypothesis_count_deduplicated": 2,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 8.510199546813965,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 0,
+              "tree_top_id": 0
+            },
+            {
+              "apex_height_m": 10.37459945678711,
+              "apex_xy_local_m": [
+                -11.355209350585938,
+                -10.24200439453125
+              ],
+              "fine_representative_count": 55135,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 4197324,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 122.0,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 27.57956044783325,
+                "fine_point_count": 55135,
+                "full_res_point_count": 4191847,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 69,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9364547588499936,
+                "stem_hypothesis_count_deduplicated": 2,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 8.37459945678711,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 1,
+              "tree_top_id": 1
+            },
+            {
+              "apex_height_m": 10.360849380493164,
+              "apex_xy_local_m": [
+                -42.30900573730469,
+                -24.632598876953125
+              ],
+              "fine_representative_count": 10169,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 460817,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 13.0,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 5.695694859157908,
+                "fine_point_count": 10169,
+                "full_res_point_count": 460817,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 5,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.935491178967151,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 8.357099294662476,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 2,
+              "tree_top_id": 2
+            },
+            {
+              "apex_height_m": 10.069899559020996,
+              "apex_xy_local_m": [
+                -25.970611572265625,
+                -12.946701049804688
+              ],
+              "fine_representative_count": 11636,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 421605,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 15.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 6.120669489785524,
+                "fine_point_count": 11636,
+                "full_res_point_count": 421605,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 6,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9339778077702158,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 8.064899444580078,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 3,
+              "tree_top_id": 3
+            },
+            {
+              "apex_height_m": 9.994399070739746,
+              "apex_xy_local_m": [
+                -21.341598510742188,
+                -10.796600341796875
+              ],
+              "fine_representative_count": 5055,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 122993,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 10.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 4.9977739129552194,
+                "fine_point_count": 5055,
+                "full_res_point_count": 122993,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 2,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9311679647143456,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.989598989486694,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 4,
+              "tree_top_id": 4
+            },
+            {
+              "apex_height_m": 9.931699752807617,
+              "apex_xy_local_m": [
+                -47.29740905761719,
+                -26.67980194091797
+              ],
+              "fine_representative_count": 27875,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 1934135,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 32.5,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 17.900504803494993,
+                "fine_point_count": 27875,
+                "full_res_point_count": 1933612,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 15,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9357664481884461,
+                "stem_hypothesis_count_deduplicated": 4,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.931299686431885,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 5,
+              "tree_top_id": 5
+            },
+            {
+              "apex_height_m": 9.863149642944336,
+              "apex_xy_local_m": [
+                -56.52400207519531,
+                -37.617897033691406
+              ],
+              "fine_representative_count": 63864,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 4475971,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 66.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 18.686199987907536,
+                "fine_point_count": 63864,
+                "full_res_point_count": 4469638,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 28,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9822908700286409,
+                "stem_hypothesis_count_deduplicated": 6,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.863099575042725,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 6,
+              "tree_top_id": 6
+            },
+            {
+              "apex_height_m": 9.760449409484863,
+              "apex_xy_local_m": [
+                -51.79020690917969,
+                -29.42340087890625
+              ],
+              "fine_representative_count": 14324,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 599842,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 17.0,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 6.257505541782474,
+                "fine_point_count": 14324,
+                "full_res_point_count": 599842,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 3,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.923982845860988,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.746549367904663,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 7,
+              "tree_top_id": 7
+            },
+            {
+              "apex_height_m": 9.348549842834473,
+              "apex_xy_local_m": [
+                -16.86920166015625,
+                -8.27520751953125
+              ],
+              "fine_representative_count": 17010,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 704065,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 19.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 6.886977795704406,
+                "fine_point_count": 17010,
+                "full_res_point_count": 704065,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 8,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9379471156234721,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.335349798202515,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 8,
+              "tree_top_id": 8
+            },
+            {
+              "apex_height_m": 9.274699211120605,
+              "apex_xy_local_m": [
+                -56.69110107421875,
+                -30.93810272216797
+              ],
+              "fine_representative_count": 13491,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 580901,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 12.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 5.71272469895015,
+                "fine_point_count": 13491,
+                "full_res_point_count": 580901,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 6,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9367805239010382,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.274249315261841,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 9,
+              "tree_top_id": 9
+            },
+            {
+              "apex_height_m": 8.764349937438965,
+              "apex_xy_local_m": [
+                -12.145599365234375,
+                -5.201507568359375
+              ],
+              "fine_representative_count": 15615,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 617775,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 16.0,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 6.650647677447581,
+                "fine_point_count": 15615,
+                "full_res_point_count": 617775,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 5,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9295838378246594,
+                "stem_hypothesis_count_deduplicated": 2,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.758300065994263,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 11,
+              "tree_top_id": 11
+            },
+            {
+              "apex_height_m": 8.590299606323242,
+              "apex_xy_local_m": [
+                -49.26380920410156,
+                -37.249000549316406
+              ],
+              "fine_representative_count": 5179,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 33031,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 20.0,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 7.377810362852727,
+                "fine_point_count": 5179,
+                "full_res_point_count": 33031,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 7,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.919491712193772,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.586299657821655,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 12,
+              "tree_top_id": 12
+            },
+            {
+              "apex_height_m": 8.58704948425293,
+              "apex_xy_local_m": [
+                -54.546112060546875,
+                -41.263999938964844
+              ],
+              "fine_representative_count": 6212,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 49891,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 17.25,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 6.631253495112081,
+                "fine_point_count": 6212,
+                "full_res_point_count": 49740,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 11,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9314313964572513,
+                "stem_hypothesis_count_deduplicated": 2,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.586799383163452,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 13,
+              "tree_top_id": 13
+            },
+            {
+              "apex_height_m": 8.543699264526367,
+              "apex_xy_local_m": [
+                -37.75770568847656,
+                -22.344703674316406
+              ],
+              "fine_representative_count": 25889,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 1957287,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 32.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 12.338567042540214,
+                "fine_point_count": 25889,
+                "full_res_point_count": 1957287,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 15,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9491402928659446,
+                "stem_hypothesis_count_deduplicated": 3,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.543349266052246,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 14,
+              "tree_top_id": 14
+            },
+            {
+              "apex_height_m": 8.447098731994629,
+              "apex_xy_local_m": [
+                -8.615798950195312,
+                -2.380096435546875
+              ],
+              "fine_representative_count": 4765,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 218058,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 8.5,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 4.820756345018824,
+                "fine_point_count": 4765,
+                "full_res_point_count": 218058,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 3,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9609590145487384,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.4451985359191895,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 15,
+              "tree_top_id": 15
+            },
+            {
+              "apex_height_m": 8.105149269104004,
+              "apex_xy_local_m": [
+                -62.368804931640625,
+                -32.68080139160156
+              ],
+              "fine_representative_count": 11652,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 619301,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 10.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 4.874765681590845,
+                "fine_point_count": 11652,
+                "full_res_point_count": 619301,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 5,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9412634538660569,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.095999240875244,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 16,
+              "tree_top_id": 16
+            },
+            {
+              "apex_height_m": 7.745599746704102,
+              "apex_xy_local_m": [
+                -30.63751220703125,
+                -16.621597290039062
+              ],
+              "fine_representative_count": 11336,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 503601,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 10.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 4.7566582805992015,
+                "fine_point_count": 11336,
+                "full_res_point_count": 503601,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 7,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9378451492711166,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 5.739449739456177,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 18,
+              "tree_top_id": 18
+            },
+            {
+              "apex_height_m": 8.274700164794922,
+              "apex_xy_local_m": [
+                -42.37541198730469,
+                -34.676902770996094
+              ],
+              "fine_representative_count": 19544,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 468245,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 36.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 10.180702783090155,
+                "fine_point_count": 19544,
+                "full_res_point_count": 468245,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 13,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9205327316177926,
+                "stem_hypothesis_count_deduplicated": 3,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.273850202560425,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 19,
+              "tree_top_id": 19
+            },
+            {
+              "apex_height_m": 9.44159984588623,
+              "apex_xy_local_m": [
+                -24.24639892578125,
+                -27.7593994140625
+              ],
+              "fine_representative_count": 23569,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 481685,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 40.0,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 12.215197079377424,
+                "fine_point_count": 23569,
+                "full_res_point_count": 481685,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 23,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9317930508439728,
+                "stem_hypothesis_count_deduplicated": 2,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.441199779510498,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 20,
+              "tree_top_id": 20
+            },
+            {
+              "apex_height_m": 6.239799976348877,
+              "apex_xy_local_m": [
+                -9.340805053710938,
+                -17.086898803710938
+              ],
+              "fine_representative_count": 2446,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 13997,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 16.0,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 7.963887348447735,
+                "fine_point_count": 2446,
+                "full_res_point_count": 13997,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 9,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9309972375220218,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 4.239449977874756,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 22,
+              "tree_top_id": 22
+            },
+            {
+              "apex_height_m": 6.166299819946289,
+              "apex_xy_local_m": [
+                -60.288604736328125,
+                -42.427001953125
+              ],
+              "fine_representative_count": 987,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 8146,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 9.5,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 7.192154709166729,
+                "fine_point_count": 987,
+                "full_res_point_count": 8146,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 5,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9752307479698381,
+                "stem_hypothesis_count_deduplicated": 2,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 3.954699754714966,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 23,
+              "tree_top_id": 23
+            },
+            {
+              "apex_height_m": 5.95805025100708,
+              "apex_xy_local_m": [
+                -59.147003173828125,
+                -44.377899169921875
+              ],
+              "fine_representative_count": 563,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 4169,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 2.5,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 2.6148476413077977,
+                "fine_point_count": 563,
+                "full_res_point_count": 4169,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 2,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9069584470758563,
+                "stem_hypothesis_count_deduplicated": 2,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 3.8859503269195557,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 27,
+              "tree_top_id": 27
+            },
+            {
+              "apex_height_m": 4.559199810028076,
+              "apex_xy_local_m": [
+                -2.73150634765625,
+                -14.071304321289062
+              ],
+              "fine_representative_count": 348,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 1931,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 4.5,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 2.944376318134346,
+                "fine_point_count": 348,
+                "full_res_point_count": 1931,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 1,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.8986375045604575,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 2.5520498752593994,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 29,
+              "tree_top_id": 29
+            }
+          ]
+        }
+      ],
+      "dbh_versions": [
+        {
+          "path": "E:\\2026.8.31-2\\2026.08.31-2\\2026.08.31-2\\artifacts\\project-runs\\batches\\analysis-d434dfe375814b2d9b8a1d765a3e4d13\\dbh_v1\\59b60a361e464918ac5dcaba4973eee1\\finalized_geometry.json",
+          "sha256": "4094a449ef1b2d57fae5ef0e7cc12520a5307e902b423764407ab9159c90401e",
+          "recovery_version": null,
+          "binding": {
+            "analysis_run_id": "analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+            "editor_revision": "349746243b1ec7731ed0382858f7be5766c6c085657a9d5cf28fb04aa428a741",
+            "final_membership_artifact_sha256": "d55c8abf96932ac28732d86c6d241343d081aeecfd19a259011f4c87e4095b03",
+            "finalized_state": "FINALIZED",
+            "ground_sha256": "ff21a11b417e46f02ce94bc414a852c59f50b18839b68c49582cc3d72e6f7332",
+            "membership": {
+              "identities": [
+                {
+                  "global_tree_id": 0,
+                  "lineage": [
+                    [
+                      0,
+                      0
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-0df359f54932b5ee4f23216d",
+                  "point_count": 333900
+                },
+                {
+                  "global_tree_id": 1,
+                  "lineage": [
+                    [
+                      0,
+                      1
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-a5736686540b5b39d8005d67",
+                  "point_count": 4844
+                },
+                {
+                  "global_tree_id": 2,
+                  "lineage": [
+                    [
+                      0,
+                      2
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-2caadace67af4698db75245d",
+                  "point_count": 460817
+                },
+                {
+                  "global_tree_id": 3,
+                  "lineage": [
+                    [
+                      0,
+                      3
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-c5bc7076473e1d4e64bc4cea",
+                  "point_count": 421605
+                },
+                {
+                  "global_tree_id": 4,
+                  "lineage": [
+                    [
+                      0,
+                      4
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-a2856815fd9df0646602c69e",
+                  "point_count": 122993
+                },
+                {
+                  "global_tree_id": 5,
+                  "lineage": [
+                    [
+                      0,
+                      5
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-4287a087efd93a7b9f92319f",
+                  "point_count": 564067
+                },
+                {
+                  "global_tree_id": 6,
+                  "lineage": [
+                    [
+                      0,
+                      7
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-73c95affd3b848653fefded9",
+                  "point_count": 599842
+                },
+                {
+                  "global_tree_id": 7,
+                  "lineage": [
+                    [
+                      0,
+                      8
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-636a1e9d9622de38785d3600",
+                  "point_count": 704065
+                },
+                {
+                  "global_tree_id": 8,
+                  "lineage": [
+                    [
+                      0,
+                      9
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-b1652eb150b67e68de28ce6d",
+                  "point_count": 580901
+                },
+                {
+                  "global_tree_id": 9,
+                  "lineage": [
+                    [
+                      0,
+                      12
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-8c92b63081dd56ccd8c27518",
+                  "point_count": 274
+                },
+                {
+                  "global_tree_id": 10,
+                  "lineage": [
+                    [
+                      0,
+                      14
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-d8122cd942cdcb06dffb63c8",
+                  "point_count": 468212
+                },
+                {
+                  "global_tree_id": 11,
+                  "lineage": [
+                    [
+                      0,
+                      18
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-0808f7adce1f940b561dc1a5",
+                  "point_count": 503601
+                }
+              ],
+              "original_index": "51643292c54f98865c86a0c239f1075fde93ca186fb9f47b46f99f8aef603bf7",
+              "tree_id": "e2106998b73d08c92fb52037d4d314f073fa22f34e0fb91b86d0186bdf29ace0",
+              "xyz": "6313aaecdde027d1d0c40e334f7e47fbeec53b920179c52b5e8a2a4332cc109d"
+            },
+            "original_lineage_sha256": "4dfe65801deee1b3f7ef2493d4a2b19372837dc2236fa7efb7e05f8d63cd7fad",
+            "preparation_reference": "artifacts/project-runs/source-shared/965efb8f9f80bb504b600b1434ada1799c6999e105c8530e99bd85e06912aa5b/preparation.json",
+            "preparation_sha256": "8b7d08ce1486bd7c4928308113381d6271f696e0befab7ac8b0fec51b241f870",
+            "project_id": "project-f1b4a4afe75445ccba1911fb919c6917",
+            "schema": "treeline-dbh-evidence-v1",
+            "source_identity": {
+              "file_size_bytes": 6303322159,
+              "sha256": "6d7ae65ff91d22e62ba97321b975949adf9e361596b733d7c799574877aae596",
+              "source_point_count": 105055350
+            },
+            "version": "dbh-recovery-v1.0"
+          },
+          "trees": [
+            {
+              "global_tree_id": 0,
+              "persistent_tree_id": "tree-0df359f54932b5ee4f23216d",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "EDITOR_STEM_SCOPE_UNPROVEN",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "EDITOR_STEM_SCOPE_UNPROVEN"
+            },
+            {
+              "global_tree_id": 1,
+              "persistent_tree_id": "tree-a5736686540b5b39d8005d67",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "EDITOR_STEM_SCOPE_UNPROVEN",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "EDITOR_STEM_SCOPE_UNPROVEN"
+            },
+            {
+              "global_tree_id": 2,
+              "persistent_tree_id": "tree-2caadace67af4698db75245d",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 3,
+              "persistent_tree_id": "tree-c5bc7076473e1d4e64bc4cea",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 4,
+              "persistent_tree_id": "tree-a2856815fd9df0646602c69e",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "ACCEPTED_SLICES_DO_NOT_SPAN_BREAST_HEIGHT",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 5,
+              "persistent_tree_id": "tree-4287a087efd93a7b9f92319f",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "EDITOR_STEM_SCOPE_UNPROVEN",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "EDITOR_STEM_SCOPE_UNPROVEN"
+            },
+            {
+              "global_tree_id": 6,
+              "persistent_tree_id": "tree-73c95affd3b848653fefded9",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 7,
+              "persistent_tree_id": "tree-636a1e9d9622de38785d3600",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 8,
+              "persistent_tree_id": "tree-b1652eb150b67e68de28ce6d",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 9,
+              "persistent_tree_id": "tree-8c92b63081dd56ccd8c27518",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "EDITOR_STEM_SCOPE_UNPROVEN",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "EDITOR_STEM_SCOPE_UNPROVEN"
+            },
+            {
+              "global_tree_id": 10,
+              "persistent_tree_id": "tree-d8122cd942cdcb06dffb63c8",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "EDITOR_STEM_SCOPE_UNPROVEN",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "EDITOR_STEM_SCOPE_UNPROVEN"
+            },
+            {
+              "global_tree_id": 11,
+              "persistent_tree_id": "tree-0808f7adce1f940b561dc1a5",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_CONTINUOUS_STEM_COLUMNS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            }
+          ]
+        },
+        {
+          "path": "E:\\2026.8.31-2\\2026.08.31-2\\2026.08.31-2\\artifacts\\project-runs\\batches\\analysis-d434dfe375814b2d9b8a1d765a3e4d13\\dbh_v1\\60de7ef36ae545f59401021fa0463f02\\finalized_geometry.json",
+          "sha256": "8e8cd440ca0905567cbeebf55cf9a236e1290485bcfcc9617d0900773fa5272a",
+          "recovery_version": "DBH_RECOVERY_V3",
+          "binding": {
+            "analysis_run_id": "analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+            "editor_revision": "349746243b1ec7731ed0382858f7be5766c6c085657a9d5cf28fb04aa428a741",
+            "final_membership_artifact_sha256": "d55c8abf96932ac28732d86c6d241343d081aeecfd19a259011f4c87e4095b03",
+            "finalized_state": "FINALIZED",
+            "ground_sha256": "ff21a11b417e46f02ce94bc414a852c59f50b18839b68c49582cc3d72e6f7332",
+            "membership": {
+              "identities": [
+                {
+                  "global_tree_id": 0,
+                  "lineage": [
+                    [
+                      0,
+                      0
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-0df359f54932b5ee4f23216d",
+                  "point_count": 333900
+                },
+                {
+                  "global_tree_id": 1,
+                  "lineage": [
+                    [
+                      0,
+                      1
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-a5736686540b5b39d8005d67",
+                  "point_count": 4844
+                },
+                {
+                  "global_tree_id": 2,
+                  "lineage": [
+                    [
+                      0,
+                      2
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-2caadace67af4698db75245d",
+                  "point_count": 460817
+                },
+                {
+                  "global_tree_id": 3,
+                  "lineage": [
+                    [
+                      0,
+                      3
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-c5bc7076473e1d4e64bc4cea",
+                  "point_count": 421605
+                },
+                {
+                  "global_tree_id": 4,
+                  "lineage": [
+                    [
+                      0,
+                      4
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-a2856815fd9df0646602c69e",
+                  "point_count": 122993
+                },
+                {
+                  "global_tree_id": 5,
+                  "lineage": [
+                    [
+                      0,
+                      5
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-4287a087efd93a7b9f92319f",
+                  "point_count": 564067
+                },
+                {
+                  "global_tree_id": 6,
+                  "lineage": [
+                    [
+                      0,
+                      7
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-73c95affd3b848653fefded9",
+                  "point_count": 599842
+                },
+                {
+                  "global_tree_id": 7,
+                  "lineage": [
+                    [
+                      0,
+                      8
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-636a1e9d9622de38785d3600",
+                  "point_count": 704065
+                },
+                {
+                  "global_tree_id": 8,
+                  "lineage": [
+                    [
+                      0,
+                      9
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-b1652eb150b67e68de28ce6d",
+                  "point_count": 580901
+                },
+                {
+                  "global_tree_id": 9,
+                  "lineage": [
+                    [
+                      0,
+                      12
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-8c92b63081dd56ccd8c27518",
+                  "point_count": 274
+                },
+                {
+                  "global_tree_id": 10,
+                  "lineage": [
+                    [
+                      0,
+                      14
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-d8122cd942cdcb06dffb63c8",
+                  "point_count": 468212
+                },
+                {
+                  "global_tree_id": 11,
+                  "lineage": [
+                    [
+                      0,
+                      18
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-0808f7adce1f940b561dc1a5",
+                  "point_count": 503601
+                }
+              ],
+              "original_index": "51643292c54f98865c86a0c239f1075fde93ca186fb9f47b46f99f8aef603bf7",
+              "tree_id": "e2106998b73d08c92fb52037d4d314f073fa22f34e0fb91b86d0186bdf29ace0",
+              "xyz": "6313aaecdde027d1d0c40e334f7e47fbeec53b920179c52b5e8a2a4332cc109d"
+            },
+            "original_lineage_sha256": "4dfe65801deee1b3f7ef2493d4a2b19372837dc2236fa7efb7e05f8d63cd7fad",
+            "preparation_reference": "artifacts/project-runs/source-shared/965efb8f9f80bb504b600b1434ada1799c6999e105c8530e99bd85e06912aa5b/preparation.json",
+            "preparation_sha256": "8b7d08ce1486bd7c4928308113381d6271f696e0befab7ac8b0fec51b241f870",
+            "project_id": "project-f1b4a4afe75445ccba1911fb919c6917",
+            "schema": "treeline-dbh-evidence-v1",
+            "source_identity": {
+              "file_size_bytes": 6303322159,
+              "sha256": "6d7ae65ff91d22e62ba97321b975949adf9e361596b733d7c799574877aae596",
+              "source_point_count": 105055350
+            },
+            "version": "dbh-recovery-v1.0"
+          },
+          "trees": [
+            {
+              "global_tree_id": 0,
+              "persistent_tree_id": "tree-0df359f54932b5ee4f23216d",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_ABSOLUTE_CANDIDATE",
+              "stem_candidate_count": 3,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 1,
+              "persistent_tree_id": "tree-a5736686540b5b39d8005d67",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_CROWN_TO_STEM_IDENTITY",
+              "stem_candidate_count": 0,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 2,
+              "persistent_tree_id": "tree-2caadace67af4698db75245d",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 3,
+              "persistent_tree_id": "tree-c5bc7076473e1d4e64bc4cea",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 4,
+              "persistent_tree_id": "tree-a2856815fd9df0646602c69e",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": 0,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "CURRENT_CROWN_TRACKED"
+            },
+            {
+              "global_tree_id": 5,
+              "persistent_tree_id": "tree-4287a087efd93a7b9f92319f",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_ABSOLUTE_CANDIDATE",
+              "stem_candidate_count": 2,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 6,
+              "persistent_tree_id": "tree-73c95affd3b848653fefded9",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 7,
+              "persistent_tree_id": "tree-636a1e9d9622de38785d3600",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 8,
+              "persistent_tree_id": "tree-b1652eb150b67e68de28ce6d",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 9,
+              "persistent_tree_id": "tree-8c92b63081dd56ccd8c27518",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_CROWN_TO_STEM_IDENTITY",
+              "stem_candidate_count": 0,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 10,
+              "persistent_tree_id": "tree-d8122cd942cdcb06dffb63c8",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_ABSOLUTE_CANDIDATE",
+              "stem_candidate_count": 2,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 11,
+              "persistent_tree_id": "tree-0808f7adce1f940b561dc1a5",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": 1,
+              "valid_dbh_roi_count": 1,
+              "stem_association_status": "CURRENT_RAW_REASSOCIATED"
+            }
+          ]
+        },
+        {
+          "path": "E:\\2026.8.31-2\\2026.08.31-2\\2026.08.31-2\\artifacts\\project-runs\\batches\\analysis-d434dfe375814b2d9b8a1d765a3e4d13\\dbh_v1\\9f25c1edc1014f0a9bc07dc13a30c6f3\\finalized_geometry.json",
+          "sha256": "ebb2ea2bb90b97f1d9b5228f33c90d27fadd842d6ca0cc92a2fd27dede9fa96c",
+          "recovery_version": "DBH_RECOVERY_V2",
+          "binding": {
+            "analysis_run_id": "analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+            "editor_revision": "349746243b1ec7731ed0382858f7be5766c6c085657a9d5cf28fb04aa428a741",
+            "final_membership_artifact_sha256": "d55c8abf96932ac28732d86c6d241343d081aeecfd19a259011f4c87e4095b03",
+            "finalized_state": "FINALIZED",
+            "ground_sha256": "ff21a11b417e46f02ce94bc414a852c59f50b18839b68c49582cc3d72e6f7332",
+            "membership": {
+              "identities": [
+                {
+                  "global_tree_id": 0,
+                  "lineage": [
+                    [
+                      0,
+                      0
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-0df359f54932b5ee4f23216d",
+                  "point_count": 333900
+                },
+                {
+                  "global_tree_id": 1,
+                  "lineage": [
+                    [
+                      0,
+                      1
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-a5736686540b5b39d8005d67",
+                  "point_count": 4844
+                },
+                {
+                  "global_tree_id": 2,
+                  "lineage": [
+                    [
+                      0,
+                      2
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-2caadace67af4698db75245d",
+                  "point_count": 460817
+                },
+                {
+                  "global_tree_id": 3,
+                  "lineage": [
+                    [
+                      0,
+                      3
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-c5bc7076473e1d4e64bc4cea",
+                  "point_count": 421605
+                },
+                {
+                  "global_tree_id": 4,
+                  "lineage": [
+                    [
+                      0,
+                      4
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-a2856815fd9df0646602c69e",
+                  "point_count": 122993
+                },
+                {
+                  "global_tree_id": 5,
+                  "lineage": [
+                    [
+                      0,
+                      5
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-4287a087efd93a7b9f92319f",
+                  "point_count": 564067
+                },
+                {
+                  "global_tree_id": 6,
+                  "lineage": [
+                    [
+                      0,
+                      7
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-73c95affd3b848653fefded9",
+                  "point_count": 599842
+                },
+                {
+                  "global_tree_id": 7,
+                  "lineage": [
+                    [
+                      0,
+                      8
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-636a1e9d9622de38785d3600",
+                  "point_count": 704065
+                },
+                {
+                  "global_tree_id": 8,
+                  "lineage": [
+                    [
+                      0,
+                      9
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-b1652eb150b67e68de28ce6d",
+                  "point_count": 580901
+                },
+                {
+                  "global_tree_id": 9,
+                  "lineage": [
+                    [
+                      0,
+                      12
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-8c92b63081dd56ccd8c27518",
+                  "point_count": 274
+                },
+                {
+                  "global_tree_id": 10,
+                  "lineage": [
+                    [
+                      0,
+                      14
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-d8122cd942cdcb06dffb63c8",
+                  "point_count": 468212
+                },
+                {
+                  "global_tree_id": 11,
+                  "lineage": [
+                    [
+                      0,
+                      18
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-0808f7adce1f940b561dc1a5",
+                  "point_count": 503601
+                }
+              ],
+              "original_index": "51643292c54f98865c86a0c239f1075fde93ca186fb9f47b46f99f8aef603bf7",
+              "tree_id": "e2106998b73d08c92fb52037d4d314f073fa22f34e0fb91b86d0186bdf29ace0",
+              "xyz": "6313aaecdde027d1d0c40e334f7e47fbeec53b920179c52b5e8a2a4332cc109d"
+            },
+            "original_lineage_sha256": "4dfe65801deee1b3f7ef2493d4a2b19372837dc2236fa7efb7e05f8d63cd7fad",
+            "preparation_reference": "artifacts/project-runs/source-shared/965efb8f9f80bb504b600b1434ada1799c6999e105c8530e99bd85e06912aa5b/preparation.json",
+            "preparation_sha256": "8b7d08ce1486bd7c4928308113381d6271f696e0befab7ac8b0fec51b241f870",
+            "project_id": "project-f1b4a4afe75445ccba1911fb919c6917",
+            "schema": "treeline-dbh-evidence-v1",
+            "source_identity": {
+              "file_size_bytes": 6303322159,
+              "sha256": "6d7ae65ff91d22e62ba97321b975949adf9e361596b733d7c799574877aae596",
+              "source_point_count": 105055350
+            },
+            "version": "dbh-recovery-v1.0"
+          },
+          "trees": [
+            {
+              "global_tree_id": 0,
+              "persistent_tree_id": "tree-0df359f54932b5ee4f23216d",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_CURRENT_ASSOCIATED_STEM",
+              "stem_candidate_count": 0,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 1,
+              "persistent_tree_id": "tree-a5736686540b5b39d8005d67",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_CURRENT_ASSOCIATED_STEM",
+              "stem_candidate_count": 0,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 2,
+              "persistent_tree_id": "tree-2caadace67af4698db75245d",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 3,
+              "persistent_tree_id": "tree-c5bc7076473e1d4e64bc4cea",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 4,
+              "persistent_tree_id": "tree-a2856815fd9df0646602c69e",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_CURRENT_ASSOCIATED_STEM",
+              "stem_candidate_count": 0,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 5,
+              "persistent_tree_id": "tree-4287a087efd93a7b9f92319f",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_CURRENT_ASSOCIATED_STEM",
+              "stem_candidate_count": 0,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 6,
+              "persistent_tree_id": "tree-73c95affd3b848653fefded9",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 7,
+              "persistent_tree_id": "tree-636a1e9d9622de38785d3600",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 8,
+              "persistent_tree_id": "tree-b1652eb150b67e68de28ce6d",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 9,
+              "persistent_tree_id": "tree-8c92b63081dd56ccd8c27518",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_CURRENT_ASSOCIATED_STEM",
+              "stem_candidate_count": 0,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 10,
+              "persistent_tree_id": "tree-d8122cd942cdcb06dffb63c8",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_CURRENT_ASSOCIATED_STEM",
+              "stem_candidate_count": 0,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 11,
+              "persistent_tree_id": "tree-0808f7adce1f940b561dc1a5",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": 1,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "CURRENT_RAW_REASSOCIATED"
+            }
+          ]
+        },
+        {
+          "path": "E:\\2026.8.31-2\\2026.08.31-2\\2026.08.31-2\\artifacts\\project-runs\\batches\\analysis-d434dfe375814b2d9b8a1d765a3e4d13\\dbh_v1\\a6ab5a117e8345969cb773b34f38073b\\finalized_geometry.json",
+          "sha256": "6f091f2ff5cbc3c69ae00cdc4f7e4fedfa92251895121eab7756c71b02b204ab",
+          "recovery_version": "DBH_RECOVERY_V2",
+          "binding": {
+            "analysis_run_id": "analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+            "editor_revision": "349746243b1ec7731ed0382858f7be5766c6c085657a9d5cf28fb04aa428a741",
+            "final_membership_artifact_sha256": "d55c8abf96932ac28732d86c6d241343d081aeecfd19a259011f4c87e4095b03",
+            "finalized_state": "FINALIZED",
+            "ground_sha256": "ff21a11b417e46f02ce94bc414a852c59f50b18839b68c49582cc3d72e6f7332",
+            "membership": {
+              "identities": [
+                {
+                  "global_tree_id": 0,
+                  "lineage": [
+                    [
+                      0,
+                      0
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-0df359f54932b5ee4f23216d",
+                  "point_count": 333900
+                },
+                {
+                  "global_tree_id": 1,
+                  "lineage": [
+                    [
+                      0,
+                      1
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-a5736686540b5b39d8005d67",
+                  "point_count": 4844
+                },
+                {
+                  "global_tree_id": 2,
+                  "lineage": [
+                    [
+                      0,
+                      2
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-2caadace67af4698db75245d",
+                  "point_count": 460817
+                },
+                {
+                  "global_tree_id": 3,
+                  "lineage": [
+                    [
+                      0,
+                      3
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-c5bc7076473e1d4e64bc4cea",
+                  "point_count": 421605
+                },
+                {
+                  "global_tree_id": 4,
+                  "lineage": [
+                    [
+                      0,
+                      4
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-a2856815fd9df0646602c69e",
+                  "point_count": 122993
+                },
+                {
+                  "global_tree_id": 5,
+                  "lineage": [
+                    [
+                      0,
+                      5
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-4287a087efd93a7b9f92319f",
+                  "point_count": 564067
+                },
+                {
+                  "global_tree_id": 6,
+                  "lineage": [
+                    [
+                      0,
+                      7
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-73c95affd3b848653fefded9",
+                  "point_count": 599842
+                },
+                {
+                  "global_tree_id": 7,
+                  "lineage": [
+                    [
+                      0,
+                      8
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-636a1e9d9622de38785d3600",
+                  "point_count": 704065
+                },
+                {
+                  "global_tree_id": 8,
+                  "lineage": [
+                    [
+                      0,
+                      9
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-b1652eb150b67e68de28ce6d",
+                  "point_count": 580901
+                },
+                {
+                  "global_tree_id": 9,
+                  "lineage": [
+                    [
+                      0,
+                      12
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-8c92b63081dd56ccd8c27518",
+                  "point_count": 274
+                },
+                {
+                  "global_tree_id": 10,
+                  "lineage": [
+                    [
+                      0,
+                      14
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-d8122cd942cdcb06dffb63c8",
+                  "point_count": 468212
+                },
+                {
+                  "global_tree_id": 11,
+                  "lineage": [
+                    [
+                      0,
+                      18
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-0808f7adce1f940b561dc1a5",
+                  "point_count": 503601
+                }
+              ],
+              "original_index": "51643292c54f98865c86a0c239f1075fde93ca186fb9f47b46f99f8aef603bf7",
+              "tree_id": "e2106998b73d08c92fb52037d4d314f073fa22f34e0fb91b86d0186bdf29ace0",
+              "xyz": "6313aaecdde027d1d0c40e334f7e47fbeec53b920179c52b5e8a2a4332cc109d"
+            },
+            "original_lineage_sha256": "4dfe65801deee1b3f7ef2493d4a2b19372837dc2236fa7efb7e05f8d63cd7fad",
+            "preparation_reference": "artifacts/project-runs/source-shared/965efb8f9f80bb504b600b1434ada1799c6999e105c8530e99bd85e06912aa5b/preparation.json",
+            "preparation_sha256": "8b7d08ce1486bd7c4928308113381d6271f696e0befab7ac8b0fec51b241f870",
+            "project_id": "project-f1b4a4afe75445ccba1911fb919c6917",
+            "schema": "treeline-dbh-evidence-v1",
+            "source_identity": {
+              "file_size_bytes": 6303322159,
+              "sha256": "6d7ae65ff91d22e62ba97321b975949adf9e361596b733d7c799574877aae596",
+              "source_point_count": 105055350
+            },
+            "version": "dbh-recovery-v1.0"
+          },
+          "trees": [
+            {
+              "global_tree_id": 0,
+              "persistent_tree_id": "tree-0df359f54932b5ee4f23216d",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "AMBIGUOUS_COMPETING_AXES",
+              "stem_candidate_count": 3,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 1,
+              "persistent_tree_id": "tree-a5736686540b5b39d8005d67",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_VALID_AXIS_PROPOSAL",
+              "stem_candidate_count": 0,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 2,
+              "persistent_tree_id": "tree-2caadace67af4698db75245d",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 3,
+              "persistent_tree_id": "tree-c5bc7076473e1d4e64bc4cea",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 4,
+              "persistent_tree_id": "tree-a2856815fd9df0646602c69e",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_VALID_AXIS_PROPOSAL",
+              "stem_candidate_count": 0,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 5,
+              "persistent_tree_id": "tree-4287a087efd93a7b9f92319f",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "AMBIGUOUS_COMPETING_AXES",
+              "stem_candidate_count": 2,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 6,
+              "persistent_tree_id": "tree-73c95affd3b848653fefded9",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 7,
+              "persistent_tree_id": "tree-636a1e9d9622de38785d3600",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 8,
+              "persistent_tree_id": "tree-b1652eb150b67e68de28ce6d",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 9,
+              "persistent_tree_id": "tree-8c92b63081dd56ccd8c27518",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_VALID_AXIS_PROPOSAL",
+              "stem_candidate_count": 0,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 10,
+              "persistent_tree_id": "tree-d8122cd942cdcb06dffb63c8",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "AMBIGUOUS_COMPETING_AXES",
+              "stem_candidate_count": 2,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 11,
+              "persistent_tree_id": "tree-0808f7adce1f940b561dc1a5",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": 1,
+              "valid_dbh_roi_count": 1,
+              "stem_association_status": "CURRENT_RAW_REASSOCIATED"
+            }
+          ]
+        },
+        {
+          "path": "E:\\2026.8.31-2\\2026.08.31-2\\2026.08.31-2\\artifacts\\project-runs\\batches\\analysis-d434dfe375814b2d9b8a1d765a3e4d13\\dbh_v1\\a8547938760e48ff9dc3b9b0e523220e\\finalized_geometry.json",
+          "sha256": "7894b3a8fd47e67280a65dd9f35eac46f316616c76ff3f29a5158505c8fb02bb",
+          "recovery_version": null,
+          "binding": {
+            "analysis_run_id": "analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+            "editor_revision": "349746243b1ec7731ed0382858f7be5766c6c085657a9d5cf28fb04aa428a741",
+            "final_membership_artifact_sha256": "d55c8abf96932ac28732d86c6d241343d081aeecfd19a259011f4c87e4095b03",
+            "finalized_state": "FINALIZED",
+            "ground_sha256": "ff21a11b417e46f02ce94bc414a852c59f50b18839b68c49582cc3d72e6f7332",
+            "membership": {
+              "identities": [
+                {
+                  "global_tree_id": 0,
+                  "lineage": [
+                    [
+                      0,
+                      0
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-0df359f54932b5ee4f23216d",
+                  "point_count": 333900
+                },
+                {
+                  "global_tree_id": 1,
+                  "lineage": [
+                    [
+                      0,
+                      1
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-a5736686540b5b39d8005d67",
+                  "point_count": 4844
+                },
+                {
+                  "global_tree_id": 2,
+                  "lineage": [
+                    [
+                      0,
+                      2
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-2caadace67af4698db75245d",
+                  "point_count": 460817
+                },
+                {
+                  "global_tree_id": 3,
+                  "lineage": [
+                    [
+                      0,
+                      3
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-c5bc7076473e1d4e64bc4cea",
+                  "point_count": 421605
+                },
+                {
+                  "global_tree_id": 4,
+                  "lineage": [
+                    [
+                      0,
+                      4
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-a2856815fd9df0646602c69e",
+                  "point_count": 122993
+                },
+                {
+                  "global_tree_id": 5,
+                  "lineage": [
+                    [
+                      0,
+                      5
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-4287a087efd93a7b9f92319f",
+                  "point_count": 564067
+                },
+                {
+                  "global_tree_id": 6,
+                  "lineage": [
+                    [
+                      0,
+                      7
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-73c95affd3b848653fefded9",
+                  "point_count": 599842
+                },
+                {
+                  "global_tree_id": 7,
+                  "lineage": [
+                    [
+                      0,
+                      8
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-636a1e9d9622de38785d3600",
+                  "point_count": 704065
+                },
+                {
+                  "global_tree_id": 8,
+                  "lineage": [
+                    [
+                      0,
+                      9
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-b1652eb150b67e68de28ce6d",
+                  "point_count": 580901
+                },
+                {
+                  "global_tree_id": 9,
+                  "lineage": [
+                    [
+                      0,
+                      12
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-8c92b63081dd56ccd8c27518",
+                  "point_count": 274
+                },
+                {
+                  "global_tree_id": 10,
+                  "lineage": [
+                    [
+                      0,
+                      14
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-d8122cd942cdcb06dffb63c8",
+                  "point_count": 468212
+                },
+                {
+                  "global_tree_id": 11,
+                  "lineage": [
+                    [
+                      0,
+                      18
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-0808f7adce1f940b561dc1a5",
+                  "point_count": 503601
+                }
+              ],
+              "original_index": "51643292c54f98865c86a0c239f1075fde93ca186fb9f47b46f99f8aef603bf7",
+              "tree_id": "e2106998b73d08c92fb52037d4d314f073fa22f34e0fb91b86d0186bdf29ace0",
+              "xyz": "6313aaecdde027d1d0c40e334f7e47fbeec53b920179c52b5e8a2a4332cc109d"
+            },
+            "original_lineage_sha256": "4dfe65801deee1b3f7ef2493d4a2b19372837dc2236fa7efb7e05f8d63cd7fad",
+            "preparation_reference": "artifacts/project-runs/source-shared/965efb8f9f80bb504b600b1434ada1799c6999e105c8530e99bd85e06912aa5b/preparation.json",
+            "preparation_sha256": "8b7d08ce1486bd7c4928308113381d6271f696e0befab7ac8b0fec51b241f870",
+            "project_id": "project-f1b4a4afe75445ccba1911fb919c6917",
+            "schema": "treeline-dbh-evidence-v1",
+            "source_identity": {
+              "file_size_bytes": 6303322159,
+              "sha256": "6d7ae65ff91d22e62ba97321b975949adf9e361596b733d7c799574877aae596",
+              "source_point_count": 105055350
+            },
+            "version": "dbh-recovery-v1.0"
+          },
+          "trees": [
+            {
+              "global_tree_id": 0,
+              "persistent_tree_id": "tree-0df359f54932b5ee4f23216d",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "EDITOR_STEM_SCOPE_UNPROVEN",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "EDITOR_STEM_SCOPE_UNPROVEN"
+            },
+            {
+              "global_tree_id": 1,
+              "persistent_tree_id": "tree-a5736686540b5b39d8005d67",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "EDITOR_STEM_SCOPE_UNPROVEN",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "EDITOR_STEM_SCOPE_UNPROVEN"
+            },
+            {
+              "global_tree_id": 2,
+              "persistent_tree_id": "tree-2caadace67af4698db75245d",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "INSUFFICIENT_ACCEPTED_SLICES",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 3,
+              "persistent_tree_id": "tree-c5bc7076473e1d4e64bc4cea",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "INSUFFICIENT_ACCEPTED_SLICES",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 4,
+              "persistent_tree_id": "tree-a2856815fd9df0646602c69e",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "INSUFFICIENT_ACCEPTED_SLICES",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 5,
+              "persistent_tree_id": "tree-4287a087efd93a7b9f92319f",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "EDITOR_STEM_SCOPE_UNPROVEN",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "EDITOR_STEM_SCOPE_UNPROVEN"
+            },
+            {
+              "global_tree_id": 6,
+              "persistent_tree_id": "tree-73c95affd3b848653fefded9",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "INSUFFICIENT_ACCEPTED_SLICES",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 7,
+              "persistent_tree_id": "tree-636a1e9d9622de38785d3600",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "INSUFFICIENT_ACCEPTED_SLICES",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 8,
+              "persistent_tree_id": "tree-b1652eb150b67e68de28ce6d",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "INSUFFICIENT_ACCEPTED_SLICES",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 9,
+              "persistent_tree_id": "tree-8c92b63081dd56ccd8c27518",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "EDITOR_STEM_SCOPE_UNPROVEN",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "EDITOR_STEM_SCOPE_UNPROVEN"
+            },
+            {
+              "global_tree_id": 10,
+              "persistent_tree_id": "tree-d8122cd942cdcb06dffb63c8",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "EDITOR_STEM_SCOPE_UNPROVEN",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "EDITOR_STEM_SCOPE_UNPROVEN"
+            },
+            {
+              "global_tree_id": 11,
+              "persistent_tree_id": "tree-0808f7adce1f940b561dc1a5",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "INSUFFICIENT_ACCEPTED_SLICES",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            }
+          ]
+        },
+        {
+          "path": "E:\\2026.8.31-2\\2026.08.31-2\\2026.08.31-2\\artifacts\\project-runs\\batches\\analysis-d434dfe375814b2d9b8a1d765a3e4d13\\dbh_v1\\b4d868e000b84fa49cca298682e14d2d\\finalized_geometry.json",
+          "sha256": "52180b87c62d8d68ebb843840671c2c8d96fca7d730964375d43cea22979d202",
+          "recovery_version": "DBH_RECOVERY_V3",
+          "binding": {
+            "analysis_run_id": "analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+            "editor_revision": "349746243b1ec7731ed0382858f7be5766c6c085657a9d5cf28fb04aa428a741",
+            "final_membership_artifact_sha256": "d55c8abf96932ac28732d86c6d241343d081aeecfd19a259011f4c87e4095b03",
+            "finalized_state": "FINALIZED",
+            "ground_sha256": "ff21a11b417e46f02ce94bc414a852c59f50b18839b68c49582cc3d72e6f7332",
+            "membership": {
+              "identities": [
+                {
+                  "global_tree_id": 0,
+                  "lineage": [
+                    [
+                      0,
+                      0
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-0df359f54932b5ee4f23216d",
+                  "point_count": 333900
+                },
+                {
+                  "global_tree_id": 1,
+                  "lineage": [
+                    [
+                      0,
+                      1
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-a5736686540b5b39d8005d67",
+                  "point_count": 4844
+                },
+                {
+                  "global_tree_id": 2,
+                  "lineage": [
+                    [
+                      0,
+                      2
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-2caadace67af4698db75245d",
+                  "point_count": 460817
+                },
+                {
+                  "global_tree_id": 3,
+                  "lineage": [
+                    [
+                      0,
+                      3
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-c5bc7076473e1d4e64bc4cea",
+                  "point_count": 421605
+                },
+                {
+                  "global_tree_id": 4,
+                  "lineage": [
+                    [
+                      0,
+                      4
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-a2856815fd9df0646602c69e",
+                  "point_count": 122993
+                },
+                {
+                  "global_tree_id": 5,
+                  "lineage": [
+                    [
+                      0,
+                      5
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-4287a087efd93a7b9f92319f",
+                  "point_count": 564067
+                },
+                {
+                  "global_tree_id": 6,
+                  "lineage": [
+                    [
+                      0,
+                      7
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-73c95affd3b848653fefded9",
+                  "point_count": 599842
+                },
+                {
+                  "global_tree_id": 7,
+                  "lineage": [
+                    [
+                      0,
+                      8
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-636a1e9d9622de38785d3600",
+                  "point_count": 704065
+                },
+                {
+                  "global_tree_id": 8,
+                  "lineage": [
+                    [
+                      0,
+                      9
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-b1652eb150b67e68de28ce6d",
+                  "point_count": 580901
+                },
+                {
+                  "global_tree_id": 9,
+                  "lineage": [
+                    [
+                      0,
+                      12
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-8c92b63081dd56ccd8c27518",
+                  "point_count": 274
+                },
+                {
+                  "global_tree_id": 10,
+                  "lineage": [
+                    [
+                      0,
+                      14
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-d8122cd942cdcb06dffb63c8",
+                  "point_count": 468212
+                },
+                {
+                  "global_tree_id": 11,
+                  "lineage": [
+                    [
+                      0,
+                      18
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-0808f7adce1f940b561dc1a5",
+                  "point_count": 503601
+                }
+              ],
+              "original_index": "51643292c54f98865c86a0c239f1075fde93ca186fb9f47b46f99f8aef603bf7",
+              "tree_id": "e2106998b73d08c92fb52037d4d314f073fa22f34e0fb91b86d0186bdf29ace0",
+              "xyz": "6313aaecdde027d1d0c40e334f7e47fbeec53b920179c52b5e8a2a4332cc109d"
+            },
+            "original_lineage_sha256": "4dfe65801deee1b3f7ef2493d4a2b19372837dc2236fa7efb7e05f8d63cd7fad",
+            "preparation_reference": "artifacts/project-runs/source-shared/965efb8f9f80bb504b600b1434ada1799c6999e105c8530e99bd85e06912aa5b/preparation.json",
+            "preparation_sha256": "8b7d08ce1486bd7c4928308113381d6271f696e0befab7ac8b0fec51b241f870",
+            "project_id": "project-f1b4a4afe75445ccba1911fb919c6917",
+            "schema": "treeline-dbh-evidence-v1",
+            "source_identity": {
+              "file_size_bytes": 6303322159,
+              "sha256": "6d7ae65ff91d22e62ba97321b975949adf9e361596b733d7c799574877aae596",
+              "source_point_count": 105055350
+            },
+            "version": "dbh-recovery-v1.0"
+          },
+          "trees": [
+            {
+              "global_tree_id": 0,
+              "persistent_tree_id": "tree-0df359f54932b5ee4f23216d",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_ABSOLUTE_CANDIDATE",
+              "stem_candidate_count": 3,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 1,
+              "persistent_tree_id": "tree-a5736686540b5b39d8005d67",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_CROWN_TO_STEM_IDENTITY",
+              "stem_candidate_count": 0,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 2,
+              "persistent_tree_id": "tree-2caadace67af4698db75245d",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 3,
+              "persistent_tree_id": "tree-c5bc7076473e1d4e64bc4cea",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 4,
+              "persistent_tree_id": "tree-a2856815fd9df0646602c69e",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_ABSOLUTE_CANDIDATE",
+              "stem_candidate_count": 0,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 5,
+              "persistent_tree_id": "tree-4287a087efd93a7b9f92319f",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_ABSOLUTE_CANDIDATE",
+              "stem_candidate_count": 2,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 6,
+              "persistent_tree_id": "tree-73c95affd3b848653fefded9",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 7,
+              "persistent_tree_id": "tree-636a1e9d9622de38785d3600",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 8,
+              "persistent_tree_id": "tree-b1652eb150b67e68de28ce6d",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 9,
+              "persistent_tree_id": "tree-8c92b63081dd56ccd8c27518",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_CROWN_TO_STEM_IDENTITY",
+              "stem_candidate_count": 0,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 10,
+              "persistent_tree_id": "tree-d8122cd942cdcb06dffb63c8",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "NO_ABSOLUTE_CANDIDATE",
+              "stem_candidate_count": 2,
+              "valid_dbh_roi_count": 0,
+              "stem_association_status": "NO_CURRENT_ASSOCIATED_STEM"
+            },
+            {
+              "global_tree_id": 11,
+              "persistent_tree_id": "tree-0808f7adce1f940b561dc1a5",
+              "dbh_method": "RECOVERED_STEM",
+              "dbh_fit_status": "PASS",
+              "stem_candidate_count": 1,
+              "valid_dbh_roi_count": 1,
+              "stem_association_status": "CURRENT_RAW_REASSOCIATED"
+            }
+          ]
+        },
+        {
+          "path": "E:\\2026.8.31-2\\2026.08.31-2\\2026.08.31-2\\artifacts\\project-runs\\batches\\analysis-d434dfe375814b2d9b8a1d765a3e4d13\\dbh_v1\\ef67c92f54d946adb63747061e2c1b75\\finalized_geometry.json",
+          "sha256": "0f8deb25b78d07dde9a29ea55de5ca0c1ceb8e42de83378b1f899d374679edbc",
+          "recovery_version": null,
+          "binding": {
+            "analysis_run_id": "analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+            "editor_revision": "349746243b1ec7731ed0382858f7be5766c6c085657a9d5cf28fb04aa428a741",
+            "final_membership_artifact_sha256": "d55c8abf96932ac28732d86c6d241343d081aeecfd19a259011f4c87e4095b03",
+            "finalized_state": "FINALIZED",
+            "ground_sha256": "ff21a11b417e46f02ce94bc414a852c59f50b18839b68c49582cc3d72e6f7332",
+            "membership": {
+              "identities": [
+                {
+                  "global_tree_id": 0,
+                  "lineage": [
+                    [
+                      0,
+                      0
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-0df359f54932b5ee4f23216d",
+                  "point_count": 333900
+                },
+                {
+                  "global_tree_id": 1,
+                  "lineage": [
+                    [
+                      0,
+                      1
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-a5736686540b5b39d8005d67",
+                  "point_count": 4844
+                },
+                {
+                  "global_tree_id": 2,
+                  "lineage": [
+                    [
+                      0,
+                      2
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-2caadace67af4698db75245d",
+                  "point_count": 460817
+                },
+                {
+                  "global_tree_id": 3,
+                  "lineage": [
+                    [
+                      0,
+                      3
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-c5bc7076473e1d4e64bc4cea",
+                  "point_count": 421605
+                },
+                {
+                  "global_tree_id": 4,
+                  "lineage": [
+                    [
+                      0,
+                      4
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-a2856815fd9df0646602c69e",
+                  "point_count": 122993
+                },
+                {
+                  "global_tree_id": 5,
+                  "lineage": [
+                    [
+                      0,
+                      5
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-4287a087efd93a7b9f92319f",
+                  "point_count": 564067
+                },
+                {
+                  "global_tree_id": 6,
+                  "lineage": [
+                    [
+                      0,
+                      7
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-73c95affd3b848653fefded9",
+                  "point_count": 599842
+                },
+                {
+                  "global_tree_id": 7,
+                  "lineage": [
+                    [
+                      0,
+                      8
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-636a1e9d9622de38785d3600",
+                  "point_count": 704065
+                },
+                {
+                  "global_tree_id": 8,
+                  "lineage": [
+                    [
+                      0,
+                      9
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-b1652eb150b67e68de28ce6d",
+                  "point_count": 580901
+                },
+                {
+                  "global_tree_id": 9,
+                  "lineage": [
+                    [
+                      0,
+                      12
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-8c92b63081dd56ccd8c27518",
+                  "point_count": 274
+                },
+                {
+                  "global_tree_id": 10,
+                  "lineage": [
+                    [
+                      0,
+                      14
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-d8122cd942cdcb06dffb63c8",
+                  "point_count": 468212
+                },
+                {
+                  "global_tree_id": 11,
+                  "lineage": [
+                    [
+                      0,
+                      18
+                    ]
+                  ],
+                  "persistent_tree_id": "tree-0808f7adce1f940b561dc1a5",
+                  "point_count": 503601
+                }
+              ],
+              "original_index": "51643292c54f98865c86a0c239f1075fde93ca186fb9f47b46f99f8aef603bf7",
+              "tree_id": "e2106998b73d08c92fb52037d4d314f073fa22f34e0fb91b86d0186bdf29ace0",
+              "xyz": "6313aaecdde027d1d0c40e334f7e47fbeec53b920179c52b5e8a2a4332cc109d"
+            },
+            "original_lineage_sha256": "4dfe65801deee1b3f7ef2493d4a2b19372837dc2236fa7efb7e05f8d63cd7fad",
+            "preparation_reference": "artifacts/project-runs/source-shared/965efb8f9f80bb504b600b1434ada1799c6999e105c8530e99bd85e06912aa5b/preparation.json",
+            "preparation_sha256": "8b7d08ce1486bd7c4928308113381d6271f696e0befab7ac8b0fec51b241f870",
+            "project_id": "project-f1b4a4afe75445ccba1911fb919c6917",
+            "schema": "treeline-dbh-evidence-v1",
+            "source_identity": {
+              "file_size_bytes": 6303322159,
+              "sha256": "6d7ae65ff91d22e62ba97321b975949adf9e361596b733d7c799574877aae596",
+              "source_point_count": 105055350
+            },
+            "version": "dbh-recovery-v1.0"
+          },
+          "trees": [
+            {
+              "global_tree_id": 0,
+              "persistent_tree_id": "tree-0df359f54932b5ee4f23216d",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "EDITOR_STEM_SCOPE_UNPROVEN",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "EDITOR_STEM_SCOPE_UNPROVEN"
+            },
+            {
+              "global_tree_id": 1,
+              "persistent_tree_id": "tree-a5736686540b5b39d8005d67",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "EDITOR_STEM_SCOPE_UNPROVEN",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "EDITOR_STEM_SCOPE_UNPROVEN"
+            },
+            {
+              "global_tree_id": 2,
+              "persistent_tree_id": "tree-2caadace67af4698db75245d",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "INSUFFICIENT_ACCEPTED_SLICES",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 3,
+              "persistent_tree_id": "tree-c5bc7076473e1d4e64bc4cea",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "INSUFFICIENT_ACCEPTED_SLICES",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 4,
+              "persistent_tree_id": "tree-a2856815fd9df0646602c69e",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "INSUFFICIENT_ACCEPTED_SLICES",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 5,
+              "persistent_tree_id": "tree-4287a087efd93a7b9f92319f",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "EDITOR_STEM_SCOPE_UNPROVEN",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "EDITOR_STEM_SCOPE_UNPROVEN"
+            },
+            {
+              "global_tree_id": 6,
+              "persistent_tree_id": "tree-73c95affd3b848653fefded9",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "INSUFFICIENT_ACCEPTED_SLICES",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 7,
+              "persistent_tree_id": "tree-636a1e9d9622de38785d3600",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "INSUFFICIENT_ACCEPTED_SLICES",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 8,
+              "persistent_tree_id": "tree-b1652eb150b67e68de28ce6d",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "INSUFFICIENT_ACCEPTED_SLICES",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            },
+            {
+              "global_tree_id": 9,
+              "persistent_tree_id": "tree-8c92b63081dd56ccd8c27518",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "EDITOR_STEM_SCOPE_UNPROVEN",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "EDITOR_STEM_SCOPE_UNPROVEN"
+            },
+            {
+              "global_tree_id": 10,
+              "persistent_tree_id": "tree-d8122cd942cdcb06dffb63c8",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "EDITOR_STEM_SCOPE_UNPROVEN",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "EDITOR_STEM_SCOPE_UNPROVEN"
+            },
+            {
+              "global_tree_id": 11,
+              "persistent_tree_id": "tree-0808f7adce1f940b561dc1a5",
+              "dbh_method": "UNAVAILABLE",
+              "dbh_fit_status": "INSUFFICIENT_ACCEPTED_SLICES",
+              "stem_candidate_count": null,
+              "valid_dbh_roi_count": null,
+              "stem_association_status": "VALIDATED_PRE_EDIT_AXIS_CURRENT_LINEAGE"
+            }
+          ]
+        }
+      ],
+      "membership_verification": "PRE_POST_HASH_AND_EXACT_INDEX_REPLAY_PASS"
+    },
+    "finalized_acceptance_batch": {
+      "operations": [
+        {
+          "tree_ids": [
+            0
+          ],
+          "type": "DELETE"
+        }
+      ],
+      "source_sha256_in_journal": null,
+      "span_manifests": [
+        {
+          "path": "E:\\TreeLineWarning-fast\\workspace\\survey_v01_gate_b_20260830\\artifacts\\project-runs\\batches\\analysis-53f4c1ac401249d78c7e8a25a438d9c9\\span-8abc94f8a2464430b623b699be20fc6f\\tree\\span_tree_manifest.json",
+          "sha256": "5d7f77dba94f1200f60ce1ec1766a4ef91be86308332d5942c445bea96893742",
+          "trees": [
+            {
+              "apex_height_m": 9.825050354003906,
+              "apex_xy_local_m": [
+                -45.39739990234375,
+                16.152099609375
+              ],
+              "fine_representative_count": 17737,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 359612,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 18.25,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 6.259896842106448,
+                "fine_point_count": 17737,
+                "full_res_point_count": 359612,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 2,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.924844067404674,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.79045033454895,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 0,
+              "tree_top_id": 0
+            },
+            {
+              "apex_height_m": 9.796699523925781,
+              "apex_xy_local_m": [
+                -36.3153076171875,
+                21.54449462890625
+              ],
+              "fine_representative_count": 17943,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 386956,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 15.25,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 6.402173260935497,
+                "fine_point_count": 17943,
+                "full_res_point_count": 386956,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 5,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.966687514446886,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.794949531555176,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 1,
+              "tree_top_id": 1
+            },
+            {
+              "apex_height_m": 9.767099380493164,
+              "apex_xy_local_m": [
+                -40.52171325683594,
+                19.063003540039062
+              ],
+              "fine_representative_count": 8979,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 235458,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 12.5,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 5.501923479131347,
+                "fine_point_count": 8979,
+                "full_res_point_count": 235458,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 2,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9179480473474434,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.749899387359619,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 2,
+              "tree_top_id": 2
+            },
+            {
+              "apex_height_m": 9.645098686218262,
+              "apex_xy_local_m": [
+                -31.270309448242188,
+                23.229293823242188
+              ],
+              "fine_representative_count": 21058,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 407050,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 18.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 6.661649202949331,
+                "fine_point_count": 21058,
+                "full_res_point_count": 407050,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 4,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9398966358834908,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.642098665237427,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 3,
+              "tree_top_id": 3
+            },
+            {
+              "apex_height_m": 8.838299751281738,
+              "apex_xy_local_m": [
+                -53.0382080078125,
+                10.563201904296875
+              ],
+              "fine_representative_count": 11579,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 279320,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 12.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 5.740503812517672,
+                "fine_point_count": 11579,
+                "full_res_point_count": 279320,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 4,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9400137162597868,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.830849885940552,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 4,
+              "tree_top_id": 4
+            },
+            {
+              "apex_height_m": 8.395198822021484,
+              "apex_xy_local_m": [
+                -48.61311340332031,
+                13.245193481445312
+              ],
+              "fine_representative_count": 5641,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 176751,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 11.25,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 5.068377991506164,
+                "fine_point_count": 5641,
+                "full_res_point_count": 176751,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 1,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9128869045811903,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.314598798751831,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 5,
+              "tree_top_id": 5
+            },
+            {
+              "apex_height_m": 8.35724925994873,
+              "apex_xy_local_m": [
+                -57.8656005859375,
+                7.52789306640625
+              ],
+              "fine_representative_count": 18470,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 383893,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 18.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 7.020185164322887,
+                "fine_point_count": 18470,
+                "full_res_point_count": 383893,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 9,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9371859866806537,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.3485493659973145,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 6,
+              "tree_top_id": 6
+            },
+            {
+              "apex_height_m": 7.932799339294434,
+              "apex_xy_local_m": [
+                -62.394500732421875,
+                5.2111053466796875
+              ],
+              "fine_representative_count": 18802,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 365692,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 17.25,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 6.217976679763484,
+                "fine_point_count": 18802,
+                "full_res_point_count": 365692,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 12,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9362902335362221,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 5.932449102401733,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 7,
+              "tree_top_id": 7
+            },
+            {
+              "apex_height_m": 6.41254997253418,
+              "apex_xy_local_m": [
+                -27.997604370117188,
+                26.61199951171875
+              ],
+              "fine_representative_count": 2691,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 77757,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 4.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 3.041986478689969,
+                "fine_point_count": 2691,
+                "full_res_point_count": 77757,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 2,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9197204893239629,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 4.407899856567383,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 8,
+              "tree_top_id": 8
+            },
+            {
+              "apex_height_m": 6.393400192260742,
+              "apex_xy_local_m": [
+                -24.110198974609375,
+                29.314102172851562
+              ],
+              "fine_representative_count": 2828,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 75988,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 5.25,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 3.541036942029101,
+                "fine_point_count": 2828,
+                "full_res_point_count": 75988,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 2,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9612958479959055,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 4.39300012588501,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 9,
+              "tree_top_id": 9
+            }
+          ]
+        },
+        {
+          "path": "E:\\TreeLineWarning-fast\\workspace\\survey_v01_gate_b_20260830\\artifacts\\project-runs\\batches\\analysis-53f4c1ac401249d78c7e8a25a438d9c9\\span-da0578ed1fc34c71837476070ab1a816\\tree\\span_tree_manifest.json",
+          "sha256": "65082b2f898a3da3a06c4fd9f6f106b6436675be7959f87a83bcd7e5cb56d242",
+          "trees": [
+            {
+              "apex_height_m": 10.164249420166016,
+              "apex_xy_local_m": [
+                7.773895263671875,
+                39.09260559082031
+              ],
+              "fine_representative_count": 697,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 16037,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 4.0,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 4.41349076605113,
+                "fine_point_count": 697,
+                "full_res_point_count": 16037,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 2,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9435535184366929,
+                "stem_hypothesis_count_deduplicated": 2,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 8.16124939918518,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 0,
+              "tree_top_id": 0
+            },
+            {
+              "apex_height_m": 9.645098686218262,
+              "apex_xy_local_m": [
+                -31.270309448242188,
+                23.229293823242188
+              ],
+              "fine_representative_count": 20935,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 405728,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 18.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 6.687627130763967,
+                "fine_point_count": 20935,
+                "full_res_point_count": 405728,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 4,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.939247063195834,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.642098665237427,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 1,
+              "tree_top_id": 1
+            },
+            {
+              "apex_height_m": 8.942549705505371,
+              "apex_xy_local_m": [
+                -6.36669921875,
+                40.554901123046875
+              ],
+              "fine_representative_count": 5531,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 106330,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 8.5,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 4.296753690833277,
+                "fine_point_count": 5531,
+                "full_res_point_count": 106330,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 2,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9268363764403847,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.941599607467651,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 2,
+              "tree_top_id": 2
+            },
+            {
+              "apex_height_m": 8.929800033569336,
+              "apex_xy_local_m": [
+                1.1199951171875,
+                45.74920654296875
+              ],
+              "fine_representative_count": 12759,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 170417,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 15.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 5.8794147346207435,
+                "fine_point_count": 12759,
+                "full_res_point_count": 170417,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 6,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9353481622263622,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.929699897766113,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 3,
+              "tree_top_id": 3
+            },
+            {
+              "apex_height_m": 8.600049018859863,
+              "apex_xy_local_m": [
+                -18.706100463867188,
+                31.075103759765625
+              ],
+              "fine_representative_count": 18299,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 345775,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 29.25,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 11.087717674521986,
+                "fine_point_count": 18299,
+                "full_res_point_count": 345775,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 5,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9274038910715104,
+                "stem_hypothesis_count_deduplicated": 2,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.596048831939697,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 4,
+              "tree_top_id": 4
+            },
+            {
+              "apex_height_m": 8.432600021362305,
+              "apex_xy_local_m": [
+                4.723388671875,
+                49.3717041015625
+              ],
+              "fine_representative_count": 5259,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 78036,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 9.25,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 4.927299882752835,
+                "fine_point_count": 5259,
+                "full_res_point_count": 78036,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 4,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9388569028335645,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.429150104522705,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 5,
+              "tree_top_id": 5
+            },
+            {
+              "apex_height_m": 8.313499450683594,
+              "apex_xy_local_m": [
+                -2.0264129638671875,
+                44.42149353027344
+              ],
+              "fine_representative_count": 3833,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 46291,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 9.5,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 4.338145237647633,
+                "fine_point_count": 3833,
+                "full_res_point_count": 46291,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 3,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9222681488622084,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.310699462890625,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 6,
+              "tree_top_id": 6
+            },
+            {
+              "apex_height_m": 7.946549415588379,
+              "apex_xy_local_m": [
+                -23.44061279296875,
+                29.44110107421875
+              ],
+              "fine_representative_count": 8273,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 207029,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 10.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 4.60339655871889,
+                "fine_point_count": 8273,
+                "full_res_point_count": 207029,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 5,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9380637095141277,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 5.946349382400513,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 7,
+              "tree_top_id": 7
+            },
+            {
+              "apex_height_m": 7.836849212646484,
+              "apex_xy_local_m": [
+                -11.18389892578125,
+                38.11320495605469
+              ],
+              "fine_representative_count": 5928,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 123287,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 9.25,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 4.967874651201761,
+                "fine_point_count": 5928,
+                "full_res_point_count": 123287,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 4,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9255159151580996,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 5.836349248886108,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 8,
+              "tree_top_id": 8
+            },
+            {
+              "apex_height_m": 6.41254997253418,
+              "apex_xy_local_m": [
+                -27.997604370117188,
+                26.61199951171875
+              ],
+              "fine_representative_count": 2696,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 77735,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 4.5,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 3.037456806126186,
+                "fine_point_count": 2696,
+                "full_res_point_count": 77735,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 2,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9203669867546977,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 4.407899856567383,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 9,
+              "tree_top_id": 9
+            }
+          ]
+        }
+      ],
+      "dbh_versions": [],
+      "membership_verification": "PRE_POST_HASH_AND_EXACT_INDEX_REPLAY_PASS"
+    },
+    "archived_trim_batch": {
+      "operations": [
+        {
+          "point_count": 315,
+          "selection_method": "LASSO",
+          "sequence": 1,
+          "timestamp": "2026-08-22T15:39:59",
+          "tree_ids": [
+            12
+          ],
+          "type": "REMOVE_POINTS"
+        }
+      ],
+      "source_sha256_in_journal": null,
+      "span_manifests": [
+        {
+          "path": "E:\\TreeLineWarning-fast\\acceptance_evidence\\archived_workspace_evidence_20260827\\local_tree_trim_acceptance_rc_d\\artifacts\\project-runs\\batches\\analysis-b728ee72e9e84b9db4e4f59b443745bd\\span-a3ba6551566b4a6cbfd2a961de9b1778\\tree\\span_tree_manifest.json",
+          "sha256": "eed67c5014b0186531af9dc1fef79f8da733e043ed05e11867424993e3994215",
+          "trees": [
+            {
+              "apex_height_m": 10.528698921203613,
+              "apex_xy_local_m": [
+                -33.64649963378906,
+                -19.75689697265625
+              ],
+              "fine_representative_count": 38827,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 2846300,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 58.5,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 19.98495236824563,
+                "fine_point_count": 38827,
+                "full_res_point_count": 2823627,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 21,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9376228560968524,
+                "stem_hypothesis_count_deduplicated": 5,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 8.528649091720581,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 0,
+              "tree_top_id": 0
+            },
+            {
+              "apex_height_m": 10.394499778747559,
+              "apex_xy_local_m": [
+                -11.401107788085938,
+                -10.166793823242188
+              ],
+              "fine_representative_count": 53708,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 4113108,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 119.5,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 27.398656933565785,
+                "fine_point_count": 53708,
+                "full_res_point_count": 4105855,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 66,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9374107362870161,
+                "stem_hypothesis_count_deduplicated": 4,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 8.394499778747559,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 1,
+              "tree_top_id": 1
+            },
+            {
+              "apex_height_m": 10.360849380493164,
+              "apex_xy_local_m": [
+                -42.30900573730469,
+                -24.632598876953125
+              ],
+              "fine_representative_count": 10244,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 460764,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 13.0,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 5.6493870280763865,
+                "fine_point_count": 10244,
+                "full_res_point_count": 460764,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 5,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9371122123176212,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 8.357099294662476,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 2,
+              "tree_top_id": 2
+            },
+            {
+              "apex_height_m": 10.145499229431152,
+              "apex_xy_local_m": [
+                -26.032608032226562,
+                -12.919403076171875
+              ],
+              "fine_representative_count": 11586,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 420225,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 15.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 6.146007293957816,
+                "fine_point_count": 11586,
+                "full_res_point_count": 420225,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 6,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9343644769681477,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 8.132899045944214,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 3,
+              "tree_top_id": 3
+            },
+            {
+              "apex_height_m": 9.994399070739746,
+              "apex_xy_local_m": [
+                -21.341598510742188,
+                -10.796600341796875
+              ],
+              "fine_representative_count": 5062,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 123917,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 10.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 5.021868006395222,
+                "fine_point_count": 5062,
+                "full_res_point_count": 123917,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 2,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9364007728730621,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.989598989486694,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 4,
+              "tree_top_id": 4
+            },
+            {
+              "apex_height_m": 9.941399574279785,
+              "apex_xy_local_m": [
+                -47.27641296386719,
+                -26.767303466796875
+              ],
+              "fine_representative_count": 32591,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 2364388,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 38.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 20.252576976406303,
+                "fine_point_count": 32591,
+                "full_res_point_count": 2364388,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 25,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9300214252390816,
+                "stem_hypothesis_count_deduplicated": 4,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.941249370574951,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 5,
+              "tree_top_id": 5
+            },
+            {
+              "apex_height_m": 9.882749557495117,
+              "apex_xy_local_m": [
+                -56.55390930175781,
+                -37.56939697265625
+              ],
+              "fine_representative_count": 62988,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 4410443,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 66.5,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 19.503915806819936,
+                "fine_point_count": 62988,
+                "full_res_point_count": 4410443,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 29,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.929325873042689,
+                "stem_hypothesis_count_deduplicated": 7,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.882549524307251,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 6,
+              "tree_top_id": 6
+            },
+            {
+              "apex_height_m": 9.760449409484863,
+              "apex_xy_local_m": [
+                -51.79020690917969,
+                -29.42340087890625
+              ],
+              "fine_representative_count": 14350,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 599988,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 17.0,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 6.2772398376448875,
+                "fine_point_count": 14350,
+                "full_res_point_count": 599988,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 3,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9204065324274604,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.746549367904663,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 7,
+              "tree_top_id": 7
+            },
+            {
+              "apex_height_m": 9.335399627685547,
+              "apex_xy_local_m": [
+                -16.822509765625,
+                -8.208206176757812
+              ],
+              "fine_representative_count": 17104,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 704661,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 20.0,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 6.9470796370162855,
+                "fine_point_count": 17104,
+                "full_res_point_count": 704661,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 6,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.939777375088735,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.322199583053589,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 8,
+              "tree_top_id": 8
+            },
+            {
+              "apex_height_m": 9.274699211120605,
+              "apex_xy_local_m": [
+                -56.69110107421875,
+                -30.93810272216797
+              ],
+              "fine_representative_count": 13528,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 579690,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 12.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 5.720965071119631,
+                "fine_point_count": 13528,
+                "full_res_point_count": 579690,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 6,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9379725640873346,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.265899181365967,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 9,
+              "tree_top_id": 9
+            },
+            {
+              "apex_height_m": 8.789849281311035,
+              "apex_xy_local_m": [
+                -12.5155029296875,
+                -5.0218048095703125
+              ],
+              "fine_representative_count": 15625,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 622261,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 16.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 7.423982799057065,
+                "fine_point_count": 15625,
+                "full_res_point_count": 622261,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 6,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9346069146210738,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.782899379730225,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 10,
+              "tree_top_id": 10
+            },
+            {
+              "apex_height_m": 8.590299606323242,
+              "apex_xy_local_m": [
+                -49.26380920410156,
+                -37.249000549316406
+              ],
+              "fine_representative_count": 5235,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 34364,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 21.0,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 8.178377472029203,
+                "fine_point_count": 5235,
+                "full_res_point_count": 34364,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 8,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.86224674186416,
+                "stem_hypothesis_count_deduplicated": 2,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.586299657821655,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 11,
+              "tree_top_id": 11
+            },
+            {
+              "apex_height_m": 8.58704948425293,
+              "apex_xy_local_m": [
+                -54.546112060546875,
+                -41.263999938964844
+              ],
+              "fine_representative_count": 6149,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 48938,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 16.25,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 6.269196766475323,
+                "fine_point_count": 6149,
+                "full_res_point_count": 48746,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 10,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9342336056582399,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.586799383163452,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 12,
+              "tree_top_id": 12
+            },
+            {
+              "apex_height_m": 8.562150001525879,
+              "apex_xy_local_m": [
+                -37.76930236816406,
+                -22.241500854492188
+              ],
+              "fine_representative_count": 21302,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 1543821,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 26.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 10.403385730979693,
+                "fine_point_count": 21302,
+                "full_res_point_count": 1543821,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 12,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9205404387268203,
+                "stem_hypothesis_count_deduplicated": 4,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.561650037765503,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 13,
+              "tree_top_id": 13
+            },
+            {
+              "apex_height_m": 8.105149269104004,
+              "apex_xy_local_m": [
+                -62.368804931640625,
+                -32.68080139160156
+              ],
+              "fine_representative_count": 11595,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 605777,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 10.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 4.8757676109024795,
+                "fine_point_count": 11595,
+                "full_res_point_count": 605777,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 4,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.933538851683716,
+                "stem_hypothesis_count_deduplicated": 2,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.0998992919921875,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 14,
+              "tree_top_id": 14
+            },
+            {
+              "apex_height_m": 7.997400283813477,
+              "apex_xy_local_m": [
+                -8.836700439453125,
+                -2.8162994384765625
+              ],
+              "fine_representative_count": 2935,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 129752,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 6.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 4.118312214536625,
+                "fine_point_count": 2935,
+                "full_res_point_count": 129752,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 3,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9266694611810478,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 5.443450212478638,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 15,
+              "tree_top_id": 15
+            },
+            {
+              "apex_height_m": 8.294548988342285,
+              "apex_xy_local_m": [
+                -42.36920166015625,
+                -35.11479949951172
+              ],
+              "fine_representative_count": 19702,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 487200,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 36.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 10.184639404047818,
+                "fine_point_count": 19702,
+                "full_res_point_count": 487200,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 15,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.8847365285913835,
+                "stem_hypothesis_count_deduplicated": 2,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 6.294348955154419,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 17,
+              "tree_top_id": 17
+            },
+            {
+              "apex_height_m": 9.597199440002441,
+              "apex_xy_local_m": [
+                -26.744903564453125,
+                -29.820899963378906
+              ],
+              "fine_representative_count": 27710,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 529637,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 43.25,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 12.814300235639461,
+                "fine_point_count": 27710,
+                "full_res_point_count": 529637,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 25,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9334847674188109,
+                "stem_hypothesis_count_deduplicated": 2,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 7.596799373626709,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 18,
+              "tree_top_id": 18
+            },
+            {
+              "apex_height_m": 6.319450378417969,
+              "apex_xy_local_m": [
+                -60.32850646972656,
+                -42.59960174560547
+              ],
+              "fine_representative_count": 1096,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 10124,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 10.0,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 7.1598654298291216,
+                "fine_point_count": 1096,
+                "full_res_point_count": 10124,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 5,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9597080949708012,
+                "stem_hypothesis_count_deduplicated": 2,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 4.093950271606445,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 20,
+              "tree_top_id": 20
+            },
+            {
+              "apex_height_m": 6.308350086212158,
+              "apex_xy_local_m": [
+                -61.90679931640625,
+                -38.97779846191406
+              ],
+              "fine_representative_count": 1046,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 63045,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 1.0,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 1.575112761211116,
+                "fine_point_count": 1046,
+                "full_res_point_count": 63045,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 1,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9667392110131914,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 4.307300090789795,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 21,
+              "tree_top_id": 21
+            },
+            {
+              "apex_height_m": 6.234749794006348,
+              "apex_xy_local_m": [
+                -9.361907958984375,
+                -17.0989990234375
+              ],
+              "fine_representative_count": 2778,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 14711,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 19.25,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 8.825353934095343,
+                "fine_point_count": 2778,
+                "full_res_point_count": 14711,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 12,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.9297125012608232,
+                "stem_hypothesis_count_deduplicated": 2,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 4.234499931335449,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 22,
+              "tree_top_id": 22
+            },
+            {
+              "apex_height_m": 6.030200004577637,
+              "apex_xy_local_m": [
+                -59.253509521484375,
+                -44.3988037109375
+              ],
+              "fine_representative_count": 531,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 3129,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 2.25,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 2.727145091829858,
+                "fine_point_count": 531,
+                "full_res_point_count": 3129,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 2,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.8890509263911612,
+                "stem_hypothesis_count_deduplicated": 2,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 3.9581000804901123,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 24,
+              "tree_top_id": 25
+            },
+            {
+              "apex_height_m": 4.5406999588012695,
+              "apex_xy_local_m": [
+                -2.7280120849609375,
+                -14.100906372070312
+              ],
+              "fine_representative_count": 326,
+              "quality_reasons": [
+                "crown_generated_candidate",
+                "stem_validated",
+                "confirmed_tree"
+              ],
+              "quality_state": "CONFIRMED_TREE",
+              "raw_point_count": 1926,
+              "structural_evidence": {
+                "CHM_peak_count": 1,
+                "crown_area": 4.75,
+                "crown_evidence_score": 1.0,
+                "crown_horizontal_extent": 3.2435138997079602,
+                "fine_point_count": 326,
+                "full_res_point_count": 1926,
+                "saddle_evidence": 0,
+                "stem_candidate_count_raw": 2,
+                "stem_crown_connectivity_score": 1.0,
+                "stem_evidence_score": 0.90647274396033,
+                "stem_hypothesis_count_deduplicated": 1,
+                "validated_independent_stem_count": 1,
+                "vertical_extent": 2.5390501022338867,
+                "vertical_structure_score": 1.0
+              },
+              "tree_id": 27,
+              "tree_top_id": 28
+            }
+          ]
+        }
+      ],
+      "dbh_versions": [],
+      "membership_verification": "UNAVAILABLE"
+    }
+  },
+  "cases": [
+    {
+      "case_id": "FIELD_BAD_T000",
+      "before_count": 2285682,
+      "after_count": 333900,
+      "removed_count": 1951782,
+      "pre_membership_sha256": "f9823d746d69c2d94d721db81266a5dec3c71674625fe94df3baad51baeba4be",
+      "post_membership_sha256": "18ee2c58e6b796414cb4e976775bf187b882f5a8823c655c56e5838105de28c6",
+      "exact_index_replay": true
+    },
+    {
+      "case_id": "FIELD_BAD_T001",
+      "before_count": 4197324,
+      "after_count": 4844,
+      "removed_count": 4192480,
+      "pre_membership_sha256": "9ce24324e53e3e2332be376523fa2f1113ddbd3f655888669aed5a62b1630aac",
+      "post_membership_sha256": "2d474924be7cdd903ec41ce61365f55f9bfceacc5e70079b2ee6e96be23f01c7",
+      "exact_index_replay": true
+    },
+    {
+      "case_id": "FIELD_BAD_T005",
+      "before_count": 1934135,
+      "after_count": 564067,
+      "removed_count": 1370068,
+      "pre_membership_sha256": "01a5566461b30896efbab243c741b6615051255004d81fe3e45e9493f59cda45",
+      "post_membership_sha256": "907e726227275c3e506fd3191ec0f1670350a64afdb885f8efa3455bf85bf568",
+      "exact_index_replay": true
+    },
+    {
+      "case_id": "FIELD_BAD_T009",
+      "before_count": 33031,
+      "after_count": 274,
+      "removed_count": 32757,
+      "pre_membership_sha256": "affaba0482266a7cc701626ddabc8faf3803da7ad9a20e9c3d65a23388dfeda4",
+      "post_membership_sha256": "b490f2bc131952296737947398e39a0f36aba9252d86aeaf847069e117500d26",
+      "exact_index_replay": true
+    },
+    {
+      "case_id": "FIELD_BAD_T010",
+      "before_count": 1957287,
+      "after_count": 468212,
+      "removed_count": 1489075,
+      "pre_membership_sha256": "868d00ed9c11b2eab5631a187ee29c28d984f565fed83eca5a61e4518ef45a84",
+      "post_membership_sha256": "c7b46dadbe8ff5abb70f10d5281e38f8ed8c923dd5058b7cfec72474060c0a09",
+      "exact_index_replay": true
+    },
+    {
+      "case_id": "FIELD_BAD_T012",
+      "before_count": 468245,
+      "after_count": 0,
+      "removed_count": 468245,
+      "pre_membership_sha256": "13bf345c9be50ee8d5bb45760762aa02a70ea32ab31b34b7b1077a4e4abbb018",
+      "post_membership_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exact_index_replay": true
+    },
+    {
+      "case_id": "FIELD_BAD_T013",
+      "before_count": 481685,
+      "after_count": 0,
+      "removed_count": 481685,
+      "pre_membership_sha256": "b7c796fd31edcb1448c0f110fa9583e0c1811ed9c247f2935344c60d93535cc0",
+      "post_membership_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exact_index_replay": true
+    },
+    {
+      "case_id": "FIELD_BAD_T014",
+      "before_count": 13997,
+      "after_count": 0,
+      "removed_count": 13997,
+      "pre_membership_sha256": "ca6b5db49cfcc9d4c87312c815c88f822a8e110faf306b2c5de2bc20f9d27ff5",
+      "post_membership_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exact_index_replay": true
+    },
+    {
+      "case_id": "FIELD_GOOD_T002",
+      "before_count": 460817,
+      "after_count": 460817,
+      "removed_count": 0,
+      "pre_membership_sha256": "12cd991ae83906b1879e3885905434fbdf2cd1cc3d9187f752b2c26370447d65",
+      "post_membership_sha256": "12cd991ae83906b1879e3885905434fbdf2cd1cc3d9187f752b2c26370447d65",
+      "exact_index_replay": true
+    },
+    {
+      "case_id": "FIELD_GOOD_T003",
+      "before_count": 421605,
+      "after_count": 421605,
+      "removed_count": 0,
+      "pre_membership_sha256": "262a541b6f8573f18872b80584509848381c4d7cd776a326571aa3b634560626",
+      "post_membership_sha256": "262a541b6f8573f18872b80584509848381c4d7cd776a326571aa3b634560626",
+      "exact_index_replay": true
+    },
+    {
+      "case_id": "FIELD_GOOD_T004",
+      "before_count": 122993,
+      "after_count": 122993,
+      "removed_count": 0,
+      "pre_membership_sha256": "ed2b9e714841edeeb8e7e767643a254041441e7e398722d9c40c4f5d35ceea8c",
+      "post_membership_sha256": "ed2b9e714841edeeb8e7e767643a254041441e7e398722d9c40c4f5d35ceea8c",
+      "exact_index_replay": true
+    },
+    {
+      "case_id": "FIELD_GOOD_T006",
+      "before_count": 599842,
+      "after_count": 599842,
+      "removed_count": 0,
+      "pre_membership_sha256": "642f248b486e541849521c7d26d3a716469ccace5c63f54afa73cd34b6fd7391",
+      "post_membership_sha256": "642f248b486e541849521c7d26d3a716469ccace5c63f54afa73cd34b6fd7391",
+      "exact_index_replay": true
+    },
+    {
+      "case_id": "FIELD_GOOD_T007",
+      "before_count": 704065,
+      "after_count": 704065,
+      "removed_count": 0,
+      "pre_membership_sha256": "42bfe8544baaeeaf87da8adb575626f45b004a7dcb5d78c39b583cc2cf81c4b9",
+      "post_membership_sha256": "42bfe8544baaeeaf87da8adb575626f45b004a7dcb5d78c39b583cc2cf81c4b9",
+      "exact_index_replay": true
+    },
+    {
+      "case_id": "FIELD_GOOD_T008",
+      "before_count": 580901,
+      "after_count": 580901,
+      "removed_count": 0,
+      "pre_membership_sha256": "3bf6d084db244ab2847f35c8d13631b01d9ebc07a6fd78e3f887d67639314a29",
+      "post_membership_sha256": "3bf6d084db244ab2847f35c8d13631b01d9ebc07a6fd78e3f887d67639314a29",
+      "exact_index_replay": true
+    },
+    {
+      "case_id": "FIELD_GOOD_T011",
+      "before_count": 503601,
+      "after_count": 503601,
+      "removed_count": 0,
+      "pre_membership_sha256": "c7423d6c4ceccc2a4c59480a107f611ebdc42322f64e35d13dbb42f5ca25c011",
+      "post_membership_sha256": "c7423d6c4ceccc2a4c59480a107f611ebdc42322f64e35d13dbb42f5ca25c011",
+      "exact_index_replay": true
+    },
+    {
+      "case_id": "ACCEPT_GOOD_T001",
+      "before_count": 106330,
+      "after_count": 106330,
+      "removed_count": 0,
+      "pre_membership_sha256": "a9243069b144d7ed6037271002e244e643b79ed967dec629556b74bff08264a6",
+      "post_membership_sha256": "a9243069b144d7ed6037271002e244e643b79ed967dec629556b74bff08264a6",
+      "exact_index_replay": true
+    }
+  ]
+}

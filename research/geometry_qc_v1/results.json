@@ -1,0 +1,955 @@
+{
+  "schema": "tree-geometry-qc-feasibility-v1",
+  "cases": [
+    {
+      "case_id": "FIELD_BAD_T000",
+      "tree_id": 0,
+      "dataset": "human_field_batch",
+      "source": "original",
+      "pre_edit_revision": "f9823d746d69c2d94d721db81266a5dec3c71674625fe94df3baad51baeba4be",
+      "post_edit_revision": "18ee2c58e6b796414cb4e976775bf187b882f5a8823c655c56e5838105de28c6",
+      "reference_issue": "MERGED_MULTI_TREE",
+      "evidence_source": "Human REMOVE_POINTS sequence 1 removed 1,951,782/2,285,682 points (85.39%); pre-edit render visual audit.",
+      "why_label_is_defensible": "The pre-edit views visibly contain several disconnected crown-like masses plus non-tree linear structure; the large human correction corroborates the visual defect.",
+      "renderable": true,
+      "prior_reference_category": "EXPLICIT_BAD_VISUAL",
+      "reference_label": "EXPLICIT_BAD",
+      "label_audit_reason": "Pre-edit orthographic/oblique views inspected in this audit show major separated masses or extended non-tree-like contamination, corroborated by the recorded correction. Exact biological subtype remains provisional.",
+      "project_run": "2026.08.31-2 / analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": {
+        "point_count": 2285682,
+        "sample_count": 16384,
+        "sample_z_extent_m": 8.41949987411499,
+        "robust_z_extent_m": 6.017319655418397,
+        "width_major_m": 9.2292469238452,
+        "width_minor_m": 5.767255017588485,
+        "width_aspect": 1.6002841725740626,
+        "width_height_ratio": 1.5337803959832128,
+        "xy_minor_major_variance": 0.3006428347854383,
+        "empty_vertical_bin_fraction": 0.0,
+        "max_vertical_gap_fraction": 0.007423243771539297,
+        "component_16_largest": 1.0,
+        "component_16_second": 0.0,
+        "component_16_singleton": 0.0,
+        "component_32_largest": 0.995361328125,
+        "component_32_second": 0.0037841796875,
+        "component_32_singleton": 0.0,
+        "component_64_largest": 0.84710693359375,
+        "component_64_second": 0.136474609375,
+        "component_64_singleton": 0.00042724609375
+      },
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "NO_VALIDATED_PASS_CRITERION"
+        ]
+      },
+      "feature_seconds": 0.10269030000199564,
+      "decision_seconds": 2.7999980375170708e-05,
+      "binding": {
+        "artifact_sha256": "8b3fd4a74e39988c9e30677ad650bb201bd837dba7daefdc9efa2b209542c6f8",
+        "membership_sha256": "f9823d746d69c2d94d721db81266a5dec3c71674625fe94df3baad51baeba4be",
+        "editor_journal_sha256": "8d6062a88209187baac87bfef643023aabe8efd1974bbaad40e66a15ea2ff293",
+        "source_sha256": null
+      }
+    },
+    {
+      "case_id": "FIELD_BAD_T001",
+      "tree_id": 1,
+      "dataset": "human_field_batch",
+      "source": "original",
+      "pre_edit_revision": "9ce24324e53e3e2332be376523fa2f1113ddbd3f655888669aed5a62b1630aac",
+      "post_edit_revision": "2d474924be7cdd903ec41ce61365f55f9bfceacc5e70079b2ee6e96be23f01c7",
+      "reference_issue": "SEVERE_NOISE_CONTAMINATION",
+      "evidence_source": "Human REMOVE_POINTS sequence 1 removed 4,192,480/4,197,324 points (99.88%); pre-edit render visual audit.",
+      "why_label_is_defensible": "The highlighted membership is dominated by long power-line/ground-like sheets rather than one tree, plainly visible across orthographic views.",
+      "renderable": true,
+      "prior_reference_category": "EXPLICIT_BAD_VISUAL",
+      "reference_label": "EXPLICIT_BAD",
+      "label_audit_reason": "Pre-edit orthographic/oblique views inspected in this audit show major separated masses or extended non-tree-like contamination, corroborated by the recorded correction. Exact biological subtype remains provisional.",
+      "project_run": "2026.08.31-2 / analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": {
+        "point_count": 4197324,
+        "sample_count": 16384,
+        "sample_z_extent_m": 8.309000015258789,
+        "robust_z_extent_m": 4.408646059036255,
+        "width_major_m": 21.574236251256146,
+        "width_minor_m": 4.78191621548764,
+        "width_aspect": 4.511629915509947,
+        "width_height_ratio": 4.893619483704334,
+        "xy_minor_major_variance": 0.042775431835652675,
+        "empty_vertical_bin_fraction": 0.0,
+        "max_vertical_gap_fraction": 0.012733141749127529,
+        "component_16_largest": 1.0,
+        "component_16_second": 0.0,
+        "component_16_singleton": 0.0,
+        "component_32_largest": 1.0,
+        "component_32_second": 0.0,
+        "component_32_singleton": 0.0,
+        "component_64_largest": 0.99395751953125,
+        "component_64_second": 0.0029296875,
+        "component_64_singleton": 0.00030517578125
+      },
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "NO_VALIDATED_PASS_CRITERION"
+        ]
+      },
+      "feature_seconds": 0.15696130000287667,
+      "decision_seconds": 2.120001590810716e-05,
+      "binding": {
+        "artifact_sha256": "8b3fd4a74e39988c9e30677ad650bb201bd837dba7daefdc9efa2b209542c6f8",
+        "membership_sha256": "9ce24324e53e3e2332be376523fa2f1113ddbd3f655888669aed5a62b1630aac",
+        "editor_journal_sha256": "8d6062a88209187baac87bfef643023aabe8efd1974bbaad40e66a15ea2ff293",
+        "source_sha256": null
+      }
+    },
+    {
+      "case_id": "FIELD_BAD_T005",
+      "tree_id": 5,
+      "dataset": "human_field_batch",
+      "source": "original",
+      "pre_edit_revision": "01a5566461b30896efbab243c741b6615051255004d81fe3e45e9493f59cda45",
+      "post_edit_revision": "907e726227275c3e506fd3191ec0f1670350a64afdb885f8efa3455bf85bf568",
+      "reference_issue": "MERGED_MULTI_TREE",
+      "evidence_source": "Human REMOVE_POINTS sequence 1 removed 1,370,068/1,934,135 points (70.84%); pre-edit render visual audit.",
+      "why_label_is_defensible": "Multiple spatially separated crown/stem masses are visibly combined in the highlighted candidate and were substantially corrected by the editor.",
+      "renderable": true,
+      "prior_reference_category": "EXPLICIT_BAD_VISUAL",
+      "reference_label": "EXPLICIT_BAD",
+      "label_audit_reason": "Pre-edit orthographic/oblique views inspected in this audit show major separated masses or extended non-tree-like contamination, corroborated by the recorded correction. Exact biological subtype remains provisional.",
+      "project_run": "2026.08.31-2 / analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": {
+        "point_count": 1934135,
+        "sample_count": 16384,
+        "sample_z_extent_m": 7.5894997119903564,
+        "robust_z_extent_m": 4.8077840852737435,
+        "width_major_m": 10.431168366689155,
+        "width_minor_m": 6.50272263620507,
+        "width_aspect": 1.6041232188824663,
+        "width_height_ratio": 2.1696416023839036,
+        "xy_minor_major_variance": 0.4312679875103794,
+        "empty_vertical_bin_fraction": 0.0,
+        "max_vertical_gap_fraction": 0.08447196180753803,
+        "component_16_largest": 1.0,
+        "component_16_second": 0.0,
+        "component_16_singleton": 0.0,
+        "component_32_largest": 1.0,
+        "component_32_second": 0.0,
+        "component_32_singleton": 0.0,
+        "component_64_largest": 0.708984375,
+        "component_64_second": 0.28729248046875,
+        "component_64_singleton": 0.0001220703125
+      },
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "NO_VALIDATED_PASS_CRITERION"
+        ]
+      },
+      "feature_seconds": 0.07563110001501627,
+      "decision_seconds": 1.1500000255182385e-05,
+      "binding": {
+        "artifact_sha256": "8b3fd4a74e39988c9e30677ad650bb201bd837dba7daefdc9efa2b209542c6f8",
+        "membership_sha256": "01a5566461b30896efbab243c741b6615051255004d81fe3e45e9493f59cda45",
+        "editor_journal_sha256": "8d6062a88209187baac87bfef643023aabe8efd1974bbaad40e66a15ea2ff293",
+        "source_sha256": null
+      }
+    },
+    {
+      "case_id": "FIELD_BAD_T009",
+      "tree_id": 9,
+      "dataset": "human_field_batch",
+      "source": "original",
+      "pre_edit_revision": "affaba0482266a7cc701626ddabc8faf3803da7ad9a20e9c3d65a23388dfeda4",
+      "post_edit_revision": "b490f2bc131952296737947398e39a0f36aba9252d86aeaf847069e117500d26",
+      "reference_issue": "SEVERE_NOISE_CONTAMINATION",
+      "evidence_source": "Human REMOVE_POINTS sequence 1 removed 32,757/33,031 points (99.17%); pre-edit render visual audit.",
+      "why_label_is_defensible": "Long linear and ground-like contamination extends away from the small vegetation cluster in multiple views; almost all points were removed by the editor.",
+      "renderable": true,
+      "prior_reference_category": "EXPLICIT_BAD_VISUAL",
+      "reference_label": "EXPLICIT_BAD",
+      "label_audit_reason": "Pre-edit orthographic/oblique views inspected in this audit show major separated masses or extended non-tree-like contamination, corroborated by the recorded correction. Exact biological subtype remains provisional.",
+      "project_run": "2026.08.31-2 / analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": {
+        "point_count": 33031,
+        "sample_count": 16384,
+        "sample_z_extent_m": 6.661799907684326,
+        "robust_z_extent_m": 5.975619449615479,
+        "width_major_m": 5.002175818840433,
+        "width_minor_m": 4.438736437529193,
+        "width_aspect": 1.1269368860352693,
+        "width_height_ratio": 0.8370974525766219,
+        "xy_minor_major_variance": 0.675813617225012,
+        "empty_vertical_bin_fraction": 0.0,
+        "max_vertical_gap_fraction": 0.0027470138267603294,
+        "component_16_largest": 0.98809814453125,
+        "component_16_second": 0.0115966796875,
+        "component_16_singleton": 0.0,
+        "component_32_largest": 0.97216796875,
+        "component_32_second": 0.0157470703125,
+        "component_32_singleton": 6.103515625e-05,
+        "component_64_largest": 0.87713623046875,
+        "component_64_second": 0.031005859375,
+        "component_64_singleton": 0.001220703125
+      },
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "NO_VALIDATED_PASS_CRITERION"
+        ]
+      },
+      "feature_seconds": 0.007200799998827279,
+      "decision_seconds": 6.200018106028438e-06,
+      "binding": {
+        "artifact_sha256": "8b3fd4a74e39988c9e30677ad650bb201bd837dba7daefdc9efa2b209542c6f8",
+        "membership_sha256": "affaba0482266a7cc701626ddabc8faf3803da7ad9a20e9c3d65a23388dfeda4",
+        "editor_journal_sha256": "8d6062a88209187baac87bfef643023aabe8efd1974bbaad40e66a15ea2ff293",
+        "source_sha256": null
+      }
+    },
+    {
+      "case_id": "FIELD_BAD_T010",
+      "tree_id": 10,
+      "dataset": "human_field_batch",
+      "source": "original",
+      "pre_edit_revision": "868d00ed9c11b2eab5631a187ee29c28d984f565fed83eca5a61e4518ef45a84",
+      "post_edit_revision": "c7b46dadbe8ff5abb70f10d5281e38f8ed8c923dd5058b7cfec72474060c0a09",
+      "reference_issue": "MERGED_MULTI_TREE",
+      "evidence_source": "Human REMOVE_POINTS sequence 1 removed 1,489,075/1,957,287 points (76.08%); pre-edit render visual audit.",
+      "why_label_is_defensible": "Several disconnected crown-like clusters and low flat structure are highlighted as one candidate; the editor removed most membership points.",
+      "renderable": true,
+      "prior_reference_category": "EXPLICIT_BAD_VISUAL",
+      "reference_label": "EXPLICIT_BAD",
+      "label_audit_reason": "Pre-edit orthographic/oblique views inspected in this audit show major separated masses or extended non-tree-like contamination, corroborated by the recorded correction. Exact biological subtype remains provisional.",
+      "project_run": "2026.08.31-2 / analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": {
+        "point_count": 1957287,
+        "sample_count": 16384,
+        "sample_z_extent_m": 6.541599273681641,
+        "robust_z_extent_m": 4.164120168685914,
+        "width_major_m": 8.363285555671277,
+        "width_minor_m": 4.475851257420998,
+        "width_aspect": 1.8685351846321707,
+        "width_height_ratio": 2.0084159959078485,
+        "xy_minor_major_variance": 0.25843059797447643,
+        "empty_vertical_bin_fraction": 0.0,
+        "max_vertical_gap_fraction": 0.02809706555884773,
+        "component_16_largest": 1.0,
+        "component_16_second": 0.0,
+        "component_16_singleton": 0.0,
+        "component_32_largest": 0.99908447265625,
+        "component_32_second": 0.00091552734375,
+        "component_32_singleton": 0.0,
+        "component_64_largest": 0.75927734375,
+        "component_64_second": 0.2357177734375,
+        "component_64_singleton": 0.00067138671875
+      },
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "NO_VALIDATED_PASS_CRITERION"
+        ]
+      },
+      "feature_seconds": 0.06921819999115542,
+      "decision_seconds": 3.100000321865082e-05,
+      "binding": {
+        "artifact_sha256": "8b3fd4a74e39988c9e30677ad650bb201bd837dba7daefdc9efa2b209542c6f8",
+        "membership_sha256": "868d00ed9c11b2eab5631a187ee29c28d984f565fed83eca5a61e4518ef45a84",
+        "editor_journal_sha256": "8d6062a88209187baac87bfef643023aabe8efd1974bbaad40e66a15ea2ff293",
+        "source_sha256": null
+      }
+    },
+    {
+      "case_id": "FIELD_BAD_T012",
+      "tree_id": 12,
+      "dataset": "human_field_batch",
+      "source": "original",
+      "pre_edit_revision": "13bf345c9be50ee8d5bb45760762aa02a70ea32ab31b34b7b1077a4e4abbb018",
+      "post_edit_revision": "DELETED_BY_HUMAN_EDIT_SEQUENCE_1",
+      "reference_issue": "MERGED_MULTI_TREE",
+      "evidence_source": "Human REMOVE_POINTS sequence 1 removed all 468,245 points; pre-edit render visual audit.",
+      "why_label_is_defensible": "The highlighted candidate contains large separated vegetation structures rather than one coherent tree and was removed in full by the editor.",
+      "renderable": true,
+      "prior_reference_category": "EXPLICIT_BAD_VISUAL",
+      "reference_label": "EXPLICIT_BAD",
+      "label_audit_reason": "Pre-edit orthographic/oblique views inspected in this audit show major separated masses or extended non-tree-like contamination, corroborated by the recorded correction. Exact biological subtype remains provisional.",
+      "project_run": "2026.08.31-2 / analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": {
+        "point_count": 468245,
+        "sample_count": 16384,
+        "sample_z_extent_m": 6.357099294662476,
+        "robust_z_extent_m": 5.449903755187988,
+        "width_major_m": 4.834317870659755,
+        "width_minor_m": 4.670244153225215,
+        "width_aspect": 1.0351317216084372,
+        "width_height_ratio": 0.8870464668404041,
+        "xy_minor_major_variance": 0.6691600373427062,
+        "empty_vertical_bin_fraction": 0.0,
+        "max_vertical_gap_fraction": 0.011719194631093985,
+        "component_16_largest": 1.0,
+        "component_16_second": 0.0,
+        "component_16_singleton": 0.0,
+        "component_32_largest": 0.99725341796875,
+        "component_32_second": 0.0015869140625,
+        "component_32_singleton": 0.00042724609375,
+        "component_64_largest": 0.9547119140625,
+        "component_64_second": 0.00860595703125,
+        "component_64_singleton": 0.00360107421875
+      },
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "NO_VALIDATED_PASS_CRITERION"
+        ]
+      },
+      "feature_seconds": 0.026668199978303164,
+      "decision_seconds": 1.200000406242907e-05,
+      "binding": {
+        "artifact_sha256": "8b3fd4a74e39988c9e30677ad650bb201bd837dba7daefdc9efa2b209542c6f8",
+        "membership_sha256": "13bf345c9be50ee8d5bb45760762aa02a70ea32ab31b34b7b1077a4e4abbb018",
+        "editor_journal_sha256": "8d6062a88209187baac87bfef643023aabe8efd1974bbaad40e66a15ea2ff293",
+        "source_sha256": null
+      }
+    },
+    {
+      "case_id": "FIELD_BAD_T013",
+      "tree_id": 13,
+      "dataset": "human_field_batch",
+      "source": "original",
+      "pre_edit_revision": "b7c796fd31edcb1448c0f110fa9583e0c1811ed9c247f2935344c60d93535cc0",
+      "post_edit_revision": "DELETED_BY_HUMAN_EDIT_SEQUENCE_1",
+      "reference_issue": "MERGED_MULTI_TREE",
+      "evidence_source": "Human REMOVE_POINTS sequence 1 removed all 481,685 points; pre-edit render visual audit.",
+      "why_label_is_defensible": "The pre-edit views show disconnected crown-like clusters and elongated contamination, and the editor removed the membership completely.",
+      "renderable": true,
+      "prior_reference_category": "EXPLICIT_BAD_VISUAL",
+      "reference_label": "EXPLICIT_BAD",
+      "label_audit_reason": "Pre-edit orthographic/oblique views inspected in this audit show major separated masses or extended non-tree-like contamination, corroborated by the recorded correction. Exact biological subtype remains provisional.",
+      "project_run": "2026.08.31-2 / analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": {
+        "point_count": 481685,
+        "sample_count": 16384,
+        "sample_z_extent_m": 7.4367995262146,
+        "robust_z_extent_m": 5.969401850700377,
+        "width_major_m": 8.052856028357867,
+        "width_minor_m": 5.285863318930458,
+        "width_aspect": 1.523470347694742,
+        "width_height_ratio": 1.3490222688581508,
+        "xy_minor_major_variance": 0.2744444692398562,
+        "empty_vertical_bin_fraction": 0.0,
+        "max_vertical_gap_fraction": 0.02133982350330041,
+        "component_16_largest": 1.0,
+        "component_16_second": 0.0,
+        "component_16_singleton": 0.0,
+        "component_32_largest": 0.9991455078125,
+        "component_32_second": 0.00054931640625,
+        "component_32_singleton": 0.0001220703125,
+        "component_64_largest": 0.62567138671875,
+        "component_64_second": 0.36102294921875,
+        "component_64_singleton": 0.00152587890625
+      },
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "NO_VALIDATED_PASS_CRITERION"
+        ]
+      },
+      "feature_seconds": 0.020318299997597933,
+      "decision_seconds": 8.299975888803601e-06,
+      "binding": {
+        "artifact_sha256": "8b3fd4a74e39988c9e30677ad650bb201bd837dba7daefdc9efa2b209542c6f8",
+        "membership_sha256": "b7c796fd31edcb1448c0f110fa9583e0c1811ed9c247f2935344c60d93535cc0",
+        "editor_journal_sha256": "8d6062a88209187baac87bfef643023aabe8efd1974bbaad40e66a15ea2ff293",
+        "source_sha256": null
+      }
+    },
+    {
+      "case_id": "FIELD_BAD_T014",
+      "tree_id": 14,
+      "dataset": "human_field_batch",
+      "source": "original",
+      "pre_edit_revision": "ca6b5db49cfcc9d4c87312c815c88f822a8e110faf306b2c5de2bc20f9d27ff5",
+      "post_edit_revision": "DELETED_BY_HUMAN_EDIT_SEQUENCE_1",
+      "reference_issue": "MERGED_MULTI_TREE",
+      "evidence_source": "Human REMOVE_POINTS sequence 1 removed all 13,997 points; pre-edit render visual audit.",
+      "why_label_is_defensible": "Multiple disconnected highlighted blobs are visibly grouped as one candidate, and the editor removed the candidate completely.",
+      "renderable": true,
+      "prior_reference_category": "EXPLICIT_BAD_VISUAL",
+      "reference_label": "EXPLICIT_BAD",
+      "label_audit_reason": "Pre-edit orthographic/oblique views inspected in this audit show major separated masses or extended non-tree-like contamination, corroborated by the recorded correction. Exact biological subtype remains provisional.",
+      "project_run": "2026.08.31-2 / analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": {
+        "point_count": 13997,
+        "sample_count": 13997,
+        "sample_z_extent_m": 4.364200115203857,
+        "robust_z_extent_m": 3.7964238262176515,
+        "width_major_m": 4.033359524581159,
+        "width_minor_m": 3.9159782396613423,
+        "width_aspect": 1.029974958423152,
+        "width_height_ratio": 1.062410233738198,
+        "xy_minor_major_variance": 0.77425103011685,
+        "empty_vertical_bin_fraction": 0.0,
+        "max_vertical_gap_fraction": 0.012144258259945407,
+        "component_16_largest": 1.0,
+        "component_16_second": 0.0,
+        "component_16_singleton": 0.0,
+        "component_32_largest": 0.9199828534686004,
+        "component_32_second": 0.07851682503393584,
+        "component_32_singleton": 7.144388083160678e-05,
+        "component_64_largest": 0.5116096306351361,
+        "component_64_second": 0.2498392512681289,
+        "component_64_singleton": 0.0010002143316424949
+      },
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "NO_VALIDATED_PASS_CRITERION"
+        ]
+      },
+      "feature_seconds": 0.006062900007236749,
+      "decision_seconds": 5.699985194951296e-06,
+      "binding": {
+        "artifact_sha256": "8b3fd4a74e39988c9e30677ad650bb201bd837dba7daefdc9efa2b209542c6f8",
+        "membership_sha256": "ca6b5db49cfcc9d4c87312c815c88f822a8e110faf306b2c5de2bc20f9d27ff5",
+        "editor_journal_sha256": "8d6062a88209187baac87bfef643023aabe8efd1974bbaad40e66a15ea2ff293",
+        "source_sha256": null
+      }
+    },
+    {
+      "case_id": "FIELD_GOOD_T002",
+      "tree_id": 2,
+      "dataset": "human_field_batch",
+      "source": "final",
+      "pre_edit_revision": "12cd991ae83906b1879e3885905434fbdf2cd1cc3d9187f752b2c26370447d65",
+      "post_edit_revision": "12cd991ae83906b1879e3885905434fbdf2cd1cc3d9187f752b2c26370447d65",
+      "reference_issue": "NONE",
+      "evidence_source": "Finalized human-reviewed batch; the only persisted edit did not target tree 2; exact 460,817-point membership digest is unchanged.",
+      "why_label_is_defensible": "The editor corrected other trees in the same review session but accepted this tree without membership correction.",
+      "renderable": true,
+      "prior_reference_category": "EXPLICIT_GOOD",
+      "reference_label": "UNCERTAIN_REFERENCE",
+      "label_audit_reason": "No explicit per-tree segmentation acceptance found; unchanged membership in a finalized batch proves preservation, not correctness.",
+      "project_run": "2026.08.31-2 / analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": {
+        "point_count": 460817,
+        "sample_count": 16384,
+        "sample_z_extent_m": 8.229399681091309,
+        "robust_z_extent_m": 4.353988046646118,
+        "width_major_m": 2.905720909905231,
+        "width_minor_m": 2.1196851539170067,
+        "width_aspect": 1.3708266553340214,
+        "width_height_ratio": 0.6673699786896546,
+        "xy_minor_major_variance": 0.43719017815201044,
+        "empty_vertical_bin_fraction": 0.0,
+        "max_vertical_gap_fraction": 0.05874065710520073,
+        "component_16_largest": 1.0,
+        "component_16_second": 0.0,
+        "component_16_singleton": 0.0,
+        "component_32_largest": 0.99859619140625,
+        "component_32_second": 0.00054931640625,
+        "component_32_singleton": 6.103515625e-05,
+        "component_64_largest": 0.9927978515625,
+        "component_64_second": 0.0018310546875,
+        "component_64_singleton": 0.0009765625
+      },
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "NO_VALIDATED_PASS_CRITERION"
+        ]
+      },
+      "feature_seconds": 0.022155099984956905,
+      "decision_seconds": 6.399990525096655e-06,
+      "binding": {
+        "artifact_sha256": "d55c8abf96932ac28732d86c6d241343d081aeecfd19a259011f4c87e4095b03",
+        "membership_sha256": "12cd991ae83906b1879e3885905434fbdf2cd1cc3d9187f752b2c26370447d65",
+        "editor_journal_sha256": "8d6062a88209187baac87bfef643023aabe8efd1974bbaad40e66a15ea2ff293",
+        "source_sha256": null
+      }
+    },
+    {
+      "case_id": "FIELD_GOOD_T003",
+      "tree_id": 3,
+      "dataset": "human_field_batch",
+      "source": "final",
+      "pre_edit_revision": "262a541b6f8573f18872b80584509848381c4d7cd776a326571aa3b634560626",
+      "post_edit_revision": "262a541b6f8573f18872b80584509848381c4d7cd776a326571aa3b634560626",
+      "reference_issue": "NONE",
+      "evidence_source": "Finalized human-reviewed batch; the only persisted edit did not target tree 3; exact 421,605-point membership digest is unchanged.",
+      "why_label_is_defensible": "The editor corrected other trees in the same review session but accepted this tree without membership correction.",
+      "renderable": true,
+      "prior_reference_category": "EXPLICIT_GOOD",
+      "reference_label": "UNCERTAIN_REFERENCE",
+      "label_audit_reason": "No explicit per-tree segmentation acceptance found; unchanged membership in a finalized batch proves preservation, not correctness.",
+      "project_run": "2026.08.31-2 / analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": {
+        "point_count": 421605,
+        "sample_count": 16384,
+        "sample_z_extent_m": 7.777599811553955,
+        "robust_z_extent_m": 5.225066032409668,
+        "width_major_m": 3.037489701681384,
+        "width_minor_m": 2.6217117416602838,
+        "width_aspect": 1.1585902650601074,
+        "width_height_ratio": 0.5813303952219281,
+        "xy_minor_major_variance": 0.6609458237408126,
+        "empty_vertical_bin_fraction": 0.0,
+        "max_vertical_gap_fraction": 0.01764044934864972,
+        "component_16_largest": 1.0,
+        "component_16_second": 0.0,
+        "component_16_singleton": 0.0,
+        "component_32_largest": 0.99993896484375,
+        "component_32_second": 6.103515625e-05,
+        "component_32_singleton": 6.103515625e-05,
+        "component_64_largest": 0.97393798828125,
+        "component_64_second": 0.01092529296875,
+        "component_64_singleton": 0.00115966796875
+      },
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "NO_VALIDATED_PASS_CRITERION"
+        ]
+      },
+      "feature_seconds": 0.018123600020771846,
+      "decision_seconds": 6.900023436173797e-06,
+      "binding": {
+        "artifact_sha256": "d55c8abf96932ac28732d86c6d241343d081aeecfd19a259011f4c87e4095b03",
+        "membership_sha256": "262a541b6f8573f18872b80584509848381c4d7cd776a326571aa3b634560626",
+        "editor_journal_sha256": "8d6062a88209187baac87bfef643023aabe8efd1974bbaad40e66a15ea2ff293",
+        "source_sha256": null
+      }
+    },
+    {
+      "case_id": "FIELD_GOOD_T004",
+      "tree_id": 4,
+      "dataset": "human_field_batch",
+      "source": "final",
+      "pre_edit_revision": "ed2b9e714841edeeb8e7e767643a254041441e7e398722d9c40c4f5d35ceea8c",
+      "post_edit_revision": "ed2b9e714841edeeb8e7e767643a254041441e7e398722d9c40c4f5d35ceea8c",
+      "reference_issue": "NONE",
+      "evidence_source": "Finalized human-reviewed batch; the only persisted edit did not target tree 4; exact 122,993-point membership digest is unchanged.",
+      "why_label_is_defensible": "The editor corrected other trees in the same review session but accepted this tree without membership correction.",
+      "renderable": true,
+      "prior_reference_category": "EXPLICIT_GOOD",
+      "reference_label": "UNCERTAIN_REFERENCE",
+      "label_audit_reason": "No explicit per-tree segmentation acceptance found; unchanged membership in a finalized batch proves preservation, not correctness.",
+      "project_run": "2026.08.31-2 / analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": {
+        "point_count": 122993,
+        "sample_count": 16384,
+        "sample_z_extent_m": 8.083999872207642,
+        "robust_z_extent_m": 6.876137433052069,
+        "width_major_m": 2.561296041192204,
+        "width_minor_m": 1.9210830324335721,
+        "width_aspect": 1.3332562923881683,
+        "width_height_ratio": 0.37249052482293643,
+        "xy_minor_major_variance": 0.4009115340378479,
+        "empty_vertical_bin_fraction": 0.0,
+        "max_vertical_gap_fraction": 0.01770172449128349,
+        "component_16_largest": 1.0,
+        "component_16_second": 0.0,
+        "component_16_singleton": 0.0,
+        "component_32_largest": 0.99609375,
+        "component_32_second": 0.0025634765625,
+        "component_32_singleton": 0.0001220703125,
+        "component_64_largest": 0.91864013671875,
+        "component_64_second": 0.04022216796875,
+        "component_64_singleton": 0.00079345703125
+      },
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "NO_VALIDATED_PASS_CRITERION"
+        ]
+      },
+      "feature_seconds": 0.009198399988235906,
+      "decision_seconds": 5.099980626255274e-06,
+      "binding": {
+        "artifact_sha256": "d55c8abf96932ac28732d86c6d241343d081aeecfd19a259011f4c87e4095b03",
+        "membership_sha256": "ed2b9e714841edeeb8e7e767643a254041441e7e398722d9c40c4f5d35ceea8c",
+        "editor_journal_sha256": "8d6062a88209187baac87bfef643023aabe8efd1974bbaad40e66a15ea2ff293",
+        "source_sha256": null
+      }
+    },
+    {
+      "case_id": "FIELD_GOOD_T006",
+      "tree_id": 6,
+      "dataset": "human_field_batch",
+      "source": "final",
+      "pre_edit_revision": "642f248b486e541849521c7d26d3a716469ccace5c63f54afa73cd34b6fd7391",
+      "post_edit_revision": "642f248b486e541849521c7d26d3a716469ccace5c63f54afa73cd34b6fd7391",
+      "reference_issue": "NONE",
+      "evidence_source": "Finalized human-reviewed batch; the only persisted edit did not target tree 6; exact 599,842-point membership digest is unchanged.",
+      "why_label_is_defensible": "The editor corrected other trees in the same review session but accepted this tree without membership correction.",
+      "renderable": true,
+      "prior_reference_category": "EXPLICIT_GOOD",
+      "reference_label": "UNCERTAIN_REFERENCE",
+      "label_audit_reason": "No explicit per-tree segmentation acceptance found; unchanged membership in a finalized batch proves preservation, not correctness.",
+      "project_run": "2026.08.31-2 / analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": {
+        "point_count": 599842,
+        "sample_count": 16384,
+        "sample_z_extent_m": 7.780399560928345,
+        "robust_z_extent_m": 4.976751794815064,
+        "width_major_m": 3.6024777887998534,
+        "width_minor_m": 3.1549863173935453,
+        "width_aspect": 1.1418362637388544,
+        "width_height_ratio": 0.7238612527458227,
+        "xy_minor_major_variance": 0.6400514064600825,
+        "empty_vertical_bin_fraction": 0.0,
+        "max_vertical_gap_fraction": 0.027389394552402985,
+        "component_16_largest": 1.0,
+        "component_16_second": 0.0,
+        "component_16_singleton": 0.0,
+        "component_32_largest": 0.9937744140625,
+        "component_32_second": 0.006103515625,
+        "component_32_singleton": 0.0,
+        "component_64_largest": 0.981201171875,
+        "component_64_second": 0.006103515625,
+        "component_64_singleton": 0.00048828125
+      },
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "NO_VALIDATED_PASS_CRITERION"
+        ]
+      },
+      "feature_seconds": 0.024660299997776747,
+      "decision_seconds": 1.0899995686486363e-05,
+      "binding": {
+        "artifact_sha256": "d55c8abf96932ac28732d86c6d241343d081aeecfd19a259011f4c87e4095b03",
+        "membership_sha256": "642f248b486e541849521c7d26d3a716469ccace5c63f54afa73cd34b6fd7391",
+        "editor_journal_sha256": "8d6062a88209187baac87bfef643023aabe8efd1974bbaad40e66a15ea2ff293",
+        "source_sha256": null
+      }
+    },
+    {
+      "case_id": "FIELD_GOOD_T007",
+      "tree_id": 7,
+      "dataset": "human_field_batch",
+      "source": "final",
+      "pre_edit_revision": "42bfe8544baaeeaf87da8adb575626f45b004a7dcb5d78c39b583cc2cf81c4b9",
+      "post_edit_revision": "42bfe8544baaeeaf87da8adb575626f45b004a7dcb5d78c39b583cc2cf81c4b9",
+      "reference_issue": "NONE",
+      "evidence_source": "Finalized human-reviewed batch; the only persisted edit did not target tree 7; exact 704,065-point membership digest is unchanged.",
+      "why_label_is_defensible": "The editor corrected other trees in the same review session but accepted this tree without membership correction.",
+      "renderable": true,
+      "prior_reference_category": "EXPLICIT_GOOD",
+      "reference_label": "UNCERTAIN_REFERENCE",
+      "label_audit_reason": "No explicit per-tree segmentation acceptance found; unchanged membership in a finalized batch proves preservation, not correctness.",
+      "project_run": "2026.08.31-2 / analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": {
+        "point_count": 704065,
+        "sample_count": 16384,
+        "sample_z_extent_m": 7.260900020599365,
+        "robust_z_extent_m": 5.657351965904237,
+        "width_major_m": 3.726442960335477,
+        "width_minor_m": 3.5125808980292064,
+        "width_aspect": 1.0608845941245828,
+        "width_height_ratio": 0.6586903170942918,
+        "xy_minor_major_variance": 0.7707518538347905,
+        "empty_vertical_bin_fraction": 0.0,
+        "max_vertical_gap_fraction": 0.008043101261288097,
+        "component_16_largest": 1.0,
+        "component_16_second": 0.0,
+        "component_16_singleton": 0.0,
+        "component_32_largest": 0.99981689453125,
+        "component_32_second": 6.103515625e-05,
+        "component_32_singleton": 0.00018310546875,
+        "component_64_largest": 0.98895263671875,
+        "component_64_second": 0.00885009765625,
+        "component_64_singleton": 0.000732421875
+      },
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "NO_VALIDATED_PASS_CRITERION"
+        ]
+      },
+      "feature_seconds": 0.028167499986011535,
+      "decision_seconds": 1.0100018698722124e-05,
+      "binding": {
+        "artifact_sha256": "d55c8abf96932ac28732d86c6d241343d081aeecfd19a259011f4c87e4095b03",
+        "membership_sha256": "42bfe8544baaeeaf87da8adb575626f45b004a7dcb5d78c39b583cc2cf81c4b9",
+        "editor_journal_sha256": "8d6062a88209187baac87bfef643023aabe8efd1974bbaad40e66a15ea2ff293",
+        "source_sha256": null
+      }
+    },
+    {
+      "case_id": "FIELD_GOOD_T008",
+      "tree_id": 8,
+      "dataset": "human_field_batch",
+      "source": "final",
+      "pre_edit_revision": "3bf6d084db244ab2847f35c8d13631b01d9ebc07a6fd78e3f887d67639314a29",
+      "post_edit_revision": "3bf6d084db244ab2847f35c8d13631b01d9ebc07a6fd78e3f887d67639314a29",
+      "reference_issue": "NONE",
+      "evidence_source": "Finalized human-reviewed batch; the only persisted edit did not target tree 8; exact 580,901-point membership digest is unchanged.",
+      "why_label_is_defensible": "The editor corrected other trees in the same review session but accepted this tree without membership correction.",
+      "renderable": true,
+      "prior_reference_category": "EXPLICIT_GOOD",
+      "reference_label": "UNCERTAIN_REFERENCE",
+      "label_audit_reason": "No explicit per-tree segmentation acceptance found; unchanged membership in a finalized batch proves preservation, not correctness.",
+      "project_run": "2026.08.31-2 / analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": {
+        "point_count": 580901,
+        "sample_count": 16384,
+        "sample_z_extent_m": 7.308099746704102,
+        "robust_z_extent_m": 5.088342113494873,
+        "width_major_m": 3.4768125949782287,
+        "width_minor_m": 3.072741302594943,
+        "width_aspect": 1.1315018911751684,
+        "width_height_ratio": 0.6832898648377669,
+        "xy_minor_major_variance": 0.6474693102835145,
+        "empty_vertical_bin_fraction": 0.0,
+        "max_vertical_gap_fraction": 0.02713432609109266,
+        "component_16_largest": 1.0,
+        "component_16_second": 0.0,
+        "component_16_singleton": 0.0,
+        "component_32_largest": 1.0,
+        "component_32_second": 0.0,
+        "component_32_singleton": 0.0,
+        "component_64_largest": 0.9923095703125,
+        "component_64_second": 0.00128173828125,
+        "component_64_singleton": 0.00115966796875
+      },
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "NO_VALIDATED_PASS_CRITERION"
+        ]
+      },
+      "feature_seconds": 0.023737400013487786,
+      "decision_seconds": 7.499998901039362e-06,
+      "binding": {
+        "artifact_sha256": "d55c8abf96932ac28732d86c6d241343d081aeecfd19a259011f4c87e4095b03",
+        "membership_sha256": "3bf6d084db244ab2847f35c8d13631b01d9ebc07a6fd78e3f887d67639314a29",
+        "editor_journal_sha256": "8d6062a88209187baac87bfef643023aabe8efd1974bbaad40e66a15ea2ff293",
+        "source_sha256": null
+      }
+    },
+    {
+      "case_id": "FIELD_GOOD_T011",
+      "tree_id": 11,
+      "dataset": "human_field_batch",
+      "source": "final",
+      "pre_edit_revision": "c7423d6c4ceccc2a4c59480a107f611ebdc42322f64e35d13dbb42f5ca25c011",
+      "post_edit_revision": "c7423d6c4ceccc2a4c59480a107f611ebdc42322f64e35d13dbb42f5ca25c011",
+      "reference_issue": "NONE",
+      "evidence_source": "Finalized human-reviewed batch; the only persisted edit did not target tree 11; exact 503,601-point membership digest is unchanged.",
+      "why_label_is_defensible": "The editor corrected other trees in the same review session but accepted this tree without membership correction.",
+      "renderable": true,
+      "prior_reference_category": "EXPLICIT_GOOD",
+      "reference_label": "UNCERTAIN_REFERENCE",
+      "label_audit_reason": "No explicit per-tree segmentation acceptance found; unchanged membership in a finalized batch proves preservation, not correctness.",
+      "project_run": "2026.08.31-2 / analysis-d434dfe375814b2d9b8a1d765a3e4d13",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": {
+        "point_count": 503601,
+        "sample_count": 16384,
+        "sample_z_extent_m": 5.704699516296387,
+        "robust_z_extent_m": 3.904884266853333,
+        "width_major_m": 2.74609552917513,
+        "width_minor_m": 2.3179077019412695,
+        "width_aspect": 1.18473031815514,
+        "width_height_ratio": 0.7032463298555099,
+        "xy_minor_major_variance": 0.6224143977884682,
+        "empty_vertical_bin_fraction": 0.0,
+        "max_vertical_gap_fraction": 0.03553204873908587,
+        "component_16_largest": 1.0,
+        "component_16_second": 0.0,
+        "component_16_singleton": 0.0,
+        "component_32_largest": 1.0,
+        "component_32_second": 0.0,
+        "component_32_singleton": 0.0,
+        "component_64_largest": 0.9853515625,
+        "component_64_second": 0.0048828125,
+        "component_64_singleton": 0.001220703125
+      },
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "NO_VALIDATED_PASS_CRITERION"
+        ]
+      },
+      "feature_seconds": 0.023066499998094514,
+      "decision_seconds": 8.000002708286047e-06,
+      "binding": {
+        "artifact_sha256": "d55c8abf96932ac28732d86c6d241343d081aeecfd19a259011f4c87e4095b03",
+        "membership_sha256": "c7423d6c4ceccc2a4c59480a107f611ebdc42322f64e35d13dbb42f5ca25c011",
+        "editor_journal_sha256": "8d6062a88209187baac87bfef643023aabe8efd1974bbaad40e66a15ea2ff293",
+        "source_sha256": null
+      }
+    },
+    {
+      "case_id": "ACCEPT_GOOD_T001",
+      "tree_id": 1,
+      "dataset": "finalized_acceptance_batch",
+      "source": "final",
+      "pre_edit_revision": "a9243069b144d7ed6037271002e244e643b79ed967dec629556b74bff08264a6",
+      "post_edit_revision": "a9243069b144d7ed6037271002e244e643b79ed967dec629556b74bff08264a6",
+      "reference_issue": "NONE",
+      "evidence_source": "COMPLETE acceptance batch with both spans FINALIZED; its only persisted DELETE targeted tree 0; exact 106,330-point tree 1 membership digest is unchanged.",
+      "why_label_is_defensible": "The finalized review outcome preserves this tree exactly while explicitly deleting another candidate; this is acceptance evidence, not an independent field-study label.",
+      "renderable": true,
+      "prior_reference_category": "EXPLICIT_GOOD",
+      "reference_label": "UNCERTAIN_REFERENCE",
+      "label_audit_reason": "No explicit per-tree segmentation acceptance found; unchanged membership in a finalized batch proves preservation, not correctness.",
+      "project_run": "survey_v01_gate_b_20260830 / analysis-53f4c1ac401249d78c7e8a25a438d9c9",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": {
+        "point_count": 106330,
+        "sample_count": 16384,
+        "sample_z_extent_m": 6.964599609375,
+        "robust_z_extent_m": 6.171271886825561,
+        "width_major_m": 2.543725181934512,
+        "width_minor_m": 1.990985633784439,
+        "width_aspect": 1.2776210630407379,
+        "width_height_ratio": 0.4121881564422497,
+        "xy_minor_major_variance": 0.42744394901143745,
+        "empty_vertical_bin_fraction": 0.0,
+        "max_vertical_gap_fraction": 0.0018666526448627616,
+        "component_16_largest": 1.0,
+        "component_16_second": 0.0,
+        "component_16_singleton": 0.0,
+        "component_32_largest": 1.0,
+        "component_32_second": 0.0,
+        "component_32_singleton": 0.0,
+        "component_64_largest": 0.98992919921875,
+        "component_64_second": 0.00994873046875,
+        "component_64_singleton": 0.0
+      },
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "NO_VALIDATED_PASS_CRITERION"
+        ]
+      },
+      "feature_seconds": 0.008684600004926324,
+      "decision_seconds": 6.000016583129764e-06,
+      "binding": {
+        "artifact_sha256": "4caadb532f7a957e51eaf26d777447d563fcb62294c5845046ed3c1df3e522fc",
+        "membership_sha256": "a9243069b144d7ed6037271002e244e643b79ed967dec629556b74bff08264a6",
+        "editor_journal_sha256": "e3558dfc162fba9704b6bf614a5a68060181974e9e99a6e41e5745eee5bf972f",
+        "source_sha256": null
+      }
+    },
+    {
+      "case_id": "ARCHIVE_UNCERTAIN_T012",
+      "tree_id": 12,
+      "dataset": "archived_trim_batch",
+      "source": "original",
+      "pre_edit_revision": "BEFORE_TREE_EDIT_SEQUENCE_1",
+      "post_edit_revision": "AFTER_TREE_EDIT_SEQUENCE_1",
+      "reference_issue": "OTHER",
+      "evidence_source": "Persisted lasso REMOVE_POINTS sequence 1 removed 315 points from tree 12.",
+      "why_label_is_defensible": "The small edit proves membership changed but does not prove an obvious pre-edit visual defect; archived point chunks are unavailable, so it is excluded from definitive metrics.",
+      "renderable": false,
+      "prior_reference_category": "EDITED_BUT_VISUAL_LABEL_UNCERTAIN",
+      "reference_label": "UNCERTAIN_REFERENCE",
+      "label_audit_reason": "Small edit with missing point chunks does not establish a segmentation defect.",
+      "project_run": "local_tree_trim_acceptance_rc_d / analysis-b728ee72e9e84b9db4e4f59b443745bd",
+      "human_review_outcome": "NOT_RECORDED_PER_TREE",
+      "features": null,
+      "prediction": {
+        "status": "UNCERTAIN",
+        "issue": "GEOMETRY_AMBIGUOUS",
+        "reason_codes": [
+          "REFERENCE_GEOMETRY_UNAVAILABLE"
+        ]
+      }
+    }
+  ],
+  "metrics": {
+    "BAD_TOTAL": 8,
+    "BAD_FALSE_PASS": 0,
+    "BAD_UNCERTAIN": 8,
+    "BAD_DETECTED": 0,
+    "GOOD_TOTAL": 0,
+    "GOOD_PASS": 0,
+    "GOOD_UNCERTAIN": 0,
+    "GOOD_FALSE_FLAG": 0
+  },
+  "scene_tree_counts": {
+    "human_field_batch/original": 15,
+    "human_field_batch/final": 12,
+    "finalized_acceptance_batch/final": 16
+  },
+  "input_hashes": [
+    {
+      "path": "E:\\2026.8.31-2\\2026.08.31-2\\2026.08.31-2\\artifacts\\project-runs\\batches\\analysis-d434dfe375814b2d9b8a1d765a3e4d13\\tree_edits.json",
+      "sha256": "8d6062a88209187baac87bfef643023aabe8efd1974bbaad40e66a15ea2ff293"
+    },
+    {
+      "path": "E:\\2026.8.31-2\\2026.08.31-2\\2026.08.31-2\\artifacts\\project-runs\\batches\\analysis-d434dfe375814b2d9b8a1d765a3e4d13\\tree_segmentation_original.npz",
+      "sha256": "8b3fd4a74e39988c9e30677ad650bb201bd837dba7daefdc9efa2b209542c6f8"
+    },
+    {
+      "path": "E:\\2026.8.31-2\\2026.08.31-2\\2026.08.31-2\\artifacts\\project-runs\\batches\\analysis-d434dfe375814b2d9b8a1d765a3e4d13\\tree_segmentation_final.npz",
+      "sha256": "d55c8abf96932ac28732d86c6d241343d081aeecfd19a259011f4c87e4095b03"
+    },
+    {
+      "path": "E:\\TreeLineWarning-fast\\workspace\\survey_v01_gate_b_20260830\\artifacts\\project-runs\\batches\\analysis-53f4c1ac401249d78c7e8a25a438d9c9\\tree_edits.json",
+      "sha256": "e3558dfc162fba9704b6bf614a5a68060181974e9e99a6e41e5745eee5bf972f"
+    },
+    {
+      "path": "E:\\TreeLineWarning-fast\\workspace\\survey_v01_gate_b_20260830\\artifacts\\project-runs\\batches\\analysis-53f4c1ac401249d78c7e8a25a438d9c9\\tree_segmentation_final.npz",
+      "sha256": "4caadb532f7a957e51eaf26d777447d563fcb62294c5845046ed3c1df3e522fc"
+    },
+    {
+      "path": "E:\\TreeLineWarning-fast\\acceptance_evidence\\archived_workspace_evidence_20260827\\local_tree_trim_acceptance_rc_d\\artifacts\\project-runs\\batches\\analysis-b728ee72e9e84b9db4e4f59b443745bd\\tree_edits.json",
+      "sha256": "73402c491aed127ebe297525351fd7e3c0c3def06bfae9acc535aef22b7dcf02"
+    }
+  ],
+  "cached_artifact_loads": [
+    {
+      "path": "E:\\2026.8.31-2\\2026.08.31-2\\2026.08.31-2\\artifacts\\project-runs\\batches\\analysis-d434dfe375814b2d9b8a1d765a3e4d13\\tree_segmentation_original.npz",
+      "load_and_group_seconds": 0.7457245000114199
+    },
+    {
+      "path": "E:\\2026.8.31-2\\2026.08.31-2\\2026.08.31-2\\artifacts\\project-runs\\batches\\analysis-d434dfe375814b2d9b8a1d765a3e4d13\\tree_segmentation_final.npz",
+      "load_and_group_seconds": 0.2079991000064183
+    },
+    {
+      "path": "E:\\TreeLineWarning-fast\\workspace\\survey_v01_gate_b_20260830\\artifacts\\project-runs\\batches\\analysis-53f4c1ac401249d78c7e8a25a438d9c9\\tree_segmentation_final.npz",
+      "load_and_group_seconds": 0.16213189999689348
+    }
+  ],
+  "audit_wall_seconds": 3.733488199999556,
+  "feature_total_seconds": 0.6225444999872707,
+  "decision_total_seconds": 0.00018480001017451286,
+  "peak_rss_delta_bytes_sampled_10ms": 947519488,
+  "product_accepted": false,
+  "verdict": "GEOMETRY_QC_NOT_GOOD_ENOUGH"
+}
