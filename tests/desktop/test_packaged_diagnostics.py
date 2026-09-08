@@ -62,6 +62,7 @@ def test_dependency_report_contains_runtime_and_module_origins(
     assert report["module_origins"]["desktop.app"]["origin"] == "frozen"
     assert "lazrs" in report["module_origins"]
     assert report["native_operations"]["pdal"]["minimal_operation_pass"] is True
+    assert "certified_operation" in report["gpu_acceleration"]
 
 
 def test_dependency_report_serializes_native_import_failure(

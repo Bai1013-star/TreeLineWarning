@@ -693,12 +693,78 @@ def dependency_report(resource_root: Path | str) -> dict[str, Any]:
     try:
         from algorithms.spans.gpu_clearance import probe_gpu
 
-        capability, _module = probe_gpu()
+        capability, module = probe_gpu()
         gpu = {
             **capability.to_dict(),
             "optional": True,
             "cpu_fallback_available": True,
         }
+        if capability.available and module is not None:
+            try:
+                import numpy as np
+                from algorithms.spans.clearance import _candidate_exact_nearest_edges
+                from algorithms.spans.gpu_clearance import create_gpu_accelerator
+                from algorithms.vegetation.tree_wire_clearance import (
+                    SegmentEdgeBvh,
+                    WireEdgeBundle,
+                )
+
+                edges = WireEdgeBundle(
+                    a_xyz=np.asarray(((0.0, 0.0, 0.0), (0.0, 2.0, 0.0))),
+                    b_xyz=np.asarray(((10.0, 0.0, 0.0), (10.0, 2.0, 0.0))),
+                    wire_id=np.asarray((5, 2), dtype=np.int32),
+                    segment_index=np.asarray((1, 0), dtype=np.int32),
+                    polyline_edge_index=np.asarray((0, 0), dtype=np.int32),
+                    wire_status=np.zeros(2, dtype=np.uint8),
+                    segment_quality_flags=np.zeros(2, dtype=np.uint16),
+                    edge_count=2,
+                )
+                points = np.asarray(
+                    ((5.0, 1.0, 0.0), (5.0, 0.0, 0.0), (10.0, 2.0, 0.0)),
+                    dtype=np.float64,
+                )
+                bvh = SegmentEdgeBvh(edges, leaf_cap=2)
+
+                def cpu(values: Any) -> tuple[Any, ...]:
+                    return _candidate_exact_nearest_edges(values, bvh, edges, 1e-9)
+
+                accelerator, initialization = create_gpu_accelerator(
+                    edges, 1e-9, mode="GPU", cp=module
+                )
+                if accelerator is None:  # pragma: no cover - explicit GPU is fail-closed
+                    raise RuntimeError("explicit GPU mode returned no accelerator")
+                actual = accelerator.nearest(points, cpu)
+                expected = cpu(points)
+                exact = bool(
+                    np.array_equal(actual[0], expected[0])
+                    and np.array_equal(actual[1], expected[1])
+                    and np.array_equal(actual[2], expected[2])
+                    and np.array_equal(actual[3], expected[3])
+                )
+                gpu["certified_operation"] = {
+                    "pass": exact,
+                    "processed_points": len(points),
+                    "effective_mode": initialization.get("effective_mode"),
+                    "certificate_success_points": actual[5][
+                        "certificate_success_points"
+                    ],
+                    "fallback_points": actual[5]["fallback_points"],
+                    "cpu_exact_match": exact,
+                }
+            except Exception as exc:  # optional GPU failure must preserve CPU startup
+                gpu["certified_operation"] = {
+                    "pass": False,
+                    "processed_points": 0,
+                    "cpu_exact_match": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        else:
+            gpu["certified_operation"] = {
+                "pass": False,
+                "processed_points": 0,
+                "cpu_exact_match": False,
+                "error": capability.reason,
+            }
     except Exception as exc:  # optional GPU diagnostics must not block CPU startup
         gpu = {
             "available": False,
