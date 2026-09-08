@@ -121,6 +121,23 @@ def test_export_cache_rejects_empty_tree_sheet_and_corrupt_workbook(tmp_path: Pa
     assert not workflow._prediction_export_cache_matches_final(path, result)
 
 
+def test_export_cache_rejects_legacy_workbook_without_measurement_columns(tmp_path):
+    from openpyxl import load_workbook
+
+    project = _project(tmp_path)
+    workflow = _workflow(tmp_path, project)
+    result = _result(project)
+    path = tmp_path / "exports" / "Prediction_Input.xlsx"
+    _write_cache(path, project)
+    book = load_workbook(path)
+    sheet = book["Trees"]
+    headers = [cell.value for cell in sheet[1]]
+    sheet.delete_cols(headers.index("horizontal_clearance_m") + 1, 3)
+    book.save(path)
+    book.close()
+    assert not workflow._prediction_export_cache_matches_final(path, result)
+
+
 def test_export_prediction_requires_finalized_status_without_implicit_finalize(
     tmp_path: Path,
 ) -> None:

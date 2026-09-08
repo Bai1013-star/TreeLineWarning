@@ -17,6 +17,7 @@ from core.stage_b.danger_points import (
     build_danger_point_display,
     persist_final_danger_points,
 )
+from core.stage_b.measurement_fields import dbh_fields
 from core.stage_b.tree_metrics import compute_stage_b_tree_metrics
 
 from desktop.review_risk_frontend import TREE_REVIEW_RISK_EXTENSION_JS
@@ -261,7 +262,7 @@ def install_review_extensions() -> None:
             str(record.persistent_tree_id): metrics.get(int(record.global_tree_id))
             for record in reconciled.global_tree_records
         }
-        from core.stage_b.dbh_recovery import load_finalized_dbh, publication_fields
+        from core.stage_b.dbh_recovery import load_finalized_dbh
 
         recovered = load_finalized_dbh(self.project_root, result, reconciled)
         dbh_by_persistent = {
@@ -270,6 +271,9 @@ def install_review_extensions() -> None:
         }
         for row in projection.get("trees", []):
             metric = persistent_to_metric.get(str(row.get("persistent_tree_id")))
+            row.update(dbh_fields(
+                metric, dbh_by_persistent.get(str(row.get("persistent_tree_id")))
+            ))
             if metric is None:
                 continue
             row["height_m"] = (
@@ -281,17 +285,6 @@ def install_review_extensions() -> None:
             row["crown_width_major_m"] = metric.crown_major_width_m
             row["crown_width_minor_m"] = metric.crown_minor_width_m
             row["crown_area_m2"] = metric.crown_area_m2
-            row["diameter_cm"] = (
-                None
-                if metric.dbh.dbh_m is None
-                else float(metric.dbh.dbh_m) * 100.0
-            )
-            row["diameter_source"] = (
-                f"BREAST_HEIGHT_1P30M_{metric.dbh.dbh_quality}"
-            )
-            dbh = dbh_by_persistent.get(str(row.get("persistent_tree_id")))
-            if dbh is not None:
-                row.update(publication_fields(dbh))
         projection.setdefault("metadata", {})["tree_metrics_source"] = (
             "CANONICAL_FULLRES_POST_EDITOR"
         )

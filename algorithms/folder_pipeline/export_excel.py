@@ -86,9 +86,14 @@ _TREE_COLUMNS = [
     "dbh_source",
     "dbh_model_version",
     "dbh_uncertainty_cm",
+    "horizontal_clearance_m",
+    "vertical_clearance_m",
+    "clearance_component_source",
 ]
 
 _NUMERIC_COLUMNS = {
+    "horizontal_clearance_m",
+    "vertical_clearance_m",
     "height_m",
     "crown_width_m",
     "crown_width_major_m",

@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 from core.stage_b import BatchSpanStatus
 from core.stage_b.dbh_recovery import DBH_FIELDS
+from core.stage_b.measurement_fields import CLEARANCE_FIELDS
 
 CURRENT_REPORT_SCHEMA = "treeline-current-final-report-v1"
 CURRENT_REPORT_MODE = "CURRENT_FINAL"
@@ -49,7 +50,7 @@ _CURRENT_TREE_FIELDS = (
     "current_risk",
     "quality_state",
     "human_edited",
-) + DBH_FIELDS
+) + DBH_FIELDS + CLEARANCE_FIELDS
 
 
 def _status_text(value: Any) -> str:

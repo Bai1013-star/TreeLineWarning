@@ -47,6 +47,7 @@ from core.stage_a.models import stable_id
 from core.stage_a.risk import RiskPolicy
 from core.stage_b import BatchAnalysisResult, BatchAnalysisScheduler, BatchSpanStatus
 from core.stage_b.failures import failure_details
+from core.stage_b.measurement_fields import clearance_components
 
 from desktop.editor_tasks import editor_action, editor_tasks
 from desktop.project_management import (
@@ -2021,6 +2022,11 @@ class DesktopWorkflow:
             tree_sheet = workbook["Trees"]
             tree_rows = tree_sheet.iter_rows(values_only=True)
             headers = tuple(next(tree_rows))
+            if not {
+                "dbh_cm", "dbh_fit_status", "horizontal_clearance_m",
+                "vertical_clearance_m", "clearance_component_source",
+            }.issubset(headers):
+                return False
             indices = {
                 key: headers.index(key)
                 for key in (
@@ -2107,8 +2113,10 @@ class DesktopWorkflow:
         path = self._root / "exports" / "Prediction_Input.xlsx"
         batch_path = editor.artifact_root / "batch.json"
         edits_path = editor.artifact_root / "tree_edits.json"
+        dbh_path = editor.artifact_root / "dbh_final.json"
         source_times = [
-            item.stat().st_mtime_ns for item in (batch_path, edits_path) if item.is_file()
+            item.stat().st_mtime_ns
+            for item in (batch_path, edits_path, dbh_path) if item.is_file()
         ]
         if (
             batch_path.is_file()
@@ -2206,6 +2214,7 @@ class DesktopWorkflow:
                     ),
                     "crown_width_m": None,
                     "minimum_clearance_m": minimum,
+                    **clearance_components(clearance),
                     "danger_point_count": (
                         None if clearance is None else clearance.danger_point_count
                     ),

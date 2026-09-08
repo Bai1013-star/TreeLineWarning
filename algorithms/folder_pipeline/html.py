@@ -961,7 +961,7 @@ def step3_html() -> str:
       <table id="finaltable">
         <thead><tr>
           <th>Tree ID</th><th>高度(m)</th><th>冠幅(m)</th><th>冠幅面积(m²)</th>
-          <th>DBH(cm)</th><th>最小净空(m)</th><th>危险点数</th><th>风险</th>
+          <th>胸径(cm)</th><th>最小净空(m)</th><th title="三维最近点对的水平分量">水平净空分量(m)</th><th title="三维最近点对的垂直分量">垂直净空分量(m)</th><th>危险点数</th><th>风险</th>
           <th>质量</th><th>人工编辑</th>
         </tr></thead>
         <tbody></tbody>
@@ -1003,8 +1003,10 @@ async function loadFinal(){
       t.height_m!=null?t.height_m.toFixed(2):"—"}</td><td>${
       t.crown_width_m!=null?t.crown_width_m.toFixed(2):"—"}</td><td>${
       t.crown_area_m2!=null?t.crown_area_m2.toFixed(2):"—"}</td><td>${
-      t.diameter_cm!=null?t.diameter_cm:"—"}</td><td>${
+      t.diameter_cm!=null?t.diameter_cm.toFixed(2):"未测得"}</td><td>${
       t.minimum_clearance_m!=null?t.minimum_clearance_m.toFixed(3):"—"}</td><td>${
+      t.horizontal_clearance_m!=null?t.horizontal_clearance_m.toFixed(3):"—"}</td><td>${
+      t.vertical_clearance_m!=null?t.vertical_clearance_m.toFixed(3):"—"}</td><td>${
       t.danger_point_count}</td><td>${risk}</td><td>${t.quality_state}</td><td>${
       t.human_edited?"是":"否"}</td>`;
     if(risk==="DANGEROUS") tr.style.background="#ffe9e9";
