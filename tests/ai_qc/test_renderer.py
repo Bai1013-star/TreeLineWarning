@@ -44,11 +44,11 @@ def _render(output: Path, revision: str):
     )
 
 
-def test_six_views_are_byte_deterministic(tmp_path: Path) -> None:
+def test_eight_views_are_byte_deterministic(tmp_path: Path) -> None:
     first = _render(tmp_path / "first", "rev-1")
     second = _render(tmp_path / "second", "rev-1")
 
-    assert len(first.view_files) == len(VIEW_NAMES) == 6
+    assert len(first.view_files) == len(VIEW_NAMES) == 8
     assert first.view_sha256 == second.view_sha256
     assert first.contact_sheet_sha256 == second.contact_sheet_sha256
     assert first.membership_sha256 == second.membership_sha256
