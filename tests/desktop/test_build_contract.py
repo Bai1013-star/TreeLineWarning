@@ -78,5 +78,7 @@ def test_release_spec_bundles_pinned_optional_gpu_runtime() -> None:
     assert 'collect_dynamic_libs("nvidia")' in spec
     assert 'collect_data_files("nvidia")' in spec
     assert '"cupy"' not in spec[spec.index("optional_excludes = [") :]
+    assert '"cupy.cuda.cutensor"' in spec
+    assert '"cupy_backends.cuda.libs.cutensor"' in spec
     assert "cupy-cuda13x==14.2.0" in requirements
     assert "nvidia-cuda-runtime==13.3.29" in requirements

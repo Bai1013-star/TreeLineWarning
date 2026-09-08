@@ -279,6 +279,11 @@ optional_excludes = [
     "PySide2",
     "wx",
     "gi",
+    # CuPy ships adapters for separately licensed optional libraries.  The
+    # certified clearance screen uses RawKernel/NVRTC only and must not collect
+    # extension modules whose cuTENSOR DLLs are not part of this runtime.
+    "cupy.cuda.cutensor",
+    "cupy_backends.cuda.libs.cutensor",
     "geopandas",
     "osgeo",
     "shapely",
