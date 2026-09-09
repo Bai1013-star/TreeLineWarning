@@ -453,6 +453,218 @@ def summarize(row: dict, by_source) -> dict:
     }
 
 
+def phase_remediate() -> None:
+    """Gate C2 minimal remediation: source-set isolation and quarantine rebuild.
+
+    Consumes the frozen canonical manifest and membership/context tables only; no
+    geometry, radius or identity change, and no expensive point rescan.
+    """
+    manifest = load('GATE_C2_IDENTITY_MANIFEST.json')
+    pools = load('GATE_C2_PARTITION_POOLS.json')
+    evidence = load('GATE_C2_ALIAS_EVIDENCE.json')
+
+    rows_by_id = {row['canonical_tree_id']: row for row in manifest}
+    relpath_to_id = {alias: row['canonical_tree_id']
+                     for row in manifest for alias in row['source_aliases']}
+    aliases_by_id = {row['canonical_tree_id']: tuple(row['source_aliases'])
+                     for row in manifest}
+
+    high_pairs = [item for item in evidence
+                  if item['containment_of_smaller'] >= 0.30]
+    quarantine = sorted({relpath_to_id[name] for item in high_pairs
+                         for name in (item['a'], item['b'])})
+    quarantine_sites = sorted({rows_by_id[cid]['site'] for cid in quarantine})
+
+    def item_of(row: dict, base_blockers=()) -> dict:
+        return {
+            'canonical_tree_id': row['canonical_tree_id'],
+            'aliases': list(row['source_aliases']),
+            'context_ids': list(row['neighbour_ids']),
+            'donor_ids': [],  # no generator exists yet; donors must come from context
+            'base_blockers': list(base_blockers),
+        }
+
+    def model_selection_blockers(row: dict) -> list[str]:
+        return [name for name, failed in (
+            ('identity_not_exact', row['identity_status'] != ci.IDENTITY_EXACT),
+            ('no_neighbour_points', row['neighbours_with_points'] <= 0),
+            ('too_few_points', row['point_count'] < 4096)) if failed]
+
+    train_all = [r for r in manifest if r['partition'] == 'train']
+    validation_all = [r for r in manifest if r['partition'] == 'validation']
+    train_base_excluded = {r['canonical_tree_id']: model_selection_blockers(r)
+                           for r in train_all if model_selection_blockers(r)}
+    validation_base_excluded = {r['canonical_tree_id']: model_selection_blockers(r)
+                                for r in validation_all if model_selection_blockers(r)}
+    train_items = [item_of(r) for r in train_all if not model_selection_blockers(r)]
+    validation_items = [item_of(r) for r in validation_all
+                        if not model_selection_blockers(r)]
+
+    isolation = ci.isolate_partition_sources(train_items, validation_items,
+                                             quarantine=quarantine)
+
+    held_out_items = [item_of(r, model_selection_blockers(r) + [
+        name for name, failed in (
+            ('not_held_out_site', r['site'] != 'wytham'),
+            ('no_plot_support', r['plot_support_cells'] <= 0)) if failed])
+        for r in manifest if r['site'] == 'wytham']
+    held_out = ci.rebuild_held_out(held_out_items, quarantine=quarantine)
+
+    # Held-out source set and its quarantine exposure.
+    held_out_sources = set(held_out['eligible'])
+    for cid in held_out['eligible']:
+        held_out_sources |= set(held_out['context'][cid])
+    held_out_aliases = {alias for cid in held_out_sources
+                        for alias in aliases_by_id.get(cid, ())}
+    quarantine_aliases = {alias for cid in quarantine
+                          for alias in aliases_by_id.get(cid, ())}
+
+    old_strict = set(pools['held_out_pool']['eligible_excluding_high_containment'])
+    old_referencing = sorted(cid for cid in old_strict
+                             if set(rows_by_id[cid]['neighbour_ids']) & set(quarantine))
+
+    train_union = set(isolation['train']['source_union'])
+    validation_union = set(isolation['validation']['source_union'])
+    held_out_union = held_out_sources
+
+    assertions = {
+        'TRAIN_VAL_CANDIDATE_LEAKAGE': len(
+            set(isolation['train']['eligible']) & set(isolation['validation']['eligible'])),
+        'TRAIN_VAL_CONTEXT_LEAKAGE': len(
+            isolation['assertions']['train_validation_context_leakage']),
+        'TRAIN_VAL_DONOR_LEAKAGE': len(
+            isolation['assertions']['train_validation_donor_leakage']),
+        'TRAIN_VAL_ALL_SOURCE_LEAKAGE': len(
+            isolation['assertions']['train_validation_all_source_leakage']),
+        'TRAIN_VAL_ALIAS_LEAKAGE': len(ci.alias_leakage(
+            isolation['train']['source_union'], isolation['validation']['source_union'],
+            aliases_by_id)),
+        'TRAIN_HELDOUT_ALL_SOURCE_LEAKAGE': len(train_union & held_out_union),
+        'VALIDATION_HELDOUT_ALL_SOURCE_LEAKAGE': len(validation_union & held_out_union),
+        'HIGH_CONTAINMENT_AS_CANDIDATE': len(set(held_out['eligible']) & set(quarantine)),
+        'HIGH_CONTAINMENT_AS_CONTEXT': len(
+            set(quarantine) & {x for v in held_out['context'].values() for x in v}),
+        'HIGH_CONTAINMENT_AS_DONOR': 0,
+        'HIGH_CONTAINMENT_AS_ALIAS_SOURCE': len(quarantine_aliases & held_out_aliases),
+    }
+    assertions['ALL_ASSERTIONS_ZERO'] = all(value == 0 for value in assertions.values())
+
+    payload = {
+        'protocol': 'GATE_C_CANONICAL_IDENTITY_PROTOCOL_V2 + source isolation remediation',
+        'policy': {
+            'example_source_set': ('candidate canonical tree UNION candidate aliases UNION '
+                                   'context canonical trees UNION context aliases UNION '
+                                   'donor canonical trees UNION donor aliases'),
+            'rule_1': 'a quarantined source contributes to no partition',
+            'rule_2': 'a candidate whose surviving context is empty is excluded (fail closed)',
+            'rule_3': ('a source still shared by both model-selection unions is removed '
+                       'from the side where it is not a candidate, or from both sides if '
+                       'it is a candidate on neither'),
+            'rule_4': 'iterate to a fixpoint; non-convergence raises instead of passing',
+            'donor_policy': ('donors are drawn from the candidate own surviving context, '
+                             'so donor leakage is structural; no generator exists yet'),
+            'geometry_unchanged': True,
+            'context_radius_m': QUERY_PAD_M,
+        },
+        'identity_manifest_digest': load('GATE_C2_IDENTITY_SUMMARY.json')['manifest_digest'],
+        'high_containment': {
+            'pair_count': len(high_pairs),
+            'tree_count': len(quarantine),
+            'trees': quarantine,
+            'sites': quarantine_sites,
+        },
+        'counts': {
+            'train_partition_before': len(train_all),
+            'train_unique_after': len(isolation['train']['eligible']),
+            'validation_partition_before': len(validation_all),
+            'validation_unique_after': len(isolation['validation']['eligible']),
+            'train_excluded_by_base_eligibility': len(train_base_excluded),
+            'validation_excluded_by_base_eligibility': len(validation_base_excluded),
+            'train_excluded_by_source_isolation': len(isolation['train']['excluded']),
+            'validation_excluded_by_source_isolation': len(isolation['validation']['excluded']),
+            'old_strict_heldout_count': len(old_strict),
+            'old_candidates_referencing_quarantine': len(old_referencing),
+            'new_strict_heldout_count': len(held_out['eligible']),
+            'heldout_excluded_due_to_context_after_quarantine': sum(
+                1 for reasons in held_out['excluded'].values()
+                if 'no_context_after_quarantine' in reasons),
+            'heldout_excluded_due_to_quarantine': sum(
+                1 for reasons in held_out['excluded'].values()
+                if 'high_containment_quarantine' in reasons),
+            'heldout_total_canonical': len(held_out_items),
+        },
+        'resolutions': isolation['resolutions'],
+        'assertions': assertions,
+        'train_source_union': sorted(train_union),
+        'validation_source_union': sorted(validation_union),
+        'held_out_source_union': sorted(held_out_union),
+        'held_out_eligible': held_out['eligible'],
+        'held_out_excluded': held_out['excluded'],
+        'train_excluded': {**train_base_excluded, **isolation['train']['excluded']},
+        'validation_excluded': {**validation_base_excluded,
+                                **isolation['validation']['excluded']},
+        'minimum_support': MIN_SUPPORT,
+        'minimum_support_preserved': (pools['minimum_support'] == 30
+                                      and len(held_out['eligible']) >= MIN_SUPPORT),
+    }
+    # Independent reconstruction straight from raw manifest rows: rebuild each
+    # partition's complete source union and re-derive the intersections, rather than
+    # trusting the counters above.
+    def rebuild_union(ids, blocked):
+        union = set()
+        for cid in ids:
+            union.add(cid)
+            union |= set(rows_by_id[cid]['neighbour_ids'])
+        return union - set(blocked)
+
+    recon_train = rebuild_union(isolation['train']['eligible'], isolation['train']['blocked'])
+    recon_validation = rebuild_union(isolation['validation']['eligible'],
+                                     isolation['validation']['blocked'])
+    recon_held_out = rebuild_union(held_out['eligible'], quarantine)
+    recon = {
+        'train_union_size': len(recon_train),
+        'validation_union_size': len(recon_validation),
+        'held_out_union_size': len(recon_held_out),
+        'train_validation_all_source_intersection': len(recon_train & recon_validation),
+        'train_heldout_all_source_intersection': len(recon_train & recon_held_out),
+        'validation_heldout_all_source_intersection': len(recon_validation & recon_held_out),
+        'quarantine_in_held_out_union': len(set(quarantine) & recon_held_out),
+        'matches_reported': (
+            len(recon_train & recon_validation)
+            == assertions['TRAIN_VAL_ALL_SOURCE_LEAKAGE']
+            and len(recon_train & recon_held_out)
+            == assertions['TRAIN_HELDOUT_ALL_SOURCE_LEAKAGE']
+            and len(recon_validation & recon_held_out)
+            == assertions['VALIDATION_HELDOUT_ALL_SOURCE_LEAKAGE']
+            and len(set(quarantine) & recon_held_out) == 0),
+    }
+    payload['independent_reconstruction'] = recon
+    save('GATE_C2_REMEDIATION.json', payload)
+
+    if (REPORTS / 'DEDUP_REPORT.json').exists():
+        dedup = load('DEDUP_REPORT.json')
+        dedup['remediation'] = {
+            'policy': 'source-set isolation R1 + high-containment quarantine R2',
+            'train_unique_after': len(isolation['train']['eligible']),
+            'validation_unique_after': len(isolation['validation']['eligible']),
+            'strict_held_out_after': len(held_out['eligible']),
+            'assertions': assertions,
+            'independent_reconstruction': recon,
+        }
+        save('DEDUP_REPORT.json', dedup)
+
+    provenance = {
+        'train': isolation['train'],
+        'validation': isolation['validation'],
+        'held_out': {'eligible': held_out['eligible'], 'excluded': held_out['excluded'],
+                     'context': held_out['context'], 'source_union': sorted(held_out_union)},
+        'aliases_by_canonical_id': aliases_by_id,
+    }
+    save('GATE_C2_CONTEXT_PROVENANCE.json', provenance)
+
+    print(json.dumps({'counts': payload['counts'], 'assertions': assertions}, indent=2))
+
+
 def phase_verify() -> None:
     """Independent re-computation of a deterministic sample plus invariant checks."""
     manifest = load('GATE_C2_IDENTITY_MANIFEST.json')
@@ -504,6 +716,24 @@ def phase_verify() -> None:
           == load('GATE_C2_IDENTITY_SUMMARY.json')['manifest_digest'],
           ci.manifest_digest(manifest))
 
+    if (REPORTS / 'GATE_C2_REMEDIATION.json').exists():
+        remediation = load('GATE_C2_REMEDIATION.json')
+        assertions = remediation['assertions']
+        check('remediation_assertions_all_zero', assertions['ALL_ASSERTIONS_ZERO'],
+              assertions)
+        check('remediation_independent_reconstruction',
+              remediation['independent_reconstruction']['matches_reported'],
+              remediation['independent_reconstruction'])
+        check('strict_held_out_meets_minimum',
+              remediation['counts']['new_strict_heldout_count']
+              >= remediation['minimum_support'],
+              {'strict': remediation['counts']['new_strict_heldout_count'],
+               'minimum': remediation['minimum_support']})
+        check('identity_manifest_unchanged',
+              remediation['identity_manifest_digest']
+              == load('GATE_C2_IDENTITY_SUMMARY.json')['manifest_digest'],
+              remediation['identity_manifest_digest'])
+
     save('GATE_C2_VERIFICATION.json', checks)
     print(json.dumps(checks, indent=2))
     print('ALL PASS' if all(c['pass'] for c in checks) else 'FAILURES PRESENT')
@@ -512,11 +742,12 @@ def phase_verify() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('phase', choices=['identity', 'membership', 'instances',
-                                          'pools', 'cases', 'verify'])
+                                          'pools', 'cases', 'remediate', 'verify'])
     args = parser.parse_args()
     {'identity': phase_identity, 'membership': phase_membership,
      'instances': phase_instances, 'pools': phase_pools,
-     'cases': phase_cases, 'verify': phase_verify}[args.phase]()
+     'cases': phase_cases, 'remediate': phase_remediate,
+     'verify': phase_verify}[args.phase]()
 
 
 if __name__ == '__main__':

@@ -54,5 +54,50 @@
     "check": "digest_matches_summary",
     "pass": true,
     "detail": "eb515773b5235f2cdb0206231493195f73f269c761d9da2d2186ba68ab3ed5aa"
+  },
+  {
+    "check": "remediation_assertions_all_zero",
+    "pass": true,
+    "detail": {
+      "TRAIN_VAL_CANDIDATE_LEAKAGE": 0,
+      "TRAIN_VAL_CONTEXT_LEAKAGE": 0,
+      "TRAIN_VAL_DONOR_LEAKAGE": 0,
+      "TRAIN_VAL_ALL_SOURCE_LEAKAGE": 0,
+      "TRAIN_VAL_ALIAS_LEAKAGE": 0,
+      "TRAIN_HELDOUT_ALL_SOURCE_LEAKAGE": 0,
+      "VALIDATION_HELDOUT_ALL_SOURCE_LEAKAGE": 0,
+      "HIGH_CONTAINMENT_AS_CANDIDATE": 0,
+      "HIGH_CONTAINMENT_AS_CONTEXT": 0,
+      "HIGH_CONTAINMENT_AS_DONOR": 0,
+      "HIGH_CONTAINMENT_AS_ALIAS_SOURCE": 0,
+      "ALL_ASSERTIONS_ZERO": true
+    }
+  },
+  {
+    "check": "remediation_independent_reconstruction",
+    "pass": true,
+    "detail": {
+      "train_union_size": 482,
+      "validation_union_size": 207,
+      "held_out_union_size": 851,
+      "train_validation_all_source_intersection": 0,
+      "train_heldout_all_source_intersection": 0,
+      "validation_heldout_all_source_intersection": 0,
+      "quarantine_in_held_out_union": 0,
+      "matches_reported": true
+    }
+  },
+  {
+    "check": "strict_held_out_meets_minimum",
+    "pass": true,
+    "detail": {
+      "strict": 749,
+      "minimum": 30
+    }
+  },
+  {
+    "check": "identity_manifest_unchanged",
+    "pass": true,
+    "detail": "eb515773b5235f2cdb0206231493195f73f269c761d9da2d2186ba68ab3ed5aa"
   }
 ]

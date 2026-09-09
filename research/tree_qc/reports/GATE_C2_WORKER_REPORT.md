@@ -161,6 +161,13 @@ for missing context. Instance-ID collisions: **0**. Native instance ID equals th
 dominant plot instance for all 1,154 trees that have both (61 trees with a native ID
 have no plot support; 364 trees have no native ID at all).
 
+**Remediation (see `GATE_C2_REMEDIATION_REPORT.md`).** After Supervisor review this
+table's pool figures are superseded by the provenance-clean remediation: train **440**
+eligible (2 excluded for base eligibility), validation **175** (2 excluded), strict
+held-out pool **749** re-derived with the 25 high-containment trees removed from
+candidate, context, donor and alias roles. Five canonical trees that had been context
+on both model-selection sides were removed from both; all assertions are zero.
+
 ## 8. Representative case review
 
 `GATE_C2_CASE_REVIEW.json` records four families with coordinate statistics, bbox,
@@ -226,6 +233,9 @@ touched.
 - `DEDUP_REPORT.json` — dedup/split summary in the required name
 - `GATE_C2_CASE_REVIEW.json` — representative cases A–D
 - `GATE_C2_VERIFICATION.json` — independent re-computation checks
+- `GATE_C2_REMEDIATION.json` — source-set isolation policy, quarantine set, assertions
+- `GATE_C2_CONTEXT_PROVENANCE.json` — per-candidate context/donor provenance
+- `GATE_C2_REMEDIATION_REPORT.md` — remediation report
 
 ## 13. Publisher clarification
 

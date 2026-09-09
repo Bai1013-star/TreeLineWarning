@@ -239,6 +239,128 @@ class Determinism(IdentityFixture):
         self.assertLess(key[0], key[1])
 
 
+def candidate(cid, context=(), donors=(), aliases=()):
+    return {'canonical_tree_id': cid,
+            'aliases': list(aliases) or [f'{cid}.ply'],
+            'context_ids': list(context),
+            'donor_ids': list(donors)}
+
+
+class SourceIsolation(unittest.TestCase):
+    """Gate C2 remediation: partitions must be source-disjoint and fail closed."""
+
+    def test_shared_context_source_is_removed_from_both_sides(self):
+        train = [candidate('train:1', ['shared:9', 'train:2'])]
+        validation = [candidate('val:1', ['shared:9', 'val:2'])]
+        result = ci.isolate_partition_sources(train, validation)
+        self.assertNotIn('shared:9', result['train']['context']['train:1'])
+        self.assertNotIn('shared:9', result['validation']['context']['val:1'])
+        self.assertEqual(result['assertions']['train_validation_all_source_leakage'], [])
+        self.assertEqual(result['assertions']['train_validation_context_leakage'], [])
+        self.assertEqual(sorted(result['train']['eligible']), ['train:1'])
+        self.assertEqual(sorted(result['validation']['eligible']), ['val:1'])
+
+    def test_candidate_with_only_shared_context_fails_closed(self):
+        train = [candidate('train:1', ['shared:9'])]
+        validation = [candidate('val:1', ['shared:9'])]
+        result = ci.isolate_partition_sources(train, validation)
+        self.assertEqual(result['train']['eligible'], [])
+        self.assertEqual(result['validation']['eligible'], [])
+        self.assertEqual(result['train']['excluded']['train:1'],
+                         'no_context_after_source_isolation')
+        self.assertEqual(result['validation']['excluded']['val:1'],
+                         'no_context_after_source_isolation')
+
+    def test_train_candidate_used_as_validation_context(self):
+        train = [candidate('train:1', ['train:2'])]
+        validation = [candidate('val:1', ['train:1', 'val:2'])]
+        result = ci.isolate_partition_sources(train, validation)
+        self.assertIn('train:1', result['train']['eligible'])
+        self.assertNotIn('train:1', result['validation']['context']['val:1'])
+        self.assertIn('train:1', result['validation']['blocked'])
+        self.assertEqual(result['assertions']['train_validation_all_source_leakage'], [])
+
+    def test_validation_candidate_used_as_train_context(self):
+        train = [candidate('train:1', ['val:1', 'train:2'])]
+        validation = [candidate('val:1', ['val:2'])]
+        result = ci.isolate_partition_sources(train, validation)
+        self.assertIn('val:1', result['validation']['eligible'])
+        self.assertNotIn('val:1', result['train']['context']['train:1'])
+        self.assertIn('val:1', result['train']['blocked'])
+        self.assertEqual(result['assertions']['train_validation_all_source_leakage'], [])
+
+    def test_donor_crossing_partitions_is_removed(self):
+        train = [candidate('train:1', ['train:2'], donors=['donor:9'])]
+        validation = [candidate('val:1', ['val:2'], donors=['donor:9'])]
+        result = ci.isolate_partition_sources(train, validation)
+        self.assertNotIn('donor:9', result['train']['donors']['train:1'])
+        self.assertNotIn('donor:9', result['validation']['donors']['val:1'])
+        self.assertEqual(result['assertions']['train_validation_donor_leakage'], [])
+        self.assertEqual(result['assertions']['train_validation_all_source_leakage'], [])
+
+    def test_alias_never_crosses_partitions(self):
+        aliases = {
+            'train:1': ('trees/train/a.ply',),
+            'val:1': ('trees/val/b.ply',),
+            'shared:9': ('trees/train/c.ply', 'trees/val/c.ply'),
+        }
+        train = [candidate('train:1', ['shared:9', 'train:2'])]
+        validation = [candidate('val:1', ['shared:9', 'val:2'])]
+        before = ci.alias_leakage(
+            ci.source_set(train[0]) | ci.source_set(train[0]),
+            ci.source_set(validation[0]), aliases)
+        self.assertTrue(before, 'fixture must start with an alias conflict')
+        result = ci.isolate_partition_sources(train, validation)
+        self.assertEqual(ci.alias_leakage(result['train']['source_union'],
+                                          result['validation']['source_union'], aliases), [])
+
+    def test_shared_quarantined_neighbour_is_excluded(self):
+        train = [candidate('train:1', ['quar:9', 'train:2'])]
+        validation = [candidate('val:1', ['quar:9', 'val:2'])]
+        result = ci.isolate_partition_sources(train, validation, quarantine={'quar:9'})
+        self.assertNotIn('quar:9', result['train']['context']['train:1'])
+        self.assertNotIn('quar:9', result['validation']['context']['val:1'])
+        self.assertIn('quar:9', result['train']['blocked'])
+        self.assertIn('quar:9', result['validation']['blocked'])
+        self.assertEqual(result['assertions']['train_validation_all_source_leakage'], [])
+
+    def test_quarantined_only_context_fails_closed(self):
+        train = [candidate('train:1', ['quar:9'])]
+        result = ci.isolate_partition_sources(train, [], quarantine={'quar:9'})
+        self.assertEqual(result['train']['eligible'], [])
+        self.assertEqual(result['train']['excluded']['train:1'],
+                         'no_context_after_source_isolation')
+
+    def test_zero_point_provenance_fails_closed(self):
+        # A bbox-adjacent neighbour that contributed no point is not a source, so a
+        # candidate with no surviving point-bearing context must be excluded.
+        train = [candidate('train:1', [])]
+        result = ci.isolate_partition_sources(train, [])
+        self.assertEqual(result['train']['eligible'], [])
+        self.assertEqual(result['train']['excluded']['train:1'],
+                         'no_context_after_source_isolation')
+
+    def test_held_out_rebuild_drops_quarantined_context_and_fails_closed(self):
+        items = [
+            {'canonical_tree_id': 'held:1', 'context_ids': ['quar:9', 'held:2'],
+             'base_blockers': []},
+            {'canonical_tree_id': 'held:2', 'context_ids': ['quar:9'], 'base_blockers': []},
+            {'canonical_tree_id': 'held:3', 'context_ids': ['held:1'], 'base_blockers': []},
+        ]
+        result = ci.rebuild_held_out(items, quarantine={'quar:9'})
+        self.assertEqual(result['eligible'], ['held:1', 'held:3'])
+        self.assertEqual(result['context']['held:1'], ['held:2'])
+        self.assertEqual(result['excluded']['held:2'], ['no_context_after_quarantine'])
+        self.assertNotIn('quar:9', {x for v in result['context'].values() for x in v})
+
+    def test_held_out_rebuild_keeps_base_blocker_reasons(self):
+        items = [{'canonical_tree_id': 'held:1', 'context_ids': ['held:2'],
+                  'base_blockers': ['no_plot_support']}]
+        result = ci.rebuild_held_out(items, quarantine=set())
+        self.assertEqual(result['eligible'], [])
+        self.assertEqual(result['excluded']['held:1'], ['no_plot_support'])
+
+
 class PlyReading(IdentityFixture):
     def test_signed_zero_cells_are_equal(self):
         positive = np.array([[0.0, 1.0, 2.0]], dtype=np.float32)

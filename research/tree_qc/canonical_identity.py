@@ -521,6 +521,157 @@ def plot_records(path: Path, chunk: int = CHUNK_POINTS) -> tuple[np.ndarray, np.
     return keys, instance
 
 
+def source_set(item: dict) -> set[str]:
+    """Complete provenance set of one example: candidate, context and donor ids.
+
+    Aliases are the same canonical tree, so the canonical id already carries them;
+    ``alias_sources`` is kept separate for explicit alias-level assertions.
+    """
+    union = {item['canonical_tree_id']}
+    union.update(item.get('context_ids', ()))
+    union.update(item.get('donor_ids', ()))
+    return union
+
+
+def _source_union(items: list[dict], blocked: set[str]) -> set[str]:
+    union: set[str] = set()
+    for item in items:
+        if item['canonical_tree_id'] in blocked:
+            continue
+        union |= source_set(item)
+    return union - blocked
+
+
+def isolate_partition_sources(train: list[dict], validation: list[dict],
+                              quarantine=frozenset(), max_iterations: int = 100) -> dict:
+    """Deterministically make two model-selection partitions source-disjoint.
+
+    Policy (fixed before any model result exists):
+    1. A quarantined source may contribute to neither partition.
+    2. A candidate whose surviving context becomes empty is excluded (fail closed).
+    3. Any canonical tree still in both source unions is removed from the side where
+       it is not a candidate; if it is a candidate on neither side it is removed from
+       both. Candidates are never removed by rule 3 alone.
+    4. The process repeats to a fixpoint; non-convergence is an error, not a pass.
+
+    Donors are drawn from the candidate's own surviving context, so they are inside
+    the same source set by construction.
+    """
+    quarantine = set(quarantine)
+    sides = ('train', 'validation')
+    inputs = {'train': list(train), 'validation': list(validation)}
+    blocked = {side: set(quarantine) for side in sides}
+    excluded: dict[str, dict] = {side: {} for side in sides}
+    resolutions: list[dict] = []
+
+    for _ in range(max_iterations):
+        active = {
+            side: [item for item in inputs[side]
+                   if item['canonical_tree_id'] not in blocked[side]
+                   and item['canonical_tree_id'] not in excluded[side]]
+            for side in sides}
+        changed = False
+        for side in sides:
+            keep = []
+            for item in active[side]:
+                surviving = [x for x in item.get('context_ids', ())
+                             if x not in blocked[side]]
+                if not surviving:
+                    excluded[side][item['canonical_tree_id']] = \
+                        'no_context_after_source_isolation'
+                    changed = True
+                else:
+                    keep.append(item)
+            active[side] = keep
+        if changed:
+            continue
+        unions = {side: _source_union(active[side], blocked[side]) for side in sides}
+        conflict = unions['train'] & unions['validation']
+        if not conflict:
+            break
+        train_ids = {item['canonical_tree_id'] for item in active['train']}
+        validation_ids = {item['canonical_tree_id'] for item in active['validation']}
+        for cid in sorted(conflict):
+            if cid in train_ids:
+                blocked['validation'].add(cid)
+                resolutions.append({'source': cid, 'removed_from': 'validation',
+                                    'reason': 'source_is_a_train_candidate'})
+            elif cid in validation_ids:
+                blocked['train'].add(cid)
+                resolutions.append({'source': cid, 'removed_from': 'train',
+                                    'reason': 'source_is_a_validation_candidate'})
+            else:
+                blocked['train'].add(cid)
+                blocked['validation'].add(cid)
+                resolutions.append({'source': cid, 'removed_from': 'both',
+                                    'reason': 'shared_non_candidate_source'})
+    else:
+        raise RuntimeError('source isolation did not converge')
+
+    result: dict = {'quarantine': sorted(quarantine), 'resolutions': resolutions}
+    for side in sides:
+        active = [item for item in inputs[side]
+                  if item['canonical_tree_id'] not in blocked[side]
+                  and item['canonical_tree_id'] not in excluded[side]]
+        result[side] = {
+            'eligible': sorted(item['canonical_tree_id'] for item in active),
+            'excluded': dict(sorted(excluded[side].items())),
+            'blocked': sorted(blocked[side]),
+            'context': {item['canonical_tree_id']: sorted(
+                x for x in item.get('context_ids', ()) if x not in blocked[side])
+                for item in active},
+            'donors': {item['canonical_tree_id']: sorted(
+                x for x in item.get('donor_ids', ()) if x not in blocked[side])
+                for item in active},
+            'source_union': sorted(_source_union(active, blocked[side])),
+        }
+
+    train_ids = set(result['train']['eligible'])
+    validation_ids = set(result['validation']['eligible'])
+    train_context = {x for v in result['train']['context'].values() for x in v}
+    validation_context = {x for v in result['validation']['context'].values() for x in v}
+    train_donors = {x for v in result['train']['donors'].values() for x in v}
+    validation_donors = {x for v in result['validation']['donors'].values() for x in v}
+    result['assertions'] = {
+        'train_validation_candidate_leakage': sorted(train_ids & validation_ids),
+        'train_validation_context_leakage': sorted(train_context & validation_context),
+        'train_validation_donor_leakage': sorted(train_donors & validation_donors),
+        'train_validation_all_source_leakage': sorted(
+            set(result['train']['source_union']) & set(result['validation']['source_union'])),
+    }
+    return result
+
+
+def rebuild_held_out(items: list[dict], quarantine=frozenset()) -> dict:
+    """Re-evaluate held-out candidates after removing quarantined context sources."""
+    quarantine = set(quarantine)
+    eligible: list[str] = []
+    excluded: dict[str, list[str]] = {}
+    context: dict[str, list[str]] = {}
+    for item in items:
+        cid = item['canonical_tree_id']
+        reasons = list(item.get('base_blockers', ()))
+        if cid in quarantine:
+            reasons.append('high_containment_quarantine')
+        surviving = [x for x in item.get('context_ids', ()) if x not in quarantine]
+        if not surviving:
+            reasons.append('no_context_after_quarantine')
+        if reasons:
+            excluded[cid] = sorted(set(reasons))
+        else:
+            eligible.append(cid)
+            context[cid] = sorted(surviving)
+    return {'eligible': sorted(eligible), 'excluded': dict(sorted(excluded.items())),
+            'context': context}
+
+
+def alias_leakage(left_union, right_union, aliases_by_id: dict) -> list[str]:
+    """Alias file paths that would appear in both source unions."""
+    left = {alias for cid in left_union for alias in aliases_by_id.get(cid, ())}
+    right = {alias for cid in right_union for alias in aliases_by_id.get(cid, ())}
+    return sorted(left & right)
+
+
 def query_box(row: dict, pad: float) -> tuple[float, float, float, float, float, float]:
     """Candidate XY bbox expanded by `pad` metres; Z extent kept native."""
     x0, y0, z0, x1, y1, z1 = row['bbox']

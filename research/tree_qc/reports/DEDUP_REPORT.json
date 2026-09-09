@@ -24,5 +24,35 @@
     "eligible_excluding_high_containment_count": 749
   },
   "manifest_digest": "eb515773b5235f2cdb0206231493195f73f269c761d9da2d2186ba68ab3ed5aa",
-  "manifest_digest_full": "eb515773b5235f2cdb0206231493195f73f269c761d9da2d2186ba68ab3ed5aa"
+  "manifest_digest_full": "eb515773b5235f2cdb0206231493195f73f269c761d9da2d2186ba68ab3ed5aa",
+  "remediation": {
+    "policy": "source-set isolation R1 + high-containment quarantine R2",
+    "train_unique_after": 440,
+    "validation_unique_after": 175,
+    "strict_held_out_after": 749,
+    "assertions": {
+      "TRAIN_VAL_CANDIDATE_LEAKAGE": 0,
+      "TRAIN_VAL_CONTEXT_LEAKAGE": 0,
+      "TRAIN_VAL_DONOR_LEAKAGE": 0,
+      "TRAIN_VAL_ALL_SOURCE_LEAKAGE": 0,
+      "TRAIN_VAL_ALIAS_LEAKAGE": 0,
+      "TRAIN_HELDOUT_ALL_SOURCE_LEAKAGE": 0,
+      "VALIDATION_HELDOUT_ALL_SOURCE_LEAKAGE": 0,
+      "HIGH_CONTAINMENT_AS_CANDIDATE": 0,
+      "HIGH_CONTAINMENT_AS_CONTEXT": 0,
+      "HIGH_CONTAINMENT_AS_DONOR": 0,
+      "HIGH_CONTAINMENT_AS_ALIAS_SOURCE": 0,
+      "ALL_ASSERTIONS_ZERO": true
+    },
+    "independent_reconstruction": {
+      "train_union_size": 482,
+      "validation_union_size": 207,
+      "held_out_union_size": 851,
+      "train_validation_all_source_intersection": 0,
+      "train_heldout_all_source_intersection": 0,
+      "validation_heldout_all_source_intersection": 0,
+      "quarantine_in_held_out_union": 0,
+      "matches_reported": true
+    }
+  }
 }

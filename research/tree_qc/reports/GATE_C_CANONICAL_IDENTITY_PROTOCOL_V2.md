@@ -174,7 +174,51 @@ The boundary and the split sizes reproduce V1 exactly (`x = 67.92401220579217 m`
 - V1 and its reports remain unchanged as the record of what the conservative
   assumption produced.
 
-## 9. What V2 does not claim
+## 9. Source-set isolation and high-containment quarantine (remediation R1/R2)
+
+Added after independent Supervisor review found that partition checks covered candidate
+identity but not every tree participating in an example.
+
+**EXAMPLE_SOURCE_SET** = candidate canonical tree ∪ candidate aliases ∪ context
+canonical trees ∪ context aliases ∪ corruption-donor canonical trees ∪ donor aliases.
+For the two model-selection partitions, `TRAIN_SOURCE_UNION ∩ VALIDATION_SOURCE_UNION`
+must be empty. The requirement applies to whole canonical source trees, not sampled
+points: a canonical tree may not contribute even one context or donor point to both
+partitions.
+
+Deterministic policy, fixed before any model result exists (implemented as
+`isolate_partition_sources`):
+
+1. A quarantined source contributes to neither partition.
+2. A candidate whose surviving context is empty is excluded — fail closed.
+3. A source still present in both unions is removed from the side where it is not a
+   candidate; if it is a candidate on neither side it is removed from both. A source
+   is never removed from the side where it is a candidate.
+4. Steps 1–3 iterate to a fixpoint; non-convergence raises rather than passes.
+5. Donors are drawn only from the candidate's own surviving context, so donor leakage
+   is structural. No generator exists yet, so donor sets are empty and the donor
+   assertions hold vacuously; the rule binds the Gate D generator.
+
+Geometry is unchanged: the 3 m context radius and the bbox/centroid rules are
+untouched. The measured effect is 5 canonical trees that were context on both sides;
+all five are Litchfield boundary-quarantine trees (candidates in neither partition), so
+rule 3 removed them from both sides.
+
+**HIGH_CONTAINMENT_QUARANTINE_SET** = the 25 canonical trees in the 17 pairs with
+containment ≥ 0.30 (all Wytham). They may not contribute as candidate, context, donor
+or alias source to the strict held-out pool. Publisher labels are unchanged and the 17
+pairs are not unioned. Each held-out candidate's context is rebuilt without them and
+re-evaluated; a candidate left with no point-bearing context is excluded with an
+explicit reason. The 3 m radius is unchanged.
+
+The previous `STRICT_HELDOUT_POOL = 749` is withdrawn as a frozen number. The
+re-derived strict pool happens to contain the same 749 candidates — the candidate set
+is unchanged because all 200 candidates that referenced the quarantine set retain
+between 5 and 64 surviving point-bearing context sources — but its context provenance
+is different for exactly those 200 candidates. The count is an outcome, not an
+assumption.
+
+## 10. What V2 does not claim
 
 - It does not claim the archives were corrupt.
 - It does not claim a level-C overlap pair is one tree, nor that it is two; it keeps
