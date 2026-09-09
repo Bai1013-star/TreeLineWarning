@@ -1,0 +1,74 @@
+{
+  "status": "HOLD_DATA_IDENTITY_CONTEXT_UNRESOLVED",
+  "manual_archive_verification": "PASS",
+  "gate_c_allowed": true,
+  "gate_c": "HOLD",
+  "gate_d_allowed": false,
+  "minimum_independent_support": 30,
+  "scope_counts": {
+    "('litchfield', 'train', 'preliminary_clear')": 386,
+    "('litchfield', 'train', 'context_blocked')": 56,
+    "('litchfield', 'quarantine', 'unresolved')": 84,
+    "('litchfield', 'validation', 'context_blocked')": 48,
+    "('litchfield', 'validation', 'preliminary_clear')": 129,
+    "('wytham', 'held_out', 'unresolved')": 600,
+    "('wytham', 'held_out', 'context_blocked')": 273,
+    "('wytham', 'held_out', 'preliminary_clear')": 3
+  },
+  "flagged_source_files": 527,
+  "diagnostic_seconds": 149.67199999999139,
+  "temporary_bytes": 2649674900,
+  "d_free_bytes": 110907105280,
+  "plot_summaries": [
+    {
+      "plot": "wytham/wytham_test.ply",
+      "points": 30016364,
+      "unique_coordinate_cells": 28349163,
+      "conflicting_coordinate_cells": 408278,
+      "conflict_points": 828371,
+      "conflict_point_fraction": 0.027597313252198035,
+      "affected_id_count": 161,
+      "total_id_count": 246,
+      "semantic0_iff_instance_minus1_violations": 0,
+      "partition_rows": 30016364,
+      "source_crc32": "3d1d41ce"
+    },
+    {
+      "plot": "wytham/wytham_train.ply",
+      "points": 102602005,
+      "unique_coordinate_cells": 98358019,
+      "conflicting_coordinate_cells": 504451,
+      "conflict_points": 1009865,
+      "conflict_point_fraction": 0.009842546449262858,
+      "affected_id_count": 256,
+      "total_id_count": 432,
+      "semantic0_iff_instance_minus1_violations": 0,
+      "partition_rows": 102602005,
+      "source_crc32": "95cc1c2b"
+    },
+    {
+      "plot": "wytham/wytham_val.ply",
+      "points": 30497066,
+      "unique_coordinate_cells": 29107190,
+      "conflicting_coordinate_cells": 78680,
+      "conflict_points": 158311,
+      "conflict_point_fraction": 0.00519102394964814,
+      "affected_id_count": 84,
+      "total_id_count": 179,
+      "semantic0_iff_instance_minus1_violations": 0,
+      "partition_rows": 30497066,
+      "source_crc32": "0501428b"
+    }
+  ],
+  "limitations": [
+    "Affected ID denominators include ground-1, not tree fractions.",
+    "Same stored coordinates may describe distinct observations; this is not a corrupt archive or a proven biological duplicate verdict.",
+    "Native/mapped-ID flags are conservative unresolved membership indicators, not relabeling.",
+    "3 preliminary clear source groups is conditional on current quarantine protocol; not a claim only3 valid trees exist in dataset.",
+    "Litchfield full within-plot coordinate conflict audit not run; its counts remain preliminary."
+  ],
+  "gate_a": "PASS_UNCHANGED",
+  "gate_b": "PASS_UNCHANGED",
+  "frozen_v0_1_modified": false,
+  "push": false
+}

@@ -1,0 +1,92 @@
+{
+  "sites": [
+    {
+      "site": "litchfield",
+      "archive_sha256": "4d45f0ad215ff49d665b0d881e15a1cfd5f85ae1e832c1da057461205b5156f3",
+      "extracted_file_count": 740,
+      "extracted_bytes": 7827966891,
+      "extracted_file_set_size_crc": "PASS",
+      "ply_count": 740,
+      "formats": {
+        "format binary_little_endian 1.0": 740
+      },
+      "property_layouts": {
+        "property double x | property double y | property double z | property int instance | property int semantic": 2,
+        "property double x | property double y | property double z | property int semantic | property int instance": 580,
+        "property float x | property float y | property float z": 146,
+        "property double x | property double y | property double z | property double red | property double green | property double blue | property int instance | property int semantic": 12
+      },
+      "vertex_count_total": 257692812,
+      "vertex_count_min": 3923,
+      "vertex_count_max": 85600738,
+      "extensions": {
+        ".ply": 740
+      },
+      "top_directories": {
+        "litchfield_test.ply": 1,
+        "litchfield_train.ply": 1,
+        "litchfield_val.ply": 1,
+        "trees": 737
+      },
+      "example_paths": [
+        "litchfield_test.ply",
+        "litchfield_train.ply",
+        "litchfield_val.ply",
+        "trees/test/in_plot_th0.90/tile_0_-20_Boom1.ply",
+        "trees/test/in_plot_th0.90/tile_0_-20_Boom10.ply",
+        "trees/test/in_plot_th0.90/tile_0_-20_Boom11.ply",
+        "trees/test/in_plot_th0.90/tile_0_-20_Boom12.ply",
+        "trees/test/in_plot_th0.90/tile_0_-20_Boom13.ply",
+        "trees/test/in_plot_th0.90/tile_0_-20_Boom14.ply",
+        "trees/test/in_plot_th0.90/tile_0_-20_Boom15.ply",
+        "trees/test/in_plot_th0.90/tile_0_-20_Boom16.ply",
+        "trees/test/in_plot_th0.90/tile_0_-20_Boom17.ply"
+      ],
+      "geometry_analysis": "NOT_RUN"
+    },
+    {
+      "site": "wytham",
+      "archive_sha256": "2ffe674247fba13fe80fa154b72af013592e5b3be8328b7f592409d7bc6534a5",
+      "extracted_file_count": 959,
+      "extracted_bytes": 6586434703,
+      "extracted_file_set_size_crc": "PASS",
+      "ply_count": 959,
+      "formats": {
+        "format binary_little_endian 1.0": 959
+      },
+      "property_layouts": {
+        "property float x | property float y | property float z": 280,
+        "property float x | property float y | property float z | property int semantic | property int instance": 676,
+        "property float x | property float y | property float z | property int instance | property int semantic": 3
+      },
+      "vertex_count_total": 345295937,
+      "vertex_count_min": 1255,
+      "vertex_count_max": 102602005,
+      "extensions": {
+        ".ply": 959
+      },
+      "top_directories": {
+        "wytham_test.ply": 1,
+        "wytham_train.ply": 1,
+        "wytham_val.ply": 1,
+        "trees": 956
+      },
+      "example_paths": [
+        "trees/test/in_plot_th0.90/wytham_winter_1035a.ply",
+        "trees/test/in_plot_th0.90/wytham_winter_1035b.ply",
+        "trees/test/in_plot_th0.90/wytham_winter_104.ply",
+        "trees/test/in_plot_th0.90/wytham_winter_1089.ply",
+        "trees/test/in_plot_th0.90/wytham_winter_1119.ply",
+        "trees/test/in_plot_th0.90/wytham_winter_1209.ply",
+        "trees/test/in_plot_th0.90/wytham_winter_1225.ply",
+        "trees/test/in_plot_th0.90/wytham_winter_122a.ply",
+        "trees/test/in_plot_th0.90/wytham_winter_122b.ply",
+        "trees/test/in_plot_th0.90/wytham_winter_122c.ply",
+        "trees/test/in_plot_th0.90/wytham_winter_122d.ply",
+        "trees/test/in_plot_th0.90/wytham_winter_122e.ply"
+      ],
+      "geometry_analysis": "NOT_RUN"
+    }
+  ],
+  "free_bytes": 113582182400
+}

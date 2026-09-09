@@ -17,7 +17,7 @@ WYTHAM_INTEGRITY = PASS
 PYTHON_STDLIB_SUPPORTED = NO
 EXTERNAL_VERIFIER = D:\Program Files\WinRAR\WinRAR.exe
 EXTERNAL_VERIFIER_VERSION = 7.13.0
-VERIFIER_FIX_COMMIT = resolve this report introducing commit; exact value also in D:\TreeQCTraining\MANUAL_ARCHIVE_FINAL_GIT_STATE.json
+VERIFIER_FIX_COMMIT = 771144a4847f525f073c8f556b2015c17b08da51
 GIT_CLEAN = recorded after commit in the external final state
 MANUAL_ARCHIVE_VERIFICATION = PASS
 GATE_C_ALLOWED = YES
@@ -29,3 +29,5 @@ WinRAR test-only commands used t -cfg- -y -p- -ibck with inherited RAR options r
 Central directory totals:1699files; compressed member bytes5497779949; ZIP archive bytes5498034689; expanded14414401594bytes. All paths passed Windows-safe path/type/duplicate/encryption checks. Current free space already accounts for ZIPs and retainedparts. Deducting expansion and10GiB trainingreserve leaves about95.79GiB, greater than35GiB guard. Supervisor permits controlled extraction only after this acceptance; the standalone verifier itself still never extracts. Gate C has started and is not yet PASS. No Gate A/B rerun or science/model/product change.
 
 Method9 mapping primary source: https://github.com/ip7z/7zip/blob/main/DOC/Methods.txt . Actual methods were obtained from every ZipInfo.compress_type, not inferred from names.
+
+Automatic continuation completed controlled extraction and entered Gate C. Its current result is HOLD_DATA_IDENTITY_CONTEXT_UNRESOLVED, with only3preliminaryclear held-out sourcegroups under the frozen conservative context policy versus30required. This is a scientific data-stage hold, not an archive or model failure. See GATE_C_IDENTITY_CONTEXT_HOLD.md; GateD-I notrun. Standalone verifier never extracts.

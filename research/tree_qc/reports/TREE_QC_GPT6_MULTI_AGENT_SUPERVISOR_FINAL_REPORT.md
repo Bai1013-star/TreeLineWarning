@@ -1,6 +1,6 @@
 # TREE_QC_GPT6_MULTI_AGENT_SUPERVISOR_FINAL_REPORT
 
-Current recovery checkpoint: **Gate A PASS; Gate B PASS; public archive transfer blocked.** This supersedes the previous pre-download-stop report, preserved in SUPERVISOR_INITIAL_NETWORK_STOP_ARCHIVE.md. The official PyTorch network problem is resolved. No final model/scientific verdict is issued: the public pilot has not run, so none of the original scientific success/failure labels is supported yet.
+Current recovery checkpoint: **Gate A PASS; Gate B PASS; manual archives verified PASS; Gate C HOLD for unresolved identity/context.** This supersedes the previous pre-download-stop report, preserved in SUPERVISOR_INITIAL_NETWORK_STOP_ARCHIVE.md. The official PyTorch network problem is resolved. No final model/scientific verdict is issued: the public pilot has not run, so none of the original scientific success/failure labels is supported yet.
 
 ## Supervisor acceptance
 
@@ -16,7 +16,7 @@ WORKTREE = E:\TreeLineWarning-tree-qc-pointnet2-final-pilot-v1
 
 GATE_A_CUDA_MINI = PASS (actual engineering gate)
 GATE_B_DATA_LICENSE = PASS (pinned isolated research use)
-GATE_C_DEDUP_SPLIT = NOT_RUN; needs downloaded verified archives
+GATE_C_DEDUP_SPLIT = HOLD_DATA_IDENTITY_CONTEXT_UNRESOLVED; current conservative held-out pool insufficient
 GATE_D_GENERATOR = NOT_RUN
 GATE_E_TRAINING = NOT_RUN (public training; mini diagnostic passed)
 GATE_F_HELDOUT = NOT_RUN
@@ -24,7 +24,7 @@ GATE_G_REPEATABILITY = NOT_RUN
 GATE_H_LOCAL_CHALLENGE = NOT_RUN
 GATE_I_DEPLOYMENT = NOT_RUN
 PUBLIC_DATA_DOWNLOAD_ALLOWED = YES, exactly pinned Litchfield/Wytham and inventory; extraction still unapproved
-EXECUTION_STATUS = ZENODO_ARCHIVE_TRANSFER_BLOCKED
+EXECUTION_STATUS = MANUAL_ARCHIVE_VERIFICATION_PASS_GATE_C_HOLD
 
 ## Gate A evidence
 
@@ -59,7 +59,7 @@ PUBLIC_DATASET = TLS Forest Instance Segmentation Benchmark
 DATASET_VERSION = official latest record16875688 at verification, DOI10.5281/zenodo.16875688; official latest-chain JSON retained
 LICENSE = metadata.id cc-by-4.0, publisher citation requirement and official attribution terms verified; does not grant automatic product/weight redistribution approval or license upstream evaluation code
 SITES = Litchfield/Wytham only
-DOWNLOAD_SIZE = Litchfield continuous partial1253634048 bytes; Wytham0 bytes; no complete verified archive; pinned archive total5498034689 bytes
+DOWNLOAD_SIZE = both manual ZIPs5498034689 bytes verified; retained Litchfield partial1253634048 bytes is separate recovery evidence
 UNIQUE_TREES = NOT_MEASURED
 DUPLICATES_REMOVED = NOT_MEASURED
 
@@ -115,3 +115,13 @@ Detailed evidence: GATE_A_RECOVERY_EXECUTION.md; GATE_A_INDEPENDENT_RUNTIME_REVI
 ## Latest archive recovery acceptance
 
 Continued from0b67e3d without rerunning Gate A/B. Two child agents handled archive recovery and independent read-only protocol/recovery review. Final reviewer verdict PASS_WITH_LIMITATIONS applies to recovery safety and evidence, not archive integrity. Seven offline recovery tests passed; no complete ZIP MD5/CRC acceptance occurred. All owned download processes and BITS job stopped. Litchfield Range support was observed through exact206 responses; Wytham Range was not tested in this recovery because Litchfield did not finish. The current download status is ZENODO_ARCHIVE_TRANSFER_BLOCKED; Gate C-I remain NOT_RUN. Public protocol prefreeze is prospective only and establishes no scientific result. No extraction, product integration, frozen V0.1 modification, science modification or push.
+
+## Current manual archive recovery supersedes historical network stop
+
+User supplied both complete officialZIPs. Exact size/officialMD5/localSHA256/centraldir PASS; actualcompression9 Deflate64 is unsupported by Python3.11stdlib. Verifierfix771144a detects localWinRAR7.13.0, runs full test-only CRC with configdisabled and RARenvironment removed; bothexit0.15independent regressiontestsPASS. No dependency install, redownload, GateA/B rerun or partdeletion. MANUAL_ZENODO_ARCHIVE_VERIFICATION_COMPAT_REPORT.md and EVIDENCE.json contain exact acceptance values.
+
+Supervisor authorized separate controlled extraction after combined expanded14414401594bytes and35GiBguard plus10GiBtrainingreserve reviewed. All1699 extractedfiles passed exactset/size/CRC; independent reviewer checked everyheaderbyte-layout. Dfree113582182400bytes at extractioncompletion. GATE_C_MANUAL_ARCHIVE_SCHEMA.md records thisstage. Coordinate/frame/dedup/spatialsplit review remains inprogress; no generator/training/scientificPASS yet. Current nextstep is complete GateC audit, not another download. Earlier statements saying noextraction/unverifiedarchives/networkblocked describe historical checkpoints only. Product/frozenV0.1 unchanged; PUSH=NO.
+
+## Final current Gate decision
+
+Gate C identity/context review is HOLD, notPASS. GATE_C_IDENTITY_CONTEXT_HOLD.md/.json supersede the inprogress checkpoint immediately above. FullWytham within-plot exactcoordinate multiplicity audit completed; conservative unresolved-source/context exclusion leaves3preliminaryclear sourcegroups, below frozenminimum30. This is conditional on currentprotocol, not a claim only3validtreesexist or archive/GTcorruption. Do not loosen held-out eligibility or alter labels to manufacture support. GateD-I remainNOT_RUN. Both officialZIPs retain fullintegrityPASS, sourcefiles andparts retained, no modelsciencefailure verdict. Latest twochildagents handled implementation/actualverification/dataaudit and independent readonlyreview; maximum2concurrent. Verifierfixcommit771144a; finaldocscommit in externalFINAL_GIT_STATE.json. No further automaticdownload/training task remains active.
