@@ -1,0 +1,28 @@
+{
+  "protocol": "GATE_C_CANONICAL_IDENTITY_PROTOCOL_V2",
+  "superseded_protocol": "GATE_C_SPATIAL_PROTOCOL_V1 (retained unchanged)",
+  "source_file_occurrences": 1693,
+  "canonical_tree_count": 1579,
+  "exact_alias_groups": 113,
+  "boundary_duplicate_groups": 113,
+  "unresolved_groups": 0,
+  "pool_sizes": {
+    "train": 442,
+    "validation": 177,
+    "held_out": 876,
+    "quarantine": 84
+  },
+  "leakage": {
+    "train_validation_overlap": 0,
+    "train_heldout_overlap": 0,
+    "validation_heldout_overlap": 0,
+    "cross_site_fingerprint_matches": 0
+  },
+  "minimum_support": 30,
+  "held_out_pool": {
+    "eligible_count": 772,
+    "eligible_excluding_high_containment_count": 749
+  },
+  "manifest_digest": "eb515773b5235f2cdb0206231493195f73f269c761d9da2d2186ba68ab3ed5aa",
+  "manifest_digest_full": "eb515773b5235f2cdb0206231493195f73f269c761d9da2d2186ba68ab3ed5aa"
+}

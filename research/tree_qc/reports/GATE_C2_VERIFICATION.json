@@ -1,0 +1,58 @@
+[
+  {
+    "check": "sampled_fingerprint_recompute",
+    "pass": true,
+    "detail": {
+      "sampled": 41,
+      "mismatches": []
+    }
+  },
+  {
+    "check": "every_multi_occurrence_group_is_level_a",
+    "pass": true,
+    "detail": []
+  },
+  {
+    "check": "canonical_ids_unique",
+    "pass": true,
+    "detail": {
+      "duplicates": 0
+    }
+  },
+  {
+    "check": "every_source_occurrence_accounted_for",
+    "pass": true,
+    "detail": {
+      "alias_paths": 1693,
+      "distinct": 1693
+    }
+  },
+  {
+    "check": "no_canonical_leakage",
+    "pass": true,
+    "detail": {
+      "train_validation_overlap": 0,
+      "train_heldout_overlap": 0,
+      "validation_heldout_overlap": 0,
+      "cross_site_fingerprint_matches": 0
+    }
+  },
+  {
+    "check": "minimum_support_preserved",
+    "pass": true,
+    "detail": {
+      "minimum": 30,
+      "eligible": 772
+    }
+  },
+  {
+    "check": "no_instance_id_collisions",
+    "pass": true,
+    "detail": []
+  },
+  {
+    "check": "digest_matches_summary",
+    "pass": true,
+    "detail": "eb515773b5235f2cdb0206231493195f73f269c761d9da2d2186ba68ab3ed5aa"
+  }
+]

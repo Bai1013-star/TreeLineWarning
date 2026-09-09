@@ -1,0 +1,3012 @@
+{
+  "A_exact_alias": [
+    {
+      "canonical_tree_id": "litchfield:tile_0_-60_Boom12",
+      "identity_status": "EXACT",
+      "alias_evidence": "LEVEL_A_EXACT_ALIAS",
+      "occurrence_count": 2,
+      "folder_partitions": [
+        "test_out_plot",
+        "val"
+      ],
+      "source_aliases": [
+        "trees/test/out_plot_th0.90/tile_0_-60_Boom12.ply",
+        "trees/val/tile_0_-60_Boom12.ply"
+      ],
+      "point_count": 35109,
+      "unique_cells": 35109,
+      "bbox": [
+        17.3169,
+        -50.4092,
+        -4.7603,
+        19.5152,
+        -49.3302,
+        4.1058
+      ],
+      "centroid": [
+        18.3138,
+        -49.8997,
+        0.8885
+      ],
+      "coordinate_stats": {
+        "x": [
+          17.3169,
+          19.5152,
+          18.3138,
+          0.414
+        ],
+        "y": [
+          -50.4092,
+          -49.3302,
+          -49.8997,
+          0.1824
+        ],
+        "z": [
+          -4.7603,
+          4.1058,
+          0.8885,
+          2.0678
+        ],
+        "non_finite": 0,
+        "duplicate_cells": 0
+      },
+      "local_instance_id": [
+        177
+      ],
+      "dominant_plot_instance": 177,
+      "plot_support_cells": 35109,
+      "neighbour_count": 9,
+      "neighbours_with_points": 7,
+      "neighbour_support_points": 200912,
+      "membership": [
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom12.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom12",
+          "plot": "litchfield_test.ply",
+          "native_instance_ids": [],
+          "point_count": 35109,
+          "unique_cells": 35109,
+          "matched_cells": 24630,
+          "matched_rows": 24630,
+          "match_fraction": 0.70153,
+          "distinct_instances": 1,
+          "dominant_instance": 177,
+          "dominant_points": 24630,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 177,
+              "points": 24630
+            }
+          ]
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom12.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom12",
+          "plot": "litchfield_train.ply",
+          "native_instance_ids": [],
+          "point_count": 35109,
+          "unique_cells": 35109,
+          "matched_cells": 0,
+          "matched_rows": 0,
+          "match_fraction": 0.0,
+          "distinct_instances": 0,
+          "dominant_instance": null,
+          "dominant_points": 0,
+          "dominant_share": 0.0,
+          "top_instances": []
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom12.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom12",
+          "plot": "litchfield_val.ply",
+          "native_instance_ids": [],
+          "point_count": 35109,
+          "unique_cells": 35109,
+          "matched_cells": 10479,
+          "matched_rows": 10479,
+          "match_fraction": 0.29847,
+          "distinct_instances": 1,
+          "dominant_instance": 177,
+          "dominant_points": 10479,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 177,
+              "points": 10479
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "canonical_tree_id": "litchfield:tile_0_-60_Boom3",
+      "identity_status": "EXACT",
+      "alias_evidence": "LEVEL_A_EXACT_ALIAS",
+      "occurrence_count": 2,
+      "folder_partitions": [
+        "test_out_plot",
+        "val"
+      ],
+      "source_aliases": [
+        "trees/test/out_plot_th0.90/tile_0_-60_Boom3.ply",
+        "trees/val/tile_0_-60_Boom3.ply"
+      ],
+      "point_count": 1556920,
+      "unique_cells": 1556920,
+      "bbox": [
+        1.5024,
+        -60.8105,
+        -4.6553,
+        12.1187,
+        -48.9977,
+        13.4987
+      ],
+      "centroid": [
+        6.5105,
+        -54.4478,
+        7.1659
+      ],
+      "coordinate_stats": {
+        "x": [
+          1.5024,
+          12.1187,
+          6.5105,
+          1.9556
+        ],
+        "y": [
+          -60.8105,
+          -48.9977,
+          -54.4478,
+          2.2999
+        ],
+        "z": [
+          -4.6553,
+          13.4987,
+          7.1659,
+          2.7083
+        ],
+        "non_finite": 0,
+        "duplicate_cells": 0
+      },
+      "local_instance_id": [
+        315
+      ],
+      "dominant_plot_instance": 315,
+      "plot_support_cells": 1556920,
+      "neighbour_count": 24,
+      "neighbours_with_points": 24,
+      "neighbour_support_points": 2286219,
+      "membership": [
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom3.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom3",
+          "plot": "litchfield_test.ply",
+          "native_instance_ids": [],
+          "point_count": 1556920,
+          "unique_cells": 1556920,
+          "matched_cells": 19559,
+          "matched_rows": 19559,
+          "match_fraction": 0.012563,
+          "distinct_instances": 1,
+          "dominant_instance": 315,
+          "dominant_points": 19559,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 315,
+              "points": 19559
+            }
+          ]
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom3.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom3",
+          "plot": "litchfield_train.ply",
+          "native_instance_ids": [],
+          "point_count": 1556920,
+          "unique_cells": 1556920,
+          "matched_cells": 0,
+          "matched_rows": 0,
+          "match_fraction": 0.0,
+          "distinct_instances": 0,
+          "dominant_instance": null,
+          "dominant_points": 0,
+          "dominant_share": 0.0,
+          "top_instances": []
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom3.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom3",
+          "plot": "litchfield_val.ply",
+          "native_instance_ids": [],
+          "point_count": 1556920,
+          "unique_cells": 1556920,
+          "matched_cells": 1537361,
+          "matched_rows": 1537361,
+          "match_fraction": 0.987437,
+          "distinct_instances": 1,
+          "dominant_instance": 315,
+          "dominant_points": 1537361,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 315,
+              "points": 1537361
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "canonical_tree_id": "litchfield:tile_0_-60_Boom4",
+      "identity_status": "EXACT",
+      "alias_evidence": "LEVEL_A_EXACT_ALIAS",
+      "occurrence_count": 2,
+      "folder_partitions": [
+        "test_out_plot",
+        "val"
+      ],
+      "source_aliases": [
+        "trees/test/out_plot_th0.90/tile_0_-60_Boom4.ply",
+        "trees/val/tile_0_-60_Boom4.ply"
+      ],
+      "point_count": 251286,
+      "unique_cells": 251286,
+      "bbox": [
+        8.8047,
+        -51.7702,
+        -4.5935,
+        13.9159,
+        -47.1795,
+        9.2992
+      ],
+      "centroid": [
+        11.3507,
+        -49.0302,
+        6.2415
+      ],
+      "coordinate_stats": {
+        "x": [
+          8.8047,
+          13.9159,
+          11.3507,
+          1.0278
+        ],
+        "y": [
+          -51.7702,
+          -47.1795,
+          -49.0302,
+          0.8529
+        ],
+        "z": [
+          -4.5935,
+          9.2992,
+          6.2415,
+          2.6428
+        ],
+        "non_finite": 0,
+        "duplicate_cells": 0
+      },
+      "local_instance_id": [
+        300
+      ],
+      "dominant_plot_instance": 300,
+      "plot_support_cells": 251286,
+      "neighbour_count": 8,
+      "neighbours_with_points": 7,
+      "neighbour_support_points": 1166471,
+      "membership": [
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom4.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom4",
+          "plot": "litchfield_test.ply",
+          "native_instance_ids": [],
+          "point_count": 251286,
+          "unique_cells": 251286,
+          "matched_cells": 216749,
+          "matched_rows": 216749,
+          "match_fraction": 0.862559,
+          "distinct_instances": 1,
+          "dominant_instance": 300,
+          "dominant_points": 216749,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 300,
+              "points": 216749
+            }
+          ]
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom4.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom4",
+          "plot": "litchfield_train.ply",
+          "native_instance_ids": [],
+          "point_count": 251286,
+          "unique_cells": 251286,
+          "matched_cells": 0,
+          "matched_rows": 0,
+          "match_fraction": 0.0,
+          "distinct_instances": 0,
+          "dominant_instance": null,
+          "dominant_points": 0,
+          "dominant_share": 0.0,
+          "top_instances": []
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom4.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom4",
+          "plot": "litchfield_val.ply",
+          "native_instance_ids": [],
+          "point_count": 251286,
+          "unique_cells": 251286,
+          "matched_cells": 34537,
+          "matched_rows": 34537,
+          "match_fraction": 0.137441,
+          "distinct_instances": 1,
+          "dominant_instance": 300,
+          "dominant_points": 34537,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 300,
+              "points": 34537
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "canonical_tree_id": "litchfield:tile_0_-60_Boom9",
+      "identity_status": "EXACT",
+      "alias_evidence": "LEVEL_A_EXACT_ALIAS",
+      "occurrence_count": 2,
+      "folder_partitions": [
+        "test_out_plot",
+        "val"
+      ],
+      "source_aliases": [
+        "trees/test/out_plot_th0.90/tile_0_-60_Boom9.ply",
+        "trees/val/tile_0_-60_Boom9.ply"
+      ],
+      "point_count": 47961,
+      "unique_cells": 47961,
+      "bbox": [
+        7.8117,
+        -51.117,
+        -4.6095,
+        9.9042,
+        -49.1065,
+        4.0893
+      ],
+      "centroid": [
+        8.6474,
+        -49.9612,
+        1.3571
+      ],
+      "coordinate_stats": {
+        "x": [
+          7.8117,
+          9.9042,
+          8.6474,
+          0.285
+        ],
+        "y": [
+          -51.117,
+          -49.1065,
+          -49.9612,
+          0.4614
+        ],
+        "z": [
+          -4.6095,
+          4.0893,
+          1.3571,
+          1.9129
+        ],
+        "non_finite": 0,
+        "duplicate_cells": 0
+      },
+      "local_instance_id": [
+        502
+      ],
+      "dominant_plot_instance": 502,
+      "plot_support_cells": 47961,
+      "neighbour_count": 6,
+      "neighbours_with_points": 4,
+      "neighbour_support_points": 124756,
+      "membership": [
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom9.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom9",
+          "plot": "litchfield_test.ply",
+          "native_instance_ids": [],
+          "point_count": 47961,
+          "unique_cells": 47961,
+          "matched_cells": 28298,
+          "matched_rows": 28298,
+          "match_fraction": 0.590021,
+          "distinct_instances": 1,
+          "dominant_instance": 502,
+          "dominant_points": 28298,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 502,
+              "points": 28298
+            }
+          ]
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom9.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom9",
+          "plot": "litchfield_train.ply",
+          "native_instance_ids": [],
+          "point_count": 47961,
+          "unique_cells": 47961,
+          "matched_cells": 0,
+          "matched_rows": 0,
+          "match_fraction": 0.0,
+          "distinct_instances": 0,
+          "dominant_instance": null,
+          "dominant_points": 0,
+          "dominant_share": 0.0,
+          "top_instances": []
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom9.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom9",
+          "plot": "litchfield_val.ply",
+          "native_instance_ids": [],
+          "point_count": 47961,
+          "unique_cells": 47961,
+          "matched_cells": 19663,
+          "matched_rows": 19663,
+          "match_fraction": 0.409979,
+          "distinct_instances": 1,
+          "dominant_instance": 502,
+          "dominant_points": 19663,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 502,
+              "points": 19663
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "canonical_tree_id": "litchfield:tile_20_-100_Boom13",
+      "identity_status": "EXACT",
+      "alias_evidence": "LEVEL_A_EXACT_ALIAS",
+      "occurrence_count": 2,
+      "folder_partitions": [
+        "train",
+        "val"
+      ],
+      "source_aliases": [
+        "trees/train/tile_20_-100_Boom13.ply",
+        "trees/val/tile_20_-100_Boom13.ply"
+      ],
+      "point_count": 77319,
+      "unique_cells": 77319,
+      "bbox": [
+        38.3245,
+        -92.315,
+        -4.7565,
+        40.6332,
+        -89.4092,
+        4.2492
+      ],
+      "centroid": [
+        39.3628,
+        -90.7714,
+        2.5534
+      ],
+      "coordinate_stats": {
+        "x": [
+          38.3245,
+          40.6332,
+          39.3628,
+          0.4739
+        ],
+        "y": [
+          -92.315,
+          -89.4092,
+          -90.7714,
+          0.6149
+        ],
+        "z": [
+          -4.7565,
+          4.2492,
+          2.5534,
+          1.8635
+        ],
+        "non_finite": 0,
+        "duplicate_cells": 0
+      },
+      "local_instance_id": [
+        39
+      ],
+      "dominant_plot_instance": 39,
+      "plot_support_cells": 77319,
+      "neighbour_count": 14,
+      "neighbours_with_points": 11,
+      "neighbour_support_points": 326795,
+      "membership": [
+        {
+          "site": "litchfield",
+          "source": "trees/train/tile_20_-100_Boom13.ply",
+          "canonical_hint": "litchfield:tile_20_-100_Boom13",
+          "plot": "litchfield_test.ply",
+          "native_instance_ids": [
+            39
+          ],
+          "point_count": 77319,
+          "unique_cells": 77319,
+          "matched_cells": 0,
+          "matched_rows": 0,
+          "match_fraction": 0.0,
+          "distinct_instances": 0,
+          "dominant_instance": null,
+          "dominant_points": 0,
+          "dominant_share": 0.0,
+          "top_instances": []
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/train/tile_20_-100_Boom13.ply",
+          "canonical_hint": "litchfield:tile_20_-100_Boom13",
+          "plot": "litchfield_train.ply",
+          "native_instance_ids": [
+            39
+          ],
+          "point_count": 77319,
+          "unique_cells": 77319,
+          "matched_cells": 9948,
+          "matched_rows": 9948,
+          "match_fraction": 0.128662,
+          "distinct_instances": 1,
+          "dominant_instance": 39,
+          "dominant_points": 9948,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 39,
+              "points": 9948
+            }
+          ]
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/train/tile_20_-100_Boom13.ply",
+          "canonical_hint": "litchfield:tile_20_-100_Boom13",
+          "plot": "litchfield_val.ply",
+          "native_instance_ids": [
+            39
+          ],
+          "point_count": 77319,
+          "unique_cells": 77319,
+          "matched_cells": 67371,
+          "matched_rows": 67371,
+          "match_fraction": 0.871338,
+          "distinct_instances": 1,
+          "dominant_instance": 39,
+          "dominant_points": 67371,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 39,
+              "points": 67371
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "B_partial_overlap_nonalias": [
+    {
+      "a": "trees/train/wytham_winter_195.ply",
+      "b": "trees/train/wytham_winter_469.ply",
+      "same_basename": false,
+      "point_count_a": 1998731,
+      "point_count_b": 439667,
+      "shared_cells": 274065,
+      "containment_of_smaller": 0.647381,
+      "centroid_gap_m": 4.748883,
+      "exact_multiset_equal": false,
+      "bbox_overlap": true,
+      "level": "LEVEL_C_PARTIAL_OVERLAP_ONLY"
+    },
+    {
+      "a": "trees/test/in_plot_th0.90/wytham_winter_1610.ply",
+      "b": "trees/test/in_plot_th0.90/wytham_winter_8361.ply",
+      "same_basename": false,
+      "point_count_a": 56052,
+      "point_count_b": 122404,
+      "shared_cells": 43417,
+      "containment_of_smaller": 0.810881,
+      "centroid_gap_m": 0.879378,
+      "exact_multiset_equal": false,
+      "bbox_overlap": true,
+      "level": "LEVEL_C_PARTIAL_OVERLAP_ONLY"
+    },
+    {
+      "a": "trees/test/in_plot_th0.90/wytham_winter_8381.ply",
+      "b": "trees/test/in_plot_th0.90/wytham_winter_9111.ply",
+      "same_basename": false,
+      "point_count_a": 114793,
+      "point_count_b": 188787,
+      "shared_cells": 34858,
+      "containment_of_smaller": 0.305464,
+      "centroid_gap_m": 3.237771,
+      "exact_multiset_equal": false,
+      "bbox_overlap": true,
+      "level": "LEVEL_C_PARTIAL_OVERLAP_ONLY"
+    },
+    {
+      "a": "trees/train/wytham_winter_195.ply",
+      "b": "trees/train/wytham_winter_752.ply",
+      "same_basename": false,
+      "point_count_a": 1998731,
+      "point_count_b": 329564,
+      "shared_cells": 31251,
+      "containment_of_smaller": 0.097535,
+      "centroid_gap_m": 6.016816,
+      "exact_multiset_equal": false,
+      "bbox_overlap": true,
+      "level": "LEVEL_C_PARTIAL_OVERLAP_ONLY"
+    },
+    {
+      "a": "trees/test/in_plot_th0.90/wytham_winter_6.ply",
+      "b": "trees/test/in_plot_th0.90/wytham_winter_889.ply",
+      "same_basename": false,
+      "point_count_a": 1684982,
+      "point_count_b": 172913,
+      "shared_cells": 27840,
+      "containment_of_smaller": 0.187626,
+      "centroid_gap_m": 10.208665,
+      "exact_multiset_equal": false,
+      "bbox_overlap": true,
+      "level": "LEVEL_C_PARTIAL_OVERLAP_ONLY"
+    }
+  ],
+  "C_boundary_duplicate": [
+    {
+      "canonical_tree_id": "litchfield:tile_0_-60_Boom12",
+      "identity_status": "EXACT",
+      "alias_evidence": "LEVEL_A_EXACT_ALIAS",
+      "occurrence_count": 2,
+      "folder_partitions": [
+        "test_out_plot",
+        "val"
+      ],
+      "source_aliases": [
+        "trees/test/out_plot_th0.90/tile_0_-60_Boom12.ply",
+        "trees/val/tile_0_-60_Boom12.ply"
+      ],
+      "point_count": 35109,
+      "unique_cells": 35109,
+      "bbox": [
+        17.3169,
+        -50.4092,
+        -4.7603,
+        19.5152,
+        -49.3302,
+        4.1058
+      ],
+      "centroid": [
+        18.3138,
+        -49.8997,
+        0.8885
+      ],
+      "coordinate_stats": {
+        "x": [
+          17.3169,
+          19.5152,
+          18.3138,
+          0.414
+        ],
+        "y": [
+          -50.4092,
+          -49.3302,
+          -49.8997,
+          0.1824
+        ],
+        "z": [
+          -4.7603,
+          4.1058,
+          0.8885,
+          2.0678
+        ],
+        "non_finite": 0,
+        "duplicate_cells": 0
+      },
+      "local_instance_id": [
+        177
+      ],
+      "dominant_plot_instance": 177,
+      "plot_support_cells": 35109,
+      "neighbour_count": 9,
+      "neighbours_with_points": 7,
+      "neighbour_support_points": 200912,
+      "membership": [
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom12.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom12",
+          "plot": "litchfield_test.ply",
+          "native_instance_ids": [],
+          "point_count": 35109,
+          "unique_cells": 35109,
+          "matched_cells": 24630,
+          "matched_rows": 24630,
+          "match_fraction": 0.70153,
+          "distinct_instances": 1,
+          "dominant_instance": 177,
+          "dominant_points": 24630,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 177,
+              "points": 24630
+            }
+          ]
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom12.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom12",
+          "plot": "litchfield_train.ply",
+          "native_instance_ids": [],
+          "point_count": 35109,
+          "unique_cells": 35109,
+          "matched_cells": 0,
+          "matched_rows": 0,
+          "match_fraction": 0.0,
+          "distinct_instances": 0,
+          "dominant_instance": null,
+          "dominant_points": 0,
+          "dominant_share": 0.0,
+          "top_instances": []
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom12.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom12",
+          "plot": "litchfield_val.ply",
+          "native_instance_ids": [],
+          "point_count": 35109,
+          "unique_cells": 35109,
+          "matched_cells": 10479,
+          "matched_rows": 10479,
+          "match_fraction": 0.29847,
+          "distinct_instances": 1,
+          "dominant_instance": 177,
+          "dominant_points": 10479,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 177,
+              "points": 10479
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "canonical_tree_id": "litchfield:tile_0_-60_Boom3",
+      "identity_status": "EXACT",
+      "alias_evidence": "LEVEL_A_EXACT_ALIAS",
+      "occurrence_count": 2,
+      "folder_partitions": [
+        "test_out_plot",
+        "val"
+      ],
+      "source_aliases": [
+        "trees/test/out_plot_th0.90/tile_0_-60_Boom3.ply",
+        "trees/val/tile_0_-60_Boom3.ply"
+      ],
+      "point_count": 1556920,
+      "unique_cells": 1556920,
+      "bbox": [
+        1.5024,
+        -60.8105,
+        -4.6553,
+        12.1187,
+        -48.9977,
+        13.4987
+      ],
+      "centroid": [
+        6.5105,
+        -54.4478,
+        7.1659
+      ],
+      "coordinate_stats": {
+        "x": [
+          1.5024,
+          12.1187,
+          6.5105,
+          1.9556
+        ],
+        "y": [
+          -60.8105,
+          -48.9977,
+          -54.4478,
+          2.2999
+        ],
+        "z": [
+          -4.6553,
+          13.4987,
+          7.1659,
+          2.7083
+        ],
+        "non_finite": 0,
+        "duplicate_cells": 0
+      },
+      "local_instance_id": [
+        315
+      ],
+      "dominant_plot_instance": 315,
+      "plot_support_cells": 1556920,
+      "neighbour_count": 24,
+      "neighbours_with_points": 24,
+      "neighbour_support_points": 2286219,
+      "membership": [
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom3.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom3",
+          "plot": "litchfield_test.ply",
+          "native_instance_ids": [],
+          "point_count": 1556920,
+          "unique_cells": 1556920,
+          "matched_cells": 19559,
+          "matched_rows": 19559,
+          "match_fraction": 0.012563,
+          "distinct_instances": 1,
+          "dominant_instance": 315,
+          "dominant_points": 19559,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 315,
+              "points": 19559
+            }
+          ]
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom3.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom3",
+          "plot": "litchfield_train.ply",
+          "native_instance_ids": [],
+          "point_count": 1556920,
+          "unique_cells": 1556920,
+          "matched_cells": 0,
+          "matched_rows": 0,
+          "match_fraction": 0.0,
+          "distinct_instances": 0,
+          "dominant_instance": null,
+          "dominant_points": 0,
+          "dominant_share": 0.0,
+          "top_instances": []
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom3.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom3",
+          "plot": "litchfield_val.ply",
+          "native_instance_ids": [],
+          "point_count": 1556920,
+          "unique_cells": 1556920,
+          "matched_cells": 1537361,
+          "matched_rows": 1537361,
+          "match_fraction": 0.987437,
+          "distinct_instances": 1,
+          "dominant_instance": 315,
+          "dominant_points": 1537361,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 315,
+              "points": 1537361
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "canonical_tree_id": "litchfield:tile_0_-60_Boom4",
+      "identity_status": "EXACT",
+      "alias_evidence": "LEVEL_A_EXACT_ALIAS",
+      "occurrence_count": 2,
+      "folder_partitions": [
+        "test_out_plot",
+        "val"
+      ],
+      "source_aliases": [
+        "trees/test/out_plot_th0.90/tile_0_-60_Boom4.ply",
+        "trees/val/tile_0_-60_Boom4.ply"
+      ],
+      "point_count": 251286,
+      "unique_cells": 251286,
+      "bbox": [
+        8.8047,
+        -51.7702,
+        -4.5935,
+        13.9159,
+        -47.1795,
+        9.2992
+      ],
+      "centroid": [
+        11.3507,
+        -49.0302,
+        6.2415
+      ],
+      "coordinate_stats": {
+        "x": [
+          8.8047,
+          13.9159,
+          11.3507,
+          1.0278
+        ],
+        "y": [
+          -51.7702,
+          -47.1795,
+          -49.0302,
+          0.8529
+        ],
+        "z": [
+          -4.5935,
+          9.2992,
+          6.2415,
+          2.6428
+        ],
+        "non_finite": 0,
+        "duplicate_cells": 0
+      },
+      "local_instance_id": [
+        300
+      ],
+      "dominant_plot_instance": 300,
+      "plot_support_cells": 251286,
+      "neighbour_count": 8,
+      "neighbours_with_points": 7,
+      "neighbour_support_points": 1166471,
+      "membership": [
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom4.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom4",
+          "plot": "litchfield_test.ply",
+          "native_instance_ids": [],
+          "point_count": 251286,
+          "unique_cells": 251286,
+          "matched_cells": 216749,
+          "matched_rows": 216749,
+          "match_fraction": 0.862559,
+          "distinct_instances": 1,
+          "dominant_instance": 300,
+          "dominant_points": 216749,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 300,
+              "points": 216749
+            }
+          ]
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom4.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom4",
+          "plot": "litchfield_train.ply",
+          "native_instance_ids": [],
+          "point_count": 251286,
+          "unique_cells": 251286,
+          "matched_cells": 0,
+          "matched_rows": 0,
+          "match_fraction": 0.0,
+          "distinct_instances": 0,
+          "dominant_instance": null,
+          "dominant_points": 0,
+          "dominant_share": 0.0,
+          "top_instances": []
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom4.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom4",
+          "plot": "litchfield_val.ply",
+          "native_instance_ids": [],
+          "point_count": 251286,
+          "unique_cells": 251286,
+          "matched_cells": 34537,
+          "matched_rows": 34537,
+          "match_fraction": 0.137441,
+          "distinct_instances": 1,
+          "dominant_instance": 300,
+          "dominant_points": 34537,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 300,
+              "points": 34537
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "canonical_tree_id": "litchfield:tile_0_-60_Boom9",
+      "identity_status": "EXACT",
+      "alias_evidence": "LEVEL_A_EXACT_ALIAS",
+      "occurrence_count": 2,
+      "folder_partitions": [
+        "test_out_plot",
+        "val"
+      ],
+      "source_aliases": [
+        "trees/test/out_plot_th0.90/tile_0_-60_Boom9.ply",
+        "trees/val/tile_0_-60_Boom9.ply"
+      ],
+      "point_count": 47961,
+      "unique_cells": 47961,
+      "bbox": [
+        7.8117,
+        -51.117,
+        -4.6095,
+        9.9042,
+        -49.1065,
+        4.0893
+      ],
+      "centroid": [
+        8.6474,
+        -49.9612,
+        1.3571
+      ],
+      "coordinate_stats": {
+        "x": [
+          7.8117,
+          9.9042,
+          8.6474,
+          0.285
+        ],
+        "y": [
+          -51.117,
+          -49.1065,
+          -49.9612,
+          0.4614
+        ],
+        "z": [
+          -4.6095,
+          4.0893,
+          1.3571,
+          1.9129
+        ],
+        "non_finite": 0,
+        "duplicate_cells": 0
+      },
+      "local_instance_id": [
+        502
+      ],
+      "dominant_plot_instance": 502,
+      "plot_support_cells": 47961,
+      "neighbour_count": 6,
+      "neighbours_with_points": 4,
+      "neighbour_support_points": 124756,
+      "membership": [
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom9.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom9",
+          "plot": "litchfield_test.ply",
+          "native_instance_ids": [],
+          "point_count": 47961,
+          "unique_cells": 47961,
+          "matched_cells": 28298,
+          "matched_rows": 28298,
+          "match_fraction": 0.590021,
+          "distinct_instances": 1,
+          "dominant_instance": 502,
+          "dominant_points": 28298,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 502,
+              "points": 28298
+            }
+          ]
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom9.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom9",
+          "plot": "litchfield_train.ply",
+          "native_instance_ids": [],
+          "point_count": 47961,
+          "unique_cells": 47961,
+          "matched_cells": 0,
+          "matched_rows": 0,
+          "match_fraction": 0.0,
+          "distinct_instances": 0,
+          "dominant_instance": null,
+          "dominant_points": 0,
+          "dominant_share": 0.0,
+          "top_instances": []
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/test/out_plot_th0.90/tile_0_-60_Boom9.ply",
+          "canonical_hint": "litchfield:tile_0_-60_Boom9",
+          "plot": "litchfield_val.ply",
+          "native_instance_ids": [],
+          "point_count": 47961,
+          "unique_cells": 47961,
+          "matched_cells": 19663,
+          "matched_rows": 19663,
+          "match_fraction": 0.409979,
+          "distinct_instances": 1,
+          "dominant_instance": 502,
+          "dominant_points": 19663,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 502,
+              "points": 19663
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "canonical_tree_id": "litchfield:tile_20_-100_Boom13",
+      "identity_status": "EXACT",
+      "alias_evidence": "LEVEL_A_EXACT_ALIAS",
+      "occurrence_count": 2,
+      "folder_partitions": [
+        "train",
+        "val"
+      ],
+      "source_aliases": [
+        "trees/train/tile_20_-100_Boom13.ply",
+        "trees/val/tile_20_-100_Boom13.ply"
+      ],
+      "point_count": 77319,
+      "unique_cells": 77319,
+      "bbox": [
+        38.3245,
+        -92.315,
+        -4.7565,
+        40.6332,
+        -89.4092,
+        4.2492
+      ],
+      "centroid": [
+        39.3628,
+        -90.7714,
+        2.5534
+      ],
+      "coordinate_stats": {
+        "x": [
+          38.3245,
+          40.6332,
+          39.3628,
+          0.4739
+        ],
+        "y": [
+          -92.315,
+          -89.4092,
+          -90.7714,
+          0.6149
+        ],
+        "z": [
+          -4.7565,
+          4.2492,
+          2.5534,
+          1.8635
+        ],
+        "non_finite": 0,
+        "duplicate_cells": 0
+      },
+      "local_instance_id": [
+        39
+      ],
+      "dominant_plot_instance": 39,
+      "plot_support_cells": 77319,
+      "neighbour_count": 14,
+      "neighbours_with_points": 11,
+      "neighbour_support_points": 326795,
+      "membership": [
+        {
+          "site": "litchfield",
+          "source": "trees/train/tile_20_-100_Boom13.ply",
+          "canonical_hint": "litchfield:tile_20_-100_Boom13",
+          "plot": "litchfield_test.ply",
+          "native_instance_ids": [
+            39
+          ],
+          "point_count": 77319,
+          "unique_cells": 77319,
+          "matched_cells": 0,
+          "matched_rows": 0,
+          "match_fraction": 0.0,
+          "distinct_instances": 0,
+          "dominant_instance": null,
+          "dominant_points": 0,
+          "dominant_share": 0.0,
+          "top_instances": []
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/train/tile_20_-100_Boom13.ply",
+          "canonical_hint": "litchfield:tile_20_-100_Boom13",
+          "plot": "litchfield_train.ply",
+          "native_instance_ids": [
+            39
+          ],
+          "point_count": 77319,
+          "unique_cells": 77319,
+          "matched_cells": 9948,
+          "matched_rows": 9948,
+          "match_fraction": 0.128662,
+          "distinct_instances": 1,
+          "dominant_instance": 39,
+          "dominant_points": 9948,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 39,
+              "points": 9948
+            }
+          ]
+        },
+        {
+          "site": "litchfield",
+          "source": "trees/train/tile_20_-100_Boom13.ply",
+          "canonical_hint": "litchfield:tile_20_-100_Boom13",
+          "plot": "litchfield_val.ply",
+          "native_instance_ids": [
+            39
+          ],
+          "point_count": 77319,
+          "unique_cells": 77319,
+          "matched_cells": 67371,
+          "matched_rows": 67371,
+          "match_fraction": 0.871338,
+          "distinct_instances": 1,
+          "dominant_instance": 39,
+          "dominant_points": 67371,
+          "dominant_share": 1.0,
+          "top_instances": [
+            {
+              "instance": 39,
+              "points": 67371
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "D_unresolved": [
+    {
+      "kind": "high_partial_overlap_pair",
+      "note": "Not an exact alias. Kept as two independent canonical trees because the publisher labels them as distinct instances; the archive alone does not prove either verdict.",
+      "pair": {
+        "a": "trees/test/in_plot_th0.90/wytham_winter_1610.ply",
+        "b": "trees/test/in_plot_th0.90/wytham_winter_8361.ply",
+        "same_basename": false,
+        "point_count_a": 56052,
+        "point_count_b": 122404,
+        "shared_cells": 43417,
+        "containment_of_smaller": 0.810881,
+        "centroid_gap_m": 0.879378,
+        "exact_multiset_equal": false,
+        "bbox_overlap": true,
+        "level": "LEVEL_C_PARTIAL_OVERLAP_ONLY"
+      },
+      "a_summary": {
+        "canonical_tree_id": "wytham:wytham_winter_1610",
+        "identity_status": "EXACT",
+        "alias_evidence": "SINGLE_OCCURRENCE",
+        "occurrence_count": 1,
+        "folder_partitions": [
+          "test_in_plot"
+        ],
+        "source_aliases": [
+          "trees/test/in_plot_th0.90/wytham_winter_1610.ply"
+        ],
+        "point_count": 56052,
+        "unique_cells": 53543,
+        "bbox": [
+          3.1071,
+          147.9876,
+          -17.7946,
+          10.8488,
+          152.6434,
+          -6.8575
+        ],
+        "centroid": [
+          8.3117,
+          150.1307,
+          -12.3921
+        ],
+        "coordinate_stats": {
+          "x": [
+            3.1071,
+            10.8488,
+            8.3117,
+            1.4754
+          ],
+          "y": [
+            147.9876,
+            152.6434,
+            150.1307,
+            0.8882
+          ],
+          "z": [
+            -17.7946,
+            -6.8575,
+            -12.3921,
+            1.6743
+          ],
+          "non_finite": 0,
+          "duplicate_cells": 2509
+        },
+        "local_instance_id": [],
+        "dominant_plot_instance": 306,
+        "plot_support_cells": 53543,
+        "neighbour_count": 19,
+        "neighbours_with_points": 19,
+        "neighbour_support_points": 514756,
+        "membership": [
+          {
+            "site": "wytham",
+            "source": "trees/test/in_plot_th0.90/wytham_winter_1610.ply",
+            "canonical_hint": "wytham:wytham_winter_1610",
+            "plot": "wytham_test.ply",
+            "native_instance_ids": [],
+            "point_count": 56052,
+            "unique_cells": 53543,
+            "matched_cells": 53543,
+            "matched_rows": 99477,
+            "match_fraction": 1.0,
+            "distinct_instances": 3,
+            "dominant_instance": 306,
+            "dominant_points": 56052,
+            "dominant_share": 0.563467,
+            "top_instances": [
+              {
+                "instance": 306,
+                "points": 56052
+              },
+              {
+                "instance": 485,
+                "points": 43417
+              },
+              {
+                "instance": 146,
+                "points": 8
+              }
+            ]
+          },
+          {
+            "site": "wytham",
+            "source": "trees/test/in_plot_th0.90/wytham_winter_1610.ply",
+            "canonical_hint": "wytham:wytham_winter_1610",
+            "plot": "wytham_train.ply",
+            "native_instance_ids": [],
+            "point_count": 56052,
+            "unique_cells": 53543,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/test/in_plot_th0.90/wytham_winter_1610.ply",
+            "canonical_hint": "wytham:wytham_winter_1610",
+            "plot": "wytham_val.ply",
+            "native_instance_ids": [],
+            "point_count": 56052,
+            "unique_cells": 53543,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          }
+        ]
+      },
+      "b_summary": {
+        "canonical_tree_id": "wytham:wytham_winter_8361",
+        "identity_status": "EXACT",
+        "alias_evidence": "SINGLE_OCCURRENCE",
+        "occurrence_count": 1,
+        "folder_partitions": [
+          "test_in_plot"
+        ],
+        "source_aliases": [
+          "trees/test/in_plot_th0.90/wytham_winter_8361.ply"
+        ],
+        "point_count": 122404,
+        "unique_cells": 119657,
+        "bbox": [
+          3.136,
+          146.6127,
+          -17.0982,
+          13.6916,
+          153.5121,
+          -6.8575
+        ],
+        "centroid": [
+          8.724,
+          149.3549,
+          -12.4299
+        ],
+        "coordinate_stats": {
+          "x": [
+            3.136,
+            13.6916,
+            8.724,
+            1.9492
+          ],
+          "y": [
+            146.6127,
+            153.5121,
+            149.3549,
+            1.3012
+          ],
+          "z": [
+            -17.0982,
+            -6.8575,
+            -12.4299,
+            1.5402
+          ],
+          "non_finite": 0,
+          "duplicate_cells": 2747
+        },
+        "local_instance_id": [],
+        "dominant_plot_instance": 485,
+        "plot_support_cells": 119657,
+        "neighbour_count": 23,
+        "neighbours_with_points": 22,
+        "neighbour_support_points": 674233,
+        "membership": [
+          {
+            "site": "wytham",
+            "source": "trees/test/in_plot_th0.90/wytham_winter_8361.ply",
+            "canonical_hint": "wytham:wytham_winter_8361",
+            "plot": "wytham_test.ply",
+            "native_instance_ids": [],
+            "point_count": 122404,
+            "unique_cells": 119657,
+            "matched_cells": 119657,
+            "matched_rows": 178921,
+            "match_fraction": 1.0,
+            "distinct_instances": 5,
+            "dominant_instance": 485,
+            "dominant_points": 122404,
+            "dominant_share": 0.684123,
+            "top_instances": [
+              {
+                "instance": 485,
+                "points": 122404
+              },
+              {
+                "instance": 306,
+                "points": 43417
+              },
+              {
+                "instance": 246,
+                "points": 12949
+              },
+              {
+                "instance": 146,
+                "points": 137
+              },
+              {
+                "instance": 226,
+                "points": 14
+              }
+            ]
+          },
+          {
+            "site": "wytham",
+            "source": "trees/test/in_plot_th0.90/wytham_winter_8361.ply",
+            "canonical_hint": "wytham:wytham_winter_8361",
+            "plot": "wytham_train.ply",
+            "native_instance_ids": [],
+            "point_count": 122404,
+            "unique_cells": 119657,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/test/in_plot_th0.90/wytham_winter_8361.ply",
+            "canonical_hint": "wytham:wytham_winter_8361",
+            "plot": "wytham_val.ply",
+            "native_instance_ids": [],
+            "point_count": 122404,
+            "unique_cells": 119657,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          }
+        ]
+      }
+    },
+    {
+      "kind": "high_partial_overlap_pair",
+      "note": "Not an exact alias. Kept as two independent canonical trees because the publisher labels them as distinct instances; the archive alone does not prove either verdict.",
+      "pair": {
+        "a": "trees/val/wytham_winter_8330.ply",
+        "b": "trees/val/wytham_winter_8332.ply",
+        "same_basename": false,
+        "point_count_a": 58491,
+        "point_count_b": 32899,
+        "shared_cells": 26161,
+        "containment_of_smaller": 0.805003,
+        "centroid_gap_m": 1.001297,
+        "exact_multiset_equal": false,
+        "bbox_overlap": true,
+        "level": "LEVEL_C_PARTIAL_OVERLAP_ONLY"
+      },
+      "a_summary": {
+        "canonical_tree_id": "wytham:wytham_winter_8330",
+        "identity_status": "EXACT",
+        "alias_evidence": "SINGLE_OCCURRENCE",
+        "occurrence_count": 1,
+        "folder_partitions": [
+          "val"
+        ],
+        "source_aliases": [
+          "trees/val/wytham_winter_8330.ply"
+        ],
+        "point_count": 58491,
+        "unique_cells": 57385,
+        "bbox": [
+          32.1856,
+          113.4303,
+          -12.4887,
+          39.2517,
+          118.5514,
+          -5.1536
+        ],
+        "centroid": [
+          35.45,
+          116.0032,
+          -6.7764
+        ],
+        "coordinate_stats": {
+          "x": [
+            32.1856,
+            39.2517,
+            35.45,
+            1.5374
+          ],
+          "y": [
+            113.4303,
+            118.5514,
+            116.0032,
+            1.1887
+          ],
+          "z": [
+            -12.4887,
+            -5.1536,
+            -6.7764,
+            1.3079
+          ],
+          "non_finite": 0,
+          "duplicate_cells": 1106
+        },
+        "local_instance_id": [
+          43
+        ],
+        "dominant_plot_instance": 43,
+        "plot_support_cells": 57385,
+        "neighbour_count": 29,
+        "neighbours_with_points": 18,
+        "neighbour_support_points": 262355,
+        "membership": [
+          {
+            "site": "wytham",
+            "source": "trees/val/wytham_winter_8330.ply",
+            "canonical_hint": "wytham:wytham_winter_8330",
+            "plot": "wytham_test.ply",
+            "native_instance_ids": [
+              43
+            ],
+            "point_count": 58491,
+            "unique_cells": 57385,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/val/wytham_winter_8330.ply",
+            "canonical_hint": "wytham:wytham_winter_8330",
+            "plot": "wytham_train.ply",
+            "native_instance_ids": [
+              43
+            ],
+            "point_count": 58491,
+            "unique_cells": 57385,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/val/wytham_winter_8330.ply",
+            "canonical_hint": "wytham:wytham_winter_8330",
+            "plot": "wytham_val.ply",
+            "native_instance_ids": [
+              43
+            ],
+            "point_count": 58491,
+            "unique_cells": 57385,
+            "matched_cells": 57385,
+            "matched_rows": 84740,
+            "match_fraction": 1.0,
+            "distinct_instances": 3,
+            "dominant_instance": 43,
+            "dominant_points": 58491,
+            "dominant_share": 0.690241,
+            "top_instances": [
+              {
+                "instance": 43,
+                "points": 58491
+              },
+              {
+                "instance": 643,
+                "points": 26161
+              },
+              {
+                "instance": 310,
+                "points": 88
+              }
+            ]
+          }
+        ]
+      },
+      "b_summary": {
+        "canonical_tree_id": "wytham:wytham_winter_8332",
+        "identity_status": "EXACT",
+        "alias_evidence": "SINGLE_OCCURRENCE",
+        "occurrence_count": 1,
+        "folder_partitions": [
+          "val"
+        ],
+        "source_aliases": [
+          "trees/val/wytham_winter_8332.ply"
+        ],
+        "point_count": 32899,
+        "unique_cells": 32498,
+        "bbox": [
+          32.1856,
+          114.99,
+          -12.4562,
+          37.4477,
+          118.5465,
+          -5.3961
+        ],
+        "centroid": [
+          34.8851,
+          116.8142,
+          -6.937
+        ],
+        "coordinate_stats": {
+          "x": [
+            32.1856,
+            37.4477,
+            34.8851,
+            1.042
+          ],
+          "y": [
+            114.99,
+            118.5465,
+            116.8142,
+            0.7614
+          ],
+          "z": [
+            -12.4562,
+            -5.3961,
+            -6.937,
+            1.5526
+          ],
+          "non_finite": 0,
+          "duplicate_cells": 401
+        },
+        "local_instance_id": [
+          643
+        ],
+        "dominant_plot_instance": 643,
+        "plot_support_cells": 32498,
+        "neighbour_count": 24,
+        "neighbours_with_points": 13,
+        "neighbour_support_points": 228586,
+        "membership": [
+          {
+            "site": "wytham",
+            "source": "trees/val/wytham_winter_8332.ply",
+            "canonical_hint": "wytham:wytham_winter_8332",
+            "plot": "wytham_test.ply",
+            "native_instance_ids": [
+              643
+            ],
+            "point_count": 32899,
+            "unique_cells": 32498,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/val/wytham_winter_8332.ply",
+            "canonical_hint": "wytham:wytham_winter_8332",
+            "plot": "wytham_train.ply",
+            "native_instance_ids": [
+              643
+            ],
+            "point_count": 32899,
+            "unique_cells": 32498,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/val/wytham_winter_8332.ply",
+            "canonical_hint": "wytham:wytham_winter_8332",
+            "plot": "wytham_val.ply",
+            "native_instance_ids": [
+              643
+            ],
+            "point_count": 32899,
+            "unique_cells": 32498,
+            "matched_cells": 32498,
+            "matched_rows": 59061,
+            "match_fraction": 1.0,
+            "distinct_instances": 3,
+            "dominant_instance": 643,
+            "dominant_points": 32899,
+            "dominant_share": 0.557034,
+            "top_instances": [
+              {
+                "instance": 643,
+                "points": 32899
+              },
+              {
+                "instance": 43,
+                "points": 26161
+              },
+              {
+                "instance": 310,
+                "points": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "kind": "high_partial_overlap_pair",
+      "note": "Not an exact alias. Kept as two independent canonical trees because the publisher labels them as distinct instances; the archive alone does not prove either verdict.",
+      "pair": {
+        "a": "trees/test/out_plot_th0.90/wytham_winter_8377.ply",
+        "b": "trees/test/out_plot_th0.90/wytham_winter_8379.ply",
+        "same_basename": false,
+        "point_count_a": 33137,
+        "point_count_b": 61901,
+        "shared_cells": 22229,
+        "containment_of_smaller": 0.690384,
+        "centroid_gap_m": 1.5281,
+        "exact_multiset_equal": false,
+        "bbox_overlap": true,
+        "level": "LEVEL_C_PARTIAL_OVERLAP_ONLY"
+      },
+      "a_summary": {
+        "canonical_tree_id": "wytham:wytham_winter_8377",
+        "identity_status": "EXACT",
+        "alias_evidence": "SINGLE_OCCURRENCE",
+        "occurrence_count": 1,
+        "folder_partitions": [
+          "test_out_plot"
+        ],
+        "source_aliases": [
+          "trees/test/out_plot_th0.90/wytham_winter_8377.ply"
+        ],
+        "point_count": 33137,
+        "unique_cells": 32198,
+        "bbox": [
+          -5.6332,
+          159.0581,
+          -19.5546,
+          0.8583,
+          163.0958,
+          -11.8344
+        ],
+        "centroid": [
+          -2.2003,
+          160.7992,
+          -13.3809
+        ],
+        "coordinate_stats": {
+          "x": [
+            -5.6332,
+            0.8583,
+            -2.2003,
+            1.2941
+          ],
+          "y": [
+            159.0581,
+            163.0958,
+            160.7992,
+            0.9154
+          ],
+          "z": [
+            -19.5546,
+            -11.8344,
+            -13.3809,
+            1.397
+          ],
+          "non_finite": 0,
+          "duplicate_cells": 939
+        },
+        "local_instance_id": [],
+        "dominant_plot_instance": null,
+        "plot_support_cells": 0,
+        "neighbour_count": 16,
+        "neighbours_with_points": 14,
+        "neighbour_support_points": 199265,
+        "membership": [
+          {
+            "site": "wytham",
+            "source": "trees/test/out_plot_th0.90/wytham_winter_8377.ply",
+            "canonical_hint": "wytham:wytham_winter_8377",
+            "plot": "wytham_test.ply",
+            "native_instance_ids": [],
+            "point_count": 33137,
+            "unique_cells": 32198,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/test/out_plot_th0.90/wytham_winter_8377.ply",
+            "canonical_hint": "wytham:wytham_winter_8377",
+            "plot": "wytham_train.ply",
+            "native_instance_ids": [],
+            "point_count": 33137,
+            "unique_cells": 32198,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/test/out_plot_th0.90/wytham_winter_8377.ply",
+            "canonical_hint": "wytham:wytham_winter_8377",
+            "plot": "wytham_val.ply",
+            "native_instance_ids": [],
+            "point_count": 33137,
+            "unique_cells": 32198,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          }
+        ]
+      },
+      "b_summary": {
+        "canonical_tree_id": "wytham:wytham_winter_8379",
+        "identity_status": "EXACT",
+        "alias_evidence": "SINGLE_OCCURRENCE",
+        "occurrence_count": 1,
+        "folder_partitions": [
+          "test_out_plot"
+        ],
+        "source_aliases": [
+          "trees/test/out_plot_th0.90/wytham_winter_8379.ply"
+        ],
+        "point_count": 61901,
+        "unique_cells": 61283,
+        "bbox": [
+          -4.2979,
+          157.6672,
+          -19.4395,
+          2.7746,
+          163.3145,
+          -10.5219
+        ],
+        "centroid": [
+          -0.6943,
+          160.5505,
+          -13.3099
+        ],
+        "coordinate_stats": {
+          "x": [
+            -4.2979,
+            2.7746,
+            -0.6943,
+            1.5403
+          ],
+          "y": [
+            157.6672,
+            163.3145,
+            160.5505,
+            1.0968
+          ],
+          "z": [
+            -19.4395,
+            -10.5219,
+            -13.3099,
+            1.2603
+          ],
+          "non_finite": 0,
+          "duplicate_cells": 618
+        },
+        "local_instance_id": [],
+        "dominant_plot_instance": 846,
+        "plot_support_cells": 10588,
+        "neighbour_count": 18,
+        "neighbours_with_points": 16,
+        "neighbour_support_points": 329803,
+        "membership": [
+          {
+            "site": "wytham",
+            "source": "trees/test/out_plot_th0.90/wytham_winter_8379.ply",
+            "canonical_hint": "wytham:wytham_winter_8379",
+            "plot": "wytham_test.ply",
+            "native_instance_ids": [],
+            "point_count": 61901,
+            "unique_cells": 61283,
+            "matched_cells": 10588,
+            "matched_rows": 10588,
+            "match_fraction": 0.172772,
+            "distinct_instances": 1,
+            "dominant_instance": 846,
+            "dominant_points": 10588,
+            "dominant_share": 1.0,
+            "top_instances": [
+              {
+                "instance": 846,
+                "points": 10588
+              }
+            ]
+          },
+          {
+            "site": "wytham",
+            "source": "trees/test/out_plot_th0.90/wytham_winter_8379.ply",
+            "canonical_hint": "wytham:wytham_winter_8379",
+            "plot": "wytham_train.ply",
+            "native_instance_ids": [],
+            "point_count": 61901,
+            "unique_cells": 61283,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/test/out_plot_th0.90/wytham_winter_8379.ply",
+            "canonical_hint": "wytham:wytham_winter_8379",
+            "plot": "wytham_val.ply",
+            "native_instance_ids": [],
+            "point_count": 61901,
+            "unique_cells": 61283,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          }
+        ]
+      }
+    },
+    {
+      "kind": "high_partial_overlap_pair",
+      "note": "Not an exact alias. Kept as two independent canonical trees because the publisher labels them as distinct instances; the archive alone does not prove either verdict.",
+      "pair": {
+        "a": "trees/train/wytham_winter_195.ply",
+        "b": "trees/train/wytham_winter_469.ply",
+        "same_basename": false,
+        "point_count_a": 1998731,
+        "point_count_b": 439667,
+        "shared_cells": 274065,
+        "containment_of_smaller": 0.647381,
+        "centroid_gap_m": 4.748883,
+        "exact_multiset_equal": false,
+        "bbox_overlap": true,
+        "level": "LEVEL_C_PARTIAL_OVERLAP_ONLY"
+      },
+      "a_summary": {
+        "canonical_tree_id": "wytham:wytham_winter_195",
+        "identity_status": "EXACT",
+        "alias_evidence": "SINGLE_OCCURRENCE",
+        "occurrence_count": 1,
+        "folder_partitions": [
+          "train"
+        ],
+        "source_aliases": [
+          "trees/train/wytham_winter_195.ply"
+        ],
+        "point_count": 1998731,
+        "unique_cells": 1971839,
+        "bbox": [
+          128.3371,
+          121.829,
+          -6.2282,
+          144.2874,
+          141.8611,
+          17.2713
+        ],
+        "centroid": [
+          136.8565,
+          130.4274,
+          9.8688
+        ],
+        "coordinate_stats": {
+          "x": [
+            128.3371,
+            144.2874,
+            136.8565,
+            3.5314
+          ],
+          "y": [
+            121.829,
+            141.8611,
+            130.4274,
+            3.9886
+          ],
+          "z": [
+            -6.2282,
+            17.2713,
+            9.8688,
+            4.8477
+          ],
+          "non_finite": 0,
+          "duplicate_cells": 26892
+        },
+        "local_instance_id": [
+          443
+        ],
+        "dominant_plot_instance": 443,
+        "plot_support_cells": 890346,
+        "neighbour_count": 36,
+        "neighbours_with_points": 35,
+        "neighbour_support_points": 3527172,
+        "membership": [
+          {
+            "site": "wytham",
+            "source": "trees/train/wytham_winter_195.ply",
+            "canonical_hint": "wytham:wytham_winter_195",
+            "plot": "wytham_test.ply",
+            "native_instance_ids": [
+              443
+            ],
+            "point_count": 1998731,
+            "unique_cells": 1971839,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/train/wytham_winter_195.ply",
+            "canonical_hint": "wytham:wytham_winter_195",
+            "plot": "wytham_train.ply",
+            "native_instance_ids": [
+              443
+            ],
+            "point_count": 1998731,
+            "unique_cells": 1971839,
+            "matched_cells": 890346,
+            "matched_rows": 1197958,
+            "match_fraction": 0.451531,
+            "distinct_instances": 6,
+            "dominant_instance": 443,
+            "dominant_points": 892458,
+            "dominant_share": 0.744983,
+            "top_instances": [
+              {
+                "instance": 443,
+                "points": 892458
+              },
+              {
+                "instance": 307,
+                "points": 273405
+              },
+              {
+                "instance": 521,
+                "points": 30631
+              },
+              {
+                "instance": 500,
+                "points": 763
+              },
+              {
+                "instance": 297,
+                "points": 700
+              },
+              {
+                "instance": 79,
+                "points": 1
+              }
+            ]
+          },
+          {
+            "site": "wytham",
+            "source": "trees/train/wytham_winter_195.ply",
+            "canonical_hint": "wytham:wytham_winter_195",
+            "plot": "wytham_val.ply",
+            "native_instance_ids": [
+              443
+            ],
+            "point_count": 1998731,
+            "unique_cells": 1971839,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          }
+        ]
+      },
+      "b_summary": {
+        "canonical_tree_id": "wytham:wytham_winter_469",
+        "identity_status": "EXACT",
+        "alias_evidence": "SINGLE_OCCURRENCE",
+        "occurrence_count": 1,
+        "folder_partitions": [
+          "train"
+        ],
+        "source_aliases": [
+          "trees/train/wytham_winter_469.ply"
+        ],
+        "point_count": 439667,
+        "unique_cells": 423344,
+        "bbox": [
+          128.4849,
+          125.1932,
+          -6.6765,
+          137.0346,
+          134.7863,
+          16.4141
+        ],
+        "centroid": [
+          132.3136,
+          129.0469,
+          9.7792
+        ],
+        "coordinate_stats": {
+          "x": [
+            128.4849,
+            137.0346,
+            132.3136,
+            1.8757
+          ],
+          "y": [
+            125.1932,
+            134.7863,
+            129.0469,
+            1.6412
+          ],
+          "z": [
+            -6.6765,
+            16.4141,
+            9.7792,
+            4.2562
+          ],
+          "non_finite": 0,
+          "duplicate_cells": 16323
+        },
+        "local_instance_id": [
+          307
+        ],
+        "dominant_plot_instance": 307,
+        "plot_support_cells": 422671,
+        "neighbour_count": 25,
+        "neighbours_with_points": 25,
+        "neighbour_support_points": 2941799,
+        "membership": [
+          {
+            "site": "wytham",
+            "source": "trees/train/wytham_winter_469.ply",
+            "canonical_hint": "wytham:wytham_winter_469",
+            "plot": "wytham_test.ply",
+            "native_instance_ids": [
+              307
+            ],
+            "point_count": 439667,
+            "unique_cells": 423344,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/train/wytham_winter_469.ply",
+            "canonical_hint": "wytham:wytham_winter_469",
+            "plot": "wytham_train.ply",
+            "native_instance_ids": [
+              307
+            ],
+            "point_count": 439667,
+            "unique_cells": 423344,
+            "matched_cells": 422671,
+            "matched_rows": 712622,
+            "match_fraction": 0.99841,
+            "distinct_instances": 3,
+            "dominant_instance": 307,
+            "dominant_points": 438994,
+            "dominant_share": 0.616026,
+            "top_instances": [
+              {
+                "instance": 307,
+                "points": 438994
+              },
+              {
+                "instance": 443,
+                "points": 273405
+              },
+              {
+                "instance": 500,
+                "points": 223
+              }
+            ]
+          },
+          {
+            "site": "wytham",
+            "source": "trees/train/wytham_winter_469.ply",
+            "canonical_hint": "wytham:wytham_winter_469",
+            "plot": "wytham_val.ply",
+            "native_instance_ids": [
+              307
+            ],
+            "point_count": 439667,
+            "unique_cells": 423344,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          }
+        ]
+      }
+    },
+    {
+      "kind": "high_partial_overlap_pair",
+      "note": "Not an exact alias. Kept as two independent canonical trees because the publisher labels them as distinct instances; the archive alone does not prove either verdict.",
+      "pair": {
+        "a": "trees/train/wytham_winter_2240.ply",
+        "b": "trees/train/wytham_winter_8099a.ply",
+        "same_basename": false,
+        "point_count_a": 28690,
+        "point_count_b": 6894,
+        "shared_cells": 4185,
+        "containment_of_smaller": 0.631127,
+        "centroid_gap_m": 2.370905,
+        "exact_multiset_equal": false,
+        "bbox_overlap": true,
+        "level": "LEVEL_C_PARTIAL_OVERLAP_ONLY"
+      },
+      "a_summary": {
+        "canonical_tree_id": "wytham:wytham_winter_2240",
+        "identity_status": "EXACT",
+        "alias_evidence": "LEVEL_A_EXACT_ALIAS",
+        "occurrence_count": 2,
+        "folder_partitions": [
+          "train",
+          "val"
+        ],
+        "source_aliases": [
+          "trees/train/wytham_winter_2240.ply",
+          "trees/val/wytham_winter_2240.ply"
+        ],
+        "point_count": 28690,
+        "unique_cells": 26708,
+        "bbox": [
+          51.9392,
+          182.7604,
+          -19.4935,
+          55.5703,
+          186.0123,
+          -10.2146
+        ],
+        "centroid": [
+          53.8839,
+          184.4487,
+          -13.362
+        ],
+        "coordinate_stats": {
+          "x": [
+            51.9392,
+            55.5703,
+            53.8839,
+            0.7946
+          ],
+          "y": [
+            182.7604,
+            186.0123,
+            184.4487,
+            0.7207
+          ],
+          "z": [
+            -19.4935,
+            -10.2146,
+            -13.362,
+            2.2233
+          ],
+          "non_finite": 0,
+          "duplicate_cells": 1982
+        },
+        "local_instance_id": [
+          520
+        ],
+        "dominant_plot_instance": 520,
+        "plot_support_cells": 26708,
+        "neighbour_count": 14,
+        "neighbours_with_points": 9,
+        "neighbour_support_points": 203140,
+        "membership": [
+          {
+            "site": "wytham",
+            "source": "trees/train/wytham_winter_2240.ply",
+            "canonical_hint": "wytham:wytham_winter_2240",
+            "plot": "wytham_test.ply",
+            "native_instance_ids": [
+              520
+            ],
+            "point_count": 28690,
+            "unique_cells": 26708,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/train/wytham_winter_2240.ply",
+            "canonical_hint": "wytham:wytham_winter_2240",
+            "plot": "wytham_train.ply",
+            "native_instance_ids": [
+              520
+            ],
+            "point_count": 28690,
+            "unique_cells": 26708,
+            "matched_cells": 891,
+            "matched_rows": 1382,
+            "match_fraction": 0.033361,
+            "distinct_instances": 2,
+            "dominant_instance": 520,
+            "dominant_points": 891,
+            "dominant_share": 0.644718,
+            "top_instances": [
+              {
+                "instance": 520,
+                "points": 891
+              },
+              {
+                "instance": 118,
+                "points": 491
+              }
+            ]
+          },
+          {
+            "site": "wytham",
+            "source": "trees/train/wytham_winter_2240.ply",
+            "canonical_hint": "wytham:wytham_winter_2240",
+            "plot": "wytham_val.ply",
+            "native_instance_ids": [
+              520
+            ],
+            "point_count": 28690,
+            "unique_cells": 26708,
+            "matched_cells": 25817,
+            "matched_rows": 31499,
+            "match_fraction": 0.966639,
+            "distinct_instances": 3,
+            "dominant_instance": 520,
+            "dominant_points": 27799,
+            "dominant_share": 0.882536,
+            "top_instances": [
+              {
+                "instance": 520,
+                "points": 27799
+              },
+              {
+                "instance": 118,
+                "points": 3696
+              },
+              {
+                "instance": 699,
+                "points": 4
+              }
+            ]
+          }
+        ]
+      },
+      "b_summary": {
+        "canonical_tree_id": "wytham:wytham_winter_8099a",
+        "identity_status": "EXACT",
+        "alias_evidence": "LEVEL_A_EXACT_ALIAS",
+        "occurrence_count": 2,
+        "folder_partitions": [
+          "train",
+          "val"
+        ],
+        "source_aliases": [
+          "trees/train/wytham_winter_8099a.ply",
+          "trees/val/wytham_winter_8099a.ply"
+        ],
+        "point_count": 6894,
+        "unique_cells": 6631,
+        "bbox": [
+          52.0422,
+          183.3261,
+          -19.4548,
+          55.5703,
+          185.2818,
+          -14.2149
+        ],
+        "centroid": [
+          53.905,
+          184.5833,
+          -15.729
+        ],
+        "coordinate_stats": {
+          "x": [
+            52.0422,
+            55.5703,
+            53.905,
+            0.8577
+          ],
+          "y": [
+            183.3261,
+            185.2818,
+            184.5833,
+            0.3896
+          ],
+          "z": [
+            -19.4548,
+            -14.2149,
+            -15.729,
+            1.3737
+          ],
+          "non_finite": 0,
+          "duplicate_cells": 263
+        },
+        "local_instance_id": [
+          118
+        ],
+        "dominant_plot_instance": 118,
+        "plot_support_cells": 6631,
+        "neighbour_count": 12,
+        "neighbours_with_points": 9,
+        "neighbour_support_points": 102930,
+        "membership": [
+          {
+            "site": "wytham",
+            "source": "trees/train/wytham_winter_8099a.ply",
+            "canonical_hint": "wytham:wytham_winter_8099a",
+            "plot": "wytham_test.ply",
+            "native_instance_ids": [
+              118
+            ],
+            "point_count": 6894,
+            "unique_cells": 6631,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/train/wytham_winter_8099a.ply",
+            "canonical_hint": "wytham:wytham_winter_8099a",
+            "plot": "wytham_train.ply",
+            "native_instance_ids": [
+              118
+            ],
+            "point_count": 6894,
+            "unique_cells": 6631,
+            "matched_cells": 539,
+            "matched_rows": 1030,
+            "match_fraction": 0.081285,
+            "distinct_instances": 2,
+            "dominant_instance": 118,
+            "dominant_points": 539,
+            "dominant_share": 0.523301,
+            "top_instances": [
+              {
+                "instance": 118,
+                "points": 539
+              },
+              {
+                "instance": 520,
+                "points": 491
+              }
+            ]
+          },
+          {
+            "site": "wytham",
+            "source": "trees/train/wytham_winter_8099a.ply",
+            "canonical_hint": "wytham:wytham_winter_8099a",
+            "plot": "wytham_val.ply",
+            "native_instance_ids": [
+              118
+            ],
+            "point_count": 6894,
+            "unique_cells": 6631,
+            "matched_cells": 6092,
+            "matched_rows": 10052,
+            "match_fraction": 0.918715,
+            "distinct_instances": 2,
+            "dominant_instance": 118,
+            "dominant_points": 6355,
+            "dominant_share": 0.632212,
+            "top_instances": [
+              {
+                "instance": 118,
+                "points": 6355
+              },
+              {
+                "instance": 520,
+                "points": 3697
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "kind": "weakest_plot_support",
+      "summary": {
+        "canonical_tree_id": "wytham:wytham_winter_1008",
+        "identity_status": "EXACT",
+        "alias_evidence": "SINGLE_OCCURRENCE",
+        "occurrence_count": 1,
+        "folder_partitions": [
+          "test_out_plot"
+        ],
+        "source_aliases": [
+          "trees/test/out_plot_th0.90/wytham_winter_1008.ply"
+        ],
+        "point_count": 137452,
+        "unique_cells": 135131,
+        "bbox": [
+          8.1156,
+          200.6908,
+          -23.2645,
+          14.8882,
+          206.9653,
+          -5.3099
+        ],
+        "centroid": [
+          11.4939,
+          203.3031,
+          -10.9185
+        ],
+        "coordinate_stats": {
+          "x": [
+            8.1156,
+            14.8882,
+            11.4939,
+            1.384
+          ],
+          "y": [
+            200.6908,
+            206.9653,
+            203.3031,
+            1.5009
+          ],
+          "z": [
+            -23.2645,
+            -5.3099,
+            -10.9185,
+            3.8954
+          ],
+          "non_finite": 0,
+          "duplicate_cells": 2321
+        },
+        "local_instance_id": [],
+        "dominant_plot_instance": null,
+        "plot_support_cells": 0,
+        "neighbour_count": 5,
+        "neighbours_with_points": 5,
+        "neighbour_support_points": 488592,
+        "membership": [
+          {
+            "site": "wytham",
+            "source": "trees/test/out_plot_th0.90/wytham_winter_1008.ply",
+            "canonical_hint": "wytham:wytham_winter_1008",
+            "plot": "wytham_test.ply",
+            "native_instance_ids": [],
+            "point_count": 137452,
+            "unique_cells": 135131,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/test/out_plot_th0.90/wytham_winter_1008.ply",
+            "canonical_hint": "wytham:wytham_winter_1008",
+            "plot": "wytham_train.ply",
+            "native_instance_ids": [],
+            "point_count": 137452,
+            "unique_cells": 135131,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/test/out_plot_th0.90/wytham_winter_1008.ply",
+            "canonical_hint": "wytham:wytham_winter_1008",
+            "plot": "wytham_val.ply",
+            "native_instance_ids": [],
+            "point_count": 137452,
+            "unique_cells": 135131,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          }
+        ]
+      }
+    },
+    {
+      "kind": "weakest_plot_support",
+      "summary": {
+        "canonical_tree_id": "wytham:wytham_winter_1045",
+        "identity_status": "EXACT",
+        "alias_evidence": "LEVEL_A_EXACT_ALIAS",
+        "occurrence_count": 2,
+        "folder_partitions": [
+          "test_out_plot",
+          "val"
+        ],
+        "source_aliases": [
+          "trees/test/out_plot_th0.90/wytham_winter_1045.ply",
+          "trees/val/wytham_winter_1045.ply"
+        ],
+        "point_count": 139992,
+        "unique_cells": 137645,
+        "bbox": [
+          26.9644,
+          194.4776,
+          -21.5955,
+          34.6496,
+          200.6859,
+          0.007
+        ],
+        "centroid": [
+          30.4111,
+          197.1783,
+          -6.0286
+        ],
+        "coordinate_stats": {
+          "x": [
+            26.9644,
+            34.6496,
+            30.4111,
+            1.5933
+          ],
+          "y": [
+            194.4776,
+            200.6859,
+            197.1783,
+            1.1642
+          ],
+          "z": [
+            -21.5955,
+            0.007,
+            -6.0286,
+            5.3007
+          ],
+          "non_finite": 0,
+          "duplicate_cells": 2347
+        },
+        "local_instance_id": [
+          279
+        ],
+        "dominant_plot_instance": null,
+        "plot_support_cells": 0,
+        "neighbour_count": 8,
+        "neighbours_with_points": 8,
+        "neighbour_support_points": 788341,
+        "membership": [
+          {
+            "site": "wytham",
+            "source": "trees/test/out_plot_th0.90/wytham_winter_1045.ply",
+            "canonical_hint": "wytham:wytham_winter_1045",
+            "plot": "wytham_test.ply",
+            "native_instance_ids": [],
+            "point_count": 139992,
+            "unique_cells": 137645,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/test/out_plot_th0.90/wytham_winter_1045.ply",
+            "canonical_hint": "wytham:wytham_winter_1045",
+            "plot": "wytham_train.ply",
+            "native_instance_ids": [],
+            "point_count": 139992,
+            "unique_cells": 137645,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/test/out_plot_th0.90/wytham_winter_1045.ply",
+            "canonical_hint": "wytham:wytham_winter_1045",
+            "plot": "wytham_val.ply",
+            "native_instance_ids": [],
+            "point_count": 139992,
+            "unique_cells": 137645,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          }
+        ]
+      }
+    },
+    {
+      "kind": "weakest_plot_support",
+      "summary": {
+        "canonical_tree_id": "wytham:wytham_winter_1081",
+        "identity_status": "EXACT",
+        "alias_evidence": "SINGLE_OCCURRENCE",
+        "occurrence_count": 1,
+        "folder_partitions": [
+          "val"
+        ],
+        "source_aliases": [
+          "trees/val/wytham_winter_1081.ply"
+        ],
+        "point_count": 117087,
+        "unique_cells": 102666,
+        "bbox": [
+          38.4447,
+          100.1744,
+          -11.6261,
+          43.1608,
+          104.8231,
+          9.3217
+        ],
+        "centroid": [
+          40.9812,
+          102.9417,
+          2.2309
+        ],
+        "coordinate_stats": {
+          "x": [
+            38.4447,
+            43.1608,
+            40.9812,
+            1.1499
+          ],
+          "y": [
+            100.1744,
+            104.8231,
+            102.9417,
+            0.8299
+          ],
+          "z": [
+            -11.6261,
+            9.3217,
+            2.2309,
+            5.6044
+          ],
+          "non_finite": 0,
+          "duplicate_cells": 14421
+        },
+        "local_instance_id": [
+          824
+        ],
+        "dominant_plot_instance": null,
+        "plot_support_cells": 0,
+        "neighbour_count": 16,
+        "neighbours_with_points": 15,
+        "neighbour_support_points": 855661,
+        "membership": [
+          {
+            "site": "wytham",
+            "source": "trees/val/wytham_winter_1081.ply",
+            "canonical_hint": "wytham:wytham_winter_1081",
+            "plot": "wytham_test.ply",
+            "native_instance_ids": [
+              824
+            ],
+            "point_count": 117087,
+            "unique_cells": 102666,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/val/wytham_winter_1081.ply",
+            "canonical_hint": "wytham:wytham_winter_1081",
+            "plot": "wytham_train.ply",
+            "native_instance_ids": [
+              824
+            ],
+            "point_count": 117087,
+            "unique_cells": 102666,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          },
+          {
+            "site": "wytham",
+            "source": "trees/val/wytham_winter_1081.ply",
+            "canonical_hint": "wytham:wytham_winter_1081",
+            "plot": "wytham_val.ply",
+            "native_instance_ids": [
+              824
+            ],
+            "point_count": 117087,
+            "unique_cells": 102666,
+            "matched_cells": 0,
+            "matched_rows": 0,
+            "match_fraction": 0.0,
+            "distinct_instances": 0,
+            "dominant_instance": null,
+            "dominant_points": 0,
+            "dominant_share": 0.0,
+            "top_instances": []
+          }
+        ]
+      }
+    }
+  ]
+}
