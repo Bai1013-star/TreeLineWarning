@@ -578,10 +578,9 @@ class GeneratorDigest(unittest.TestCase):
         for field in ('deterministic_digest', 'manifest_digest', 'generator_digest'):
             self.assertIn(field, payload)
             self.assertEqual(len(payload[field]), 64)
-        # Recomputing the summary without the volatile and self-referential fields must
-        # reproduce the digest.
-        volatile = {'seconds', 'deterministic_digest', 'manifest_digest'}
-        stripped = {k: v for k, v in payload.items() if k not in volatile}
+        # Recomputing the summary without the self-referential digest field must
+        # reproduce it; the committed artifact carries no volatile field.
+        stripped = {k: v for k, v in payload.items() if k != 'deterministic_digest'}
         recomputed = hashlib.sha256(json.dumps(
             stripped, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
         self.assertEqual(recomputed, payload['deterministic_digest'])

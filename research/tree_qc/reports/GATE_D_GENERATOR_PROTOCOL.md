@@ -2,11 +2,19 @@
 
 Status: **worker protocol, pending GPT-6 Supervisor acceptance. Training remains locked.**
 `GATE_D_GENERATOR_VERSION = GATE_D_SYNTHETIC_GENERATOR_V1`
-`GATE_D_GENERATOR_DIGEST = b36cd620d78236d998e8e657eb5f5a42e2451146ef2ee3ac87751269c06bb37b`
+`GATE_D_GENERATOR_DIGEST = ab62f3b9f3a0977d49b0ec988357e3663e641c2dd0b0fdfacb7e4622278c8741`
 
 The digest is the SHA-256 over the generator implementation files listed in
 `gate_d_diagnostic.GENERATOR_FILES`. The Supervisor's acceptance marker must carry this
 exact digest; a different digest refuses to unlock training.
+
+`GATE_D_DIAGNOSTIC_DETERMINISTIC_DIGEST = 9d62d0cc12454e73006b8e7312fe3c128aedc1855c7bce8bcb08be6aa797cdf2`
+`GATE_D_DIAGNOSTIC_MANIFEST_DIGEST = 035bb077c1cb2160b6b3ef0fe89750f9557bfceb2b63efa9e9aaf02493e5dbd3`
+
+Both artifacts are fully deterministic: re-running the diagnostic on the frozen inputs
+reproduces the same file, so a rerun never leaves the worktree dirty. Wall-clock timing
+is volatile run telemetry and is written to the gitignored
+`GATE_D_DIAGNOSTIC_RUNTIME.json` instead of the frozen artifact.
 
 ## 1. Scope and non-goals
 

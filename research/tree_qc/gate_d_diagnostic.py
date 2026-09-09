@@ -156,20 +156,25 @@ def run(per_partition: int = 5, repeats: int = 1, points: int = sampler.POINTS_P
     REPORTS.mkdir(parents=True, exist_ok=True)
     if write_visuals:
         summary['visualisations'] = write_visualisations(visual_payload)
-    # The examples themselves must be reproducible byte-for-byte. Wall-clock timing is
-    # the only field that legitimately varies, so the deterministic digest covers the
-    # finished summary without it and the manifest is hashed directly.
-    summary['deterministic_digest'] = hashlib.sha256(json.dumps(
-        summary, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+    # The committed artifact is fully deterministic: two runs on the same frozen inputs
+    # must produce the same file, so re-running the diagnostic never leaves the worktree
+    # dirty. Wall-clock timing is volatile run telemetry and goes to a separate file.
     summary['manifest_digest'] = hashlib.sha256(
         ('\n'.join(json.dumps(row, sort_keys=True) for row in manifest_rows)
          + '\n').encode('utf-8')).hexdigest()
-    summary['seconds'] = round(time.time() - started, 3)
+    summary['deterministic_digest'] = hashlib.sha256(json.dumps(
+        summary, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
     (REPORTS / 'GATE_D_SYNTHETIC_DIAGNOSTIC.json').write_text(
         json.dumps(summary, indent=2), encoding='utf-8')
     with (REPORTS / 'GATE_D_DIAGNOSTIC_MANIFEST.jsonl').open('w', encoding='utf-8') as out:
         for row in manifest_rows:
             out.write(json.dumps(row, sort_keys=True) + '\n')
+    telemetry = {'seconds': round(time.time() - started, 3),
+                 'deterministic_digest': summary['deterministic_digest'],
+                 'manifest_digest': summary['manifest_digest'],
+                 'examples': len(records), 'violations': violations}
+    (REPORTS / 'GATE_D_DIAGNOSTIC_RUNTIME.json').write_text(
+        json.dumps(telemetry, indent=2), encoding='utf-8')
     return summary
 
 

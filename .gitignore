@@ -34,3 +34,5 @@ research/tree_qc/**/*.onnx
 research/tree_qc/.venv/
 research/tree_qc/data/
 research/tree_qc/outputs/
+# Volatile run telemetry (wall-clock timing); the frozen artifact is fully deterministic
+research/tree_qc/reports/GATE_D_DIAGNOSTIC_RUNTIME.json

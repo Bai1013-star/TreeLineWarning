@@ -23,7 +23,7 @@ V0.1 or product file was touched, and nothing was pushed.
 | — tests | `test_gate_d.py` (65 tests) |
 
 `GATE_D_GENERATOR_VERSION = GATE_D_SYNTHETIC_GENERATOR_V1`
-`GATE_D_GENERATOR_DIGEST = b36cd620d78236d998e8e657eb5f5a42e2451146ef2ee3ac87751269c06bb37b`
+`GATE_D_GENERATOR_DIGEST = ab62f3b9f3a0977d49b0ec988357e3663e641c2dd0b0fdfacb7e4622278c8741`
 
 ## 2. Frozen inputs re-derived, not trusted
 
