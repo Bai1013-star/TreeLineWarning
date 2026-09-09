@@ -1,0 +1,287 @@
+{
+  "diagnostic_version": "GATE_D_SYNTHETIC_DIAGNOSTIC_V1",
+  "generator_version": "GATE_D_SYNTHETIC_GENERATOR_V1",
+  "generator_digest": "345953a6a1d541b1f632ecba93090026c4a4b9dce273387f0b06f42e138854b6",
+  "sampler_version": "GATE_D_STRUCTURED_SAMPLER_V1",
+  "protocol": "GATE_C_CANONICAL_IDENTITY_PROTOCOL_V2 + source isolation remediation",
+  "identity_manifest_digest": "eb515773b5235f2cdb0206231493195f73f269c761d9da2d2186ba68ab3ed5aa",
+  "provenance_digest": "feab1423e6c9dc81ea05c4d02c56d5df987bb42c24d219f8089228ad06279688",
+  "training_lock": {
+    "marker": "E:\\TreeLineWarning-tree-qc-pointnet2-final-pilot-v1\\research\\tree_qc\\reports\\GATE_D_ACCEPTANCE.json",
+    "exists": false,
+    "training_allowed": false,
+    "reason": "GATE_D_NOT_ACCEPTED"
+  },
+  "TRAINING_LOCK_ACTIVE": true,
+  "points_primary": 4096,
+  "points_robustness": 2048,
+  "points_used": 4096,
+  "classes": [
+    "GOOD",
+    "MERGED_MULTI_TREE",
+    "NEIGHBOR_CONTAMINATION",
+    "OVER_SEGMENTED",
+    "CROWN_INCOMPLETE",
+    "STEM_MISSING",
+    "NOISE"
+  ],
+  "severities": [
+    "LOW",
+    "MEDIUM",
+    "HIGH"
+  ],
+  "partitions": [
+    "train",
+    "validation"
+  ],
+  "candidates": {
+    "train": [
+      "litchfield:tile_0_-100_Boom27",
+      "litchfield:tile_0_-60_Boom12",
+      "litchfield:tile_40_-100_Boom11",
+      "litchfield:tile_40_-40_Boom16",
+      "litchfield:tile_20_-40_Boom9"
+    ],
+    "validation": [
+      "litchfield:tile_80_-100_Boom21",
+      "litchfield:tile_80_-100_Boom17",
+      "litchfield:tile_80_-60_Boom5",
+      "litchfield:tile_80_-60_Boom13",
+      "litchfield:tile_80_-80_Boom3"
+    ]
+  },
+  "examples": 210,
+  "examples_per_class_severity": {
+    "CROWN_INCOMPLETE|HIGH": 10,
+    "CROWN_INCOMPLETE|LOW": 10,
+    "CROWN_INCOMPLETE|MEDIUM": 10,
+    "GOOD|HIGH": 10,
+    "GOOD|LOW": 10,
+    "GOOD|MEDIUM": 10,
+    "MERGED_MULTI_TREE|HIGH": 10,
+    "MERGED_MULTI_TREE|LOW": 10,
+    "MERGED_MULTI_TREE|MEDIUM": 10,
+    "NEIGHBOR_CONTAMINATION|HIGH": 10,
+    "NEIGHBOR_CONTAMINATION|LOW": 10,
+    "NEIGHBOR_CONTAMINATION|MEDIUM": 10,
+    "NOISE|HIGH": 10,
+    "NOISE|LOW": 10,
+    "NOISE|MEDIUM": 10,
+    "OVER_SEGMENTED|HIGH": 10,
+    "OVER_SEGMENTED|LOW": 10,
+    "OVER_SEGMENTED|MEDIUM": 10,
+    "STEM_MISSING|HIGH": 10,
+    "STEM_MISSING|LOW": 10,
+    "STEM_MISSING|MEDIUM": 10
+  },
+  "donor_usage_examples": 58,
+  "quarantine_donor_uses": 0,
+  "held_out_examples": 0,
+  "cross_partition_leakage": 0,
+  "violations": [],
+  "fingerprint": {
+    "fingerprint_version": "GATE_D_FINGERPRINT_V1",
+    "examples": 210,
+    "permutations": 2000,
+    "alpha": 0.01,
+    "checks": [
+      {
+        "check": "point_count_fingerprint_raw",
+        "p_value": 0.343328,
+        "pass": true,
+        "critical": false,
+        "detail": {
+          "statistic": "between_group_mean_variance_ratio",
+          "raw_min": 2908,
+          "raw_max": 632869,
+          "note": "pre-normalisation size; MERGED and NOISE append geometry, so a class-dependent raw size is expected and is not a model-input leak"
+        }
+      },
+      {
+        "check": "point_count_fingerprint_source",
+        "p_value": 0.017491,
+        "pass": true,
+        "critical": false,
+        "detail": {
+          "statistic": "between_group_mean_variance_ratio",
+          "min": 30649,
+          "max": 69995,
+          "note": "post-normalisation size must be class-independent, otherwise the generator leaks the class through cloud size"
+        }
+      },
+      {
+        "check": "point_count_fingerprint_sampled",
+        "p_value": 1.0,
+        "pass": true,
+        "critical": false,
+        "detail": {
+          "distinct_sampled_sizes": [
+            4096
+          ],
+          "note": "every example must reach the model at the same fixed size"
+        }
+      },
+      {
+        "check": "fixed_fraction_fingerprint",
+        "p_value": 0.952524,
+        "pass": true,
+        "critical": false,
+        "detail": {
+          "fraction_min": 0.036878,
+          "fraction_max": 0.552529,
+          "fraction_mean": 0.207299,
+          "fraction_distinct_values": 180,
+          "per_class_drawn_fraction": {
+            "CROWN_INCOMPLETE": {
+              "n": 30,
+              "mean": 0.228791,
+              "min": 0.054513,
+              "max": 0.54968
+            },
+            "MERGED_MULTI_TREE": {
+              "n": 30,
+              "mean": 0.212621,
+              "min": 0.04211,
+              "max": 0.51803
+            },
+            "NEIGHBOR_CONTAMINATION": {
+              "n": 30,
+              "mean": 0.20698,
+              "min": 0.044908,
+              "max": 0.552529
+            },
+            "NOISE": {
+              "n": 30,
+              "mean": 0.204697,
+              "min": 0.041146,
+              "max": 0.525971
+            },
+            "OVER_SEGMENTED": {
+              "n": 30,
+              "mean": 0.196828,
+              "min": 0.036878,
+              "max": 0.533841
+            },
+            "STEM_MISSING": {
+              "n": 30,
+              "mean": 0.19388,
+              "min": 0.040873,
+              "max": 0.524221
+            }
+          },
+          "realised_magnitude_mean": 0.207299,
+          "excluded_classes": [
+            "GOOD"
+          ],
+          "note": "the drawn fraction comes from one shared distribution; the realised magnitude differs by class because the geometry mapping differs"
+        }
+      },
+      {
+        "check": "fixed_axis_fingerprint",
+        "p_value": 1.0,
+        "pass": true,
+        "critical": false,
+        "detail": {
+          "dominant_axis_histogram": {
+            "0": 11,
+            "1": 9,
+            "2": 10
+          },
+          "per_class_dominant_axis": {
+            "OVER_SEGMENTED": 0
+          },
+          "chi2": 0.0,
+          "note": "a class-constant dominant axis is the failure mode"
+        }
+      },
+      {
+        "check": "class_specific_sampling_fingerprint",
+        "p_value": 0.098951,
+        "pass": true,
+        "critical": false,
+        "detail": {
+          "mean_membership_source": 0.753177,
+          "mean_membership_sampled": 0.753102,
+          "mean_membership_gap": -7.5e-05,
+          "max_abs_membership_gap": 0.005478,
+          "per_class_mean_gap": {
+            "CROWN_INCOMPLETE": 2.1e-05,
+            "GOOD": 0.0,
+            "MERGED_MULTI_TREE": -0.000445,
+            "NEIGHBOR_CONTAMINATION": -0.00011,
+            "NOISE": 1e-05,
+            "OVER_SEGMENTED": 0.0,
+            "STEM_MISSING": 0.0
+          },
+          "mean_spatial_coverage": 0.946048,
+          "statistic": "between-group variance share of the sampled-minus-source membership gap",
+          "note": "the absolute membership fraction is the class signal; only a class-dependent sampler shift would be an artefact"
+        }
+      },
+      {
+        "check": "metadata_leakage_tensor_stats",
+        "p_value": 0.994503,
+        "pass": true,
+        "critical": false,
+        "detail": {
+          "loo_nearest_centroid_accuracy": 0.990476,
+          "chance_accuracy": 0.142857,
+          "margin_over_chance": 0.847619,
+          "feature_channels": [
+            "local_x",
+            "local_y",
+            "local_z",
+            "candidate_membership"
+          ],
+          "feature_channel_count": 4,
+          "test": "permutation p-value for a nearest-centroid probe on the 8 per-channel summary statistics of the exposed tensor",
+          "note": "the tensor carries 4 declared channels only; no provenance or class field exists in the model input"
+        }
+      },
+      {
+        "check": "metadata_leakage_identifiers",
+        "p_value": 1.0,
+        "pass": true,
+        "critical": false,
+        "detail": {
+          "class_sets_identical_across_candidates": true,
+          "class_sets_identical_across_severities": true,
+          "candidates": 10,
+          "severities": [
+            "HIGH",
+            "LOW",
+            "MEDIUM"
+          ],
+          "note": "every candidate and severity carries the same class set, so an identifier cannot stand in for the label"
+        }
+      }
+    ],
+    "critical_fingerprints": [],
+    "GENERATOR_FINGERPRINT": "NONE_DETECTED",
+    "CRITICAL_FINGERPRINTS": []
+  },
+  "seconds": 7.419,
+  "visualisations": [
+    "gate_d_visuals\\GOOD_MEDIUM_litchfield_tile_0_-100_Boom27.png",
+    "gate_d_visuals\\MERGED_MULTI_TREE_MEDIUM_litchfield_tile_0_-100_Boom27.png",
+    "gate_d_visuals\\NEIGHBOR_CONTAMINATION_MEDIUM_litchfield_tile_0_-100_Boom27.png",
+    "gate_d_visuals\\OVER_SEGMENTED_MEDIUM_litchfield_tile_0_-100_Boom27.png",
+    "gate_d_visuals\\CROWN_INCOMPLETE_MEDIUM_litchfield_tile_0_-100_Boom27.png",
+    "gate_d_visuals\\STEM_MISSING_MEDIUM_litchfield_tile_0_-100_Boom27.png",
+    "gate_d_visuals\\NOISE_MEDIUM_litchfield_tile_0_-100_Boom27.png",
+    "gate_d_visuals\\GOOD_MEDIUM_litchfield_tile_0_-60_Boom12.png",
+    "gate_d_visuals\\MERGED_MULTI_TREE_MEDIUM_litchfield_tile_0_-60_Boom12.png",
+    "gate_d_visuals\\NEIGHBOR_CONTAMINATION_MEDIUM_litchfield_tile_0_-60_Boom12.png",
+    "gate_d_visuals\\OVER_SEGMENTED_MEDIUM_litchfield_tile_0_-60_Boom12.png",
+    "gate_d_visuals\\CROWN_INCOMPLETE_MEDIUM_litchfield_tile_0_-60_Boom12.png",
+    "gate_d_visuals\\STEM_MISSING_MEDIUM_litchfield_tile_0_-60_Boom12.png",
+    "gate_d_visuals\\NOISE_MEDIUM_litchfield_tile_0_-60_Boom12.png",
+    "gate_d_visuals\\GOOD_MEDIUM_litchfield_tile_40_-100_Boom11.png",
+    "gate_d_visuals\\MERGED_MULTI_TREE_MEDIUM_litchfield_tile_40_-100_Boom11.png",
+    "gate_d_visuals\\NEIGHBOR_CONTAMINATION_MEDIUM_litchfield_tile_40_-100_Boom11.png",
+    "gate_d_visuals\\OVER_SEGMENTED_MEDIUM_litchfield_tile_40_-100_Boom11.png",
+    "gate_d_visuals\\CROWN_INCOMPLETE_MEDIUM_litchfield_tile_40_-100_Boom11.png",
+    "gate_d_visuals\\STEM_MISSING_MEDIUM_litchfield_tile_40_-100_Boom11.png",
+    "gate_d_visuals\\NOISE_MEDIUM_litchfield_tile_40_-100_Boom11.png"
+  ]
+}

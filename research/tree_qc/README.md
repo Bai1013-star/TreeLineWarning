@@ -1,13 +1,42 @@
 # Tree QC Gate A implementation
 
-This directory currently implements **Gate A only**. No public-data, training-site,
-held-out, local-challenge or deployment results exist. The four later-stage
-launchers deliberately return exit code 3 until implementation and supervisor approval.
+This directory implements **Gate A** (runtime/model diagnostic), the **Gate C2** frozen
+canonical identity and provenance, and the **Gate D/E engineering layer**. No formal
+model training has been run and no held-out or local-challenge result exists.
 
 `SETUP_TREE_QC_TRAINING.cmd` creates the independent Python 3.11 environment on D:.
 The supervisor selected the official torch 2.14.0+cu130 Windows wheel for this driver.
 `RUN_TREE_QC_MINI_GATE.cmd` runs model tests and the frozen diagnostic, retaining raw
 logs, JSON and checkpoints in a timestamped D:\TreeQCTraining directory.
+
+## Gate D/E engineering layer
+
+`01_RUN_GATE_D_DIAGNOSTICS.cmd` runs the bounded synthetic-generator diagnostic. The
+launchers `02_RUN_POINTNET_BASELINE.cmd`, `03_RUN_POINTNET2_PILOT.cmd`,
+`04_RUN_CROSS_SITE_EVAL.cmd`, `05_RUN_MULTI_SEED_ROBUSTNESS.cmd` and
+`RUN_TREE_QC_EFG_FULL_VALIDATION.cmd` are implemented but **refuse to train**: every one
+checks `research/tree_qc/reports/GATE_D_ACCEPTANCE.json` and exits 3 with
+`GATE_D_NOT_ACCEPTED` while Gate D is unaccepted. The acceptance marker is deliberately
+not committed.
+
+The layer is split so the generator never imports a model:
+
+| Module | Role |
+|---|---|
+| `gate_d_provenance.py` | frozen-split loader, donor allowlist, fail-closed authorization |
+| `gate_d_geometry.py` | bounded geometry cache; authorised tree reads only |
+| `gate_d_generator.py` | 7 classes x 3 severities, real geometry only |
+| `gate_d_sampler.py` | label-agnostic 4096/2048 structured sampler |
+| `gate_d_dataset.py` | `ExampleSpec -> Generator -> Sampler -> Tensor`, numpy only |
+| `gate_d_metrics.py` | confusion matrix, five named metrics, frozen thresholds |
+| `gate_d_train.py` | shared engine: AMP, checkpoint, resume, best, device |
+| `train_pointnet.py`, `train_pointnet2.py` | the two locked training entry points |
+| `gate_d_fingerprint.py` | construction-artefact permutation tests |
+| `gate_d_lock.py` | `TRAINING_ALLOWED = False` |
+| `run_tree_qc_efg.py` | the future 8-step E/F/G run, dry-run only for now |
+
+`GATE_D_GENERATOR_PROTOCOL.md` records the contract; `GATE_D_WORKER_REPORT.md` records
+the diagnostic result.
 
 The PointNet baseline is shared pointwise MLP + symmetric max pooling, **without
 T-Net**; it is not an exact full paper reproduction. PointNet++ SSG has true FPS,
