@@ -1,218 +1,207 @@
-# Gate D/E combined engineering worker report
+# Gate D minimal remediation worker report — all blockers
 
 Worker: Claude Code (DeepSeek). **Worker report only; GPT-6 Supervisor decides.**
-`START_HEAD = 2c02f849863b2139ac014989a6f7cf1f957f2cab`
+`START_HEAD = 17f6075730c18c0d49bddfc9991693556984e019`
 
-This round built the merged Gate D + Gate E engineering layer and ran **only** the
-bounded Gate D diagnostic. No model was trained, no held-out tree was read, no frozen
-V0.1 or product file was touched, and nothing was pushed.
+Gate C2 remains PASS and was not rerun. No data was redownloaded, no 163 M-point scan
+was repeated, no model was trained, no held-out or local-challenge tree was read, no
+product or frozen V0.1 file was touched, and nothing was pushed.
 
-## 1. What was delivered
+`GENERATOR_VERSION = GATE_D_SYNTHETIC_GENERATOR_V2`
+`GENERATOR_DIGEST = 363ca30e5d6ca83f80df4f9d893c602062f909c6c980405df7f17459ba47471b`
+`PROTOCOL_DIGEST = 36e4cfca043190d4d12c2ab9ee635d92bb479cb9b56d482ae1121fd797939729`
 
-| Item | Module |
-|---|---|
-| A. synthetic generator | `gate_d_generator.py` |
-| B. generator science + fingerprints | `gate_d_fingerprint.py` |
-| C. structured sampler | `gate_d_sampler.py` |
-| D. model-ready Dataset/DataLoader | `gate_d_dataset.py` |
-| E. PointNet baseline trainer | `train_pointnet.py` + `gate_d_train.py` |
-| F. PointNet++ SSG trainer | `train_pointnet2.py` + `gate_d_train.py` |
-| G. validation/threshold infrastructure | `gate_d_metrics.py` |
-| H. E/F/G orchestrator + launchers | `run_tree_qc_efg.py` + 6 `.cmd` files |
-| — provenance gate, geometry cache, training lock | `gate_d_provenance.py`, `gate_d_geometry.py`, `gate_d_lock.py` |
-| — tests | `test_gate_d.py` (65 tests) |
+This round closed the six blockers from `TREE_QC_GATE_D_MINIMAL_REMEDIATION_ALL_BLOCKERS_V1`
+by minimal remediation of the existing implementation, not a rewrite.
 
-`GATE_D_GENERATOR_VERSION = GATE_D_SYNTHETIC_GENERATOR_V1`
-`GATE_D_GENERATOR_DIGEST = ab62f3b9f3a0977d49b0ec988357e3663e641c2dd0b0fdfacb7e4622278c8741`
+## Recovery note
 
-## 2. Frozen inputs re-derived, not trusted
+The session was interrupted by a forced reboot. All remediation edits survived in the
+dirty worktree and were recovered and completed rather than restarted. Nothing was
+reset, restored, checked out over, stashed or cleaned. Every modified file was re-parsed,
+all JSON/JSONL/PNG artifacts were re-validated, and the diagnostic was regenerated from
+a clean process.
 
-The gate reloads the Gate C2 artifacts and re-derives the invariants: protocol
-`GATE_C_CANONICAL_IDENTITY_PROTOCOL_V2`, manifest digest
-`eb515773b5235f2c…3ed5aa`, `TRAIN_UNIQUE = 440`, `VALIDATION_UNIQUE = 175`,
-`HELDOUT_FROZEN_COUNT = 749`, source unions 482/207/851 pairwise disjoint,
-high-containment quarantine 25 trees / 28 aliases. Any mismatch raises.
+## 1. Blocker 1 — current candidate membership
 
-**One finding during implementation, corrected in my code, not in the artifacts.**
-`partition == 'quarantine'` in the identity manifest is *not* the high-containment set.
-It is 84 Litchfield trees whose bbox crosses the 3 m train/validation boundary. They may
-not be candidates, but the frozen provenance explicitly retains 70 of them as context
-for model-selection candidates. My first gate conflated the two and rejected legal
-context; it now distinguishes `high_containment_quarantine` (25, forbidden in every
-role) from `boundary_quarantine` (84, legal context, never a candidate). The frozen
-artifacts were correct.
+The channel was `publisher GT source membership`, which is the answer. It is now
+`current_candidate_membership`: whether the *current* single-tree segmentation selected
+the point.
 
-## 3. Donor contract
+Every example is built from one shared `BaseScene` (`gate_d_scene.py`): approved
+candidate + approved surviving context clipped to the frozen 3 m query. `GOOD` keeps the
+publisher GT membership; defects flip only the flag.
 
-Allowlist, checked in order: self-donation; donor exists; high-containment forbidden in
-every role; held-out unreachable; cross-partition leak; finally the donor must be in the
-candidate's own surviving `context`. Every generated example ends with
-`assert_example_sources(candidate, donors)`, so a violation raises rather than producing
-a mislabelled example.
-
-`DONOR_CONTRACT = ENFORCED_ALLOWLIST_FAIL_CLOSED`
-`CROSS_PARTITION_LEAKAGE = 0` (210 examples, 58 distinct donors used)
-`QUARANTINE_USAGE = 0`
-`HELDOUT_USAGE = 0`
-
-## 4. Generator science
-
-Seven classes, three severities, real publisher geometry only.
-
-| Class | Mechanism | Membership |
+| Class | Mechanism | Flag |
 |---|---|---|
-| `GOOD` | official observation untouched | 1 |
-| `MERGED_MULTI_TREE` | real neighbouring trees moved in | mixed |
-| `NEIGHBOR_CONTAMINATION` | real neighbouring boundary geometry | mixed |
-| `OVER_SEGMENTED` | contiguous spatial subset of the same tree | 1 |
-| `CROWN_INCOMPLETE` | contiguous crown removed, refilled with real non-member geometry | mixed |
-| `STEM_MISSING` | contiguous stem column removed, refilled with real floor geometry | mixed |
-| `NOISE` | real non-member geometry dominates | mostly 0 |
+| `MERGED_MULTI_TREE` | whole neighbouring tree inside the query claimed | 0 → 1 |
+| `NEIGHBOR_CONTAMINATION` | contiguous neighbouring region claimed | 0 → 1 |
+| `NOISE` | scattered non-structural context points claimed | 0 → 1 |
+| `OVER_SEGMENTED` | contiguous candidate region dropped | 1 → 0 |
+| `CROWN_INCOMPLETE` | contiguous crown region dropped | 1 → 0 |
+| `STEM_MISSING` | contiguous stem region dropped | 1 → 0 |
 
-No class invents a coordinate; `test_no_class_uses_invented_gaussian_geometry` asserts
-every generated point exists in the real geometry bundle.
+Claimed neighbour points are membership 1 even though their GT source is a neighbour;
+dropped candidate points are membership 0 while remaining in the scene. `gt_source_id`
+is audit-only and never a model channel. The tensor exposes exactly four channels.
 
-**Two design decisions worth the Supervisor's attention.**
+**`GOOD` now always contains real context and membership-0 points**, so the mere
+existence of a zero flag cannot identify the class. Measured membership-only shortcut
+(balanced accuracy, threshold fitted on one partition and applied to the other): **0.508**.
 
-1. *Membership source.* The publisher's per-tree files and merged plot clouds are
-   largely non-overlapping by exact cell (median match fraction 0, only 14.5 % of trees
-   with `dominant_share == 1.0`). Plot-derived per-point membership is therefore not
-   sound for tree examples. Gate D uses the publisher's own per-tree annotation:
-   candidate points carry membership 1, context/background points carry 0.
-2. *Missing regions are refilled.* `CROWN_INCOMPLETE` and `STEM_MISSING` do not leave a
-   hole — a point-only model cannot see a hole, and a hole is not what a segmentation
-   defect looks like. The vacated volume is refilled with real non-member geometry
-   (floor/understorey/neighbour) carrying membership 0.
+`GOOD_HAS_REAL_CONTEXT = YES` (30/30 GOOD examples, `good_without_real_context = 0`)
+`CURRENT_MEMBERSHIP_GT_LEAKAGE = NONE`
+`MEMBERSHIP_ONLY_SHORTCUT_ACCURACY = 0.508` (chance 0.5)
 
-## 5. Structured sampler
+## 2. Blocker 2 — every point source obeys the frozen allowlist
 
-One label-agnostic path for `GOOD` and every defect class; `sample` has no label
-parameter (asserted by test). Features are exactly `local_x`, `local_y`, `local_z`,
-`candidate_membership`. `POINTS_PRIMARY = 4096`, `POINTS_ROBUSTNESS = 2048`.
+The unauthorized background path is **deleted**. `gate_d_geometry` no longer has
+`allowed_background_trees`, and `CandidateGeometry` no longer has a `background` field;
+it loads only the candidate and its frozen surviving context. `gate_d_scene` clips
+context to the frozen 3 m query (candidate XY bbox + 3 m, native Z extent) verbatim.
 
-**A real defect was found and fixed here.** The first sampler used a hard per-cell cap,
-which under-sampled a dense cluster: on a two-component fixture with an 11 % member
-fraction, the sampled fraction collapsed to 0.7 %. Replacing the cap with a per-cell
-floor over-corrected in the other direction (0.11 → 0.134). The shipped sampler uses
-proportional largest-remainder quotas with neither cap nor floor, and reproduces the
-source membership fraction to within ~1 % on clustered, spread and even fixtures, with
-spatial coverage 0.79–0.96. Measured per-class sampler shift on the diagnostic:
-≤ 5 × 10⁻⁴.
+`assert_scene_sources` is the single unified check over candidate, context, donor,
+background, refill and alias sources. The diagnostic independently rebuilds the source
+union from the scene and requires `reported == reconstructed`, and rejects any alias in
+the high-containment alias set.
 
-## 6. Fingerprint diagnostics
+`UNAUTHORIZED_BACKGROUND_REFERENCES = 0` (was 72)
+`CONTEXT_3M_QUERY_COMPLIANCE = ENFORCED` (context points asserted inside the box)
+`SOURCE_UNION_COMPLETE = YES` (`actual_point_source_ids` == counts keys, counts sum to
+the scene size, verified per example)
+`CROSS_PARTITION_COMPLETE_SOURCE_LEAKAGE = 0`
+`HELDOUT_SOURCE_USAGE = 0`
+`HIGH_CONTAINMENT_USAGE = 0`
 
-Eight permutation tests, 2000 permutations, α = 0.01.
+`NOISE` needed a data-supported definition: the public data cannot supply a genuine
+"background" separate from neighbouring canonical trees, so `NOISE` is limited to
+**scattered** context points (at most one per spatial cell) and is structurally distinct
+from the **contiguous** contamination region. No background source was invented.
 
-| Check | p | Result |
-|---|---:|---|
-| `point_count_fingerprint_raw` | 0.343 | pass (reported, not critical) |
-| `point_count_fingerprint_source` | 0.017 | pass |
-| `point_count_fingerprint_sampled` | 1.000 | pass |
-| `fixed_fraction_fingerprint` | 0.953 | pass |
-| `fixed_axis_fingerprint` | 1.000 | pass |
-| `class_specific_sampling_fingerprint` | 0.099 | pass |
-| `metadata_leakage_tensor_stats` | 0.995 | pass |
-| `metadata_leakage_identifiers` | 1.000 | pass |
+## 3. Blocker 3 — class-specific refill removed; STEM applicability
 
-`GENERATOR_FINGERPRINT = NONE_DETECTED`, `CRITICAL_FINGERPRINTS = []`.
+`_background_in_region` and both class-specific refills are **deleted**. `CROWN_INCOMPLETE`
+and `STEM_MISSING` no longer delete points or inject other trees: the real crown/stem
+points stay in the scene with membership 0.
 
-**Two critical fingerprints were found during development and fixed, not excused.**
+`STEM_MISSING` now requires observable lower evidence — at least 24 points in the bottom
+45 % of the height range, within 0.75 m of the trunk axis, spanning at least 1.5 m
+vertically. Otherwise it raises `STEM_MISSING_NOT_APPLICABLE` and the example is not
+generated.
 
-1. *Point-count leak.* `MERGED` appends whole neighbouring trees and `NOISE` prepends
-   background geometry, so cloud size revealed the class. The generator now normalises
-   every cloud to a size drawn uniformly from 30 000–70 000 points before sampling.
-   Diagnostic normalised range 30 649–69 995; raw range 2 908–632 869.
-2. *Sampler shift.* See §5 — a genuine sampler bias, fixed in the sampler.
+`CROWN_CLASS_SPECIFIC_REFILL = NONE`
+`STEM_CLASS_SPECIFIC_REFILL = NONE`
+`STEM_APPLICABLE = 30`
+`STEM_NOT_APPLICABLE = 0` (diagnostic scope; the rejection path is exercised by test on a
+flattened fixture)
 
-One test was also corrected for measuring the wrong thing: `fixed_fraction_fingerprint`
-now tests the **drawn** fraction (one shared distribution across classes and severities,
-`GOOD` excluded as it has no corruption), because the realised magnitude necessarily
-differs when a fraction maps onto a crown cut versus a boundary injection. The realised
-magnitude is reported alongside.
+## 4. Blocker 4 — metric scale and structured sampler
 
-## 7. Diagnostic scope and result
+Per-example RMS scaling is **removed**. `local_translate` performs translation plus
+division by one fixed research-wide constant (`METRIC_SCALE_CONSTANT = 10.0`), so metric
+size and cross-example comparability survive. `per_example_scaling = False` is recorded.
 
-Bounded diagnostic: 5 train + 5 validation representative trees (evenly spaced by point
-count), 7 classes × 3 severities = **210 examples**, 21 representative PNGs.
+Group budgets are now **proportional to each scene's own publisher GT split**, which is
+identical for every class of a candidate. A fixed 60 % candidate quota was tried and
+rejected because it shifted the sampled membership fraction by up to +0.43. Within each
+group, spatial cells and height bands receive a quota floor. Changed-membership evidence
+is reserved inside those fixed budgets and **never duplicated**; a shortfall is recorded.
+
+Measured on the diagnostic: candidate/context quotas identical across every class of a
+candidate (e.g. 602/3494 for every class of the first candidate), height bands 4/4
+sampled, spatial coverage 1.0, changed evidence ≥ 32 wherever ≥ 32 changed points exist.
+
+`PER_EXAMPLE_RMS_SCALING = NO`
+`METRIC_SCALE_PRESERVED = YES`
+`CANDIDATE_CONTEXT_COVERAGE = CLASS-INDEPENDENT`
+`HEIGHT_COVERAGE = 1.0`
+`BOUNDARY_COVERAGE = PRESENT` (both groups always sampled)
+`CHANGED_MEMBERSHIP_EVIDENCE = RESERVED, NEVER DUPLICATED`
+
+## 5. Blocker 5 — fingerprint detector replaced
+
+`loo_nearest_centroid` now builds class references **and standardisation statistics**
+from the other samples only, predicts, then compares. Global standardisation, which
+leaked the held-out sample's own statistics, is gone.
+
+Two mandatory negative controls verify the detector itself:
+
+| Control | Result |
+|---|---|
+| random features (same shape as real) | separation 0.048, limit 0.25 → pass |
+| implanted perfectly class-coded scalar | separation 1.000, minimum 0.90 → pass |
+| detector verified | **YES** |
+
+The membership-only shortcut is reported with **balanced** accuracy, because the
+diagnostic is deliberately imbalanced (6 GOOD vs 36 defect per candidate); raw accuracy
+would report the majority-class rate. Cross-partition balanced accuracy 0.508.
+
+Eight checks, all pass, `CRITICAL_FINGERPRINTS = []`. Artifact:
+`GATE_D_FINGERPRINT_REMEDIATION.json`.
+
+`FINGERPRINT_RANDOM_CONTROL = PASS (0.048)`
+`FINGERPRINT_IMPLANTED_SHORTCUT = PASS (1.000)`
+`FINGERPRINT_REAL_DIAGNOSTIC = NONE_DETECTED`
+
+## 6. Blocker 6 — training lock binds the current digests
+
+`gate_d_lock` now requires all five fields and verifies three against the **current**
+implementation: `generator_version`, `generator_digest` and `protocol_digest`. Changing
+the generator or the frozen protocol after acceptance invalidates the marker.
+
+Required: `gate_d = ACCEPTED`, `training_allowed = true`, `generator_version`,
+`generator_digest`, `protocol_digest`. Any missing marker, missing field, stale version,
+stale digest or stale protocol digest exits 3 with `GATE_D_NOT_ACCEPTED`. Tests cover
+missing marker, missing field (each), explicit HOLD, `training_allowed = false`, stale
+generator digest, wrong generator version, wrong protocol digest, a correct mock marker
+(allowed only at test level) and a code change after the marker.
+
+`TRAINING_LOCK_CURRENT_DIGEST_BOUND = YES`
+`STALE_DIGEST_REJECTED = YES`
+`MISSING_MARKER_REJECTED = YES`
+`MISMATCH_REJECTED = YES`
+
+## 7. Bounded diagnostic
+
+210 examples (5 train + 5 validation representative trees × 7 classes × 3 severities),
+21 representative PNGs, 57 s.
 
 | Field | Value |
 |---|---|
-| `GATE_D_DIAGNOSTICS_CMD` | `01_RUN_GATE_D_DIAGNOSTICS.cmd` |
-| examples | 210 (10 per class×severity) |
+| examples | 210 |
 | violations | `[]` |
 | `GENERATOR_FINGERPRINT` | `NONE_DETECTED` |
 | `CRITICAL_FINGERPRINTS` | `[]` |
 | `QUARANTINE_USAGE` | 0 |
 | `HELDOUT_USAGE` | 0 |
 | `CROSS_PARTITION_LEAKAGE` | 0 |
-| `DETERMINISTIC` | yes (same spec → identical bytes; two full regenerations produced identical `deterministic_digest` and `manifest_digest`) |
-| runtime | 7.4 s |
+| unauthorized point sources | 0 |
+| source-union mismatches | 0 |
+| stem applicable / rejected | 30 / 0 |
+| determinism | two clean runs produce identical `deterministic_digest` |
 
-Artifacts: `GATE_D_SYNTHETIC_DIAGNOSTIC.json`, `GATE_D_DIAGNOSTIC_MANIFEST.jsonl`
-(210 rows, full per-example provenance), `GATE_D_GENERATOR_PROTOCOL.md`,
-`GATE_D_WORKER_REPORT.md`, `gate_d_visuals/` (21 PNGs).
+Artifacts: `GATE_D_SYNTHETIC_DIAGNOSTIC.json`, `GATE_D_DIAGNOSTIC_MANIFEST.jsonl`,
+`GATE_D_FINGERPRINT_REMEDIATION.json`, `GATE_D_GENERATOR_PROTOCOL.md`, 21 PNGs.
 
-## 8. Training lock
-
-`TRAINING_ALLOWED = FALSE`. Every trainer calls `require_training_allowed` first.
-
-| Launcher | Behaviour now |
-|---|---|
-| `02_RUN_POINTNET_BASELINE.cmd` | exit 3, `GATE_D_NOT_ACCEPTED`, trains nothing |
-| `03_RUN_POINTNET2_PILOT.cmd` | exit 3, `GATE_D_NOT_ACCEPTED`, trains nothing |
-| `04_RUN_CROSS_SITE_EVAL.cmd` | dry-run plan, exit 3 |
-| `05_RUN_MULTI_SEED_ROBUSTNESS.cmd` | dry-run plan, exit 3 |
-| `RUN_TREE_QC_EFG_FULL_VALIDATION.cmd` | exit 3 without acceptance, `--dry-run` exits 0 |
-
-Unlocking requires `reports/GATE_D_ACCEPTANCE.json` with `gate_d = ACCEPTED`,
-`training_allowed = true` and the matching `generator_digest`. The marker is **not**
-committed. Tests assert the lock is active, that a forged marker with a mismatched
-digest is refused, and that both trainer entry points return 3.
-
-`TRAINING_STARTED = NO`, `POINTNET_TRAINED = NO`, `POINTNET2_TRAINED = NO`.
-
-## 9. Held-out protection
-
-Held-out is unreachable by construction: `DatasetConfig` refuses the partition,
-`partition_of_candidate` raises, `authorize_donor` refuses, the background allowlist
-excludes, and `select_threshold` refuses any non-model-selection partition. The
-diagnostic reports `held_out_examples = 0`.
-
-## 10. Verification
+## 8. Verification
 
 | Check | Result |
 |---|---|
-| `python -m pytest test_gate_d.py` | **66 passed** |
-| `python -m pytest test_canonical_identity.py` | **30 passed** (Gate C2 regression) |
-| both suites in the torch training interpreter | 96 passed |
-| `python -m ruff check` on new files | all checks passed |
-| `python -m compileall` on new files | clean |
-| diagnostic regenerated twice | `deterministic_digest` and `manifest_digest` identical |
-| `git status` | clean after commit |
+| `pytest test_gate_d.py` | **101 passed** |
+| `pytest test_canonical_identity.py` | **30 passed** (Gate C2 regression) |
+| combined | **131 passed** |
+| ruff on new files | all checks passed |
+| Python parse check on every module | clean |
+| JSON / JSONL / PNG integrity after reboot | clean (210 JSONL lines, 21 valid PNGs) |
+| diagnostic regenerated from a clean process | `violations = []`, digests stable |
+| launchers 02–05, EFG | exit 3 `GATE_D_NOT_ACCEPTED` |
 
-PointNet and PointNet++ were **not** trained, and `engine.train()` was never called.
-The shared engine was verified without touching a dataset or a real model:
+`TRAINING_STARTED = NO`, `POINTNET_TRAINED = NO`, `POINTNET2_TRAINED = NO`.
 
-| Verification | Result |
-|---|---|
-| both models accept `(B, 4096, 4)` and `(B, 2048, 4)`, finite logits | pass |
-| parameter counts | PointNet 76 770, PointNet++ SSG 333 506 |
-| checkpoint save/load round trip, config + dataset digests preserved | pass |
-| `_run_epoch` forward + backward + AMP scaler + optimizer step, train and eval, on synthetic tensors | pass, finite loss, scores in [0, 1] |
-| `train_pointnet.py --dry-run`, `train_pointnet2.py --dry-run` | exit 0 |
-| real training attempt | exit 3 `GATE_D_NOT_ACCEPTED` |
-
-The Gate D/E layer needs NumPy in the training interpreter because the generator,
-sampler and geometry cache are numpy-only by design; `gate_d_requirements.txt` records
-that and NumPy 2.4.6 + pytest 9.1.1 were installed into the existing
-`D:\TreeQCTraining\venv` (torch 2.14.0+cu130 untouched, CUDA available, RTX 5070 Laptop).
-The test suite passes in both the analysis interpreter and the training interpreter
-(95 tests each).
-
-## 12. Verdict
+## 9. Verdict
 
 `FINAL_WORKER_VERDICT = GATE_D_WORKER_READY_FOR_SUPERVISOR_REVIEW`
 
-No leakage, no quarantine use, no held-out use, no critical fingerprint, deterministic
-generation, full provenance per example, and the training lock is verified active.
-Gate D acceptance remains the Supervisor's decision.
+All six blockers are closed with deterministic, documented, fail-closed behaviour. Gate D
+acceptance remains the Supervisor's decision; `TRAINING_ALLOWED` stays `FALSE` and no
+acceptance marker exists.

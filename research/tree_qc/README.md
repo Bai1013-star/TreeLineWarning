@@ -23,20 +23,28 @@ The layer is split so the generator never imports a model:
 
 | Module | Role |
 |---|---|
-| `gate_d_provenance.py` | frozen-split loader, donor allowlist, fail-closed authorization |
+| `gate_d_provenance.py` | frozen-split loader, source allowlist, fail-closed authorization |
+| `gate_d_scene.py` | shared `BaseScene`: candidate + 3 m-clipped frozen context |
 | `gate_d_geometry.py` | bounded geometry cache; authorised tree reads only |
-| `gate_d_generator.py` | 7 classes x 3 severities, real geometry only |
-| `gate_d_sampler.py` | label-agnostic 4096/2048 structured sampler |
+| `gate_d_generator.py` | 7 classes x 3 severities; corrupts membership only |
+| `gate_d_sampler.py` | label-agnostic 4096/2048 sampler, metric scale preserved |
 | `gate_d_dataset.py` | `ExampleSpec -> Generator -> Sampler -> Tensor`, numpy only |
 | `gate_d_metrics.py` | confusion matrix, five named metrics, frozen thresholds |
 | `gate_d_train.py` | shared engine: AMP, checkpoint, resume, best, device |
 | `train_pointnet.py`, `train_pointnet2.py` | the two locked training entry points |
-| `gate_d_fingerprint.py` | construction-artefact permutation tests |
-| `gate_d_lock.py` | `TRAINING_ALLOWED = False` |
+| `gate_d_fingerprint.py` | construction-artefact tests plus negative controls |
+| `gate_d_lock.py` | `TRAINING_ALLOWED = False`, bound to the current digests |
 | `run_tree_qc_efg.py` | the future 8-step E/F/G run, dry-run only for now |
 
 `GATE_D_GENERATOR_PROTOCOL.md` records the contract; `GATE_D_WORKER_REPORT.md` records
 the diagnostic result.
+
+Every example is the **same** scene — an approved candidate plus its approved surviving
+context clipped to the frozen 3 m query — and corruption changes only
+`current_candidate_membership`. A claimed neighbour point is membership 1; a dropped
+candidate point is membership 0 while remaining in the scene. The model therefore sees
+"did the current segmentation select this real point", never the answer. There is no
+class-specific refill and no point source outside the frozen allowlist.
 
 The PointNet baseline is shared pointwise MLP + symmetric max pooling, **without
 T-Net**; it is not an exact full paper reproduction. PointNet++ SSG has true FPS,

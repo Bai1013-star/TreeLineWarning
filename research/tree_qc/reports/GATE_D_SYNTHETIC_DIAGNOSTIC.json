@@ -1,21 +1,31 @@
 {
-  "diagnostic_version": "GATE_D_SYNTHETIC_DIAGNOSTIC_V1",
-  "generator_version": "GATE_D_SYNTHETIC_GENERATOR_V1",
-  "generator_digest": "ab62f3b9f3a0977d49b0ec988357e3663e641c2dd0b0fdfacb7e4622278c8741",
-  "sampler_version": "GATE_D_STRUCTURED_SAMPLER_V1",
+  "diagnostic_version": "GATE_D_SYNTHETIC_DIAGNOSTIC_V2",
+  "generator_version": "GATE_D_SYNTHETIC_GENERATOR_V2",
+  "generator_digest": "363ca30e5d6ca83f80df4f9d893c602062f909c6c980405df7f17459ba47471b",
+  "sampler_version": "GATE_D_STRUCTURED_SAMPLER_V2",
+  "scene_version": "GATE_D_BASE_SCENE_V1",
+  "membership_channel": "current_candidate_membership",
   "protocol": "GATE_C_CANONICAL_IDENTITY_PROTOCOL_V2 + source isolation remediation",
+  "protocol_digest": "36e4cfca043190d4d12c2ab9ee635d92bb479cb9b56d482ae1121fd797939729",
   "identity_manifest_digest": "eb515773b5235f2cdb0206231493195f73f269c761d9da2d2186ba68ab3ed5aa",
   "provenance_digest": "feab1423e6c9dc81ea05c4d02c56d5df987bb42c24d219f8089228ad06279688",
   "training_lock": {
     "marker": "E:\\TreeLineWarning-tree-qc-pointnet2-final-pilot-v1\\research\\tree_qc\\reports\\GATE_D_ACCEPTANCE.json",
     "exists": false,
     "training_allowed": false,
-    "reason": "GATE_D_NOT_ACCEPTED"
+    "reason": "GATE_D_NOT_ACCEPTED",
+    "expected": {
+      "generator_version": "GATE_D_SYNTHETIC_GENERATOR_V2",
+      "generator_digest": "363ca30e5d6ca83f80df4f9d893c602062f909c6c980405df7f17459ba47471b",
+      "protocol_digest": "36e4cfca043190d4d12c2ab9ee635d92bb479cb9b56d482ae1121fd797939729"
+    }
   },
   "TRAINING_LOCK_ACTIVE": true,
   "points_primary": 4096,
   "points_robustness": 2048,
   "points_used": 4096,
+  "metric_scale_constant": 10.0,
+  "per_example_rms_scaling": false,
   "classes": [
     "GOOD",
     "MERGED_MULTI_TREE",
@@ -74,39 +84,34 @@
     "STEM_MISSING|LOW": 10,
     "STEM_MISSING|MEDIUM": 10
   },
-  "donor_usage_examples": 58,
+  "not_applicable_examples": [],
+  "not_applicable_count": 0,
+  "stem_applicable": 30,
+  "stem_rejected": 0,
+  "stem_rejection_reasons": {},
+  "good_without_real_context": 0,
+  "donor_usage_examples": 87,
   "quarantine_donor_uses": 0,
   "held_out_examples": 0,
   "cross_partition_leakage": 0,
+  "unauthorized_point_sources": 0,
+  "source_union_mismatches": 0,
   "violations": [],
   "fingerprint": {
-    "fingerprint_version": "GATE_D_FINGERPRINT_V1",
+    "fingerprint_version": "GATE_D_FINGERPRINT_V2",
     "examples": 210,
     "permutations": 2000,
     "alpha": 0.01,
     "checks": [
       {
-        "check": "point_count_fingerprint_raw",
-        "p_value": 0.343328,
-        "pass": true,
-        "critical": false,
-        "detail": {
-          "statistic": "between_group_mean_variance_ratio",
-          "raw_min": 2908,
-          "raw_max": 632869,
-          "note": "pre-normalisation size; MERGED and NOISE append geometry, so a class-dependent raw size is expected and is not a model-input leak"
-        }
-      },
-      {
         "check": "point_count_fingerprint_source",
-        "p_value": 0.017491,
+        "p_value": 1.0,
         "pass": true,
         "critical": false,
         "detail": {
-          "statistic": "between_group_mean_variance_ratio",
-          "min": 30649,
-          "max": 69995,
-          "note": "post-normalisation size must be class-independent, otherwise the generator leaks the class through cloud size"
+          "candidates": 10,
+          "candidates_with_class_dependent_scene_size": {},
+          "note": "one candidate = one shared scene for every class; only the membership channel changes"
         }
       },
       {
@@ -117,63 +122,29 @@
         "detail": {
           "distinct_sampled_sizes": [
             4096
-          ],
-          "note": "every example must reach the model at the same fixed size"
+          ]
         }
       },
       {
         "check": "fixed_fraction_fingerprint",
-        "p_value": 0.952524,
+        "p_value": 0.555722,
         "pass": true,
         "critical": false,
         "detail": {
-          "fraction_min": 0.036878,
-          "fraction_max": 0.552529,
-          "fraction_mean": 0.207299,
-          "fraction_distinct_values": 180,
+          "fraction_min": 0.035305,
+          "fraction_max": 0.560048,
+          "fraction_mean": 0.215478,
           "per_class_drawn_fraction": {
-            "CROWN_INCOMPLETE": {
-              "n": 30,
-              "mean": 0.228791,
-              "min": 0.054513,
-              "max": 0.54968
-            },
-            "MERGED_MULTI_TREE": {
-              "n": 30,
-              "mean": 0.212621,
-              "min": 0.04211,
-              "max": 0.51803
-            },
-            "NEIGHBOR_CONTAMINATION": {
-              "n": 30,
-              "mean": 0.20698,
-              "min": 0.044908,
-              "max": 0.552529
-            },
-            "NOISE": {
-              "n": 30,
-              "mean": 0.204697,
-              "min": 0.041146,
-              "max": 0.525971
-            },
-            "OVER_SEGMENTED": {
-              "n": 30,
-              "mean": 0.196828,
-              "min": 0.036878,
-              "max": 0.533841
-            },
-            "STEM_MISSING": {
-              "n": 30,
-              "mean": 0.19388,
-              "min": 0.040873,
-              "max": 0.524221
-            }
+            "CROWN_INCOMPLETE": 0.213357,
+            "MERGED_MULTI_TREE": 0.191523,
+            "NEIGHBOR_CONTAMINATION": 0.21679,
+            "NOISE": 0.239008,
+            "OVER_SEGMENTED": 0.193022,
+            "STEM_MISSING": 0.239171
           },
-          "realised_magnitude_mean": 0.207299,
           "excluded_classes": [
             "GOOD"
-          ],
-          "note": "the drawn fraction comes from one shared distribution; the realised magnitude differs by class because the geometry mapping differs"
+          ]
         }
       },
       {
@@ -183,59 +154,100 @@
         "critical": false,
         "detail": {
           "dominant_axis_histogram": {
-            "0": 11,
-            "1": 9,
-            "2": 10
+            "0": 10,
+            "1": 11,
+            "2": 9
           },
-          "per_class_dominant_axis": {
-            "OVER_SEGMENTED": 0
-          },
-          "chi2": 0.0,
-          "note": "a class-constant dominant axis is the failure mode"
+          "classes_with_axis": [
+            "OVER_SEGMENTED"
+          ]
         }
       },
       {
         "check": "class_specific_sampling_fingerprint",
-        "p_value": 0.098951,
+        "p_value": 0.078461,
         "pass": true,
         "critical": false,
         "detail": {
-          "mean_membership_source": 0.753177,
-          "mean_membership_sampled": 0.753102,
-          "mean_membership_gap": -7.5e-05,
-          "max_abs_membership_gap": 0.005478,
-          "per_class_mean_gap": {
-            "CROWN_INCOMPLETE": 2.1e-05,
-            "GOOD": 0.0,
-            "MERGED_MULTI_TREE": -0.000445,
-            "NEIGHBOR_CONTAMINATION": -0.00011,
-            "NOISE": 1e-05,
-            "OVER_SEGMENTED": 0.0,
-            "STEM_MISSING": 0.0
+          "mean_sampler_gap": 0.000216,
+          "max_abs_sampler_gap": 0.013669,
+          "per_class_mean_sampler_gap": {
+            "CROWN_INCOMPLETE": 0.000545,
+            "GOOD": -8e-06,
+            "MERGED_MULTI_TREE": 0.001076,
+            "NEIGHBOR_CONTAMINATION": 0.000733,
+            "NOISE": 0.000773,
+            "OVER_SEGMENTED": -0.000215,
+            "STEM_MISSING": -0.001391
           },
-          "mean_spatial_coverage": 0.946048,
-          "statistic": "between-group variance share of the sampled-minus-source membership gap",
-          "note": "the absolute membership fraction is the class signal; only a class-dependent sampler shift would be an artefact"
+          "per_class_mean_intended_shift": {
+            "CROWN_INCOMPLETE": -0.101594,
+            "GOOD": 0.0,
+            "MERGED_MULTI_TREE": 0.031135,
+            "NEIGHBOR_CONTAMINATION": 0.083797,
+            "NOISE": 0.183089,
+            "OVER_SEGMENTED": -0.044503,
+            "STEM_MISSING": -0.016032
+          },
+          "mean_spatial_coverage": 1.0,
+          "note": "the sampler must reproduce the scene membership fraction for every class; the intended shift is the generator signal and is reported separately"
         }
       },
       {
         "check": "metadata_leakage_tensor_stats",
-        "p_value": 0.994503,
+        "p_value": 1.0,
         "pass": true,
         "critical": false,
         "detail": {
-          "loo_nearest_centroid_accuracy": 0.990476,
+          "loo_nearest_centroid_accuracy": 0.257143,
           "chance_accuracy": 0.142857,
-          "margin_over_chance": 0.847619,
           "feature_channels": [
             "local_x",
             "local_y",
             "local_z",
-            "candidate_membership"
+            "current_candidate_membership"
           ],
           "feature_channel_count": 4,
-          "test": "permutation p-value for a nearest-centroid probe on the 8 per-channel summary statistics of the exposed tensor",
-          "note": "the tensor carries 4 declared channels only; no provenance or class field exists in the model input"
+          "detector_verified_by_controls": true
+        }
+      },
+      {
+        "check": "membership_only_shortcut",
+        "p_value": 1.0,
+        "pass": true,
+        "critical": false,
+        "detail": {
+          "best_membership_only_balanced_accuracy": 0.597222,
+          "limit": 0.8,
+          "detail": {
+            "membership_fraction_loo_balanced_accuracy": 0.597222,
+            "membership_fraction_leave_one_candidate_out_balanced_accuracy": 0.2,
+            "membership_fraction_cross_partition": {
+              "applicable": true,
+              "fit_train_test_validation_balanced_accuracy": 0.45,
+              "fit_validation_test_train_balanced_accuracy": 0.566667,
+              "mean_balanced_accuracy": 0.508333
+            },
+            "membership_fraction_in_sample_balanced_accuracy": 0.597222,
+            "membership_zero_count_loo_balanced_accuracy": 0.597222,
+            "membership_one_count_loo_balanced_accuracy": 0.597222,
+            "good_fraction_range": [
+              0.119385,
+              0.373047
+            ],
+            "bad_fraction_range": [
+              0.013672,
+              0.686768
+            ],
+            "majority_class_rate": 0.857143,
+            "any_membership_zero": {
+              "balanced_accuracy": 0.0,
+              "examples_with_a_zero_flag": 210,
+              "examples": 210,
+              "note": "a naive any(membership == 0) rule; every example has one"
+            }
+          },
+          "note": "balanced accuracy is used because the diagnostic is deliberately imbalanced (6 GOOD vs 36 defect examples per candidate); GOOD always contains membership-0 context, so the presence of a zero flag cannot itself identify the class; the headline number fits a threshold on one partition and applies it to the other"
         }
       },
       {
@@ -246,20 +258,121 @@
         "detail": {
           "class_sets_identical_across_candidates": true,
           "class_sets_identical_across_severities": true,
-          "candidates": 10,
-          "severities": [
-            "HIGH",
-            "LOW",
-            "MEDIUM"
-          ],
-          "note": "every candidate and severity carries the same class set, so an identifier cannot stand in for the label"
+          "best_single_audit_scalar": {
+            "feature": 1,
+            "best_balanced_accuracy": 0.55,
+            "best_accuracy": 0.752381,
+            "threshold": 0.000825,
+            "direction": 1,
+            "cut_index": 172,
+            "label_defining": false
+          },
+          "note": "audit scalars never enter the model; this scan only shows whether the generator leaves a trivially separable geometric artefact"
         }
       }
     ],
+    "controls": {
+      "chance_accuracy": 0.142857,
+      "random_control_accuracy": 0.138095,
+      "random_control_separation": 0.047511,
+      "random_control_max_separation": 0.25,
+      "random_control_pass": true,
+      "implanted_shortcut_accuracy": 0.485714,
+      "implanted_shortcut_separation": 1.0,
+      "implanted_shortcut_min_separation": 0.9,
+      "implanted_shortcut_pass": true,
+      "detector_verified": true
+    },
+    "audit_shortcut_scan": {
+      "best_single_scalar": {
+        "feature": 1,
+        "best_balanced_accuracy": 0.55,
+        "best_accuracy": 0.752381,
+        "threshold": 0.000825,
+        "direction": 1,
+        "cut_index": 172,
+        "label_defining": false
+      },
+      "per_feature": [
+        {
+          "feature": 0,
+          "best_balanced_accuracy": 0.536111,
+          "best_accuracy": 0.633333,
+          "threshold": 7.1e-05,
+          "direction": 1,
+          "cut_index": 139,
+          "label_defining": false
+        },
+        {
+          "feature": 1,
+          "best_balanced_accuracy": 0.55,
+          "best_accuracy": 0.752381,
+          "threshold": 0.000825,
+          "direction": 1,
+          "cut_index": 172,
+          "label_defining": false
+        },
+        {
+          "feature": 2,
+          "best_balanced_accuracy": 0.577778,
+          "best_accuracy": 0.609524,
+          "threshold": 0.000143,
+          "direction": 1,
+          "cut_index": 126,
+          "label_defining": false
+        },
+        {
+          "feature": 3,
+          "best_balanced_accuracy": 0.597222,
+          "best_accuracy": 0.309524,
+          "threshold": 0.119385,
+          "direction": 1,
+          "cut_index": 35,
+          "label_defining": true
+        },
+        {
+          "feature": 4,
+          "best_balanced_accuracy": 0.536111,
+          "best_accuracy": 0.633333,
+          "threshold": 0.169792,
+          "direction": -1,
+          "cut_index": 71,
+          "label_defining": true
+        },
+        {
+          "feature": 5,
+          "best_balanced_accuracy": 0.533333,
+          "best_accuracy": 0.342857,
+          "threshold": 0.112751,
+          "direction": 1,
+          "cut_index": 54,
+          "label_defining": false
+        },
+        {
+          "feature": 6,
+          "best_balanced_accuracy": 0.533333,
+          "best_accuracy": 0.7,
+          "threshold": 0.290281,
+          "direction": 1,
+          "cut_index": 159,
+          "label_defining": false
+        },
+        {
+          "feature": 7,
+          "best_balanced_accuracy": 0.597222,
+          "best_accuracy": 0.309524,
+          "threshold": 0.324239,
+          "direction": 1,
+          "cut_index": 35,
+          "label_defining": false
+        }
+      ]
+    },
     "critical_fingerprints": [],
     "GENERATOR_FINGERPRINT": "NONE_DETECTED",
     "CRITICAL_FINGERPRINTS": []
   },
+  "manifest_digest": "626a6fc149733e9a1e58baf3febbd604bd7b0429649ca56ee3fe4412758deb7a",
   "visualisations": [
     "gate_d_visuals\\GOOD_MEDIUM_litchfield_tile_0_-100_Boom27.png",
     "gate_d_visuals\\MERGED_MULTI_TREE_MEDIUM_litchfield_tile_0_-100_Boom27.png",
@@ -283,6 +396,5 @@
     "gate_d_visuals\\STEM_MISSING_MEDIUM_litchfield_tile_40_-100_Boom11.png",
     "gate_d_visuals\\NOISE_MEDIUM_litchfield_tile_40_-100_Boom11.png"
   ],
-  "manifest_digest": "035bb077c1cb2160b6b3ef0fe89750f9557bfceb2b63efa9e9aaf02493e5dbd3",
-  "deterministic_digest": "9d62d0cc12454e73006b8e7312fe3c128aedc1855c7bce8bcb08be6aa797cdf2"
+  "deterministic_digest": "17d966950a657ed1476c6e73eaeda063f18fdc002d255d44c18505177ed0e24a"
 }
