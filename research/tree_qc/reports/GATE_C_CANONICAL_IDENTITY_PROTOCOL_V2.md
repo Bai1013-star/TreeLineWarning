@@ -215,8 +215,10 @@ The previous `STRICT_HELDOUT_POOL = 749` is withdrawn as a frozen number. The
 re-derived strict pool happens to contain the same 749 candidates — the candidate set
 is unchanged because all 200 candidates that referenced the quarantine set retain
 between 5 and 64 surviving point-bearing context sources — but its context provenance
-is different for exactly those 200 candidates. The count is an outcome, not an
-assumption.
+is different for exactly those 200 candidates: 436 (candidate, quarantined-source)
+context references were removed, all 25 quarantine trees had been serving as context,
+and 28 quarantine alias files that were previously reachable through context are now
+unreachable. The count is an outcome, not an assumption.
 
 ## 10. What V2 does not claim
 

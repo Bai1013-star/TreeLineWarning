@@ -76,6 +76,9 @@ Every held-out candidate's context was rebuilt without those 25 and re-evaluated
 | **re-derived from clean provenance** | **749** |
 | candidates dropped for lack of clean context | 0 |
 | candidates whose context provenance changed | **200** |
+| (candidate, quarantined-source) context references removed | 436 |
+| quarantine trees that had been serving as context | 25 / 25 |
+| quarantine alias files previously reachable, now reachable | 28 → 0 |
 | 25 quarantine trees excluded as candidates | 25 |
 
 The count is unchanged because every one of the 200 affected candidates retains a real
