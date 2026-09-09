@@ -21,11 +21,12 @@ from pathlib import Path
 import gate_d_generator as gen
 import gate_d_geometry as geometry
 import gate_d_sampler as sampler
+import gate_d_scene as scene_module
 import numpy as np
 from gate_d_provenance import MODEL_SELECTION_PARTITIONS, GateDProvenance
 
 DEFAULT_CACHE_ROOT = Path('D:/TreeQCTraining/gate_d_cache')
-DATASET_VERSION = 'GATE_D_DATASET_V1'
+DATASET_VERSION = 'GATE_D_DATASET_V2'
 LABEL_INDEX = {gen.LABEL_PASS: 0, gen.LABEL_REVIEW: 1}
 
 
@@ -117,18 +118,23 @@ class GateDDataset:
     def __getitem__(self, index: int) -> DatasetItem:
         spec = self.specs[index]
         geometry_for_candidate = self._geometry_for(spec.candidate_id)
-        example = gen.generate_example(spec, geometry_for_candidate, self.provenance)
-        sample = sampler.sample(example.points, example.membership, spec.seed,
-                                self.config.points)
+        try:
+            example = gen.generate_example(spec, geometry_for_candidate, self.provenance)
+        except gen.NotApplicableError as exc:
+            raise DatasetError(
+                f'{spec.key} is not applicable: {exc.reason} {exc.detail}') from exc
+        scene = scene_module.build_base_scene(spec.candidate_id, spec.partition,
+                                              geometry_for_candidate, self.provenance)
+        sample = sampler.sample(example.points, example.membership,
+                                example.changed_membership, scene.candidate_mask,
+                                spec.seed, self.config.points)
         provenance = dict(example.provenance)
         provenance['sample'] = {
             'sampler_version': sampler.SAMPLER_VERSION,
             'points': sample.points,
             'source_points': sample.source_count,
             'features': list(sampler.FEATURES),
-            'membership_fraction': round(sampler.membership_fraction(sample), 6),
-            'spatial_coverage': round(
-                sampler.spatial_coverage(sample, example.points), 6),
+            'diagnostics': sample.diagnostics,
         }
         provenance['features_digest'] = hashlib.sha256(
             np.ascontiguousarray(sample.features).tobytes()).hexdigest()

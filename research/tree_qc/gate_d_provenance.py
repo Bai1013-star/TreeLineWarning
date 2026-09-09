@@ -24,6 +24,7 @@ REPORTS = Path(__file__).resolve().parent / 'reports'
 PROVENANCE_FILE = 'GATE_C2_CONTEXT_PROVENANCE.json'
 MANIFEST_FILE = 'GATE_C2_IDENTITY_MANIFEST.json'
 REMEDIATION_FILE = 'GATE_C2_REMEDIATION.json'
+PROTOCOL_FILE = 'GATE_C_CANONICAL_IDENTITY_PROTOCOL_V2.md'
 
 TRAIN = 'train'
 VALIDATION = 'validation'
@@ -99,6 +100,7 @@ class GateDProvenance:
     """
 
     protocol: str
+    protocol_digest: str
     identity_manifest_digest: str
     provenance_digest: str
     train: PartitionView
@@ -221,6 +223,45 @@ class GateDProvenance:
             if self.partition_of[cid] == HELD_OUT:
                 raise HeldOutAccessError(f'held-out source {cid} reached an example')
 
+    def assert_scene_sources(self, candidate: str,
+                             contributing_sources) -> tuple[str, ...]:
+        """Every source that contributed a point must be legal for this candidate.
+
+        This is the unified check the task requires: candidate, context, donor,
+        background and alias sources all pass through it, and the candidate's legal
+        external source set is exactly its frozen surviving context.
+        """
+        partition = self.partition_of_candidate(candidate)
+        self.assert_not_quarantined(candidate, 'candidate')
+        self.assert_not_boundary_candidate(candidate)
+        self.assert_alias_clean(candidate, partition)
+        context = set(self.authorized_context(candidate))
+        union = tuple(sorted(set(contributing_sources)))
+        for source_id in union:
+            if source_id not in self.partition_of:
+                raise UnknownTreeError(f'unknown contributing source: {source_id}')
+            self.assert_not_quarantined(source_id, 'source')
+            self.assert_alias_clean(source_id, partition)
+            source_partition = self.partition_of[source_id]
+            if source_partition == HELD_OUT:
+                raise HeldOutAccessError(
+                    f'held-out source {source_id} reached an example')
+            if source_id == candidate:
+                continue
+            if source_id not in context:
+                raise UnauthorizedDonorError(
+                    f'{source_id} is not in the surviving context of {candidate}; '
+                    'external geometry may only come from the frozen allowlist')
+            if (source_partition in MODEL_SELECTION_PARTITIONS
+                    and source_partition != partition):
+                raise CrossPartitionError(
+                    f'source {source_id} ({source_partition}) crosses into '
+                    f'{partition} for {candidate}')
+        if candidate not in union:
+            raise ManifestMismatchError(
+                f'candidate {candidate} contributed no points to its own example')
+        return union
+
     # --- geometry lookup -------------------------------------------------
     def source_file(self, canonical_tree_id: str) -> str:
         record = self.tree.get(canonical_tree_id)
@@ -241,6 +282,16 @@ class GateDProvenance:
 def _digest(payload) -> str:
     text = json.dumps(payload, sort_keys=True, separators=(',', ':'), default=str)
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
+def protocol_digest(reports: Path | None = None) -> str:
+    """Digest of the frozen Gate C2 protocol document.
+
+    The training lock binds this value, so editing the frozen protocol invalidates any
+    acceptance that was granted against the previous text.
+    """
+    root = Path(reports) if reports is not None else REPORTS
+    return hashlib.sha256((root / PROTOCOL_FILE).read_bytes()).hexdigest()
 
 
 def load_gate_d_provenance(reports: Path | None = None,
@@ -311,6 +362,7 @@ def load_gate_d_provenance(reports: Path | None = None,
 
     frozen = GateDProvenance(
         protocol=protocol,
+        protocol_digest=protocol_digest(root),
         identity_manifest_digest=remediation['identity_manifest_digest'],
         provenance_digest=_digest(provenance),
         train=train, validation=validation,

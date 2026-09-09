@@ -1,18 +1,32 @@
 """Gate D synthetic tree-QC generator.
 
-Seven classes, three severities, generated online from **real publisher geometry**
-only. No Gaussian point cloud is ever invented to stand in for a segmentation defect:
+Every example is the **same** kind of object: a ``BaseScene`` of real publisher geometry
+whose ``current_candidate_membership`` channel is corrupted in a class-specific way. The
+point cloud stays as close as possible to identical across classes; what changes is
+which points the *current* single-tree segmentation claims.
 
-* ``GOOD``                 — the official observation, membership untouched;
-* ``MERGED_MULTI_TREE``    — real neighbouring trees moved in whole/partial;
-* ``NEIGHBOR_CONTAMINATION`` — real neighbouring boundary geometry added;
-* ``OVER_SEGMENTED``       — a spatially contiguous subset of the same tree;
-* ``CROWN_INCOMPLETE``     — a spatially contiguous crown (top) region removed;
-* ``STEM_MISSING``         — a spatially contiguous stem/lower region removed;
-* ``NOISE``                — real non-member plot geometry dominates the cloud.
+That matches the real TreeLineWarning question: given this pile of real points, did the
+current single-tree membership choose correctly?
 
-Every donor comes from the candidate's own surviving context and is re-authorised
-here, so the generator fails closed even if a caller hands it an illegal spec.
+Classes:
+
+* ``GOOD``                   — publisher GT membership, unchanged;
+* ``MERGED_MULTI_TREE``      — a whole neighbouring tree inside the query is claimed;
+* ``NEIGHBOR_CONTAMINATION`` — a contiguous neighbouring region near the boundary is
+  claimed;
+* ``OVER_SEGMENTED``         — a spatially contiguous part of the candidate is dropped;
+* ``CROWN_INCOMPLETE``       — the contiguous crown region is dropped;
+* ``STEM_MISSING``           — the contiguous stem/lower region is dropped;
+* ``NOISE``                  — scattered, non-structural context points are claimed.
+
+Two properties are load-bearing and are asserted by test:
+
+1. **No ground-truth leakage.** ``current_candidate_membership`` means "the current
+   segmentation selected this point", never "this is the answer". Merged and contaminating
+   neighbour points are therefore 1, and dropped candidate points are 0.
+2. **No geometry invention.** Every coordinate comes from the scene; no point is deleted,
+   no class-specific refill exists, and no external source outside the candidate's frozen
+   surviving context is ever used.
 """
 from __future__ import annotations
 
@@ -20,8 +34,8 @@ import hashlib
 from dataclasses import dataclass, field
 
 import numpy as np
-from gate_d_geometry import CandidateGeometry, TreeGeometry
 from gate_d_provenance import MODEL_SELECTION_PARTITIONS
+from gate_d_scene import BaseScene, SceneError, build_base_scene, scene_source_union
 
 GOOD = 'GOOD'
 MERGED_MULTI_TREE = 'MERGED_MULTI_TREE'
@@ -35,6 +49,8 @@ CLASSES = (GOOD, MERGED_MULTI_TREE, NEIGHBOR_CONTAMINATION, OVER_SEGMENTED,
            CROWN_INCOMPLETE, STEM_MISSING, NOISE)
 DEFECT_CLASSES = CLASSES[1:]
 BAD_CLASSES = DEFECT_CLASSES
+CLAIM_CLASSES = (MERGED_MULTI_TREE, NEIGHBOR_CONTAMINATION, NOISE)
+DROP_CLASSES = (OVER_SEGMENTED, CROWN_INCOMPLETE, STEM_MISSING)
 
 LOW = 'LOW'
 MEDIUM = 'MEDIUM'
@@ -42,31 +58,42 @@ HIGH = 'HIGH'
 SEVERITIES = (LOW, MEDIUM, HIGH)
 SEVERITY_LEVEL = {LOW: 0, MEDIUM: 1, HIGH: 2}
 
-# Target binary label. PASS = the observation is a usable single-tree instance.
 LABEL_PASS = 'PASS'
 LABEL_REVIEW = 'REVIEW_REQUIRED'
 LABELS = (LABEL_PASS, LABEL_REVIEW)
 
-GENERATOR_VERSION = 'GATE_D_SYNTHETIC_GENERATOR_V1'
+GENERATOR_VERSION = 'GATE_D_SYNTHETIC_GENERATOR_V2'
+MEMBERSHIP_CHANNEL = 'current_candidate_membership'
 
-# Corruption magnitude per severity. The *fraction* is always drawn from the same
-# uniform range for every severity, so severity carries the strength of the defect
-# without becoming a class fingerprint. These are the only hand-set numbers.
 FRACTION_RANGE = (0.06, 0.34)
 SEVERITY_MULTIPLIER = {LOW: 0.55, MEDIUM: 1.0, HIGH: 1.65}
 FRACTION_CEILING = 0.72
 
-# Every cloud is normalised to a size drawn from one class-independent distribution
-# before sampling. Without this the cloud size alone reveals the class: MERGED appends
-# whole neighbouring trees, NOISE prepends background geometry and OVER_SEGMENTED drops
-# a region, so the raw count is a construction artefact rather than a property of the
-# defect. Trees in this benchmark range from ~4.8 k to ~5.8 M points, so the target is a
-# range rather than a single value; the draw is uniform for every class and severity.
-NORMALISE_RANGE = (30_000, 70_000)
+# STEM_MISSING applicability: the candidate must show observable, contiguous lower
+# evidence before a missing-stem defect is meaningful. Thresholds are fixed and applied
+# to every candidate identically.
+STEM_MIN_LOWER_POINTS = 24
+STEM_MIN_VERTICAL_SPAN_M = 1.5
+STEM_MAX_RADIUS_M = 0.75
+# The "lower" region is the bottom 45 % of the candidate's height range. It is a
+# definition of where stem evidence lives, not a tunable per-candidate threshold.
+STEM_LOWER_HEIGHT_FRACTION = 0.45
+
+STEM_APPLICABLE = 'APPLICABLE'
+STEM_NOT_APPLICABLE = 'STEM_MISSING_NOT_APPLICABLE'
 
 
 class GeneratorError(RuntimeError):
     pass
+
+
+class NotApplicableError(GeneratorError):
+    """Raised when a defect is not supported by the candidate's real geometry."""
+
+    def __init__(self, reason: str, detail: dict | None = None):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail or {}
 
 
 @dataclass(frozen=True)
@@ -106,25 +133,29 @@ class ExampleSpec:
 
 @dataclass
 class SyntheticExample:
-    """One generated example plus its complete provenance."""
+    """One generated example plus its complete audit provenance."""
 
     spec: ExampleSpec
-    points: np.ndarray            # (N, 3) float32 metres, real geometry
-    membership: np.ndarray        # (N,) bool official GT membership flag
-    label: str                    # PASS | REVIEW_REQUIRED
-    donors: tuple[str, ...]       # canonical ids whose geometry is present
+    points: np.ndarray                 # (N, 3) float32 metres, real geometry
+    membership: np.ndarray             # (N,) bool current_candidate_membership
+    label: str
+    changed_membership: np.ndarray     # (N,) bool points whose flag differs from GOOD
+    source_ids: tuple[str, ...]
     provenance: dict = field(default_factory=dict)
 
     @property
     def key(self) -> str:
         return self.spec.key
 
+    @property
+    def donors(self) -> tuple[str, ...]:
+        return tuple(self.provenance.get('donors', ()))
+
 
 def _rng(spec: ExampleSpec) -> np.random.Generator:
-    """Seed stream derived from the spec only; no hidden state, no clock."""
     material = f'{GENERATOR_VERSION}|{spec.key}'.encode()
-    digest = hashlib.sha256(material).digest()
-    return np.random.default_rng(int.from_bytes(digest[:8], 'little'))
+    return np.random.default_rng(int.from_bytes(hashlib.sha256(material).digest()[:8],
+                                                'little'))
 
 
 def _draw_fraction(rng: np.random.Generator, severity: str) -> float:
@@ -140,271 +171,337 @@ def _unit_direction(rng: np.random.Generator) -> np.ndarray:
     return vector / norm
 
 
-def _subsample(points: np.ndarray, count: int, rng: np.random.Generator) -> np.ndarray:
-    """Deterministic uniform draw of `count` indices.
+def _take(count: int, want: int, rng: np.random.Generator) -> np.ndarray:
+    """Deterministic uniform index draw of `want` from `count` (sorted)."""
+    want = max(1, min(int(want), count))
+    if want >= count:
+        return np.arange(count)
+    return np.sort(rng.permutation(count)[:want])
 
-    Uses a partial permutation rather than ``choice(replace=False)``, which is
-    pathologically slow once the array is large.
-    """
-    count = max(1, min(int(count), points.shape[0]))
-    if count >= points.shape[0]:
-        return np.arange(points.shape[0])
-    return np.sort(rng.permutation(points.shape[0])[:count])
+
+def _candidate_indices(scene: BaseScene) -> np.ndarray:
+    return np.flatnonzero(scene.candidate_mask)
+
+
+def _context_indices(scene: BaseScene) -> np.ndarray:
+    return np.flatnonzero(~scene.candidate_mask)
+
+
+def _context_sources(scene: BaseScene) -> list[int]:
+    """Scene source indices that are context (not the candidate)."""
+    return [index for index, source_id in enumerate(scene.source_ids)
+            if source_id != scene.candidate_id]
 
 
 def _stem_axis_xy(points: np.ndarray) -> tuple[float, float]:
-    """Robust trunk axis: median XY of the lowest decile of the cloud."""
     if points.shape[0] == 0:
         return 0.0, 0.0
     low = points[:, 2] <= np.quantile(points[:, 2], 0.10)
-    subset = points[low]
-    if subset.shape[0] == 0:
-        subset = points
+    subset = points[low] if low.any() else points
     return float(np.median(subset[:, 0])), float(np.median(subset[:, 1]))
 
 
-def _background_in_region(geometry: CandidateGeometry, mask_fn,
-                          rng: np.random.Generator) -> tuple[np.ndarray, int]:
-    """Real non-member geometry inside a region, for filling a vacated volume.
+def stem_evidence(scene: BaseScene) -> dict:
+    """Observable lower/stem-like contiguous evidence in the candidate's own points.
 
-    A missing region must not be left empty: a point-only model cannot see a hole, and
-    a hole is not what a segmentation defect looks like. What the tree loses, the plot
-    actually contains — ground, understorey or a neighbouring tree — so the region is
-    refilled with real geometry carrying membership 0.
+    A missing-stem defect is only meaningful when the candidate actually shows a
+    stem-like column: enough points in the lower part of its height range, within a
+    narrow horizontal radius of the trunk axis, spanning a non-trivial height. The check
+    is applied identically to every candidate.
     """
-    if geometry.background.shape[0] == 0:
-        return np.zeros((0, 3), dtype=np.float32), 0
-    inside = mask_fn(geometry.background)
-    if not inside.any():
-        return np.zeros((0, 3), dtype=np.float32), 0
-    selected = geometry.background[inside]
-    return np.asarray(selected, dtype=np.float32), int(np.unique(
-        geometry.background_label[inside]).size)
+    candidate = scene.points[_candidate_indices(scene)]
+    if candidate.shape[0] == 0:
+        return {'applicable': False, 'reason': 'no_candidate_points'}
+    z_low, z_high = float(candidate[:, 2].min()), float(candidate[:, 2].max())
+    span = z_high - z_low
+    if span <= 1e-6:
+        return {'applicable': False, 'reason': 'degenerate_height_range',
+                'z_span': round(span, 6)}
+    axis_x, axis_y = _stem_axis_xy(candidate)
+    horizontal = np.hypot(candidate[:, 0] - axis_x, candidate[:, 1] - axis_y)
+    radius = float(np.quantile(horizontal, 0.35))
+    z_cut = z_low + span * STEM_LOWER_HEIGHT_FRACTION
+    lower = ((candidate[:, 2] <= z_cut)
+             & (horizontal <= min(radius, STEM_MAX_RADIUS_M)))
+    count = int(lower.sum())
+    lower_span = (float(candidate[lower, 2].max() - candidate[lower, 2].min())
+                  if count else 0.0)
+    detail = {
+        'stem_axis_xy': [round(axis_x, 6), round(axis_y, 6)],
+        'radius_m': round(min(radius, STEM_MAX_RADIUS_M), 6),
+        'z_cut': round(z_cut, 6),
+        'z_span': [round(z_low, 6), round(z_high, 6)],
+        'lower_points': count,
+        'lower_span_m': round(lower_span, 6),
+        'min_lower_points': STEM_MIN_LOWER_POINTS,
+        'min_vertical_span_m': STEM_MIN_VERTICAL_SPAN_M,
+    }
+    if count < STEM_MIN_LOWER_POINTS:
+        detail.update(applicable=False, reason='insufficient_lower_points')
+        return detail
+    if lower_span < STEM_MIN_VERTICAL_SPAN_M:
+        detail.update(applicable=False, reason='insufficient_vertical_span')
+        return detail
+    detail.update(applicable=True, reason=None, lower_mask=lower)
+    return detail
 
 
-def _select_donors(geometry: CandidateGeometry, rng: np.random.Generator,
-                   wanted: int) -> tuple[TreeGeometry, ...]:
-    """Pick real context trees deterministically from the seeded stream."""
-    available = [t for t in geometry.context if t.points.shape[0] > 0]
-    if not available:
-        return ()
-    order = rng.permutation(len(available))
-    return tuple(available[i] for i in order[:max(1, min(wanted, len(available)))])
+def _claim_from_sources(scene: BaseScene, source_indices, fraction: float,
+                        rng: np.random.Generator, local_only: bool) -> np.ndarray:
+    """Indices whose membership flips 0 -> 1, taken from approved context sources."""
+    context = _context_indices(scene)
+    if context.size == 0:
+        raise NotApplicableError('no_context_points',
+                                 {'context_points': 0})
+    if local_only:
+        centre = scene.points[_candidate_indices(scene)].mean(axis=0)
+        distance = np.linalg.norm(scene.points[context] - centre, axis=1)
+        radius = float(np.quantile(distance, 0.5))
+        near = context[distance <= radius]
+        pool = near if near.size else context
+    else:
+        pool = context
+    if source_indices is not None:
+        allowed = np.isin(scene.gt_source_id[pool], np.asarray(source_indices))
+        restricted = pool[allowed]
+        pool = restricted if restricted.size else pool
+    want = int(round(pool.size * fraction))
+    if want < 1:
+        raise NotApplicableError('claim_below_one_point', {'pool': int(pool.size)})
+    return pool[_take(pool.size, want, rng)]
 
 
-def _normalise_count(points: np.ndarray, membership: np.ndarray,
-                     rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray, dict]:
-    """Normalise the cloud to a size drawn from the shared class-independent range.
+def _scattered_selection(scene: BaseScene, pool: np.ndarray, want: int,
+                         rng: np.random.Generator) -> np.ndarray:
+    """Non-structural selection: at most one point per spatial cell.
 
-    A cloud larger than the target is reduced by a uniform deterministic draw; a
-    smaller cloud is upsampled by repeating points from the same uniform draw. Repeats
-    are real coordinates, so no synthetic geometry is introduced, and the draw is
-    identical in distribution for every class and severity.
+    NOISE must not look like a contiguous neighbouring region, otherwise it would be
+    indistinguishable from contamination and would differ only by class name. Points are
+    spread across cells instead. The cell size is refined until the lattice can hold the
+    requested count, so the defect is visible rather than throttled by the grid.
     """
-    count = points.shape[0]
-    target = int(rng.integers(NORMALISE_RANGE[0], NORMALISE_RANGE[1] + 1))
-    if count == target:
-        return points, membership, {
-            'action': 'exact', 'before': int(count), 'after': int(count)}
-    if count > target:
-        keep = np.sort(rng.permutation(count)[:target])
-        return points[keep], membership[keep], {
-            'action': 'reduced', 'before': int(count), 'after': int(keep.size),
-            'target': target}
-    keep = rng.permutation(count)
-    repeats = int(np.ceil(target / count))
-    chosen = np.concatenate([keep] * repeats)[:target]
-    return points[chosen], membership[chosen], {
-        'action': 'upsampled', 'before': int(count), 'after': int(chosen.size),
-        'target': target, 'unique_sources': int(count)}
+    want = max(1, min(int(want), pool.size))
+    points = scene.points[pool]
+    low = points.min(axis=0)
+    span = np.maximum(points.max(axis=0) - low, 1e-9)
+    for resolution in (6, 10, 16, 24, 32, 48):
+        cells = np.floor((points - low) / (span / resolution)).astype(np.int64)
+        keys = (cells[:, 0] * (resolution + 2) + cells[:, 1]) * (resolution + 2) \
+            + cells[:, 2]
+        unique = np.unique(keys)
+        if unique.size >= want:
+            order = np.argsort(keys, kind='stable')
+            sorted_keys = keys[order]
+            boundaries = np.flatnonzero(np.diff(sorted_keys)) + 1
+            groups = np.split(order, boundaries)
+            chosen = rng.permutation(len(groups))[:want]
+            return np.asarray([pool[groups[g][rng.integers(0, groups[g].size)]]
+                               for g in chosen], dtype=np.int64)
+    # The lattice cannot separate enough points: fall back to a uniform draw, which is
+    # still non-contiguous in expectation and is reported.
+    return pool[_take(pool.size, want, rng)]
 
 
-def generate_example(spec: ExampleSpec, geometry: CandidateGeometry,
-                     provenance) -> SyntheticExample:
-    """Generate one example. Raises on any provenance or geometry violation."""
-    if geometry.candidate_id != spec.candidate_id:
-        raise GeneratorError(
-            f'geometry is for {geometry.candidate_id}, spec asks {spec.candidate_id}')
-    candidate = geometry.candidate
-    if candidate.points.shape[0] == 0:
-        raise GeneratorError(f'{spec.candidate_id} has no stored geometry')
+def generate_example(spec: ExampleSpec, geometry, provenance) -> SyntheticExample:
+    """Generate one example from the shared scene. Raises on any violation."""
+    try:
+        scene = build_base_scene(spec.candidate_id, spec.partition, geometry, provenance)
+    except SceneError as exc:
+        raise GeneratorError(str(exc)) from exc
 
     rng = _rng(spec)
-    points = np.asarray(candidate.points, dtype=np.float32)
-    membership = np.asarray(candidate.membership, dtype=bool)
-    donors: tuple[str, ...] = ()
-    # `drawn_fraction` comes from the one shared distribution every class and severity
-    # uses. `fraction` is the realised magnitude after the class-specific geometry
-    # mapping, which necessarily differs between a crown cut and a boundary injection.
-    detail: dict = {'fraction': 0.0, 'drawn_fraction': 0.0}
+    membership = scene.membership_gt()
+    gt_membership = membership.copy()
+    detail: dict = {'fraction': 0.0, 'drawn_fraction': 0.0,
+                    'mechanism': 'unchanged', 'claimed_points': 0, 'dropped_points': 0}
+    donors: list[str] = []
+    donors_detail: dict[str, int] = {}
 
     if spec.example_class == GOOD:
-        # Official GT membership is preserved exactly.
         pass
 
     elif spec.example_class == MERGED_MULTI_TREE:
-        chosen = _select_donors(geometry, rng, 2)
-        if not chosen:
-            raise GeneratorError(f'{spec.candidate_id} has no context donor for MERGED')
+        # A whole neighbouring tree inside the query is claimed.
+        sources = _context_sources(scene)
+        if not sources:
+            raise NotApplicableError('no_context_source', {})
+        order = rng.permutation(len(sources))
+        chosen_source = sources[int(order[0])]
+        source_id = scene.source_ids[chosen_source]
+        pool = _context_indices(scene)
+        pool = pool[scene.gt_source_id[pool] == chosen_source]
+        if pool.size == 0:
+            raise NotApplicableError('donor_source_clipped_empty',
+                                     {'donor': source_id})
         fraction = _draw_fraction(rng, spec.severity)
-        extra_points, extra_membership, used = [], [], []
-        for donor in chosen:
-            take = _subsample(donor.points, int(donor.points.shape[0] * fraction), rng)
-            extra_points.append(donor.points[take])
-            extra_membership.append(np.asarray(donor.membership[take], dtype=bool))
-            used.append(donor.canonical_tree_id)
-        points = np.concatenate([points, *extra_points], axis=0)
-        membership = np.concatenate([membership, *extra_membership], axis=0)
-        donors = tuple(used)
+        want = int(round(pool.size * fraction))
+        if want < 1:
+            raise NotApplicableError('merged_below_one_point', {'pool': int(pool.size)})
+        claimed = pool[_take(pool.size, want, rng)]
+        membership[claimed] = True
+        donors = [source_id]
+        donors_detail[source_id] = int(claimed.size)
         detail = {'fraction': fraction, 'drawn_fraction': fraction,
-                  'donors_used': list(used),
-                  'donor_points': int(sum(p.shape[0] for p in extra_points))}
+                  'mechanism': 'claim_whole_neighbour',
+                  'claimed_points': int(claimed.size), 'dropped_points': 0,
+                  'donor_source': source_id,
+                  'donor_claimed_fraction_of_clipped': round(
+                      float(claimed.size / pool.size), 6)}
 
     elif spec.example_class == NEIGHBOR_CONTAMINATION:
-        chosen = _select_donors(geometry, rng, 2)
-        if not chosen:
-            raise GeneratorError(
-                f'{spec.candidate_id} has no context donor for CONTAMINATION')
+        # A contiguous neighbouring region adjacent to the candidate boundary.
+        sources = _context_sources(scene)
+        if not sources:
+            raise NotApplicableError('no_context_source', {})
         fraction = _draw_fraction(rng, spec.severity)
-        centre = points.mean(axis=0)
-        radius = float(np.linalg.norm(points.max(axis=0) - points.min(axis=0))) * 0.5
-        extra_points, used = [], []
-        for donor in chosen:
-            distance = np.linalg.norm(donor.points - centre, axis=1)
-            near = np.flatnonzero(distance <= radius)
-            if near.size == 0:
-                near = np.argsort(distance)[:max(1, donor.points.shape[0] // 100)]
-            take = near[_subsample(donor.points[near], int(near.size * fraction), rng)]
-            extra_points.append(donor.points[take])
-            used.append(donor.canonical_tree_id)
-        points = np.concatenate([points, *extra_points], axis=0)
-        membership = np.concatenate(
-            [membership, np.zeros(sum(p.shape[0] for p in extra_points), dtype=bool)])
-        donors = tuple(used)
+        claimed = _claim_from_sources(scene, sources, fraction, rng, local_only=True)
+        membership[claimed] = True
+        for source_index in np.unique(scene.gt_source_id[claimed]):
+            source_id = scene.source_ids[int(source_index)]
+            donors.append(source_id)
+            donors_detail[source_id] = int(
+                (scene.gt_source_id[claimed] == source_index).sum())
         detail = {'fraction': fraction, 'drawn_fraction': fraction,
-                  'donors_used': list(used),
-                  'boundary_radius_m': radius,
-                  'donor_points': int(sum(p.shape[0] for p in extra_points))}
-
-    elif spec.example_class == OVER_SEGMENTED:
-        fraction = _draw_fraction(rng, spec.severity)
-        axis = _unit_direction(rng)
-        projection = points @ axis
-        threshold = float(np.quantile(projection, fraction))
-        keep = projection > threshold
-        if keep.sum() < 8 or (~keep).sum() < 8:
-            raise GeneratorError(f'{spec.candidate_id} cannot be over-segmented')
-        points, membership = points[keep], membership[keep]
-        detail = {'fraction': fraction, 'drawn_fraction': fraction,
-                  'axis': [round(float(v), 6) for v in axis],
-                  'dropped_points': int((~keep).sum())}
-
-    elif spec.example_class == CROWN_INCOMPLETE:
-        fraction = _draw_fraction(rng, spec.severity)
-        z_low, z_high = float(points[:, 2].min()), float(points[:, 2].max())
-        threshold = z_high - (z_high - z_low) * fraction
-        keep = points[:, 2] <= threshold
-        if keep.sum() < 8 or (~keep).sum() < 8:
-            raise GeneratorError(f'{spec.candidate_id} cannot lose a crown region')
-        removed = points[~keep]
-        fill, fill_instances = _background_in_region(
-            geometry, lambda xyz: xyz[:, 2] > threshold, rng)
-        points = np.concatenate([points[keep], fill], axis=0)
-        membership = np.concatenate(
-            [membership[keep], np.zeros(fill.shape[0], dtype=bool)])
-        detail = {'fraction': fraction, 'drawn_fraction': fraction,
-                  'z_cut': round(threshold, 6),
-                  'z_span': [round(z_low, 6), round(z_high, 6)],
-                  'removed_points': int((~keep).sum()),
-                  'fill_points': int(fill.shape[0]),
-                  'fill_instances': fill_instances,
-                  'removed_centroid_z': round(float(removed[:, 2].mean()), 6)}
-
-    elif spec.example_class == STEM_MISSING:
-        fraction = _draw_fraction(rng, spec.severity)
-        axis_x, axis_y = _stem_axis_xy(points)
-        z_low, z_high = float(points[:, 2].min()), float(points[:, 2].max())
-        z_cut = z_low + (z_high - z_low) * fraction
-        horizontal = np.hypot(points[:, 0] - axis_x, points[:, 1] - axis_y)
-        radius = float(np.quantile(horizontal, 0.35))
-        keep = ~((points[:, 2] <= z_cut) & (horizontal <= radius))
-        if keep.sum() < 8 or (~keep).sum() < 8:
-            raise GeneratorError(f'{spec.candidate_id} cannot lose a stem region')
-        # The publisher plot floor sits a few decimetres below the tree base, so the
-        # refill region is the whole vertical column under the stem, not only the
-        # cylinder that the tree itself occupied.
-        fill_radius = max(radius, 1.5)
-        fill, fill_instances = _background_in_region(
-            geometry,
-            lambda xyz: ((xyz[:, 2] <= z_cut)
-                         & (np.hypot(xyz[:, 0] - axis_x, xyz[:, 1] - axis_y)
-                            <= fill_radius)),
-            rng)
-        points = np.concatenate([points[keep], fill], axis=0)
-        membership = np.concatenate(
-            [membership[keep], np.zeros(fill.shape[0], dtype=bool)])
-        detail = {'fraction': fraction, 'drawn_fraction': fraction,
-                  'z_cut': round(z_cut, 6),
-                  'stem_radius_m': round(radius, 6),
-                  'fill_radius_m': round(fill_radius, 6),
-                  'stem_axis_xy': [round(axis_x, 6), round(axis_y, 6)],
-                  'removed_points': int((~keep).sum()),
-                  'fill_points': int(fill.shape[0]),
-                  'fill_instances': fill_instances}
+                  'mechanism': 'claim_contiguous_neighbour_region',
+                  'claimed_points': int(claimed.size), 'dropped_points': 0,
+                  'claim_radius_fraction': 0.5}
 
     elif spec.example_class == NOISE:
-        if geometry.background.shape[0] == 0:
-            raise GeneratorError(f'{spec.candidate_id} has no real non-member geometry')
+        # Scattered, non-structural context points are claimed.
+        sources = _context_sources(scene)
+        if not sources:
+            raise NotApplicableError('no_context_source', {})
         fraction = _draw_fraction(rng, spec.severity)
-        background = np.asarray(geometry.background, dtype=np.float32)
-        take = _subsample(background, int(background.shape[0] * max(fraction, 0.5)), rng)
-        noise_points = background[take]
-        keep = _subsample(points, int(points.shape[0] * (1.0 - fraction)), rng)
-        points = np.concatenate([noise_points, points[keep]], axis=0)
-        membership = np.concatenate(
-            [np.zeros(noise_points.shape[0], dtype=bool), membership[keep]])
+        pool = _context_indices(scene)
+        want = int(round(pool.size * fraction))
+        if want < 1:
+            raise NotApplicableError('noise_below_one_point', {'pool': int(pool.size)})
+        claimed = _scattered_selection(scene, pool, want, rng)
+        membership[claimed] = True
+        for source_index in np.unique(scene.gt_source_id[claimed]):
+            source_id = scene.source_ids[int(source_index)]
+            donors.append(source_id)
+            donors_detail[source_id] = int(
+                (scene.gt_source_id[claimed] == source_index).sum())
         detail = {'fraction': fraction, 'drawn_fraction': fraction,
-                  'noise_points': int(noise_points.shape[0]),
-                  'noise_source_trees': int(np.unique(
-                      geometry.background_label[take]).size),
-                  'surviving_candidate_points': int(keep.size)}
+                  'mechanism': 'claim_scattered_context_points',
+                  'claimed_points': int(claimed.size), 'dropped_points': 0,
+                  'distinct_cells': int(claimed.size)}
+
+    elif spec.example_class == OVER_SEGMENTED:
+        # A spatially contiguous part of the candidate is no longer selected.
+        candidate = _candidate_indices(scene)
+        fraction = _draw_fraction(rng, spec.severity)
+        axis = _unit_direction(rng)
+        projection = scene.points[candidate] @ axis
+        threshold = float(np.quantile(projection, fraction))
+        drop = candidate[projection <= threshold]
+        if drop.size < 1:
+            raise NotApplicableError('over_segmented_below_one_point',
+                                     {'candidate_points': int(candidate.size)})
+        membership[drop] = False
+        detail = {'fraction': fraction, 'drawn_fraction': fraction,
+                  'mechanism': 'drop_contiguous_candidate_region',
+                  'claimed_points': 0, 'dropped_points': int(drop.size),
+                  'axis': [round(float(v), 6) for v in axis],
+                  'dropped_fraction_of_candidate': round(
+                      float(drop.size / candidate.size), 6)}
+
+    elif spec.example_class == CROWN_INCOMPLETE:
+        # The contiguous crown region is no longer selected. The real crown points stay
+        # in the scene: the segmentation did not pick them, the tree still has them.
+        candidate = _candidate_indices(scene)
+        fraction = _draw_fraction(rng, spec.severity)
+        z = scene.points[candidate, 2]
+        z_low, z_high = float(z.min()), float(z.max())
+        threshold = z_high - (z_high - z_low) * fraction
+        drop = candidate[z > threshold]
+        if drop.size < 1:
+            raise NotApplicableError('crown_incomplete_below_one_point',
+                                     {'candidate_points': int(candidate.size)})
+        membership[drop] = False
+        detail = {'fraction': fraction, 'drawn_fraction': fraction,
+                  'mechanism': 'drop_contiguous_crown_region',
+                  'claimed_points': 0, 'dropped_points': int(drop.size),
+                  'z_cut': round(threshold, 6),
+                  'z_span': [round(z_low, 6), round(z_high, 6)],
+                  'dropped_fraction_of_candidate': round(
+                      float(drop.size / candidate.size), 6)}
+
+    elif spec.example_class == STEM_MISSING:
+        evidence = stem_evidence(scene)
+        if not evidence['applicable']:
+            raise NotApplicableError(STEM_NOT_APPLICABLE, evidence)
+        candidate = _candidate_indices(scene)
+        fraction = _draw_fraction(rng, spec.severity)
+        z_low, z_high = evidence['z_span']
+        z_cut = z_low + (z_high - z_low) * fraction
+        axis_x, axis_y = evidence['stem_axis_xy']
+        horizontal = np.hypot(scene.points[candidate, 0] - axis_x,
+                              scene.points[candidate, 1] - axis_y)
+        drop = candidate[(scene.points[candidate, 2] <= z_cut)
+                         & (horizontal <= evidence['radius_m'])]
+        if drop.size < 1:
+            raise NotApplicableError('stem_missing_below_one_point',
+                                     {'candidate_points': int(candidate.size)})
+        membership[drop] = False
+        detail = {'fraction': fraction, 'drawn_fraction': fraction,
+                  'mechanism': 'drop_contiguous_stem_region',
+                  'claimed_points': 0, 'dropped_points': int(drop.size),
+                  'z_cut': round(z_cut, 6), 'stem_axis_xy': evidence['stem_axis_xy'],
+                  'stem_radius_m': evidence['radius_m'],
+                  'stem_evidence': {k: v for k, v in evidence.items()
+                                    if k != 'lower_mask'}}
 
     else:  # pragma: no cover - guarded by ExampleSpec
         raise GeneratorError(f'unhandled class {spec.example_class}')
 
-    raw_point_count = int(points.shape[0])
-    points, membership, normalisation = _normalise_count(points, membership, rng)
-    if points.shape[0] == 0:
-        raise GeneratorError(f'{spec.candidate_id} produced an empty cloud')
-
-    donors = tuple(donors)
-    # Fail closed on the real contract, using the same gate the dataset uses.
-    provenance.assert_example_sources(spec.candidate_id, donors)
+    changed = membership != gt_membership
+    donors = sorted(set(donors))
+    union = scene_source_union(scene)
+    # Unified fail-closed check over every source that contributed a point.
+    authorised_union = provenance.assert_scene_sources(spec.candidate_id, union)
+    if tuple(authorised_union) != union:
+        raise GeneratorError('source union normalization mismatch')
 
     label = LABEL_PASS if spec.example_class == GOOD else LABEL_REVIEW
     record = {
         'generator_version': GENERATOR_VERSION,
+        'membership_channel': MEMBERSHIP_CHANNEL,
         'key': spec.key,
         'candidate_id': spec.candidate_id,
         'partition': spec.partition,
-        'site': candidate.site,
+        'site': scene.site,
         'class': spec.example_class,
         'severity': spec.severity,
         'label': label,
         'seed': spec.seed,
-        'donors': list(donors),
-        'context_ids': list(geometry.context_ids),
-        'point_count': int(points.shape[0]),
-        'raw_point_count': raw_point_count,
-        'normalisation': normalisation,
-        'membership_fraction': round(float(membership.mean()), 6)
-        if membership.size else 0.0,
-        'source_union': sorted({spec.candidate_id, *donors}),
+        'scene_version': scene.audit.get('scene_version'),
+        'query_box': scene.audit.get('query_box'),
+        'query_pad_m': scene.audit.get('query_pad_m'),
+        'donors': donors,
+        'donor_point_counts': donors_detail,
+        'context_ids': list(scene.source_ids[1:]),
+        'point_count': scene.point_count,
+        'actual_point_source_ids': list(union),
+        'actual_point_source_counts': scene.source_counts(),
+        'actual_point_source_aliases': {
+            source_id: list(provenance.source_aliases_of.get(source_id, ()))
+            for source_id in union},
+        'candidate_points': scene.candidate_points,
+        'context_points': scene.context_points,
+        'membership_fraction': round(float(membership.mean()), 6),
+        'gt_membership_fraction': round(float(gt_membership.mean()), 6),
+        'changed_membership_points': int(changed.sum()),
+        'changed_membership_fraction': round(float(changed.mean()), 6),
+        'claimed_points': int(detail.get('claimed_points', 0)),
+        'dropped_points': int(detail.get('dropped_points', 0)),
+        'source_union': list(union),
         'corruption': detail,
     }
-    return SyntheticExample(spec=spec, points=np.asarray(points, dtype=np.float32),
-                            membership=np.asarray(membership, dtype=bool),
-                            label=label, donors=donors, provenance=record)
+    return SyntheticExample(spec=spec, points=scene.points, membership=membership,
+                            label=label, changed_membership=changed,
+                            source_ids=scene.source_ids, provenance=record)
 
 
 def enumerate_specs(candidate_ids, partition: str, classes=CLASSES,
