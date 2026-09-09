@@ -1,5 +1,7 @@
 @echo off
 "D:\TreeQCTraining\venv\Scripts\python.exe" "%~dp0research\tree_qc\zenodo_archive_recovery.py" verify
+set "VERIFY_EXIT=%ERRORLEVEL%"
 echo.
 echo Verification only. No network request or extraction is started by this file.
 pause
+exit /b %VERIFY_EXIT%

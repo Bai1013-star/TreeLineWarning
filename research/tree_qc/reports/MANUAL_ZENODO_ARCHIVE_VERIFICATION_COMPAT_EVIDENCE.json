@@ -1,0 +1,124 @@
+{
+  "status": "BOTH_ARCHIVES_VERIFIED",
+  "archives": [
+    {
+      "identity": {
+        "name": "litchfield.zip",
+        "size": 2331915728,
+        "md5": "8e374d940d7e651484a84d7d63f18636",
+        "url": "https://zenodo.org/api/records/16875688/files/litchfield.zip/content",
+        "file_link": "https://zenodo.org/api/records/16875688/files/litchfield.zip",
+        "record": 16875688
+      },
+      "actual": {
+        "md5": "8e374d940d7e651484a84d7d63f18636",
+        "sha256": "4d45f0ad215ff49d665b0d881e15a1cfd5f85ae1e832c1da057461205b5156f3",
+        "bytes": 2331915728
+      },
+      "zip_crc": "PASS",
+      "actual_bytes": 2331915728,
+      "size": "PASS",
+      "official_md5": "PASS",
+      "central_directory": "PASS",
+      "compression_method_ids": [
+        9
+      ],
+      "compression_method_names": {
+        "9": "Deflate64"
+      },
+      "python_stdlib_supported": false,
+      "python_stdlib_status": "PYTHON_STDLIB_LIMITATION",
+      "full_decompression_crc_test": "PASS",
+      "crc_evidence": {
+        "executable": "D:\\Program Files\\WinRAR\\WinRAR.exe",
+        "kind": "winrar",
+        "command": [
+          "D:\\Program Files\\WinRAR\\WinRAR.exe",
+          "t",
+          "-cfg-",
+          "-y",
+          "-p-",
+          "-ibck",
+          "-ilogD:\\TreeQCTraining\\logs\\zenodo_recovery_20260909\\litchfield.zip.crc.1788936709273329700.errors.txt",
+          "D:\\TreeQCData\\downloads\\litchfield.zip"
+        ],
+        "exit_code": 0,
+        "seconds": 23.844000000011874,
+        "version_output": "7.13.0\n",
+        "version_exit_code": 0,
+        "log_prefix": "D:\\TreeQCTraining\\logs\\zenodo_recovery_20260909\\litchfield.zip.crc.1788936709273329700",
+        "inherited_rar_environment_removed": true,
+        "config_disabled": true
+      },
+      "expanded_bytes": 7827966891,
+      "compressed_bytes": 2331806122,
+      "file_count": 740
+    },
+    {
+      "identity": {
+        "name": "wytham.zip",
+        "size": 3166118961,
+        "md5": "8d7918ed1270d603efc83aae5a8777c1",
+        "url": "https://zenodo.org/api/records/16875688/files/wytham.zip/content",
+        "file_link": "https://zenodo.org/api/records/16875688/files/wytham.zip",
+        "record": 16875688
+      },
+      "actual": {
+        "md5": "8d7918ed1270d603efc83aae5a8777c1",
+        "sha256": "2ffe674247fba13fe80fa154b72af013592e5b3be8328b7f592409d7bc6534a5",
+        "bytes": 3166118961
+      },
+      "zip_crc": "PASS",
+      "actual_bytes": 3166118961,
+      "size": "PASS",
+      "official_md5": "PASS",
+      "central_directory": "PASS",
+      "compression_method_ids": [
+        9
+      ],
+      "compression_method_names": {
+        "9": "Deflate64"
+      },
+      "python_stdlib_supported": false,
+      "python_stdlib_status": "PYTHON_STDLIB_LIMITATION",
+      "full_decompression_crc_test": "PASS",
+      "crc_evidence": {
+        "executable": "D:\\Program Files\\WinRAR\\WinRAR.exe",
+        "kind": "winrar",
+        "command": [
+          "D:\\Program Files\\WinRAR\\WinRAR.exe",
+          "t",
+          "-cfg-",
+          "-y",
+          "-p-",
+          "-ibck",
+          "-ilogD:\\TreeQCTraining\\logs\\zenodo_recovery_20260909\\wytham.zip.crc.1788936739286943300.errors.txt",
+          "D:\\TreeQCData\\downloads\\wytham.zip"
+        ],
+        "exit_code": 0,
+        "seconds": 25.21899999998277,
+        "version_output": "7.13.0\n",
+        "version_exit_code": 0,
+        "log_prefix": "D:\\TreeQCTraining\\logs\\zenodo_recovery_20260909\\wytham.zip.crc.1788936739286943300",
+        "inherited_rar_environment_removed": true,
+        "config_disabled": true
+      },
+      "expanded_bytes": 6586434703,
+      "compressed_bytes": 3165973827,
+      "file_count": 959
+    }
+  ],
+  "free_bytes": 128004464640,
+  "expanded_total": 14414401594,
+  "final_free_bytes": 113590063046,
+  "disk_guard_pass": true,
+  "allow_extract": false,
+  "reason": "Supervisor must review actual budget before extraction",
+  "manual_archive_verification": "PASS",
+  "gate_c_allowed": true,
+  "supervisor_allow_extract": true,
+  "training_reserve_bytes": 10737418240,
+  "free_after_expansion_and_training_reserve": 102852644806,
+  "independent_review": "PASS_WITH_LIMITATIONS; deterministic external configuration issue fixed;15 offline tests independently passed",
+  "verifier_startup_sha256": "82e80d14517d0116de29b106fc5c50aa900a055b1b6e97a9fbe449267dc5f641"
+}

@@ -15,6 +15,91 @@ from public_data import FILES, RESERVE, digests, inventory, save
 DEST = Path('D:/TreeQCData/downloads')
 LOG = Path('D:/TreeQCTraining/logs/zenodo_recovery_20260909')
 
+ZIP_METHOD_NAMES = {0: 'Stored', 1: 'Shrink', 2: 'Reduce factor 1', 3: 'Reduce factor 2',
+                    4: 'Reduce factor 3', 5: 'Reduce factor 4', 6: 'Implode',
+                    8: 'Deflate', 9: 'Deflate64', 12: 'BZIP2', 14: 'LZMA',
+                    20: 'Zstandard (deprecated ID)', 93: 'Zstandard', 95: 'XZ',
+                    98: 'PPMd'}
+
+
+def stdlib_supports(method):
+    # This checks the running interpreter and optional decoder modules, not
+    # merely a hard-coded version number. No archive payload is read here.
+    try:
+        zipfile._get_decompressor(method)
+        return True
+    except (NotImplementedError, RuntimeError):
+        return False
+
+
+def external_verifier():
+    """Find an actual executable, never infer availability from associations."""
+    for name in ('7z.exe', '7zz.exe', 'WinRAR.exe', 'rar.exe'):
+        candidates = [shutil.which(name)]
+        for variable in ('ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA'):
+            base = os.environ.get(variable)
+            if base:
+                for folder in ('7-Zip', 'WinRAR', 'Programs/7-Zip', 'Programs/WinRAR'):
+                    candidates.append(str(Path(base)/folder/name))
+        if os.name == 'nt':
+            import winreg
+            for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+                for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+                    try:
+                        with winreg.OpenKey(hive, 'SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\'+name,
+                                            0, winreg.KEY_READ | view) as key:
+                            candidates.append(winreg.QueryValueEx(key, None)[0].strip('"'))
+                    except OSError:
+                        pass
+        for candidate in candidates:
+            if candidate and Path(candidate).is_file():
+                return dict(executable=str(Path(candidate).resolve()),
+                            kind='7z' if name.lower().startswith('7z') else
+                            'winrar' if name.lower() == 'winrar.exe' else 'rar')
+    return None
+
+
+def external_crc_test(path, tool):
+    """Full test command only: no output directory, extraction or modification."""
+    LOG.mkdir(parents=True, exist_ok=True)
+    stem = LOG/(path.name+'.crc.'+str(time.time_ns()))
+    if tool['kind'] == 'winrar':
+        quoted = tool['executable'].replace("'", "''")
+        version_args = ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+                        "[System.Diagnostics.FileVersionInfo]::GetVersionInfo('"+quoted+"').FileVersion"]
+    else:
+        version_args = [tool['executable'], 'i'] if tool['kind'] == '7z' else [tool['executable'], '-?']
+    version = subprocess.run(version_args, capture_output=True, text=True, errors='replace', timeout=30)
+    Path(str(stem)+'.version.stdout.txt').write_text(version.stdout, encoding='utf-8')
+    Path(str(stem)+'.version.stderr.txt').write_text(version.stderr, encoding='utf-8')
+    # Empty password disables interactive password prompts; encrypted entries
+    # have already been rejected by central-directory inventory.
+    args = ([tool['executable'], 't', '-bd', '-y', '-p', '--', str(path.resolve())]
+            if tool['kind'] == '7z' else
+            [tool['executable'], 't', '-cfg-', '-y', '-p-',
+             *(['-ibck', '-ilog'+str(stem)+'.errors.txt'] if tool['kind'] == 'winrar' else []),
+             str(path.resolve())])
+    startup = None
+    if os.name == 'nt':
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = 0
+    started = time.monotonic()
+    environment = {key: value for key, value in os.environ.items() if key.upper() != 'RAR'}
+    with Path(str(stem)+'.stdout.txt').open('w', encoding='utf-8') as stdout, \
+            Path(str(stem)+'.stderr.txt').open('w', encoding='utf-8') as stderr:
+        result = subprocess.run(args, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL,
+                                timeout=7200, startupinfo=startup, env=environment)
+    evidence = dict(**tool, command=args, exit_code=result.returncode,
+                    seconds=time.monotonic()-started, version_output=version.stdout+version.stderr,
+                    version_exit_code=version.returncode, log_prefix=str(stem),
+                    inherited_rar_environment_removed=True,
+                    config_disabled=tool['kind'] in ('winrar', 'rar'))
+    save(Path(str(stem)+'.json'), evidence)
+    if result.returncode != 0:
+        raise RuntimeError(f'STOP_ARCHIVE_INTEGRITY_FAILED: external CRC test exit={result.returncode}; {stem}')
+    return evidence
+
 
 def refresh_metadata():
     """Refresh online transfer identities; offline verify never calls this."""
@@ -113,16 +198,36 @@ def specifications():
 
 def checked(path, spec):
     if path.stat().st_size != spec['size']:
-        raise RuntimeError(f'INCOMPLETE: {path}: {path.stat().st_size}/{spec["size"]}')
+        raise RuntimeError(f'STOP_ARCHIVE_INTEGRITY_FAILED: WRONG_SIZE: {path}: {path.stat().st_size}/{spec["size"]}')
     actual = digests(path)
     if actual['md5'] != spec['md5']:
-        raise RuntimeError(f'MD5_MISMATCH: {path}; retained; extraction prohibited')
+        raise RuntimeError(f'STOP_ARCHIVE_INTEGRITY_FAILED: MD5_MISMATCH: {path}; retained; extraction prohibited')
     listing = inventory(path)
     with zipfile.ZipFile(path) as archive:
-        bad = archive.testzip()
-        if bad is not None:
-            raise RuntimeError(f'ZIP_CRC_FAILED: {bad}')
+        methods = sorted({info.compress_type for info in archive.infolist()})
+        supported = all(stdlib_supports(method) for method in methods)
+        preflight = dict(identity=spec, actual_bytes=path.stat().st_size, actual=actual,
+                         central_directory='PASS', compression_method_ids=methods,
+                         compression_method_names={str(m): ZIP_METHOD_NAMES.get(m, 'Unknown') for m in methods},
+                         python_stdlib_supported=supported, file_count=listing['entry_count'])
+        save(DEST/(spec['name']+'.preflight.json'), preflight)
+        print(json.dumps(preflight), flush=True)
+        if supported:
+            bad = archive.testzip()
+            if bad is not None:
+                raise RuntimeError(f'STOP_ARCHIVE_INTEGRITY_FAILED: ZIP_CRC_FAILED: {bad}')
+            crc_evidence = dict(implementation='python zipfile.testzip', exit_code=0)
+        else:
+            tool = external_verifier()
+            if tool is None:
+                raise RuntimeError('PYTHON_STDLIB_LIMITATION: no external full CRC verifier available; archive not accepted or declared corrupt')
+            crc_evidence = external_crc_test(path, tool)
     report = dict(identity=spec, actual=actual, zip_crc='PASS',
+                  actual_bytes=path.stat().st_size, size='PASS', official_md5='PASS', central_directory='PASS',
+                  compression_method_ids=methods, compression_method_names=preflight['compression_method_names'],
+                  python_stdlib_supported=supported,
+                  python_stdlib_status='SUPPORTED' if supported else 'PYTHON_STDLIB_LIMITATION',
+                  full_decompression_crc_test='PASS', crc_evidence=crc_evidence,
                   expanded_bytes=listing['extracted_bytes'],
                   compressed_bytes=sum(x['compressed'] for x in listing['entries']),
                   file_count=sum(not x['directory'] for x in listing['entries']))

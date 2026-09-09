@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import Mock, patch
 
 import zenodo_archive_recovery as recovery
@@ -98,6 +99,85 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(process.call_count, 12)
         self.assertFalse(part.exists())
         self.assertEqual((self.root/'litchfield.zip').stat().st_size, 12)
+
+    def archive_fixture(self):
+        path = self.root/'ordinary.zip'
+        with zipfile.ZipFile(path, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('example.txt', b'offline CRC fixture'*100)
+        return path, dict(name=path.name, size=path.stat().st_size,
+                          md5=recovery.digests(path)['md5'])
+
+    def test_ordinary_deflate_full_crc(self):
+        path, spec = self.archive_fixture()
+        with patch.object(recovery, 'external_verifier', side_effect=AssertionError('external unnecessary')):
+            report = recovery.checked(path, spec)
+        self.assertEqual(report['compression_method_ids'], [8])
+        self.assertTrue(report['python_stdlib_supported'])
+        self.assertEqual(report['full_decompression_crc_test'], 'PASS')
+
+    def test_unsupported_dispatch_external_success(self):
+        path, spec = self.archive_fixture()
+        tool = dict(executable='fixture.exe', kind='7z')
+        with patch.object(recovery, 'stdlib_supports', return_value=False), \
+                patch.object(recovery, 'external_verifier', return_value=tool), \
+                patch.object(recovery, 'external_crc_test', return_value={'exit_code': 0}) as crc, \
+                patch.object(zipfile.ZipFile, 'testzip', side_effect=AssertionError('unsupported stdlib must not run')):
+            report = recovery.checked(path, spec)
+        crc.assert_called_once_with(path, tool)
+        self.assertEqual(report['python_stdlib_status'], 'PYTHON_STDLIB_LIMITATION')
+        self.assertEqual(report['zip_crc'], 'PASS')
+
+    def test_unsupported_without_tool_is_limitation(self):
+        path, spec = self.archive_fixture()
+        with patch.object(recovery, 'stdlib_supports', return_value=False), \
+                patch.object(recovery, 'external_verifier', return_value=None):
+            with self.assertRaisesRegex(RuntimeError, 'PYTHON_STDLIB_LIMITATION'):
+                recovery.checked(path, spec)
+        self.assertFalse((self.root/(path.name+'.verified.json')).exists())
+
+    def test_external_test_success_and_failure(self):
+        path, _ = self.archive_fixture()
+        for code in (0, 2):
+            version = Mock(stdout='7-Zip fixture version', stderr='', returncode=0)
+            result = Mock(returncode=code)
+            with patch.object(recovery.subprocess, 'run', side_effect=[version, result]) as run:
+                if code:
+                    with self.assertRaisesRegex(RuntimeError, 'STOP_ARCHIVE_INTEGRITY_FAILED'):
+                        recovery.external_crc_test(path, dict(executable='fixture.exe', kind='7z'))
+                else:
+                    evidence = recovery.external_crc_test(path, dict(executable='fixture.exe', kind='7z'))
+                    self.assertEqual(evidence['exit_code'], 0)
+                    self.assertTrue(Path(evidence['log_prefix']+'.stdout.txt').exists())
+            command = run.call_args_list[1].args[0]
+            self.assertEqual(command[1], 't')
+            self.assertIn(str(path.resolve()), command)
+
+    def test_wrong_size_stops_before_hash_or_directory(self):
+        path, spec = self.archive_fixture()
+        with patch.object(recovery, 'digests', side_effect=AssertionError('size first')):
+            with self.assertRaisesRegex(RuntimeError, 'WRONG_SIZE'):
+                recovery.checked(path, dict(spec, size=spec['size']+1))
+
+    def test_winrar_test_ignores_inherited_configuration(self):
+        path, _ = self.archive_fixture()
+        with patch.dict(recovery.os.environ, {'RAR': '-x*'}), \
+                patch.object(recovery.subprocess, 'run', side_effect=[
+                    Mock(stdout='7.13.0', stderr='', returncode=0), Mock(returncode=0)]) as run:
+            recovery.external_crc_test(path, dict(executable='WinRAR.exe', kind='winrar'))
+        command = run.call_args_list[1].args[0]
+        self.assertEqual(command[1], 't')
+        self.assertIn('-cfg-', command)
+        self.assertNotIn('RAR', run.call_args_list[1].kwargs['env'])
+
+    def test_wrong_md5_stops_before_directory_or_decompression(self):
+        path, spec = self.archive_fixture()
+        with patch.object(recovery, 'inventory', side_effect=AssertionError('hash first')):
+            with self.assertRaisesRegex(RuntimeError, 'MD5_MISMATCH'):
+                recovery.checked(path, dict(spec, md5='wrong'))
+
+    def test_deflate64_is_not_supported_by_python311(self):
+        self.assertFalse(recovery.stdlib_supports(9))
+        self.assertEqual(recovery.ZIP_METHOD_NAMES[9], 'Deflate64')
 
 
 if __name__ == '__main__':
