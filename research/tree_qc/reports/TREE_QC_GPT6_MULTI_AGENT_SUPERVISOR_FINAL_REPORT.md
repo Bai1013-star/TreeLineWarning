@@ -24,14 +24,14 @@ GATE_G_REPEATABILITY = NOT_RUN
 GATE_H_LOCAL_CHALLENGE = NOT_RUN
 GATE_I_DEPLOYMENT = NOT_RUN
 PUBLIC_DATA_DOWNLOAD_ALLOWED = YES, exactly pinned Litchfield/Wytham and inventory; extraction still unapproved
-EXECUTION_STATUS = PUBLIC_DATA_DOWNLOAD_NETWORK_BLOCKED
+EXECUTION_STATUS = ZENODO_ARCHIVE_TRANSFER_BLOCKED
 
 ## Gate A evidence
 
 DATA_ROOT = D:\TreeQCData
 TRAINING_ROOT = D:\TreeQCTraining
 D_FREE_BEFORE = approximately132.24 GiB at recovery start
-D_FREE_AFTER = approximately125.55 GiB; exact final bytes in FINAL_GIT_STATE.json
+D_FREE_AFTER = approximately124.34 GiB at archive recovery stop; exact final bytes in FINAL_GIT_STATE.json
 GPU = NVIDIA GeForce RTX5070 Laptop,8151MiB,capability12.0
 DRIVER = 591.86
 PYTORCH = 2.14.0+cu130, actually installed in existing Python3.11.9 environment
@@ -59,11 +59,11 @@ PUBLIC_DATASET = TLS Forest Instance Segmentation Benchmark
 DATASET_VERSION = official latest record16875688 at verification, DOI10.5281/zenodo.16875688; official latest-chain JSON retained
 LICENSE = metadata.id cc-by-4.0, publisher citation requirement and official attribution terms verified; does not grant automatic product/weight redistribution approval or license upstream evaluation code
 SITES = Litchfield/Wytham only
-DOWNLOAD_SIZE = public archive0 bytes received; pinned archive total5498034689 bytes
+DOWNLOAD_SIZE = Litchfield continuous partial1253634048 bytes; Wytham0 bytes; no complete verified archive; pinned archive total5498034689 bytes
 UNIQUE_TREES = NOT_MEASURED
 DUPLICATES_REMOVED = NOT_MEASURED
 
-The official metadata endpoint recovered after earlier failures, so metadata/license are no longer the blocker. Archive endpoints remain a separate transfer problem. See PUBLIC_DATA_PIPELINE_WORKER_20260909.md and public_data_network_attempts.log for exact per-site routes, attempts and status; HTTP000 denotes curl received no HTTP response before timeout. No archive or point cloud was extracted. Source provenance JSON is metadata, not downloaded data.
+The official metadata endpoint recovered after earlier failures, so metadata/license are no longer the blocker. Archive transfer resumed in the latest recovery, then hit bounded HTTP504 failures after preserving1253634048 contiguous bytes. Current evidence supersedes the earlier zero-byte status: ZENODO_ARCHIVE_TRANSFER_RECOVERY.md and ZENODO_ARCHIVE_TRANSFER_BLOCKED.json. Archive endpoints remain a separate transfer problem. See PUBLIC_DATA_PIPELINE_WORKER_20260909.md and public_data_network_attempts.log for exact per-site routes, attempts and status; HTTP000 denotes curl received no HTTP response before timeout. No archive or point cloud was extracted. Source provenance JSON is metadata, not downloaded data.
 
 Central-directory inspection requires verified size/MD5 and records local SHA256. Approved budget: exact two archives + up to40GiB expanded +10GiB training reserve, retaining at least35GiB actual D free. Extraction remains allow_extract=false until actual combined ZIP expanded size is reviewed. Bounds and offline safety tests do not substitute for real archive/schema/coordinate verification.
 
@@ -108,6 +108,10 @@ SCIENCE_CHANGED = NO
 INDEPENDENT_REVIEWER_VERDICT = PASS_WITH_LIMITATIONS for Gate A runtime and stage evidence; data-module follow-up findings resolved/reviewed in the accompanying review record
 PUSH = NO
 
-NEXT_STEP = Resume the pinned official data download when archive service responds correctly. DOWNLOAD_TREE_QC_PILOT_DATA.cmd defaults to the saved two-site approval and preserves trustworthy .part progress. SETUP_TREE_QC_TRAINING.cmd now detects the installed matching torch and avoids download; Gate A need not be repeated unless its implementation/environment changes. After complete archive verification review expanded totals, then proceed Gate C onward. Do not relabel the current archive network problem as OFFICIAL_PYTORCH_DOWNLOAD_NETWORK_BLOCKED, PRE_DOWNLOAD_GATE_FAILED or model failure; PyTorch and Gate A succeeded.
+NEXT_STEP = Automatic recovery stopped after bounded Range and BITS HTTP504 failures. User browser-downloads exactly the two official ZIPs into D:\TreeQCData\downloads, then VERIFY_MANUAL_ZENODO_ARCHIVES.cmd performs offline integrity verification. Preserve the existing .part. A later explicit resume can reuse its1253634048-byte prefix when the official service recovers. DOWNLOAD_TREE_QC_PILOT_DATA.cmd defaults to the saved two-site approval and preserves trustworthy .part progress. SETUP_TREE_QC_TRAINING.cmd now detects the installed matching torch and avoids download; Gate A need not be repeated unless its implementation/environment changes. After complete archive verification review expanded totals, then proceed Gate C onward. Do not relabel the current archive network problem as OFFICIAL_PYTORCH_DOWNLOAD_NETWORK_BLOCKED, PRE_DOWNLOAD_GATE_FAILED or model failure; PyTorch and Gate A succeeded.
 
 Detailed evidence: GATE_A_RECOVERY_EXECUTION.md; GATE_A_INDEPENDENT_RUNTIME_REVIEW.md; GATE_A_RECOVERY_SUPERVISOR.md; DATA_LICENSE_AUDIT.md; pinned_pilot_manifest.json; PUBLIC_DATA_PIPELINE_WORKER_20260909.md; gate_a_recovery_evidence/.
+
+## Latest archive recovery acceptance
+
+Continued from0b67e3d without rerunning Gate A/B. Two child agents handled archive recovery and independent read-only protocol/recovery review. Final reviewer verdict PASS_WITH_LIMITATIONS applies to recovery safety and evidence, not archive integrity. Seven offline recovery tests passed; no complete ZIP MD5/CRC acceptance occurred. All owned download processes and BITS job stopped. Litchfield Range support was observed through exact206 responses; Wytham Range was not tested in this recovery because Litchfield did not finish. The current download status is ZENODO_ARCHIVE_TRANSFER_BLOCKED; Gate C-I remain NOT_RUN. Public protocol prefreeze is prospective only and establishes no scientific result. No extraction, product integration, frozen V0.1 modification, science modification or push.

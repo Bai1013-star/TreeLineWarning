@@ -1,0 +1,45 @@
+{
+  "status": "ZENODO_ARCHIVE_TRANSFER_BLOCKED",
+  "files": [
+    {
+      "name": "litchfield.zip",
+      "size": 2331915728,
+      "md5": "8e374d940d7e651484a84d7d63f18636",
+      "url": "https://zenodo.org/api/records/16875688/files/litchfield.zip/content",
+      "file_link": "https://zenodo.org/api/records/16875688/files/litchfield.zip",
+      "record": 16875688,
+      "partial": {
+        "md5": "df83351a073313630cbcc99fe2645e8a",
+        "sha256": "ac9eea2c41f38d80645d73a06a1ba0ff92a4c1598f2483e7ee257a53ecfbe766",
+        "bytes": 1253634048
+      },
+      "part_path": "D:\\TreeQCData\\downloads\\litchfield.zip.part",
+      "range": "CONFIRMED_206",
+      "resume": "YES_AT_BYTE_1253634048",
+      "integrity": "NOT_COMPLETE_NOT_VERIFIED"
+    },
+    {
+      "name": "wytham.zip",
+      "size": 3166118961,
+      "md5": "8d7918ed1270d603efc83aae5a8777c1",
+      "url": "https://zenodo.org/api/records/16875688/files/wytham.zip/content",
+      "file_link": "https://zenodo.org/api/records/16875688/files/wytham.zip",
+      "record": 16875688,
+      "partial": {
+        "bytes": 0,
+        "md5": null,
+        "sha256": null
+      },
+      "part_path": "D:\\TreeQCData\\downloads\\wytham.zip.part",
+      "range": "NOT_TESTED_DUE_TO_ORDER",
+      "resume": "NO_PARTIAL_START_AFTER_LITCHFIELD_VERIFIED",
+      "integrity": "NOT_COMPLETE_NOT_VERIFIED"
+    }
+  ],
+  "allow_extract": false,
+  "gate_a": "PASS_UNCHANGED",
+  "gate_b": "PASS_UNCHANGED",
+  "bits_job": "4e97ba62-2baa-4c41-a988-5704a35beee1",
+  "bits": "504_TRANSIENT_ERROR_0_BYTES_AT_35.1565_SECONDS_JOB_REMOVED",
+  "stop": true
+}

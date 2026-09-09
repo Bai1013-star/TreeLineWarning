@@ -1,7 +1,7 @@
 @echo off
 if "%~1"=="" (
-  "D:\TreeQCTraining\venv\Scripts\python.exe" "%~dp0research\tree_qc\public_data.py" download --approval "%~dp0research\tree_qc\reports\PUBLIC_DATA_DOWNLOAD_APPROVAL.json"
+  "D:\TreeQCTraining\venv\Scripts\python.exe" "%~dp0research\tree_qc\zenodo_archive_recovery.py" ranges --chunk-mib 4
   exit /b
 )
-"D:\TreeQCTraining\venv\Scripts\python.exe" "%~dp0research\tree_qc\public_data.py" %*
+"D:\TreeQCTraining\venv\Scripts\python.exe" "%~dp0research\tree_qc\zenodo_archive_recovery.py" %*
 exit /b %errorlevel%
