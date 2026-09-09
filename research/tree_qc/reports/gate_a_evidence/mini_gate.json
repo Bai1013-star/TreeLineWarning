@@ -1,0 +1,19 @@
+{
+  "status": "ENVIRONMENT_NOT_READY",
+  "gate_a": "NOT_RUN",
+  "mini_overfit": "NOT_RUN",
+  "public_download_allowed": false,
+  "python_executable": "D:\\TreeQCTraining\\venv\\Scripts\\python.exe",
+  "python_version": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+  "d_free_bytes": 142102200320,
+  "time": 1788914747.792068,
+  "source_sha256": {
+    "gate_preflight.py": "e9c44a98d775c1658a7105a2a24fea62291845f89b9a8388165877e0645c6a98",
+    "mini_gate.py": "a2e1f3c287323f357b5f0659ad2e4593a80a4d4215ca30d3dfb42c9f8367349d",
+    "models.py": "595c1e75b9201f616e94d9286da2d349677d3b57df48576ecb43e70d9bfc4201",
+    "test_models.py": "d178c338dbbc763a68166597f3296404c6b6c603cf92b33a9d4509faca2d7421",
+    "windows_resources.py": "1df84861c02b0de38822a6011c1fce8287bbf736634e1abc851571358e5d47eb"
+  },
+  "frozen_config_sha256": "b119fd3f242f94377e7c81c6ebaeff4411c127b1be7c381be698be92e1bc3251",
+  "error": "Traceback (most recent call last):\n  File \"E:\\TreeLineWarning-tree-qc-pointnet2-final-pilot-v1\\research\\tree_qc\\gate_preflight.py\", line 24, in main\n    import torch\nModuleNotFoundError: No module named 'torch'\n"
+}

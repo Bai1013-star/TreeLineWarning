@@ -1,0 +1,21 @@
+{
+  "diagnostic_only": true,
+  "samples": 32,
+  "points": 4096,
+  "input": "XYZ metres plus membership",
+  "seed": 101,
+  "dataset_seed_base": 7400,
+  "max_epochs": 20,
+  "optimizer": "Adam",
+  "learning_rate": 0.003,
+  "amp": "float16",
+  "workers": 2,
+  "probe_batches": [16, 8, 4, 2, 1],
+  "probe_steps": 2,
+  "probe_max_attempts": 8,
+  "safe_batch_policy": "half largest stable, minimum 1",
+  "overfit_accuracy_min": 0.96875,
+  "overfit_loss_ratio_max": 0.5,
+  "early_stop": "epoch >= 3 and accuracy >= 0.96875 and loss < initial * 0.25",
+  "pointnet_note": "shared MLP and global max baseline, no T-Net; not full paper reproduction"
+}

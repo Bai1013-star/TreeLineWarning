@@ -25,3 +25,12 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .venv/
+
+# Tree QC research artifacts; source/config/reports remain tracked
+research/tree_qc/**/__pycache__/
+research/tree_qc/**/*.pt
+research/tree_qc/**/*.pth
+research/tree_qc/**/*.onnx
+research/tree_qc/.venv/
+research/tree_qc/data/
+research/tree_qc/outputs/
