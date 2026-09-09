@@ -2,7 +2,7 @@
 
 Status: **worker protocol, pending GPT-6 Supervisor acceptance. Training remains locked.**
 `GATE_D_GENERATOR_VERSION = GATE_D_SYNTHETIC_GENERATOR_V1`
-`GATE_D_GENERATOR_DIGEST = 345953a6a1d541b1f632ecba93090026c4a4b9dce273387f0b06f42e138854b6`
+`GATE_D_GENERATOR_DIGEST = b36cd620d78236d998e8e657eb5f5a42e2451146ef2ee3ac87751269c06bb37b`
 
 The digest is the SHA-256 over the generator implementation files listed in
 `gate_d_diagnostic.GENERATOR_FILES`. The Supervisor's acceptance marker must carry this
@@ -162,7 +162,7 @@ Any critical fingerprint sets `GENERATOR_FINGERPRINT = CRITICAL`, adds
 
 ```json
 {"gate_d": "ACCEPTED", "training_allowed": true,
- "generator_digest": "345953a6...", "accepted_by": "<supervisor>",
+ "generator_digest": "b36cd620d7...", "accepted_by": "<supervisor>",
  "accepted_at": "<iso-8601>"}
 ```
 

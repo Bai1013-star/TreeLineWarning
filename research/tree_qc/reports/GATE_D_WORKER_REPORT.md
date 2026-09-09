@@ -23,7 +23,7 @@ V0.1 or product file was touched, and nothing was pushed.
 | — tests | `test_gate_d.py` (65 tests) |
 
 `GATE_D_GENERATOR_VERSION = GATE_D_SYNTHETIC_GENERATOR_V1`
-`GATE_D_GENERATOR_DIGEST = 345953a6a1d541b1f632ecba93090026c4a4b9dce273387f0b06f42e138854b6`
+`GATE_D_GENERATOR_DIGEST = b36cd620d78236d998e8e657eb5f5a42e2451146ef2ee3ac87751269c06bb37b`
 
 ## 2. Frozen inputs re-derived, not trusted
 
@@ -145,7 +145,7 @@ count), 7 classes × 3 severities = **210 examples**, 21 representative PNGs.
 | `QUARANTINE_USAGE` | 0 |
 | `HELDOUT_USAGE` | 0 |
 | `CROSS_PARTITION_LEAKAGE` | 0 |
-| `DETERMINISTIC` | yes (same spec → identical bytes) |
+| `DETERMINISTIC` | yes (same spec → identical bytes; two full regenerations produced identical `deterministic_digest` and `manifest_digest`) |
 | runtime | 7.4 s |
 
 Artifacts: `GATE_D_SYNTHETIC_DIAGNOSTIC.json`, `GATE_D_DIAGNOSTIC_MANIFEST.jsonl`
@@ -182,10 +182,12 @@ diagnostic reports `held_out_examples = 0`.
 
 | Check | Result |
 |---|---|
-| `python -m pytest test_gate_d.py` | **65 passed** |
+| `python -m pytest test_gate_d.py` | **66 passed** |
 | `python -m pytest test_canonical_identity.py` | **30 passed** (Gate C2 regression) |
+| both suites in the torch training interpreter | 96 passed |
 | `python -m ruff check` on new files | all checks passed |
 | `python -m compileall` on new files | clean |
+| diagnostic regenerated twice | `deterministic_digest` and `manifest_digest` identical |
 | `git status` | clean after commit |
 
 PointNet and PointNet++ were **not** trained, and `engine.train()` was never called.

@@ -7,6 +7,7 @@ absent.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -569,6 +570,25 @@ class GeneratorDigest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(first), 64)
         int(first, 16)
+
+    def test_artifact_reports_a_deterministic_digest(self):
+        payload = json.loads(
+            (provenance_module.REPORTS / 'GATE_D_SYNTHETIC_DIAGNOSTIC.json')
+            .read_text(encoding='utf-8'))
+        for field in ('deterministic_digest', 'manifest_digest', 'generator_digest'):
+            self.assertIn(field, payload)
+            self.assertEqual(len(payload[field]), 64)
+        # Recomputing the summary without the volatile and self-referential fields must
+        # reproduce the digest.
+        volatile = {'seconds', 'deterministic_digest', 'manifest_digest'}
+        stripped = {k: v for k, v in payload.items() if k not in volatile}
+        recomputed = hashlib.sha256(json.dumps(
+            stripped, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+        self.assertEqual(recomputed, payload['deterministic_digest'])
+        manifest = (provenance_module.REPORTS / 'GATE_D_DIAGNOSTIC_MANIFEST.jsonl') \
+            .read_text(encoding='utf-8')
+        self.assertEqual(hashlib.sha256(manifest.encode('utf-8')).hexdigest(),
+                         payload['manifest_digest'])
 
 
 class GeometryAuthorization(unittest.TestCase):

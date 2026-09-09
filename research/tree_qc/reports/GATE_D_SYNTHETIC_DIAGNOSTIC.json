@@ -1,7 +1,7 @@
 {
   "diagnostic_version": "GATE_D_SYNTHETIC_DIAGNOSTIC_V1",
   "generator_version": "GATE_D_SYNTHETIC_GENERATOR_V1",
-  "generator_digest": "345953a6a1d541b1f632ecba93090026c4a4b9dce273387f0b06f42e138854b6",
+  "generator_digest": "b36cd620d78236d998e8e657eb5f5a42e2451146ef2ee3ac87751269c06bb37b",
   "sampler_version": "GATE_D_STRUCTURED_SAMPLER_V1",
   "protocol": "GATE_C_CANONICAL_IDENTITY_PROTOCOL_V2 + source isolation remediation",
   "identity_manifest_digest": "eb515773b5235f2cdb0206231493195f73f269c761d9da2d2186ba68ab3ed5aa",
@@ -260,7 +260,6 @@
     "GENERATOR_FINGERPRINT": "NONE_DETECTED",
     "CRITICAL_FINGERPRINTS": []
   },
-  "seconds": 7.419,
   "visualisations": [
     "gate_d_visuals\\GOOD_MEDIUM_litchfield_tile_0_-100_Boom27.png",
     "gate_d_visuals\\MERGED_MULTI_TREE_MEDIUM_litchfield_tile_0_-100_Boom27.png",
@@ -283,5 +282,8 @@
     "gate_d_visuals\\CROWN_INCOMPLETE_MEDIUM_litchfield_tile_40_-100_Boom11.png",
     "gate_d_visuals\\STEM_MISSING_MEDIUM_litchfield_tile_40_-100_Boom11.png",
     "gate_d_visuals\\NOISE_MEDIUM_litchfield_tile_40_-100_Boom11.png"
-  ]
+  ],
+  "deterministic_digest": "ca4e9d729fee2ea459e8fd7112aa2264d3f27424fee506e711e280b1378445a4",
+  "manifest_digest": "035bb077c1cb2160b6b3ef0fe89750f9557bfceb2b63efa9e9aaf02493e5dbd3",
+  "seconds": 12.001
 }
