@@ -1,0 +1,20 @@
+# Gate D/E training environment requirements
+#
+# The independent Gate A environment D:\TreeQCTraining\venv already pins the official
+# CUDA wheel:
+#
+#   torch @ file:///D:/TreeQCTraining/gate_a_recovery_20260909/
+#           torch-2.14.0%2Bcu130-cp311-cp311-win_amd64.whl
+#           #sha256=00fb5440e7560b3b21e5e24567c6096fec4ef65b50a7ef1a105ebed5755eef7e
+#
+# The Gate D/E layer additionally needs NumPy, because the generator, sampler and
+# geometry cache are numpy-only by design and the dataset must stay model-agnostic.
+# pytest is needed to run test_gate_d.py and the Gate C2 regression in that interpreter.
+#
+# Install into the existing environment (do not rebuild it):
+#   D:\TreeQCTraining\venv\Scripts\python.exe -m pip install -r gate_d_requirements.txt
+#
+# Installed and verified during this round:
+#   numpy 2.4.6, pytest 9.1.1, on Python 3.11.9 with torch 2.14.0+cu130 (CUDA available).
+numpy>=2.0,<3
+pytest>=8
