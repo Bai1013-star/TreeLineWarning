@@ -1,0 +1,12 @@
+# Initial supervisor audit
+
+Frozen baseline worktree is clean at 5f6f4d1fd5d79a3a922bf5924ae1b4e3d2b8f4d9. Original E:\TreeLineWarning-fast is dirty at 4d330ede0c9e2bc886f48497b15b3fcbeab3cb55 and is not a development target. New research worktree was created from exact baseline and verified clean before new research files.
+
+D free before =132.41 GiB; E free before=50.28 GiB; physical RAM=15.73 GiB. GPU NVIDIA GeForce RTX5070 Laptop, 8151 MiB reported, driver591.86, driver CUDA max13.1. Python3.11 and3.12 available. Supervisor and read-only agent independently checked live official GitHub latest release (v2.14.0) and official cu130 wheel index; cp311 Windows wheel hash 00fb5440e7560b3b21e5e24567c6096fec4ef65b50a7ef1a105ebed5755eef7e. Selected isolated Python3.11 + torch2.14.0+cu130; actual runtime compatibility remains Gate A, not assumed from listing.
+Sources: https://api.github.com/repos/pytorch/pytorch/releases/latest and https://download.pytorch.org/whl/cu130/torch/ . Browser-rendered get-started selector contains stale 2.7.0 text; direct official artifact index and release API were used rather than that stale selector.
+
+History found in existing Git branches codex/tree-ai-qc-v1 and codex/tree-geometry-qc-v1. V2 report verdict VLM_ROUTE_NOT_SUFFICIENT; aggregate benchmark-gpu.json confirms all explicit bad runs false-passed for both contact and multi rendering. Geometry validation documents rejected usefulness gate and existing unrelated export-test failure. Historical claims of EXPLICIT_GOOD are not accepted as reliable local GOOD in this study; current supplied protocol controls.
+
+Local challenge directory located: E:\TreeLineWarning-ai-qc-benchmark\acceptance-bad-8. Only directory names and aggregate historical text inspected, not local geometries, images, individual example metrics or per-tree defect evidence. Historical report contains aggregate defect coverage; no generator choices may be derived from this report. Eight case geometries stay sealed until public experiment freeze. Metadata sources exist on prior branches, loader inspection deferred until Gate H.
+
+No public data downloaded. No product files modified. No cleanup. All downstream scientific gates remain closed.
