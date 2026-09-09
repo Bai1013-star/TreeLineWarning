@@ -33,3 +33,11 @@ Creative Commons 官方许可摘要的授权范围包括原文：
 ## 核验限制与下一步证据
 
 Zenodo 搜索索引能读官方声明；网页直接获取出现 HTTP 429，本机 `/api/records/16875688`、`/api/records/16875688/files`、`/records/16875688/export/json` 多次超时。因此 API 中精确 license 对象、version 和 latest 链尚未保存。下载 Gate 开放前，应取得完整官方元数据快照，再核对其与上述声明一致。不得将本报告当作训练或商业发布批准。
+
+## 官方 JSON 恢复补审（2026-09-09，更新此前网络限制）
+
+已取得并独立解析 [官方 API](https://zenodo.org/api/records/16875688) 快照 zenodo_16875688_verified_metadata.json：record id = 16875688，access_right = open，metadata.license.id = cc-by-4.0；description 的 CC BY 4.0 和论文引用声明与原审计一致。因此此前「API 精确 license 对象尚未保存」限制已解除。
+
+进一步跟随该 JSON 的 links.latest（https://zenodo.org/api/records/16875688/versions/latest），HTTP 200 最终返回固定记录 16875688，13,895 bytes；快照 zenodo_16875688_latest_verified_metadata.json。官方 version relation 同时为 index 2、is_last true，确认该核验时刻的 latest 链；后续仍固定使用 DOI 10.5281/zenodo.16875688。
+
+数据许可元数据与发布者声明一致；现已生成仅含 Litchfield/Wytham 的 pinned_pilot_manifest.json，保留 exact bytes、发布者 MD5 和官方 content URL。声明此处是补充证据，不代替总工程师对 Gate B 的批准；数据文件未下载，本地数据校验、解压容量和科学数据检查仍未完成。原报告对评价代码许可及未采用权重的边界不变。

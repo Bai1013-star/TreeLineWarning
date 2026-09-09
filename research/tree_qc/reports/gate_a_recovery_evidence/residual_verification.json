@@ -1,0 +1,22 @@
+{
+  "time": 1788928821.0808837,
+  "prior_record_path": "D:\\TreeQCTraining\\tmp\\tmp13s1vldg",
+  "prior_record_path_exists": false,
+  "actual_partial_path": "D:\\TreeQCTraining\\tmp\\pip-unpack-97lmycbe\\torch-2.14.0+cu130-cp311-cp311-win_amd64.whl",
+  "actual_size": 43735040,
+  "source_log": "D:\\TreeQCTraining\\logs\\setup_torch.log",
+  "zip_signature_hex": "504b030414000000",
+  "partial_sha256": "c8f0e139d9d40f9ef8aa541d213847a1e7fe0e4cffeeacea043d8709e855d463",
+  "official_first_1048576_match": true,
+  "official_last_65536_match": true,
+  "resume_authorized": true,
+  "install_partial_allowed": false,
+  "speed_probes_Bps": {
+    "download-r2.pytorch.org": 267338,
+    "download.pytorch.org": 367490
+  },
+  "current_stable": "2.14.0",
+  "cuda": "13.0",
+  "wheel": "torch-2.14.0+cu130-cp311-cp311-win_amd64.whl",
+  "expected_sha256": "00fb5440e7560b3b21e5e24567c6096fec4ef65b50a7ef1a105ebed5755eef7e"
+}

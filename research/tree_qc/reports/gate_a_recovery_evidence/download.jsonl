@@ -1,0 +1,169 @@
+{"chunk": 94066688, "error": "incomplete response", "retry": 1, "bytes": 7837190, "time": 1788928762.0299304}
+{"chunk": 43735040, "bytes": 16777216, "seconds": 17.113001346588135, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928764.2798133}
+{"chunk": 60512256, "bytes": 16777216, "seconds": 20.003441333770752, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928767.170756}
+{"chunk": 94066688, "bytes": 16777216, "seconds": 22.70768427848816, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928769.8770092}
+{"chunk": 77289472, "error": "incomplete response", "retry": 1, "bytes": 13098304, "time": 1788928775.8174603}
+{"chunk": 77289472, "bytes": 16777216, "seconds": 32.35893726348877, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928779.5272627}
+{"chunk": 144398336, "error": "incomplete response", "retry": 1, "bytes": 14568471, "time": 1788928786.2864912}
+{"chunk": 144398336, "bytes": 16777216, "seconds": 18.941901922225952, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928788.818911}
+{"chunk": 110843904, "error": "incomplete response", "retry": 1, "bytes": 15175903, "time": 1788928788.9336345}
+{"chunk": 110843904, "bytes": 16777216, "seconds": 28.001789569854736, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928792.2821689}
+{"chunk": 177952768, "bytes": 16777216, "seconds": 5.126554727554321, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928793.9454658}
+{"chunk": 127621120, "bytes": 16777216, "seconds": 28.622968673706055, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928795.7937248}
+{"chunk": 161175552, "error": "incomplete response", "retry": 1, "bytes": 12937216, "time": 1788928801.3238337}
+{"chunk": 161175552, "bytes": 16777216, "seconds": 27.302778720855713, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928806.8311946}
+{"chunk": 194729984, "bytes": 16777216, "seconds": 18.401848077774048, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928810.684017}
+{"chunk": 211507200, "bytes": 16777216, "seconds": 19.35610866546631, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928813.3021426}
+{"chunk": 228284416, "bytes": 16777216, "seconds": 22.880631685256958, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928818.6749504}
+{"chunk": 261838848, "bytes": 16777216, "seconds": 9.043185949325562, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928819.727203}
+{"chunk": 245061632, "bytes": 16777216, "seconds": 18.570173740386963, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928825.4013684}
+{"chunk": 278616064, "bytes": 16777216, "seconds": 14.351905822753906, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928827.6540484}
+{"chunk": 328947712, "error": "incomplete response", "retry": 1, "bytes": 16045978, "time": 1788928839.5774033}
+{"chunk": 328947712, "bytes": 16777216, "seconds": 16.8554584980011, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928842.2568269}
+{"chunk": 312170496, "error": "incomplete response", "retry": 1, "bytes": 13411054, "time": 1788928843.8157349}
+{"chunk": 295393280, "bytes": 16777216, "seconds": 32.961665868759155, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928851.6366162}
+{"chunk": 362502144, "bytes": 16777216, "seconds": 11.127095460891724, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928853.3845277}
+{"chunk": 312170496, "bytes": 16777216, "seconds": 33.74904537200928, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928853.4762483}
+{"chunk": 345724928, "error": "incomplete response", "retry": 1, "bytes": 11766974, "time": 1788928855.8861036}
+{"chunk": 345724928, "bytes": 16777216, "seconds": 33.07298445701599, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928860.727033}
+{"chunk": 379279360, "error": "incomplete response", "retry": 1, "bytes": 9148635, "time": 1788928866.915098}
+{"chunk": 412833792, "bytes": 16777216, "seconds": 14.882245540618896, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928868.3584938}
+{"chunk": 396056576, "bytes": 16777216, "seconds": 16.835241556167603, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928870.2197692}
+{"chunk": 379279360, "bytes": 16777216, "seconds": 22.16222620010376, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928873.7988424}
+{"chunk": 463165440, "bytes": 16777216, "seconds": 11.24898648262024, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928881.4687557}
+{"chunk": 479942656, "bytes": 16777216, "seconds": 7.827197313308716, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928881.6260397}
+{"chunk": 446388224, "bytes": 16777216, "seconds": 14.335009336471558, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928882.694012}
+{"chunk": 429611008, "error": "incomplete response", "retry": 1, "bytes": 12367380, "time": 1788928894.763405}
+{"chunk": 513497088, "error": "incomplete response", "retry": 1, "bytes": 12815388, "time": 1788928894.921098}
+{"chunk": 429611008, "bytes": 16777216, "seconds": 39.97604465484619, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928900.7030776}
+{"chunk": 496719872, "bytes": 16777216, "seconds": 30.61426591873169, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928912.0830216}
+{"chunk": 513497088, "bytes": 16777216, "seconds": 34.4553017616272, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928916.0818884}
+{"chunk": 547051520, "error": "incomplete response", "retry": 1, "bytes": 14349959, "time": 1788928916.9731236}
+{"chunk": 547051520, "bytes": 16777216, "seconds": 18.83760929107666, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928919.5406868}
+{"chunk": 530274304, "bytes": 16777216, "seconds": 37.54340100288391, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928920.237413}
+{"chunk": 580605952, "bytes": 16777216, "seconds": 20.842957496643066, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928936.924846}
+{"chunk": 563828736, "error": "incomplete response", "retry": 1, "bytes": 10253503, "time": 1788928945.8614888}
+{"chunk": 563828736, "bytes": 16777216, "seconds": 38.154563665390015, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928950.2375853}
+{"chunk": 597383168, "error": "incomplete response", "retry": 1, "bytes": 16558767, "time": 1788928954.4987438}
+{"chunk": 630937600, "bytes": 16777216, "seconds": 22.579739093780518, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928959.5050912}
+{"chunk": 597383168, "error": "<urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1006)>", "retry": 2, "bytes": 16558767, "time": 1788928959.5456192}
+{"chunk": 597383168, "bytes": 16777216, "seconds": 43.29837250709534, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928962.8390594}
+{"chunk": 664492032, "error": "<urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1006)>", "retry": 1, "bytes": 0, "time": 1788928964.5854335}
+{"chunk": 614160384, "error": "incomplete response", "retry": 1, "bytes": 14290271, "time": 1788928967.667645}
+{"chunk": 647714816, "error": "incomplete response", "retry": 1, "bytes": 15746523, "time": 1788928975.5596356}
+{"chunk": 614160384, "bytes": 16777216, "seconds": 58.01346826553345, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928978.2508812}
+{"chunk": 647714816, "bytes": 16777216, "seconds": 29.09229040145874, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928979.3298757}
+{"chunk": 681269248, "bytes": 16777216, "seconds": 24.136678218841553, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928986.9757376}
+{"chunk": 714823680, "bytes": 16777216, "seconds": 9.9954833984375, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788928989.3259242}
+{"chunk": 731600896, "bytes": 16777216, "seconds": 14.519745826721191, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929001.4954834}
+{"chunk": 748378112, "error": "incomplete response", "retry": 1, "bytes": 12429887, "time": 1788929007.588488}
+{"chunk": 765155328, "bytes": 16777216, "seconds": 13.954867362976074, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929015.4503508}
+{"chunk": 748378112, "bytes": 16777216, "seconds": 27.27945041656494, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929016.605892}
+{"chunk": 664492032, "bytes": 16777216, "seconds": 61.29992699623108, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929020.8050182}
+{"chunk": 698046464, "error": "incomplete response", "retry": 1, "bytes": 15277899, "time": 1788929027.7802851}
+{"chunk": 781932544, "bytes": 16777216, "seconds": 16.05826425552368, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929031.508615}
+{"chunk": 698046464, "bytes": 16777216, "seconds": 54.50661611557007, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929032.7574973}
+{"chunk": 798709760, "error": "incomplete response", "retry": 1, "bytes": 8508895, "time": 1788929033.101748}
+{"chunk": 798709760, "bytes": 16777216, "seconds": 24.78946352005005, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929041.3953555}
+{"chunk": 832264192, "bytes": 16777216, "seconds": 11.101725339889526, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929042.6103404}
+{"chunk": 882595840, "bytes": 16777216, "seconds": 6.151151180267334, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929048.7614915}
+{"chunk": 865818624, "error": "incomplete response", "retry": 1, "bytes": 14381723, "time": 1788929056.535058}
+{"chunk": 849041408, "bytes": 16777216, "seconds": 29.09344172477722, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929061.8515005}
+{"chunk": 865818624, "bytes": 16777216, "seconds": 22.05395483970642, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929063.4493103}
+{"chunk": 916150272, "bytes": 16777216, "seconds": 8.645174741744995, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929070.4966753}
+{"chunk": 815486976, "error": "incomplete response", "retry": 1, "bytes": 9571129, "time": 1788929071.9192445}
+{"chunk": 932927488, "bytes": 16777216, "seconds": 8.667101383209229, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929072.1164117}
+{"chunk": 899373056, "error": "incomplete response", "retry": 1, "bytes": 10782983, "time": 1788929074.1023486}
+{"chunk": 815486976, "bytes": 16777216, "seconds": 61.64592242240906, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929082.4514942}
+{"chunk": 899373056, "bytes": 16777216, "seconds": 34.60563397407532, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929083.367632}
+{"chunk": 966481920, "bytes": 16777216, "seconds": 12.968283653259277, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929085.0846953}
+{"chunk": 983259136, "bytes": 16777216, "seconds": 6.818142890930176, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929089.2702847}
+{"chunk": 1000036352, "bytes": 16777216, "seconds": 9.870092868804932, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929093.2377248}
+{"chunk": 949704704, "error": "incomplete response", "retry": 1, "bytes": 14701684, "time": 1788929099.6556487}
+{"chunk": 1033590784, "bytes": 16777216, "seconds": 13.2046480178833, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929102.475524}
+{"chunk": 949704704, "bytes": 16777216, "seconds": 32.00586724281311, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929102.5025425}
+{"chunk": 1050368000, "bytes": 16777216, "seconds": 13.142807722091675, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929106.3810523}
+{"chunk": 1016813568, "error": "incomplete response", "retry": 1, "bytes": 11882272, "time": 1788929118.7719963}
+{"chunk": 1067145216, "error": "incomplete response", "retry": 1, "bytes": 15038431, "time": 1788929119.49613}
+{"chunk": 1067145216, "bytes": 16777216, "seconds": 21.109450101852417, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929123.584974}
+{"chunk": 1100699648, "error": "incomplete response", "retry": 1, "bytes": 13919151, "time": 1788929127.2763302}
+{"chunk": 1016813568, "bytes": 16777216, "seconds": 42.29650020599365, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929127.3811955}
+{"chunk": 1100699648, "bytes": 16777216, "seconds": 25.946036100387573, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929132.3270884}
+{"chunk": 1083922432, "error": "incomplete response", "retry": 1, "bytes": 15871643, "time": 1788929137.3759618}
+{"chunk": 1083922432, "bytes": 16777216, "seconds": 37.65764307975769, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929140.1601856}
+{"chunk": 1151031296, "bytes": 16777216, "seconds": 9.790416955947876, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929142.1175053}
+{"chunk": 1117476864, "bytes": 16777216, "seconds": 31.884074926376343, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929155.4695687}
+{"chunk": 1167808512, "error": "incomplete response", "retry": 1, "bytes": 10543595, "time": 1788929157.411513}
+{"chunk": 1134254080, "error": "incomplete response", "retry": 1, "bytes": 7477259, "time": 1788929162.8338478}
+{"chunk": 1167808512, "bytes": 16777216, "seconds": 27.233005046844482, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929167.3931906}
+{"chunk": 1184585728, "error": "incomplete response", "retry": 1, "bytes": 7615344, "time": 1788929174.2129948}
+{"chunk": 1134254080, "bytes": 16777216, "seconds": 50.118645668029785, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929177.4998412}
+{"chunk": 1184585728, "bytes": 16777216, "seconds": 41.821857213974, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929183.9393625}
+{"chunk": 1218140160, "error": "incomplete response", "retry": 1, "bytes": 8534860, "time": 1788929186.744106}
+{"chunk": 1234917376, "bytes": 16777216, "seconds": 18.707540273666382, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929196.2081103}
+{"chunk": 1201362944, "error": "incomplete response", "retry": 1, "bytes": 15030844, "time": 1788929200.9240274}
+{"chunk": 1251694592, "bytes": 16777216, "seconds": 18.29348611831665, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929202.2328486}
+{"chunk": 1218140160, "bytes": 16777216, "seconds": 35.50592231750488, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929202.899113}
+{"chunk": 1201362944, "bytes": 16777216, "seconds": 53.31559705734253, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929208.7851658}
+{"chunk": 1268471808, "bytes": 16777216, "seconds": 13.735775232315063, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929209.9444792}
+{"chunk": 1285249024, "bytes": 16777216, "seconds": 16.540871620178223, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929218.7737203}
+{"chunk": 1318803456, "error": "incomplete response", "retry": 1, "bytes": 16757604, "time": 1788929226.5941074}
+{"chunk": 1335580672, "error": "incomplete response", "retry": 1, "bytes": 14608239, "time": 1788929228.8622017}
+{"chunk": 1318803456, "bytes": 16777216, "seconds": 21.006025791168213, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929229.7917025}
+{"chunk": 1335580672, "bytes": 16777216, "seconds": 24.846769332885742, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929234.7912486}
+{"chunk": 1302026240, "error": "incomplete response", "retry": 1, "bytes": 12982135, "time": 1788929235.787266}
+{"chunk": 1369135104, "bytes": 16777216, "seconds": 7.838359355926514, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929237.6300619}
+{"chunk": 1402689536, "bytes": 16777216, "seconds": 7.364542722702026, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929244.9946046}
+{"chunk": 1302026240, "bytes": 16777216, "seconds": 48.3499481678009, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929251.249061}
+{"chunk": 1385912320, "bytes": 16777216, "seconds": 16.7225182056427, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929251.5137668}
+{"chunk": 1352357888, "error": "incomplete response", "retry": 1, "bytes": 8136020, "time": 1788929253.4440854}
+{"chunk": 1419466752, "bytes": 16777216, "seconds": 11.530444383621216, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929256.525049}
+{"chunk": 1352357888, "bytes": 16777216, "seconds": 41.9103786945343, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929260.684099}
+{"chunk": 1469798400, "error": "incomplete response", "retry": 1, "bytes": 16297292, "time": 1788929269.3401008}
+{"chunk": 1469798400, "bytes": 16777216, "seconds": 15.637654542922974, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929272.1627035}
+{"chunk": 1486575616, "error": "incomplete response", "retry": 1, "bytes": 15239412, "time": 1788929273.8957243}
+{"chunk": 1486575616, "bytes": 16777216, "seconds": 16.221968173980713, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929276.9060671}
+{"chunk": 1436243968, "bytes": 16777216, "seconds": 31.50274896621704, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929282.75181}
+{"chunk": 1453021184, "error": "incomplete response", "retry": 1, "bytes": 8981507, "time": 1788929283.9845657}
+{"chunk": 1536907264, "bytes": 16777216, "seconds": 12.479037761688232, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929295.2308478}
+{"chunk": 1503352832, "error": "incomplete response", "retry": 1, "bytes": 13397569, "time": 1788929298.4477067}
+{"chunk": 1520130048, "error": "incomplete response", "retry": 1, "bytes": 16278372, "time": 1788929302.8583117}
+{"chunk": 1503352832, "bytes": 16777216, "seconds": 34.41608166694641, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929306.5787852}
+{"chunk": 1553684480, "bytes": 16777216, "seconds": 12.249881267547607, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929307.480729}
+{"chunk": 1520130048, "bytes": 16777216, "seconds": 30.60828161239624, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929307.5143487}
+{"chunk": 1453021184, "bytes": 16777216, "seconds": 56.18066906929016, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929307.6944358}
+{"chunk": 1587238912, "bytes": 16777216, "seconds": 10.163355588912964, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929317.6440847}
+{"chunk": 1570461696, "bytes": 16777216, "seconds": 18.115258932113647, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929324.694044}
+{"chunk": 1620793344, "bytes": 16777216, "seconds": 22.11377501487732, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929329.8082108}
+{"chunk": 1604016128, "bytes": 16777216, "seconds": 23.07184410095215, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929330.5861928}
+{"chunk": 1637570560, "bytes": 16777216, "seconds": 19.160369873046875, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929336.8044546}
+{"chunk": 1671124992, "bytes": 16777216, "seconds": 9.577335119247437, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929339.385546}
+{"chunk": 1704679424, "bytes": 16777216, "seconds": 9.160617113113403, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929345.9650717}
+{"chunk": 1687902208, "error": "incomplete response", "retry": 1, "bytes": 11297927, "time": 1788929350.5755875}
+{"chunk": 1687902208, "bytes": 16777216, "seconds": 25.241708517074585, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929355.8279014}
+{"chunk": 1738233856, "bytes": 16777216, "seconds": 10.435467958450317, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929356.4005396}
+{"chunk": 1654347776, "error": "incomplete response", "retry": 1, "bytes": 15634354, "time": 1788929357.3358994}
+{"chunk": 1721456640, "bytes": 16777216, "seconds": 18.67635464668274, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929358.0624504}
+{"chunk": 1654347776, "bytes": 16777216, "seconds": 35.77980327606201, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929360.4738474}
+{"chunk": 1805342720, "bytes": 16777216, "seconds": 9.8228178024292, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929370.2966652}
+{"chunk": 1788565504, "bytes": 16777216, "seconds": 17.07652759552002, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929375.1395397}
+{"chunk": 1755011072, "error": "incomplete response", "retry": 1, "bytes": 9463107, "time": 1788929379.0097406}
+{"chunk": 1771788288, "error": "incomplete response", "retry": 1, "bytes": 16675407, "time": 1788929379.5888267}
+{"chunk": 1771788288, "bytes": 16777216, "seconds": 25.011655807495117, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929381.4121954}
+{"chunk": 1822119936, "error": "incomplete response", "retry": 1, "bytes": 14681144, "time": 1788929389.4669795}
+{"chunk": 1755011072, "bytes": 16777216, "seconds": 34.5742130279541, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929390.4021144}
+{"chunk": 1838897152, "error": "incomplete response", "retry": 1, "bytes": 11863508, "time": 1788929392.661263}
+{"chunk": 1822119936, "bytes": 16777216, "seconds": 23.422523498535156, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929393.7191887}
+{"chunk": 1838897152, "bytes": 16777216, "seconds": 23.550095319747925, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929398.689635}
+{"chunk": 1872451584, "bytes": 16777216, "seconds": 14.589714527130127, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929404.991829}
+{"chunk": 1889228800, "bytes": 16777216, "seconds": 15.52818751335144, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929409.2473762}
+{"chunk": 1906006016, "bytes": 16777216, "seconds": 12.062899589538574, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929410.7525346}
+{"chunk": 1855674368, "bytes": 16777216, "seconds": 30.388506412506104, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929411.8007019}
+{"chunk": 1922783232, "bytes": 16777216, "seconds": 14.83162546157837, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929419.8234544}
+{"chunk": 1939560448, "bytes": 16777216, "seconds": 10.903964042663574, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929420.1518528}
+{"chunk": 1989892096, "bytes": 695726, "seconds": 3.2327871322631836, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929423.0562415}
+{"chunk": 1973114880, "error": "incomplete response", "retry": 1, "bytes": 11703691, "time": 1788929426.4634466}
+{"chunk": 1956337664, "bytes": 16777216, "seconds": 17.968936681747437, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929428.7214713}
+{"chunk": 1973114880, "bytes": 16777216, "seconds": 18.28530240058899, "etag": "\"70ad4f0aedcda136411002e2f71020fe\"", "time": 1788929430.0860043}
+{"final_size": 1990587822, "sha256": "00fb5440e7560b3b21e5e24567c6096fec4ef65b50a7ef1a105ebed5755eef7e", "download_seconds": 686.3697845935822, "time": 1788929433.5233562}
+{"wheel_metadata": "Wheel-Version: 1.0\nGenerator: scikit-build-core 1.0.0\nRoot-Is-Purelib: false\nTag: cp311-cp311-win_amd64\n\n", "time": 1788929443.2702286}

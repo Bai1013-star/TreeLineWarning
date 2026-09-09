@@ -1,0 +1,15 @@
+D:\TreeQCTraining\venv\Lib\site-packages\torch\_subclasses\functional_tensor.py:368: UserWarning: Failed to initialize NumPy: No module named 'numpy' (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\torch\csrc\utils\tensor_numpy.cpp:84.)
+  cpu = _conversion_method_template(device=torch.device("cpu"))
+..F
+======================================================================
+FAIL: test_sizes_gradients_and_model_batch_independence (__main__.PointOpsTests.test_sizes_gradients_and_model_batch_independence)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "E:\TreeLineWarning-tree-qc-pointnet2-final-pilot-v1\research\tree_qc\test_models.py", line 31, in test_sizes_gradients_and_model_batch_independence
+    self.assertTrue(torch.allclose(logits[:1],model(x[:1]),atol=1e-5,rtol=1e-4))
+AssertionError: False is not true
+
+----------------------------------------------------------------------
+Ran 3 tests in 1.225s
+
+FAILED (failures=1)

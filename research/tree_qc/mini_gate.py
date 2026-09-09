@@ -13,6 +13,8 @@ import time
 import traceback
 
 import torch
+from fp32_policy import configure_fp32
+FP32_POLICY = configure_fp32()
 from torch.utils.data import Dataset, DataLoader
 from models import MODELS, farthest_point_sample, radius_group
 
@@ -190,7 +192,7 @@ def main():
         assert shutil.disk_usage('D:\\').free > 35*1024**3, 'STOP_DISK_GUARD'
         torch.set_num_threads(4)
         assert torch.cuda.is_available(), 'CUDA unavailable'
-        result['environment'] = {'python_executable': sys.executable, 'python_version': sys.version, 'torch': torch.__version__, 'cuda': torch.version.cuda, 'device': torch.cuda.get_device_name(), 'capability': torch.cuda.get_device_capability(), 'arch_list': torch.cuda.get_arch_list(), 'driver': subprocess.check_output(['nvidia-smi', '--query-gpu=driver_version,memory.total', '--format=csv,noheader'], text=True).strip()}
+        result['environment'] = {'fp32_policy': FP32_POLICY, 'python_executable': sys.executable, 'python_version': sys.version, 'torch': torch.__version__, 'cuda': torch.version.cuda, 'device': torch.cuda.get_device_name(), 'capability': torch.cuda.get_device_capability(), 'arch_list': torch.cuda.get_arch_list(), 'driver': subprocess.check_output(['nvidia-smi', '--query-gpu=driver_version,memory.total', '--format=csv,noheader'], text=True).strip()}
         a = torch.randn(256, 256, device='cuda', requires_grad=True)
         (a @ a).square().mean().backward()
         assert torch.isfinite(a.grad).all()

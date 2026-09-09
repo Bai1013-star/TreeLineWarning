@@ -1,3 +1,5 @@
+CURRENT RECOVERY: Gate A PASS; Gate B PASS; public archive transfer currently blocked. See TREE_QC_GPT6_MULTI_AGENT_SUPERVISOR_FINAL_REPORT.md and GATE_A_RECOVERY_SUPERVISOR.md. The initial decisions below are retained as historical evidence and are superseded for Gates A/B.
+
 # Supervisor gate decisions
 
 ## Gate A — PRE_DOWNLOAD_GATE_FAILED (environment/execution blocker)

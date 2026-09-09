@@ -1,0 +1,17 @@
+{
+  "supervisor": "root",
+  "gate_b": "PASS",
+  "allow_extract": false,
+  "reserve_training_bytes": 10737418240,
+  "min_free_bytes": 37580963840,
+  "scope": "Download exactly the pinned two archives and inspect ZIP central directories only. Submit actual expanded byte totals before extraction. No training approval.",
+  "gate_a": "PASS",
+  "max_archive_bytes": 5498034689,
+  "sites": [
+    "litchfield",
+    "wytham"
+  ],
+  "max_total_expanded_bytes": 42949672960,
+  "allow_download": true,
+  "record_id": 16875688
+}

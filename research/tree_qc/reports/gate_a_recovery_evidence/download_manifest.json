@@ -1,0 +1,11 @@
+{
+  "url": "https://download.pytorch.org/whl/cu130/torch-2.14.0%2Bcu130-cp311-cp311-win_amd64.whl",
+  "sha256": "00fb5440e7560b3b21e5e24567c6096fec4ef65b50a7ef1a105ebed5755eef7e",
+  "total": 1990587822,
+  "retained_path": "D:\\TreeQCTraining\\tmp\\pip-unpack-97lmycbe\\torch-2.14.0+cu130-cp311-cp311-win_amd64.whl",
+  "retained_bytes": 43735040,
+  "prefix_1MiB_verified": true,
+  "tail_64KiB_verified": true,
+  "chunk_size": 16777216,
+  "workers": 4
+}

@@ -1,70 +1,71 @@
 # TREE_QC_GPT6_MULTI_AGENT_SUPERVISOR_FINAL_REPORT
 
-FINAL_VERDICT = PRE_DOWNLOAD_GATE_FAILED
+Current recovery checkpoint: **Gate A PASS; Gate B PASS; public archive transfer blocked.** This supersedes the previous pre-download-stop report, preserved in SUPERVISOR_INITIAL_NETWORK_STOP_ARCHIVE.md. The official PyTorch network problem is resolved. No final model/scientific verdict is issued: the public pilot has not run, so none of the original scientific success/failure labels is supported yet.
 
-This is a stopped pre-download attempt, not a completed public pilot. The independent CUDA environment is not ready: actual launcher preflight returned ModuleNotFoundError for torch. A 1.99 GB official wheel transfer was approximately 50 KB/s, projected around 10 hours, and was stopped by the supervisor after bounded alternate-source/local-environment checks. This verdict does not establish PointNet++ scientific failure. No loss curves, GPU success or public metrics exist.
+## Supervisor acceptance
 
-## Responsibility and Git
-
-SUPERVISOR_MODEL = GPT-6 family (host-configured; exact deployment identifier not independently exposed)
-SUBAGENTS_USED = 3 distinct agents, at most 2 concurrent
-SUBAGENT_TASKS = cuda_audit: read-only CUDA then official dataset/license audit; ml_gate_a: isolated model/launcher/Gate A implementation and environment attempt; independent_reviewer: read-only code/evidence audit and fix recheck
-SUBAGENT_FAILURES = CUDA installation throughput blocked completion; Zenodo metadata access timed out; reviewer found AMP-skipped batch false-stability loophole, fixed and re-reviewed before delivery
+SUPERVISOR_MODEL = GPT-6 family, host configured
+SUBAGENTS_USED = 4 this recovery (maximum2 active concurrently)
+SUBAGENT_TASKS = gate_a_recovery: official wheel recovery/install/real CUDA and mini execution; dataset_metadata_recovery: official metadata/latest/license; public_data_pipeline: authorized two-site downloader and bounded inventory; gate_a_runtime_reviewer: new independent read-only runtime and data-stage reviewer
+SUBAGENT_FAILURES = real initial batch-independence test failed under implicit TF32; diagnosed and repaired IEEE FP32 policy with original tolerance. Public archive HTTP504/timeouts remain external obstruction.
 BASELINE_HEAD = 5f6f4d1fd5d79a3a922bf5924ae1b4e3d2b8f4d9
-FINAL_HEAD = exact final report commit resolved in D:\TreeQCTraining\FINAL_GIT_STATE.json (written after commit to avoid self-referential hash)
+RECOVERY_START_HEAD = 39a46b8c93950f6190705d4f491b31331815898d
+FINAL_HEAD = exact committed hash in D:\TreeQCTraining\FINAL_GIT_STATE.json, written after commit
 BRANCH = codex/tree-qc-pointnet2-final-pilot-v1
 WORKTREE = E:\TreeLineWarning-tree-qc-pointnet2-final-pilot-v1
 
-The original dirty worktree was not used for development. Supervisor personally verified worktree list/status/HEAD/history and exact clean frozen baseline before creating this branch. Initial plan was frozen at commit eee0fed. Final snapshot is local only.
-
-## Gate results
-
-GATE_A_CUDA_MINI = NOT_PASSED; ENVIRONMENT_NOT_READY; actual preflight exit 2; GPU/mini tests NOT_RUN
-GATE_B_DATA_LICENSE = BLOCKED_METADATA_VERIFICATION; visible CC BY4.0 publisher statement audited, exact latest/API/file bytes remain unverified
-GATE_C_DEDUP_SPLIT = NOT_RUN
+GATE_A_CUDA_MINI = PASS (actual engineering gate)
+GATE_B_DATA_LICENSE = PASS (pinned isolated research use)
+GATE_C_DEDUP_SPLIT = NOT_RUN; needs downloaded verified archives
 GATE_D_GENERATOR = NOT_RUN
-GATE_E_TRAINING = NOT_RUN
+GATE_E_TRAINING = NOT_RUN (public training; mini diagnostic passed)
 GATE_F_HELDOUT = NOT_RUN
 GATE_G_REPEATABILITY = NOT_RUN
 GATE_H_LOCAL_CHALLENGE = NOT_RUN
 GATE_I_DEPLOYMENT = NOT_RUN
-PUBLIC_DATA_DOWNLOAD_ALLOWED = NO
+PUBLIC_DATA_DOWNLOAD_ALLOWED = YES, exactly pinned Litchfield/Wytham and inventory; extraction still unapproved
+EXECUTION_STATUS = PUBLIC_DATA_DOWNLOAD_NETWORK_BLOCKED
+
+## Gate A evidence
 
 DATA_ROOT = D:\TreeQCData
 TRAINING_ROOT = D:\TreeQCTraining
-D_FREE_BEFORE = 132.41 GiB
-D_FREE_AFTER = 132.34 GiB (rounded; final byte count in FINAL_GIT_STATE.json)
+D_FREE_BEFORE = approximately132.24 GiB at recovery start
+D_FREE_AFTER = approximately125.55 GiB; exact final bytes in FINAL_GIT_STATE.json
+GPU = NVIDIA GeForce RTX5070 Laptop,8151MiB,capability12.0
+DRIVER = 591.86
+PYTORCH = 2.14.0+cu130, actually installed in existing Python3.11.9 environment
+PYTORCH_CUDA = 13.0, arch_list includes sm_120
+AUTO_BATCH = both models16/8/4/2/1 tested, all stable; safety batch8.16 is maximum tested, not proven GPU limit; no OOM observed.
+AMP = float16 forward/backward and GradScaler,50 effective updates plus2 initial overflow skips; every probe had2 real updates
+PEAK_VRAM = largest recorded allocator allocated284314112 bytes/reserved434110464 bytes across probes/mini, not whole-card peak
+PEAK_RAM = sampled process-tree working-set3425959936 bytes; parent OS high-water2395250688 bytes, not continuous process-tree peak
 
-## Environment and model evidence
+Official wheel1990587822 bytes: torch-2.14.0+cu130-cp311-cp311-win_amd64.whl. SHA25600fb5440e7560b3b21e5e24567c6096fec4ef65b50a7ef1a105ebed5755eef7e independently rehashed by supervisor and reviewer; ZIP CRC, CPython3.11 Windows tag and Requires-Python verified. Reused43735040 verified partial bytes, fetched1946852782 new bytes in686.37seconds including assembly/hash, about2.84MB/s useful throughput. Four official bounded range streams retained partial segments and recovered interrupted responses. No third-party mirror, driver upgrade, toolkit or project rebuild. SETUP reuse branch was actually rerun and exited0 without download.
 
-GPU = NVIDIA GeForce RTX 5070 Laptop GPU, 8151 MiB as nvidia-smi reports
-DRIVER = 591.86; driver maximum CUDA 13.1
-PYTORCH = NOT_INSTALLED in isolated Python3.11.9; selected official torch2.14.0+cu130
-PYTORCH_CUDA = NOT_MEASURED; selected wheel cu130
-AUTO_BATCH = NOT_RUN; implemented probes16/8/4/2/1, two actual optimizer updates required, maximum8 attempts, half-largest-stable safety policy
-AMP = NOT_RUN; float16 GradScaler code implemented; overflow skip explicitly tracked
-PEAK_VRAM = NOT_MEASURED for training
-PEAK_RAM = NOT_MEASURED for training; machine physical RAM15.73 GiB
+POINTNET_PARAMETERS = 76770 (shared-MLP/max baseline without T-Net)
+POINTNET2_PARAMETERS = 333506 (compact true PointNet++ SSG)
+MODEL_SIZE_MB = float32 parameter payload0.30708 /1.334024 decimal MB; checkpoint files additionally hold optimizer/scaler state
+POINTNET_RESULTS = diagnostic loss0.6822715104→0.0287656975,4epochs,32samples,final accuracy1.0
+POINTNET2_RESULTS = diagnostic loss0.6909888536→0.1491527297,3epochs,32samples,final accuracy1.0
 
-Official wheel SHA256 = 00fb5440e7560b3b21e5e24567c6096fec4ef65b50a7ef1a105ebed5755eef7e; the retained partial wheel is incomplete and is NOT checksum-verified or reusable as an installed package. No driver/toolkit installation was attempted. Owned pip processes were stopped and files preserved; no disk cleanup occurred.
+These toy accuracies do not demonstrate tree-QC scientific learnability. Both models used4096 XYZ+membership, real GPU updates, Windows2 spawned workers. CUDA allocation/matmul/backward and both models2048/4096 FP32 forward/backward passed. Gate mini runtime12.737seconds includes calibration and diagnostic, not deployment latency. Checkpoint reload logits error0; resumed parameters changed and optimizer steps16→17/12→13. Independent reviewer loaded checkpoints on CUDA, reevaluated all32 samples and reproduced final metrics exactly; saved optimizer steps16/12 equal epochs×4 batches.
 
-POINTNET_PARAMETERS = NOT_MEASURED at runtime
-POINTNET2_PARAMETERS = NOT_MEASURED at runtime
-MODEL_SIZE_MB = NOT_MEASURED; no trained model artifact
-POINTNET_RESULTS = NOT_RUN
-POINTNET2_RESULTS = NOT_RUN
+Initial real test failure was not suppressed. Same saved parameters/input showed batch-single logit error1.49757e-5 with TF32,7.45e-9 under IEEE FP32. Supervisor approved explicit cuDNN/matmul FP32 policy in both evaluation and training entry points. FP16 AMP remains unchanged. All7 final source hashes matched actual runtime evidence. Frozen mini config SHA256 remains b119fd3f242f94377e7c81c6ebaeff4411c127b1be7c381be698be92e1bc3251: no model/toy/epoch/acceptance-threshold relaxation.
 
-Static review confirms actual FPS + radius grouping + two hierarchical local MLP/max abstractions in compact PointNet++ SSG. The PointNet baseline omits T-Net and does not claim full original-paper reproduction. Synthetic diagnostic consists of32 easy ellipsoids at4096 points; it is only an implementation test. The frozen20-epoch ceiling and acceptance criteria were not expanded. None of these designs is evidence that real segmentation defects are learnable.
+## Public data and remaining scientific work
 
-## Dataset and scientific outcomes
-
-PUBLIC_DATASET = TLS Forest Instance Segmentation Benchmark, candidate only
-DATASET_VERSION = candidate DOI10.5281/zenodo.16875688; latest chain NOT_VERIFIED
-LICENSE = official indexed publisher statement CC BY4.0; metadata verification incomplete; no commercial deployment conclusion
-SITES = proposed Litchfield / Wytham; not approved or downloaded
-DOWNLOAD_SIZE = public data0 bytes; proposed site archives display approximately5.5 GB, exact bytes/extraction unknown
+PUBLIC_DATASET = TLS Forest Instance Segmentation Benchmark
+DATASET_VERSION = official latest record16875688 at verification, DOI10.5281/zenodo.16875688; official latest-chain JSON retained
+LICENSE = metadata.id cc-by-4.0, publisher citation requirement and official attribution terms verified; does not grant automatic product/weight redistribution approval or license upstream evaluation code
+SITES = Litchfield/Wytham only
+DOWNLOAD_SIZE = public archive0 bytes received; pinned archive total5498034689 bytes
 UNIQUE_TREES = NOT_MEASURED
 DUPLICATES_REMOVED = NOT_MEASURED
+
+The official metadata endpoint recovered after earlier failures, so metadata/license are no longer the blocker. Archive endpoints remain a separate transfer problem. See PUBLIC_DATA_PIPELINE_WORKER_20260909.md and public_data_network_attempts.log for exact per-site routes, attempts and status; HTTP000 denotes curl received no HTTP response before timeout. No archive or point cloud was extracted. Source provenance JSON is metadata, not downloaded data.
+
+Central-directory inspection requires verified size/MD5 and records local SHA256. Approved budget: exact two archives + up to40GiB expanded +10GiB training reserve, retaining at least35GiB actual D free. Extraction remains allow_extract=false until actual combined ZIP expanded size is reviewed. Bounds and offline safety tests do not substitute for real archive/schema/coordinate verification.
 
 CROSS_SITE_A_TO_B = NOT_RUN
 CROSS_SITE_B_TO_A = NOT_RUN
@@ -79,46 +80,34 @@ CONTAMINATION = NOT_RUN
 OVERSEG = NOT_RUN
 CROWN_INCOMPLETE = NOT_RUN
 STEM_MISSING = NOT_RUN
-NOISE_CONTAMINATION = NOT_RUN
 MULTI_SEED = NOT_RUN
 SAMPLING_ROBUSTNESS = NOT_RUN
-
-No dataset manifest, dedup implementation, public sampler, neighborhood loader, real corruption generator or trained threshold exists. The scientific contract requires identity/context separation and validation-only thresholds. Quantitative independent-tree support and per-core-class criteria still need freezing before Gate F; qualitative wording alone cannot authorize continuation.
-
-LOCAL_BAD_TOTAL = 8 expected from supplied protocol and located directory; evaluated0
+LOCAL_BAD_TOTAL = 8 expected,0 evaluated
 LOCAL_BAD_REVIEW = NOT_MEASURED
 LOCAL_BAD_UNCERTAIN = NOT_MEASURED
 LOCAL_BAD_FALSE_PASS = NOT_MEASURED
 DOMAIN_GAP = UNKNOWN
 
-No local point clouds/images were opened and no local predictions were made. During historical evidence audit the supervisor inadvertently saw aggregate geometry and per-case stem/peak statistics in a prior report. This exposure is recorded in INITIAL_SUPERVISOR_AUDIT.md. It must not influence design/calibration; a future challenge cannot be described as fully information-blind to this supervisor. Current reliable local GOOD count remains unavailable, so no local false-review conclusion is possible.
+Prior historical local-statistics exposure is retained in INITIAL_SUPERVISOR_AUDIT.md. No local images/point clouds/predictions were used in this recovery. Future challenge cannot be described as fully information-blind to this supervisor. No reliable local GOOD distribution exists. Formal public pipeline/dedup/context/sampler/generator, deterministic cross-process pilot resume, quantitative per-core-class support rules, and data-stack dependencies remain future gated work. NumPy is absent at this pure-Torch checkpoint and is not a Gate A failure.
 
-## Deployment and product isolation
+## Product isolation, review and recovery
 
 CPU_MS_PER_TREE = NOT_MEASURED
 GPU_MS_PER_TREE = NOT_MEASURED
 TOTAL_17_TREE_CPU_SEC = NOT_MEASURED
 TOTAL_17_TREE_GPU_SEC = NOT_MEASURED
-NO_FULL_SOURCE_RESCAN = YES (no source scan performed; future contract retained)
-ASYNC_ARCHITECTURE = REQUIRED_FUTURE_CONTRACT_ONLY
-INCREMENTAL_RECOMPUTE = REQUIRED_FUTURE_CONTRACT_ONLY
-EXISTING_PERFORMANCE_OPTIMIZATION_PRESERVED = YES; product source unchanged, no new runtime stage
-ONNX = NOT_RUN; prerequisite gates closed
+NO_FULL_SOURCE_RESCAN = YES
+ASYNC_ARCHITECTURE = future contract only
+INCREMENTAL_RECOMPUTE = future contract only
+EXISTING_PERFORMANCE_OPTIMIZATION_PRESERVED = YES, no product-path changes
+ONNX = NOT_RUN
 ONNX_EQUIVALENCE = NOT_RUN
 PRODUCT_INTEGRATION = NO
 FROZEN_PRODUCT_CHANGED = NO
 SCIENCE_CHANGED = NO
-
-Six requested Windows launcher files exist. SETUP and MINI are implemented entry points; DOWNLOAD/START/RESUME/EVALUATE deliberately exit3 because those stages are not implemented or approved. Formal cross-process reproducible training resume with RNG/sampler state remains future work. Mini checkpoint reload-and-step code is not a substitute. RAM code reports sampled process-tree working-set and parent OS high-water, not a continuous exact training-process-tree peak.
-
-## Validation and independent review
-
-Actual preflight evidence is archived in reports/gate_a_evidence/mini_gate.json and mini_gate.raw.log. All five recorded Python source SHA256 values and config SHA256 were independently matched to final source. Python syntax compilation passed; a standard-library Windows RAM probe returned nonzero counters. Torch-dependent model tests, CUDA tests, overfit, AMP, OOM, and resume all remain NOT_RUN. Product-path diff against the frozen baseline is empty; diff whitespace checks passed.
-
-INDEPENDENT_REVIEWER_VERDICT = PASS_WITH_LIMITATIONS (static implementation and truthful stop report only; complete research NOT accepted)
-
-Reviewer P1: AMP skipped steps previously could appear STABLE before Adam states allocated. Final code checks actual optimizer step advancement and state allocation and requires two successful updates; insufficient updates explicitly stop as AMP_UNSTABLE. Reviewer rechecked current source and preflight hashes and accepted the correction. Other limitations remain explicit above.
-
+INDEPENDENT_REVIEWER_VERDICT = PASS_WITH_LIMITATIONS for Gate A runtime and stage evidence; data-module follow-up findings resolved/reviewed in the accompanying review record
 PUSH = NO
-NEXT_STEP = Obtain a practical supported official-wheel installation path or locally verified exact pinned wheel; run SETUP then MINI and supervisor Gate A review. Only after that and complete official dataset metadata may two-site download be authorized. Do not enlarge model, change diagnostic or add epochs to hide the environment failure.
-FINAL_VERDICT = PRE_DOWNLOAD_GATE_FAILED
+
+NEXT_STEP = Resume the pinned official data download when archive service responds correctly. DOWNLOAD_TREE_QC_PILOT_DATA.cmd defaults to the saved two-site approval and preserves trustworthy .part progress. SETUP_TREE_QC_TRAINING.cmd now detects the installed matching torch and avoids download; Gate A need not be repeated unless its implementation/environment changes. After complete archive verification review expanded totals, then proceed Gate C onward. Do not relabel the current archive network problem as OFFICIAL_PYTORCH_DOWNLOAD_NETWORK_BLOCKED, PRE_DOWNLOAD_GATE_FAILED or model failure; PyTorch and Gate A succeeded.
+
+Detailed evidence: GATE_A_RECOVERY_EXECUTION.md; GATE_A_INDEPENDENT_RUNTIME_REVIEW.md; GATE_A_RECOVERY_SUPERVISOR.md; DATA_LICENSE_AUDIT.md; pinned_pilot_manifest.json; PUBLIC_DATA_PIPELINE_WORKER_20260909.md; gate_a_recovery_evidence/.

@@ -1,0 +1,7 @@
+{"site": "litchfield", "attempt": 1, "url": "https://zenodo.org/api/records/16875688/files/litchfield.zip/content", "resume_bytes": 0}
+{"site": "litchfield", "attempt": 1, "error": "HTTP Error 504: Gateway Time-out"}
+{"site": "litchfield", "attempt": 2, "url": "https://zenodo.org/records/16875688/files/litchfield.zip?download=1", "resume_bytes": 0}
+{"site": "litchfield", "attempt": 2, "error": "HTTP Error 504: Gateway Time-out"}
+{"site": "litchfield", "attempt": 3, "url": "https://zenodo.org/api/records/16875688/files/litchfield.zip/content", "resume_bytes": 0}
+{"site":"wytham","tool":"curl","url":"https://zenodo.org/api/records/16875688/files/wytham.zip/content","range":"bytes=0-65535","max_time_seconds":25,"elapsed_seconds":25.010759,"curl_error":28,"http_code":"000","downloaded_bytes":0,"bytes_per_second":0}
+{"site":"wytham","tool":"curl","url":"https://zenodo.org/records/16875688/files/wytham.zip?download=1","range":"bytes=0-65535","max_time_seconds":25,"elapsed_seconds":25.009188,"curl_error":28,"http_code":"000","downloaded_bytes":0,"bytes_per_second":0}

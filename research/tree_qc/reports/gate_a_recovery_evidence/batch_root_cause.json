@@ -1,0 +1,246 @@
+[
+  {
+    "cudnn_tf32": true,
+    "matmul_tf32": false,
+    "max_abs": 1.4975666999816895e-05,
+    "max_relative": 0.0003493807453196496,
+    "allclose": false,
+    "batch": [
+      [
+        0.04287843406200409,
+        0.03626580536365509
+      ]
+    ],
+    "single": [
+      [
+        0.04286345839500427,
+        0.03625810891389847
+      ]
+    ],
+    "layers": [
+      {
+        "layer": 0,
+        "type": "Conv2d",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 1,
+        "type": "ReLU",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 2,
+        "type": "Conv2d",
+        "max_abs": 0.0005942583084106445
+      },
+      {
+        "layer": 3,
+        "type": "ReLU",
+        "max_abs": 0.0005481243133544922
+      },
+      {
+        "layer": 4,
+        "type": "Conv2d",
+        "max_abs": 0.0003287196159362793
+      },
+      {
+        "layer": 5,
+        "type": "ReLU",
+        "max_abs": 0.0003287196159362793
+      },
+      {
+        "layer": 6,
+        "type": "Conv2d",
+        "max_abs": 0.0003059804439544678
+      },
+      {
+        "layer": 7,
+        "type": "ReLU",
+        "max_abs": 0.0003059804439544678
+      }
+    ]
+  },
+  {
+    "cudnn_tf32": false,
+    "matmul_tf32": false,
+    "max_abs": 7.450580596923828e-09,
+    "max_relative": 1.7382126316078939e-07,
+    "allclose": true,
+    "batch": [
+      [
+        0.042863450944423676,
+        0.03625810891389847
+      ]
+    ],
+    "single": [
+      [
+        0.04286345839500427,
+        0.03625810891389847
+      ]
+    ],
+    "layers": [
+      {
+        "layer": 0,
+        "type": "Conv2d",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 1,
+        "type": "ReLU",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 2,
+        "type": "Conv2d",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 3,
+        "type": "ReLU",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 4,
+        "type": "Conv2d",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 5,
+        "type": "ReLU",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 6,
+        "type": "Conv2d",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 7,
+        "type": "ReLU",
+        "max_abs": 0.0
+      }
+    ]
+  },
+  {
+    "cudnn_tf32": true,
+    "matmul_tf32": true,
+    "max_abs": 3.4123659133911133e-06,
+    "max_relative": 9.411318023921922e-05,
+    "allclose": true,
+    "batch": [
+      [
+        0.04286462441086769,
+        0.03626152127981186
+      ]
+    ],
+    "single": [
+      [
+        0.04286345839500427,
+        0.03625810891389847
+      ]
+    ],
+    "layers": [
+      {
+        "layer": 0,
+        "type": "Conv2d",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 1,
+        "type": "ReLU",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 2,
+        "type": "Conv2d",
+        "max_abs": 0.0005942583084106445
+      },
+      {
+        "layer": 3,
+        "type": "ReLU",
+        "max_abs": 0.0005481243133544922
+      },
+      {
+        "layer": 4,
+        "type": "Conv2d",
+        "max_abs": 0.0003287196159362793
+      },
+      {
+        "layer": 5,
+        "type": "ReLU",
+        "max_abs": 0.0003287196159362793
+      },
+      {
+        "layer": 6,
+        "type": "Conv2d",
+        "max_abs": 0.0003059804439544678
+      },
+      {
+        "layer": 7,
+        "type": "ReLU",
+        "max_abs": 0.0003059804439544678
+      }
+    ]
+  },
+  {
+    "cudnn_tf32": false,
+    "matmul_tf32": true,
+    "max_abs": 1.7385929822921753e-05,
+    "max_relative": 0.00040561193600296974,
+    "allclose": false,
+    "batch": [
+      [
+        0.04284607246518135,
+        0.036258354783058167
+      ]
+    ],
+    "single": [
+      [
+        0.04286345839500427,
+        0.03625810891389847
+      ]
+    ],
+    "layers": [
+      {
+        "layer": 0,
+        "type": "Conv2d",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 1,
+        "type": "ReLU",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 2,
+        "type": "Conv2d",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 3,
+        "type": "ReLU",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 4,
+        "type": "Conv2d",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 5,
+        "type": "ReLU",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 6,
+        "type": "Conv2d",
+        "max_abs": 0.0
+      },
+      {
+        "layer": 7,
+        "type": "ReLU",
+        "max_abs": 0.0
+      }
+    ]
+  }
+]

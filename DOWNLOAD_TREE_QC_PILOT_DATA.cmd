@@ -1,4 +1,7 @@
 @echo off
-echo NOT_RUN: DOWNLOAD_TREE_QC_PILOT_DATA is not implemented or authorized at Gate A.
-echo Supervisor must approve the required scientific gates before this stage is enabled.
-exit /b 3
+if "%~1"=="" (
+  "D:\TreeQCTraining\venv\Scripts\python.exe" "%~dp0research\tree_qc\public_data.py" download --approval "%~dp0research\tree_qc\reports\PUBLIC_DATA_DOWNLOAD_APPROVAL.json"
+  exit /b
+)
+"D:\TreeQCTraining\venv\Scripts\python.exe" "%~dp0research\tree_qc\public_data.py" %*
+exit /b %errorlevel%

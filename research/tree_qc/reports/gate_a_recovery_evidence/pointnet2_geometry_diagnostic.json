@@ -1,0 +1,110 @@
+[
+  {
+    "seed": 0,
+    "precision": "default",
+    "stage": 1,
+    "fps_batch_single_equal": true,
+    "groups_batch_single_equal": true,
+    "group_default_direct_same_set": true,
+    "mlp_pooled_max_abs": 0.0
+  },
+  {
+    "seed": 0,
+    "precision": "default",
+    "stage": 2,
+    "fps_batch_single_equal": true,
+    "groups_batch_single_equal": true,
+    "group_default_direct_same_set": true,
+    "mlp_pooled_max_abs": 0.0
+  },
+  {
+    "seed": 0,
+    "precision": "ieee",
+    "stage": 1,
+    "fps_batch_single_equal": true,
+    "groups_batch_single_equal": true,
+    "group_default_direct_same_set": true,
+    "mlp_pooled_max_abs": 0.0
+  },
+  {
+    "seed": 0,
+    "precision": "ieee",
+    "stage": 2,
+    "fps_batch_single_equal": true,
+    "groups_batch_single_equal": true,
+    "group_default_direct_same_set": true,
+    "mlp_pooled_max_abs": 0.0
+  },
+  {
+    "seed": 3,
+    "precision": "default",
+    "stage": 1,
+    "fps_batch_single_equal": true,
+    "groups_batch_single_equal": true,
+    "group_default_direct_same_set": true,
+    "mlp_pooled_max_abs": 0.0
+  },
+  {
+    "seed": 3,
+    "precision": "default",
+    "stage": 2,
+    "fps_batch_single_equal": true,
+    "groups_batch_single_equal": true,
+    "group_default_direct_same_set": true,
+    "mlp_pooled_max_abs": 0.0
+  },
+  {
+    "seed": 3,
+    "precision": "ieee",
+    "stage": 1,
+    "fps_batch_single_equal": true,
+    "groups_batch_single_equal": true,
+    "group_default_direct_same_set": true,
+    "mlp_pooled_max_abs": 0.0
+  },
+  {
+    "seed": 3,
+    "precision": "ieee",
+    "stage": 2,
+    "fps_batch_single_equal": true,
+    "groups_batch_single_equal": true,
+    "group_default_direct_same_set": true,
+    "mlp_pooled_max_abs": 0.0
+  },
+  {
+    "seed": 101,
+    "precision": "default",
+    "stage": 1,
+    "fps_batch_single_equal": true,
+    "groups_batch_single_equal": true,
+    "group_default_direct_same_set": true,
+    "mlp_pooled_max_abs": 0.0
+  },
+  {
+    "seed": 101,
+    "precision": "default",
+    "stage": 2,
+    "fps_batch_single_equal": true,
+    "groups_batch_single_equal": true,
+    "group_default_direct_same_set": true,
+    "mlp_pooled_max_abs": 0.0
+  },
+  {
+    "seed": 101,
+    "precision": "ieee",
+    "stage": 1,
+    "fps_batch_single_equal": true,
+    "groups_batch_single_equal": true,
+    "group_default_direct_same_set": true,
+    "mlp_pooled_max_abs": 0.0
+  },
+  {
+    "seed": 101,
+    "precision": "ieee",
+    "stage": 2,
+    "fps_batch_single_equal": true,
+    "groups_batch_single_equal": true,
+    "group_default_direct_same_set": true,
+    "mlp_pooled_max_abs": 0.0
+  }
+]

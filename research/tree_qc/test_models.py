@@ -1,5 +1,7 @@
 import unittest
 import torch
+from fp32_policy import configure_fp32
+FP32_POLICY = configure_fp32()
 from models import MODELS, farthest_point_sample, radius_group
 
 class PointOpsTests(unittest.TestCase):

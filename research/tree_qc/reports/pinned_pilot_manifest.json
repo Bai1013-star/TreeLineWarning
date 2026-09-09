@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "record_id": 16875688,
+  "doi": "10.5281/zenodo.16875688",
+  "concept_doi": "10.5281/zenodo.14615492",
+  "metadata_source": "https://zenodo.org/api/records/16875688",
+  "metadata_snapshot": "zenodo_16875688_verified_metadata.json",
+  "metadata_sha256": "1fd5e61b2687ff0ee55e7d15f10694879c1756b76260c87dd4e766667de7be34",
+  "latest_link": "https://zenodo.org/api/records/16875688/versions/latest",
+  "latest_verified_record_id": 16875688,
+  "checked_date": "2026-09-09",
+  "license_id": "cc-by-4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "citation_doi": "10.1016/j.isprsjprs.2025.10.033",
+  "total_compressed_bytes": 5498034689,
+  "expanded_bytes": null,
+  "download_authorization": "Supervisor decision required; this manifest does not authorize download",
+  "files": [
+    {
+      "filename": "litchfield.zip",
+      "size_bytes": 2331915728,
+      "publisher_checksum": "md5:8e374d940d7e651484a84d7d63f18636",
+      "official_url": "https://zenodo.org/api/records/16875688/files/litchfield.zip/content",
+      "locally_verified": false,
+      "downloaded_bytes": 0
+    },
+    {
+      "filename": "wytham.zip",
+      "size_bytes": 3166118961,
+      "publisher_checksum": "md5:8d7918ed1270d603efc83aae5a8777c1",
+      "official_url": "https://zenodo.org/api/records/16875688/files/wytham.zip/content",
+      "locally_verified": false,
+      "downloaded_bytes": 0
+    }
+  ]
+}

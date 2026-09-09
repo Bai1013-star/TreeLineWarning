@@ -1,0 +1,30 @@
+{
+  "original_case": {
+    "seed": 3,
+    "model": "pointnet",
+    "count": 4096,
+    "max_abs": 1.4975666999816895e-05,
+    "max_relative": 0.0003493807453196496,
+    "allclose": false,
+    "logits_batch": [
+      [
+        0.04287843406200409,
+        0.03626580536365509
+      ]
+    ],
+    "logits_single": [
+      [
+        0.04286345839500427,
+        0.03625810891389847
+      ]
+    ]
+  },
+  "policy": {
+    "matmul_allow_tf32": false,
+    "cudnn_allow_tf32": false,
+    "float32_matmul_precision": "highest",
+    "amp_policy": "existing explicit float16 autocast unchanged"
+  },
+  "max_abs": 7.450580596923828e-09,
+  "original_tolerance_pass": true
+}

@@ -1,0 +1,12 @@
+{
+  "new_download_bytes": 1946852782,
+  "retained_bytes": 43735040,
+  "final_bytes": 1990587822,
+  "seconds_including_assembly_hash": 686.3697845935822,
+  "average_new_bytes_per_second": 2836448.8439023923,
+  "retry_events": 50,
+  "retries_from_zero": false,
+  "complete_chunk_etags": [
+    "\"70ad4f0aedcda136411002e2f71020fe\""
+  ]
+}
