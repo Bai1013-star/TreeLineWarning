@@ -33,6 +33,7 @@ import argparse
 import json
 import sys
 import time
+import traceback
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -1262,6 +1263,38 @@ class Pilot:
         self.log(f'    PUBLIC_EXPERIMENT_FREEZE written: {digest[:16]}  '
                  f'held-out locked = YES')
 
+    def load_frozen_runs(self, selected: str) -> dict:
+        """Reload the three frozen runs from persisted state, thresholds included.
+
+        ``self.runs`` is in-memory and empty on a restart, so every stage that runs after
+        the three-seed stage must rebuild it from the state file. The threshold files are
+        re-read and re-marked frozen here: a restart must arrive at exactly the same
+        precondition the first attempt had, otherwise the run fails its own guard for a
+        reason that has nothing to do with the experiment.
+        """
+        for seed in gates.MODEL_SEEDS:
+            run = self.runs.get(seed) or self.state.model_run(run_key(selected, seed))
+            if not run:
+                raise PilotStop('STOP_RESUME_MISMATCH', {
+                    'message': f'no recorded run for {selected} seed {seed}',
+                    'seed': seed, 'model': selected})
+            path = self.layout.path('freeze', 'thresholds', f'seed{seed}_threshold.json')
+            if not path.exists():
+                path = trainer_module.write_threshold_file(
+                    self.layout.path('freeze', 'thresholds'), run,
+                    run['dataset_digest'])
+            payload = state_module.read_json(path, verify=False)
+            if payload.get('threshold') != run['threshold']:
+                raise PilotStop('STOP_CONFIG_MISMATCH', {
+                    'message': f'seed {seed} threshold file disagrees with the run',
+                    'file': str(path), 'file_threshold': payload.get('threshold'),
+                    'run_threshold': run['threshold']})
+            run['threshold_path'] = str(path)
+            run['threshold_sha256'] = state_module.digest_file(path)
+            run['threshold_frozen'] = True
+            self.runs[seed] = run
+        return self.runs
+
     def stage_heldout(self) -> None:
         name = S_HELDOUT
         audit = self.state.payload['heldout']
@@ -1280,6 +1313,7 @@ class Pilot:
         provenance = self._load_provenance()
         selected = freeze_state['payload']['selected_architecture']
         thresholds = freeze_state['payload']['frozen_thresholds']
+        self.load_frozen_runs(selected)
 
         # Every precondition, checked in order, before one held-out point is read.
         parity = self.state.payload.get('parity') or {}
@@ -1469,6 +1503,7 @@ class Pilot:
         selected = freeze_state['payload']['selected_architecture']
         deployment = int(freeze_state['payload']['deployment_candidate_seed'])
         plan = freeze_state['payload']['robustness_plan']
+        self.load_frozen_runs(selected)
         run = self.runs.get(deployment) or self.state.model_run(
             run_key(selected, deployment))
         threshold = float(freeze_state['payload']['frozen_thresholds'][str(deployment)])
@@ -1734,6 +1769,29 @@ class Pilot:
                                                  {'code': code, 'detail': detail},
                                                  self.state.payload)
                 self.log(f'STOP: {code} {detail}')
+                return {'status': 'STOPPED', 'stop_code': code, 'detail': detail,
+                        'stage': name}
+            except Exception as exc:  # noqa: BLE001 - fail closed on anything unexpected
+                # An unexpected exception is still a fail-closed stop: it is recorded with
+                # its traceback, the run state says which stage died, a stop report is
+                # written and nothing is retried. A bare traceback with no state is exactly
+                # what an unattended run must never leave behind.
+                code = 'STOP_UNEXPECTED_ERROR'
+                detail = {'message': f'{type(exc).__name__}: {exc}',
+                          'stage': name,
+                          'traceback': traceback.format_exc()[-4000:]}
+                self.record_stage(name, 'FAILED', detail={'stop': code})
+                self.state.record_stop(code, detail)
+                self.state.save()
+                reports_module.write_stop_report(self.layout.path('reports'),
+                                                 {'code': code, 'detail': detail},
+                                                 self.state.payload)
+                self.log('')
+                self.log(f'STOP: {code}')
+                self.log(detail['traceback'])
+                self.log(f'  STATE  : {self.layout.state_path}')
+                self.log(f'  REPORT : '
+                         f'{self.layout.path("reports", "EFG_STOP_REPORT.json")}')
                 return {'status': 'STOPPED', 'stop_code': code, 'detail': detail,
                         'stage': name}
             if not already:

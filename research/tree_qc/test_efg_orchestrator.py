@@ -784,6 +784,44 @@ class HeldOutProvenance(unittest.TestCase):
                                           candidate_ids=[sorted(
                                               PROVENANCE.train.eligible)[0]])
 
+    def test_held_out_not_applicable_specs_are_recorded_not_fatal(self):
+        """A held-out defect the geometry cannot support is excluded, never substituted."""
+        candidate_id = self.candidates[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            cache_root = Path(temporary)
+            dataset = heldout_module.HeldOutDataset(
+                PROVENANCE, self.view, candidate_ids=[candidate_id], points=4096,
+                cache_root=cache_root)
+            spec = dataset.specs[0]
+            dataset.exclusions[spec.key] = {'reason': 'merged_below_one_point',
+                                            'detail': {'pool': 3}}
+            dataset._save_exclusions()
+            with self.assertRaises(dataset_source.NotApplicableExample) as raised:
+                dataset[0]
+            self.assertEqual(raised.exception.reason, 'merged_below_one_point')
+            # The exclusion is persisted, so a restarted evaluation does not rediscover it.
+            reloaded = heldout_module.HeldOutDataset(
+                PROVENANCE, self.view, candidate_ids=[candidate_id], points=4096,
+                cache_root=cache_root)
+            self.assertEqual(reloaded.exclusion(spec.key)['reason'],
+                             'merged_below_one_point')
+            with self.assertRaises(dataset_source.NotApplicableExample):
+                reloaded[0]
+            # Every other spec of the same candidate is still evaluable.
+            self.assertEqual(len(reloaded), 21)
+
+    def test_held_out_exclusions_do_not_leak_across_partitions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cache_root = Path(temporary)
+            (cache_root / 'heldout_exclusions.json').write_text(
+                json.dumps({'partition': 'validation',
+                            'exclusions': {'x': {'reason': 'wrong partition'}}}),
+                encoding='utf-8')
+            dataset = heldout_module.HeldOutDataset(
+                PROVENANCE, self.view, candidate_ids=[self.candidates[0]], points=4096,
+                cache_root=cache_root)
+            self.assertEqual(dataset.exclusions, {})
+
     def test_held_out_adapter_builds_a_usable_example(self):
         candidate_id = self.candidates[0]
         dataset = heldout_module.HeldOutDataset(

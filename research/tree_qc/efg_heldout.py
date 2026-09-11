@@ -50,6 +50,7 @@ import gate_d_geometry as geometry_module
 import gate_d_sampler as sampler
 import gate_d_scene as scene_module
 import numpy as np
+from efg_dataset import NotApplicableExample
 from efg_specs import SamplingSpec, enumerate_specs
 from gate_d_provenance import HELD_OUT
 
@@ -72,6 +73,21 @@ class HeldOutError(RuntimeError):
 class AdapterDrift(HeldOutError):
     def __init__(self, detail):
         super().__init__('STOP_HELDOUT_ADAPTER_DRIFT', detail)
+
+
+def _jsonable(value):
+    """Make a NotApplicableError detail JSON-safe without losing its meaning."""
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    return str(value)
 
 
 # --- held-out authorization -------------------------------------------------
@@ -675,6 +691,31 @@ class HeldOutDataset:
                                            seed_base=self.seed_base,
                                            repeats=self.repeats))
         self._geometry: dict = {}
+        # Exclusions are keyed by spec, not by index, so they survive a change in the
+        # candidate subset and are written next to the held-out geometry cache.
+        self.exclusions: dict[str, dict] = {}
+        self._exclusions_path = self.cache_root / 'heldout_exclusions.json'
+        self._load_exclusions()
+
+    def _load_exclusions(self) -> None:
+        try:
+            payload = json.loads(self._exclusions_path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return
+        if isinstance(payload, dict) and payload.get('partition') == HELD_OUT:
+            self.exclusions = {str(k): dict(v)
+                               for k, v in (payload.get('exclusions') or {}).items()}
+
+    def _save_exclusions(self) -> None:
+        self.cache_root.mkdir(parents=True, exist_ok=True)
+        tmp = self._exclusions_path.with_suffix('.json.tmp')
+        tmp.write_text(json.dumps({'partition': HELD_OUT,
+                                   'exclusions': self.exclusions},
+                                  indent=2, sort_keys=True), encoding='utf-8')
+        tmp.replace(self._exclusions_path)
+
+    def exclusion(self, spec_key: str) -> dict | None:
+        return self.exclusions.get(spec_key)
 
     def __len__(self) -> int:
         return len(self.specs)
@@ -708,6 +749,10 @@ class HeldOutDataset:
 
     def __getitem__(self, index: int) -> HeldOutItem:
         spec = self.specs[index]
+        recorded = self.exclusions.get(spec.key)
+        if recorded is not None:
+            raise NotApplicableExample(spec.key, str(recorded.get('reason')),
+                                       recorded.get('detail'))
         geometry = self._geometry_for(spec.candidate_id)
         # The scene is built once and shared by the corruption body and the sampler. It is
         # deterministic from the frozen geometry and the candidate, so rebuilding it for the
@@ -719,8 +764,17 @@ class HeldOutDataset:
         if tuple(authorised) != tuple(union):
             raise HeldOutError('STOP_HELDOUT_MANIFEST_CHANGED', {
                 'message': 'held-out source union normalization mismatch'})
-        example = corrupt_scene(spec, scene, self.provenance,
-                                authorised_union=authorised)
+        try:
+            example = corrupt_scene(spec, scene, self.provenance,
+                                    authorised_union=authorised)
+        except gen.NotApplicableError as exc:
+            # A held-out defect the real geometry cannot support is excluded and counted,
+            # exactly as on the model-selection side. It is never substituted, and the count
+            # is bounded by the scorer's exclusion limit.
+            record = {'reason': exc.reason, 'detail': _jsonable(exc.detail)}
+            self.exclusions[spec.key] = record
+            self._save_exclusions()
+            raise NotApplicableExample(spec.key, exc.reason, record['detail']) from exc
         sample_seed = spec.sampling_seed(self.points, self.seed_base)
         sample = sampler.sample(example.points, example.membership,
                                 example.changed_membership, scene.candidate_mask,
