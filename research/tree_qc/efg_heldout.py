@@ -737,6 +737,12 @@ class HeldOutDataset:
         self.exclusions: dict[str, dict] = {}
         self._exclusions_path = self.cache_root / 'heldout_exclusions.json'
         self._load_exclusions()
+        # Per-candidate reuse. One held-out candidate has 21 declared specs (7 classes x 3
+        # severities) that share one scene and one authorization decision: only the
+        # corruption and the sampler draw differ. Building the scene per example costs
+        # ~0.5 s on a large held-out scene, so it is built once per candidate and replaced
+        # when the candidate changes.
+        self._scene_cache: dict = {}
 
     def _load_exclusions(self) -> None:
         try:
@@ -788,23 +794,34 @@ class HeldOutDataset:
         """How many held-out candidates this instance actually scores."""
         return len(self.candidate_ids)
 
+    def scene_for(self, candidate_id: str):
+        """The candidate's held-out scene and its authorized source union, built once.
+
+        The scene depends only on the candidate's frozen geometry, so every spec of the
+        candidate shares it. Authorization is re-run whenever the candidate changes, which
+        is exactly as often as a new source union appears.
+        """
+        cached = self._scene_cache.get(candidate_id)
+        if cached is None:
+            geometry = self._geometry_for(candidate_id)
+            scene = build_heldout_scene(candidate_id, geometry, self.provenance, self.view)
+            union = scene_module.scene_source_union(scene)
+            authorised = authorize_heldout_scene(self.provenance, self.view,
+                                                 candidate_id, union)
+            if tuple(authorised) != tuple(union):
+                raise HeldOutError('STOP_HELDOUT_MANIFEST_CHANGED', {
+                    'message': 'held-out source union normalization mismatch'})
+            self._scene_cache = {candidate_id: (scene, authorised)}
+            cached = self._scene_cache[candidate_id]
+        return cached
+
     def __getitem__(self, index: int) -> HeldOutItem:
         spec = self.specs[index]
         recorded = self.exclusions.get(spec.key)
         if recorded is not None:
             raise NotApplicableExample(spec.key, str(recorded.get('reason')),
                                        recorded.get('detail'))
-        geometry = self._geometry_for(spec.candidate_id)
-        # The scene is built once and shared by the corruption body and the sampler. It is
-        # deterministic from the frozen geometry and the candidate, so rebuilding it for the
-        # sampler would produce the identical object at twice the CPU cost.
-        scene = build_heldout_scene(spec.candidate_id, geometry, self.provenance, self.view)
-        union = scene_module.scene_source_union(scene)
-        authorised = authorize_heldout_scene(self.provenance, self.view,
-                                             spec.candidate_id, union)
-        if tuple(authorised) != tuple(union):
-            raise HeldOutError('STOP_HELDOUT_MANIFEST_CHANGED', {
-                'message': 'held-out source union normalization mismatch'})
+        scene, authorised = self.scene_for(spec.candidate_id)
         try:
             example = corrupt_scene(spec, scene, self.provenance,
                                     authorised_union=authorised)
