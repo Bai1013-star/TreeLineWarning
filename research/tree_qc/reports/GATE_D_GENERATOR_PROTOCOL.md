@@ -2,14 +2,13 @@
 
 Status: **worker protocol, pending GPT-6 Supervisor acceptance. Training remains locked.**
 `GATE_D_GENERATOR_VERSION = GATE_D_SYNTHETIC_GENERATOR_V2`
-`GATE_D_GENERATOR_DIGEST = 363ca30e5d6ca83f80df4f9d893c602062f909c6c980405df7f17459ba47471b`
+`GATE_D_GENERATOR_DIGEST = fcadab3e8050e2fb85c8fe8f90a34df6ec4536af4070428dd392297fccfd9567`
 
 The digest is the SHA-256 over the generator implementation files listed in
 `gate_d_diagnostic.GENERATOR_FILES`. The Supervisor's acceptance marker must carry this
 exact digest; a different digest refuses to unlock training.
 
 `GATE_D_PROTOCOL_DIGEST = 36e4cfca043190d4d12c2ab9ee635d92bb479cb9b56d482ae1121fd797939729`
-`GATE_D_DIAGNOSTIC_DETERMINISTIC_DIGEST = 17d966950a657ed1476c6e73eaeda063f18fdc002d255d44c18505177ed0e24a`
 `GATE_D_DIAGNOSTIC_MANIFEST_DIGEST = 626a6fc149733e9a1e58baf3febbd604bd7b0429649ca56ee3fe4412758deb7a`
 
 Both artifacts are fully deterministic: re-running the diagnostic on the frozen inputs
@@ -156,9 +155,29 @@ Coverage guarantees, all class-independent:
   duplicating points. If fewer changed points exist than the reservation, the shortfall
   is recorded and reported (`changed_evidence_shortfall`).
 
+### 8.1 Extreme-strata boundary (`GATE_D_STRUCTURED_SAMPLER_V3`)
+
+`_select_within` funds each occupied stratum with `floor` points, and when the budget
+cannot cover every stratum it funds the largest strata first and leaves the rest at zero.
+That fallback branch previously cleared `quotas` without resetting `allocated`, so the
+funding loop broke on its first iteration, every quota stayed zero and the group
+contributed **no** structured points at all. The generic whole-scene refill in `sample()`
+then silently replaced that group's budget, bypassing both the candidate/context split and
+the within-group spatial/height structure.
+
+The fix resets `allocated` with the quotas and re-derives it from the grants actually
+made. `_select_within` now asserts its own contract: it returns exactly
+`min(budget, pool.size)` distinct indices drawn from the pool, never exceeding a
+stratum's real size, and raises rather than returning a short selection.
+
+The branch is **latent at the current diagnostic scale** — the minimum group budget is
+489 while the maximum possible strata count (spatial cells × height bands) is 344, so no
+of the 210 examples reaches it. It is covered by direct `_select_within` tests and by a
+`sample()`-level test that verifies the group budgets survive.
+
 ## 9. Fingerprint diagnostics
 
-`GATE_D_FINGERPRINT_V2` runs permutation tests (2000 permutations, α = 0.01) plus two
+`GATE_D_FINGERPRINT_V3` runs permutation tests (2000 permutations, α = 0.01) plus two
 mandatory negative controls.
 
 Checks: scene size constant per candidate, sampled size constant, drawn fraction
@@ -170,7 +189,40 @@ references *and standardisation statistics* from the other samples only, then pr
 then compares. The random control (features independent of the label) must land near
 chance, and the implanted control (a perfectly class-coded scalar) must be detected; if
 either control misbehaves, the gate itself fails. Measured: random control separation
-0.048 (limit 0.25), implanted shortcut separation 1.000 (minimum 0.90).
+0.048, implanted shortcut separation 1.000.
+
+### 9.1 Real-gate wiring
+
+The controls and the real gate now run the **same** detector: the permutation-calibrated
+max-feature class separation. The critical value is the **99th percentile of the
+permutation null of the same max statistic**, which already accounts for the
+max-over-columns selection and the sample size, floored at `MIN_REAL_SEPARATION = 0.25`
+so that a statistically detectable but practically useless separation cannot fail the
+gate on its own. Both the observed value and the calibrated critical value are reported.
+
+An earlier revision tested only `feature_stats[:, 0]`, so a shortcut in any other column
+would have passed, and it computed the LOO accuracy without letting it decide anything.
+
+### 9.2 Artifact columns versus defect columns
+
+The critical decision is taken on the **artifact columns**: the position statistics
+(`feature_mean[0]`, `feature_mean[1]`, `feature_std[0]`, `feature_std[1]`). The
+corruption re-labels points and never moves them, so these must stay class-invariant; a
+construction shortcut would appear here.
+
+The **defect columns** are the membership and vertical statistics
+(`feature_mean[2..3]`, `feature_std[2..3]`). They are *expected* to vary with the class,
+because that is the injected corruption: `feature_mean[3]` is the fraction of points the
+current segmentation claims, and `feature_std[3]` is exactly its Bernoulli function
+(measured correlation 1.000, max deviation 2.6e-05). They are reported as the defect
+signature rather than failed. A construction shortcut landing in a defect column would
+still be visible in that reported value.
+
+Measured on the 210-example diagnostic: artifact separation 0.0002 (critical value
+0.250), defect-signature separation 0.454. The full per-column breakdown is `[0.0002,
+0.0001, 0.190, 0.454, 0.0000, 0.0000, 0.0000, 0.411]` — the position columns are clean
+and all class information sits in the membership and vertical channels, which is the
+defect and not an artifact.
 
 The **membership-only shortcut** is the metric the Supervisor asked for. It fits a
 threshold on one partition and applies it to the other, and reports **balanced**
@@ -187,7 +239,7 @@ exists and **matches the current implementation**:
 ```json
 {"gate_d": "ACCEPTED", "training_allowed": true,
  "generator_version": "GATE_D_SYNTHETIC_GENERATOR_V2",
- "generator_digest": "363ca30e...",
+ "generator_digest": "fcadab3e...",
  "protocol_digest": "36e4cfca...",
  "accepted_by": "<supervisor>", "accepted_at": "<iso-8601>"}
 ```

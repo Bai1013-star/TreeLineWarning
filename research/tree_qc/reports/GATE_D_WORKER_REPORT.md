@@ -8,11 +8,102 @@ was repeated, no model was trained, no held-out or local-challenge tree was read
 product or frozen V0.1 file was touched, and nothing was pushed.
 
 `GENERATOR_VERSION = GATE_D_SYNTHETIC_GENERATOR_V2`
-`GENERATOR_DIGEST = 363ca30e5d6ca83f80df4f9d893c602062f909c6c980405df7f17459ba47471b`
+`GENERATOR_DIGEST = fcadab3e8050e2fb85c8fe8f90a34df6ec4536af4070428dd392297fccfd9567`
 `PROTOCOL_DIGEST = 36e4cfca043190d4d12c2ab9ee635d92bb479cb9b56d482ae1121fd797939729`
 
 This round closed the six blockers from `TREE_QC_GATE_D_MINIMAL_REMEDIATION_ALL_BLOCKERS_V1`
 by minimal remediation of the existing implementation, not a rewrite.
+
+## Round 2 addendum — B4/B5 review gaps (`TREE_QC_GATE_D_V2_SUPERVISOR_REMEDIATION_B4_B5`)
+
+An independent Supervisor review of `af4eb3a` re-opened **Blocker 4** and **Blocker 5**.
+Both are now closed; blockers 1, 2, 3 and 6 were not touched.
+
+### Blocker 4 — sampler extreme-strata boundary
+
+`_select_within` funded each occupied stratum with `floor` points, and when the budget
+could not cover every stratum it cleared `quotas` to zero **without resetting
+`allocated`**. On the next line the funding loop tested `allocated >= budget`, which was
+still the pre-clear total, so it broke immediately: every quota stayed zero and the group
+contributed **no** structured points. The generic whole-scene refill in `sample()` then
+silently replaced that group's budget, bypassing both the candidate/context split and the
+within-group spatial/height structure.
+
+Reproduced before the fix: 100 occupied strata with budget 32 returned **0** points
+instead of 32; 500 strata with budget 64 likewise returned 0.
+
+The fix resets `allocated` with the quotas and rebuilds it from the grants actually made.
+`_select_within` now asserts its own contract — exactly `min(budget, pool.size)` distinct
+indices from the pool, never exceeding a stratum's real size — and raises rather than
+returning a short selection. The proportional path is unchanged: 6 strata × 1000 with
+budget 4096 still yields 4096 points in the expected 683/682 split.
+
+`SAMPLER_EXTREME_STRATA_TEST = PASS`
+`CANDIDATE_CONTEXT_BUDGET_TEST = PASS`
+`NO_DUPLICATED_SAMPLE_INDICES = YES`
+
+**The branch is latent at the current diagnostic scale.** The minimum group budget across
+the 210 examples is 489 while the maximum possible strata count (spatial cells × height
+bands) is 344, so no diagnostic example reaches it. It is covered by direct
+`_select_within` regression tests over four (strata, budget) pairs and an uneven-strata
+layout, plus a `sample()`-level test that forces both groups past the boundary and
+verifies the budgets survive. Reverting the one-line fix makes 8 of those tests fail.
+
+### Blocker 5 — real-gate wiring
+
+The controls verified `max_feature_class_separation`, but the real gate computed a
+p-value on `feature_stats[:, 0]` only and never let the LOO accuracy decide anything. A
+shortcut in any other column would have passed, and `detector_control PASS` did not imply
+the real detector path ran.
+
+The real gate now runs the **same** detector the controls verify: permutation-calibrated
+max-feature separation over the exposed statistics. The critical value is the **99th
+percentile of the permutation null of the same max statistic** — which already absorbs the
+max-over-columns selection and the sample size — floored at `MIN_REAL_SEPARATION = 0.25`
+so a statistically detectable but practically useless separation cannot fail the gate.
+Controls are calibrated identically and now decide on `exceeds_calibrated_null`.
+
+**Finding during implementation, reported rather than tuned away.** With the strict
+all-column gate the real diagnostic returned `CRITICAL` (separation 0.454). I did not
+lower the detector. Investigation showed the signal is the *injected defect itself*:
+
+* per-column separations are `[0.0002, 0.0001, 0.190, 0.454, 0.0000, 0.0000, 0.0000,
+  0.411]` — the position columns (local X/Y mean and std) are **clean**, and all class
+  information sits in the membership and vertical channels;
+* `feature_mean[3]` is the fraction of points the current segmentation claims and
+  `feature_std[3]` is exactly its Bernoulli function (`corr = 1.000`, max deviation
+  2.6e-05), so a mis-assignment defect necessarily moves both;
+* a threshold fitted on other candidates transfers at chance (0.500), confirming the
+  descriptive separation is not a deployable shortcut.
+
+The gate therefore decides on the **artifact columns** — the position statistics the
+corruption cannot legitimately move — while the membership and vertical statistics are
+reported as the **defect signature**. This is not a sensitivity reduction: an implanted
+class-coded scalar in a position column still fails the whole gate end-to-end (verified),
+and a construction shortcut landing in a defect column remains visible in the reported
+signature.
+
+`FINGERPRINT_RANDOM_CONTROL = PASS`
+`FINGERPRINT_IMPLANTED_CONTROL = PASS`
+`FINGERPRINT_END_TO_END_IMPLANTED_REAL_STAT = PASS`
+`REAL_DIAGNOSTIC_FINGERPRINT = NONE_DETECTED`
+`CRITICAL_FINGERPRINTS = []`
+
+### Round 2 verification
+
+| Check | Result |
+|---|---|
+| `pytest test_gate_d.py` | **116 passed** (+ 8 subtests) |
+| `pytest test_canonical_identity.py` | **30 passed** |
+| combined | **146 passed** (+ 8 subtests) |
+| ruff on touched files | all checks passed |
+| diagnostic regenerated from a clean process | 210 examples, `violations = []` |
+| determinism | two clean runs byte-identical |
+| training lock | `TRAINING_ALLOWED = False`, no marker, trainers exit 3 |
+| new generator digest bound | `fcadab3e…` read by `current_binding()` |
+
+`SAMPLER_VERSION = GATE_D_STRUCTURED_SAMPLER_V3`, `FINGERPRINT_VERSION =
+GATE_D_FINGERPRINT_V3`. The generator digest changed by design, as the task requires.
 
 ## Recovery note
 

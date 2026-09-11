@@ -813,6 +813,278 @@ class FingerprintControls(unittest.TestCase):
         self.assertLess(split['best_balanced_accuracy'], 0.60)
 
 
+class SamplerExtremeStrata(unittest.TestCase):
+    """Blocker 4 regression: occupied strata may outnumber the group budget.
+
+    The earlier `_select_within` cleared `quotas` without resetting `allocated`, so the
+    funding loop broke immediately, the group contributed zero structured points, and the
+    generic whole-scene refill in `sample()` silently replaced the group budget.
+    """
+
+    def setUp(self):
+        self.rng = np.random.default_rng(0)
+
+    def _check_selection(self, pool, keys, budget, floor=1, label='case'):
+        picked = sampler._select_within(pool, keys, budget, self.rng, floor)
+        expected = min(budget, pool.size)
+        self.assertEqual(picked.size, expected, label)
+        self.assertGreater(picked.size, 0, label)
+        self.assertEqual(len(np.unique(picked)), picked.size, label)
+        self.assertTrue(np.isin(picked, pool).all(), label)
+        return picked
+
+    def test_more_strata_than_budget(self):
+        # 100 occupied strata, budget 32, floor 1: the exact reported failure.
+        picked = self._check_selection(np.arange(100), np.arange(100), 32,
+                                       label='100x1 budget32')
+        # The structured quota must survive: points reach many distinct strata.
+        self.assertGreaterEqual(len(np.unique(np.asarray(picked))), 32)
+
+    def test_many_strata_many_budgets(self):
+        for strata, budget in ((500, 64), (1000, 10), (200, 199), (64, 63)):
+            with self.subTest(strata=strata, budget=budget):
+                self._check_selection(np.arange(strata), np.arange(strata), budget,
+                                      label=f'{strata}x1 budget{budget}')
+
+    def test_uneven_strata_do_not_exceed_budget_or_size(self):
+        sizes = np.array([1] * 90 + [400] * 10)
+        keys = np.repeat(np.arange(sizes.size), sizes)
+        pool = np.arange(keys.size)
+        for budget in (32, 64, 512, 4096):
+            with self.subTest(budget=budget):
+                picked = self._check_selection(pool, keys, budget,
+                                               label=f'uneven budget{budget}')
+                counts = np.bincount(keys[picked], minlength=sizes.size)
+                # Never exceeds any stratum's real size.
+                self.assertTrue((counts <= sizes).all())
+
+    def test_budget_larger_than_pool_is_capped(self):
+        self._check_selection(np.arange(50), np.arange(50), 200, label='budget>pool')
+
+    def test_normal_proportional_path_still_works(self):
+        keys = np.repeat(np.arange(6), 1000)
+        pool = np.arange(6000)
+        picked = self._check_selection(pool, keys, 4096, label='proportional')
+        counts = np.bincount(keys[picked], minlength=6)
+        # Roughly equal strata must receive roughly equal quotas.
+        self.assertLess(int(counts.max() - counts.min()), 32)
+
+    def test_misaligned_keys_rejected(self):
+        with self.assertRaises(sampler.SamplerError):
+            sampler._select_within(np.arange(10), np.arange(9), 5, self.rng, 1)
+
+    def test_group_budget_preserved_when_strata_exceed_budget(self):
+        """`sample()` must not let the generic refill replace a group's budget."""
+        rng = np.random.default_rng(7)
+        count = 20000
+        points = rng.normal(size=(count, 3)).astype(np.float32)
+        candidate_mask = np.zeros(count, dtype=bool)
+        candidate_mask[:3000] = True
+        membership = candidate_mask.copy()
+        changed = np.zeros(count, dtype=bool)
+        changed[:100] = True
+
+        sample = sampler.sample(points, membership, changed, candidate_mask, 3)
+        diagnostics = sample.diagnostics
+        self.assertEqual(diagnostics['candidate_sampled'],
+                         diagnostics['candidate_budget'])
+        self.assertEqual(diagnostics['context_sampled'],
+                         diagnostics['context_budget'])
+        self.assertEqual(diagnostics['candidate_sampled']
+                         + diagnostics['context_sampled'],
+                         diagnostics['points_target'])
+        self.assertEqual(sample.indices.size, len(np.unique(sample.indices)))
+        self.assertEqual(sample.indices.size, diagnostics['points_target'])
+
+    def test_extreme_strata_scene_keeps_coverage_without_duplicates(self):
+        """A scene engineered so each group has far more strata than its budget."""
+        rng = np.random.default_rng(11)
+        # Candidate: 600 points spread over a wide, sparse footprint.
+        candidate = (rng.random((600, 3)).astype(np.float32) * 20.0)
+        # Context: a dense clump plus a thin wide shell, so strata are uneven.
+        dense = rng.normal(10.0, 0.05, size=(9000, 3)).astype(np.float32)
+        shell = (rng.random((3000, 3)).astype(np.float32) * 20.0)
+        points = np.concatenate([candidate, dense, shell])
+        candidate_mask = np.zeros(points.shape[0], dtype=bool)
+        candidate_mask[:600] = True
+        membership = candidate_mask.copy()
+        changed = np.zeros(points.shape[0], dtype=bool)
+        changed[:64] = True
+
+        sample = sampler.sample(points, membership, changed, candidate_mask, 5)
+        diagnostics = sample.diagnostics
+        self.assertEqual(sample.indices.size, diagnostics['points_target'])
+        self.assertEqual(len(np.unique(sample.indices)), sample.indices.size)
+        self.assertEqual(diagnostics['candidate_sampled'],
+                         diagnostics['candidate_budget'])
+        self.assertEqual(diagnostics['context_sampled'],
+                         diagnostics['context_budget'])
+        # Structured coverage survives the extreme strata layout.
+        self.assertGreaterEqual(diagnostics['spatial_cells_sampled'], 2)
+        self.assertGreaterEqual(len(diagnostics['height_bands_sampled']), 2)
+        self.assertGreaterEqual(
+            diagnostics['changed_evidence_sampled'],
+            min(sampler.MIN_CHANGED_EVIDENCE, int(changed.sum())))
+
+
+def _synthetic_records(feature_mean=None, feature_std=None,
+                       seed: int = 5) -> list:
+    """A full ExampleRecord set covering every class, for `analyse()` level tests.
+
+    Every field is plausible; only the exposed tensor statistics are manipulated.
+    """
+    rng = np.random.default_rng(seed)
+    classes = list(gen.CLASSES)
+    records = []
+    for index in range(210):
+        example_class = classes[index % len(classes)]
+        mean = list(feature_mean(index, example_class)) if callable(feature_mean) \
+            else list(feature_mean if feature_mean is not None else rng.normal(size=4))
+        std = list(feature_std(index, example_class)) if callable(feature_std) \
+            else list(feature_std if feature_std is not None
+                      else np.abs(rng.normal(size=4)) + 1.0)
+        records.append(fingerprint.ExampleRecord(
+            key=f'k{index}', candidate_id=f'c{index // 21}', partition='train',
+            example_class=example_class, severity=gen.SEVERITIES[index % 3],
+            label='PASS' if example_class == gen.GOOD else 'REVIEW_REQUIRED',
+            point_count=1000, sampled_points=4096, membership_fraction=0.2,
+            gt_membership_fraction=0.2, intended_membership_shift=0.0,
+            changed_membership_points=0, changed_membership_fraction=0.0,
+            candidate_points=100, context_points=900, claimed_points=0,
+            dropped_points=0, source_count=2, corruption_fraction=0.1,
+            drawn_fraction=0.1, corruption_axis=None, membership_sampled=0.2,
+            candidate_sampled=100, context_sampled=900, changed_evidence_sampled=0,
+            spatial_coverage=0.9, height_coverage=1.0,
+            feature_mean=tuple(mean), feature_std=tuple(std),
+            bbox_extent=(1.0, 1.0, 1.0), centroid_norm=1.0, duplicate_rate=0.0))
+    return records
+
+
+class FingerprintRealGate(unittest.TestCase):
+    """Blocker 5 end-to-end: the real `analyse()` gate must actually HOLD.
+
+    Testing the detector helper alone is not enough; these tests drive the full
+    `fingerprint.analyse(records)` path that produces `GENERATOR_FINGERPRINT`.
+
+    The gate decides on the **artifact columns** — the position statistics the corruption
+    cannot legitimately move — because those are where a construction shortcut would
+    appear. Membership and vertical statistics are the injected defect and are reported
+    as the defect signature.
+    """
+
+    @staticmethod
+    def _gate(result):
+        return next(c for c in result['checks']
+                    if c['check'] == 'metadata_leakage_tensor_stats')
+
+    def test_implanted_position_shortcut_makes_analyse_critical(self):
+        """A class-coded scalar in a position statistic must fail the whole gate."""
+        order = {name: index for index, name in enumerate(gen.CLASSES)}
+
+        def mean_of(index, example_class):
+            values = [0.0] * 4
+            values[1] = float(order[example_class])  # shortcut in feature_mean[1]
+            return values
+
+        result = fingerprint.analyse(_synthetic_records(feature_mean=mean_of))
+        self.assertEqual(result['GENERATOR_FINGERPRINT'], 'CRITICAL')
+        self.assertIn('metadata_leakage_tensor_stats',
+                      result['CRITICAL_FINGERPRINTS'])
+        check = self._gate(result)
+        self.assertTrue(check['critical'])
+        self.assertFalse(check['pass'])
+        self.assertTrue(check['detail']['artifact_detector'][
+            'exceeds_calibrated_null'])
+
+    def test_implanted_shortcut_in_std_position_column_is_found(self):
+        """The gate must not be blind to a shortcut outside column 0."""
+        order = {name: index for index, name in enumerate(gen.CLASSES)}
+
+        def std_of(index, example_class):
+            values = [1.0] * 4
+            values[0] = float(order[example_class])  # shortcut in feature_std[0]
+            return values
+
+        result = fingerprint.analyse(_synthetic_records(feature_std=std_of))
+        self.assertEqual(result['GENERATOR_FINGERPRINT'], 'CRITICAL')
+        self.assertIn('metadata_leakage_tensor_stats',
+                      result['CRITICAL_FINGERPRINTS'])
+        check = self._gate(result)
+        self.assertEqual(check['detail']['artifact_detector']['worst_column'], 2)
+
+    def test_random_exposed_statistics_do_not_trigger_the_gate(self):
+        result = fingerprint.analyse(_synthetic_records(seed=17))
+        self.assertEqual(result['GENERATOR_FINGERPRINT'], 'NONE_DETECTED')
+        self.assertNotIn('metadata_leakage_tensor_stats',
+                         result['CRITICAL_FINGERPRINTS'])
+        check = self._gate(result)
+        self.assertFalse(check['critical'])
+        self.assertTrue(check['pass'])
+
+    def test_analyse_reports_the_calibrated_detector(self):
+        result = fingerprint.analyse(_synthetic_records(seed=23))
+        artifact = self._gate(result)['detail']['artifact_detector']
+        for key in ('critical_value', 'observed_separation', 'p_value',
+                    'exceeds_calibrated_null'):
+            self.assertIn(key, artifact)
+        self.assertEqual(artifact['permutations'], fingerprint.PERMUTATIONS)
+        self.assertEqual(artifact['min_real_separation'],
+                         fingerprint.MIN_REAL_SEPARATION)
+
+    def test_controls_and_real_gate_use_the_same_statistic(self):
+        """The verified detector must be the one the real gate decides with."""
+        result = fingerprint.analyse(_synthetic_records(seed=29))
+        check = self._gate(result)
+        self.assertEqual(check['detail']['artifact_detector']['statistic'],
+                         'max over columns of the between-class variance share')
+        controls = result['controls']
+        self.assertIn('max-feature separation',
+                      controls['verification_basis'])
+        self.assertTrue(controls['detector_verified'])
+
+    def test_defect_columns_are_reported_as_signal_not_failure(self):
+        """A class-coded scalar in a defect column is the injected signal.
+
+        `feature_mean[3]` is the fraction of points the current segmentation claims and
+        `feature_std[3]` is exactly its Bernoulli function, so a mis-assignment defect
+        necessarily moves them. The gate must report that as the defect signature rather
+        than fail, while still passing the artifact columns.
+        """
+        order = {name: index for index, name in enumerate(gen.CLASSES)}
+
+        def mean_of(index, example_class):
+            values = [0.0] * 4
+            values[3] = float(order[example_class])  # membership statistic
+            return values
+
+        result = fingerprint.analyse(_synthetic_records(feature_mean=mean_of))
+        check = self._gate(result)
+        self.assertFalse(check['critical'])
+        self.assertFalse(check['detail']['artifact_detector'][
+            'exceeds_calibrated_null'])
+        # The class signal is still visible and reported.
+        self.assertGreater(
+            check['detail']['defect_signature']['observed_separation'],
+            fingerprint.MIN_REAL_SEPARATION)
+        self.assertEqual(
+            max(check['detail']['per_column_separation'][3],
+                check['detail']['per_column_separation'][7]),
+            check['detail']['defect_signature']['observed_separation'])
+
+    def test_detector_ignores_a_negligible_separation(self):
+        """A tiny but statistically detectable separation must not fail the gate."""
+        rng = np.random.default_rng(31)
+
+        def mean_of(index, example_class):
+            values = list(rng.normal(size=4))
+            # Barely class-correlated, far below the practical floor.
+            values[0] += 0.001 * list(gen.CLASSES).index(example_class)
+            return values
+
+        result = fingerprint.analyse(_synthetic_records(feature_mean=mean_of))
+        self.assertEqual(result['GENERATOR_FINGERPRINT'], 'NONE_DETECTED')
+
+
 class TrainingLock(unittest.TestCase):
     """Blocker 6: the lock binds the current generator and protocol digests."""
 

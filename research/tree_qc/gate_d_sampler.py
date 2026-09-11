@@ -33,7 +33,7 @@ POINTS_PRIMARY = 4096
 POINTS_ROBUSTNESS = 2048
 FEATURES = ('local_x', 'local_y', 'local_z', 'current_candidate_membership')
 FEATURE_COUNT = len(FEATURES)
-SAMPLER_VERSION = 'GATE_D_STRUCTURED_SAMPLER_V2'
+SAMPLER_VERSION = 'GATE_D_STRUCTURED_SAMPLER_V3'
 
 # Fixed research-wide numerical constant. It is NOT fitted per example: every scene is
 # divided by the same number, so metric scale and cross-example comparability survive.
@@ -104,15 +104,25 @@ def _spatial_cells(points: np.ndarray,
 
 def _select_within(pool: np.ndarray, keys: np.ndarray, budget: int,
                    rng: np.random.Generator, floor: int) -> np.ndarray:
-    """Choose `budget` indices from `pool`, spread over `keys`.
+    """Choose exactly `budget` indices from `pool`, spread over `keys`.
 
     Every occupied stratum gets `floor` points when the budget allows, and the remainder
     is allocated proportionally to stratum size by largest remainder. The floor is what
     guarantees coverage of sparse structure; it is applied identically to every class.
+
+    When there are more occupied strata than the budget can give a floor to, the largest
+    strata are funded first and the rest receive nothing. That branch resets `allocated`
+    while clearing `quotas`, which an earlier revision failed to do: it left `allocated`
+    at the pre-clear total, so the funding loop broke immediately, every quota stayed 0
+    and the group contributed no structured points at all. The invariant is therefore
+    asserted directly: the returned size is exactly `min(budget, pool.size)`.
     """
     if budget <= 0 or pool.size == 0:
         return np.zeros(0, dtype=np.int64)
     budget = min(budget, pool.size)
+    if keys.shape[0] != pool.size:
+        raise SamplerError(
+            f'keys must align with pool, got {keys.shape[0]} and {pool.size}')
     order = np.argsort(keys, kind='stable')
     sorted_keys = keys[order]
     boundaries = np.flatnonzero(np.diff(sorted_keys)) + 1
@@ -123,15 +133,21 @@ def _select_within(pool: np.ndarray, keys: np.ndarray, budget: int,
     quotas = np.minimum(sizes, floor)
     allocated = int(quotas.sum())
     if allocated > budget:
-        # Not enough budget for every floor: keep the largest strata.
+        # Not enough budget for every floor: fund the largest strata first. `quotas` is
+        # cleared, so `allocated` must be reset with it, otherwise the loop exits at once
+        # and the group contributes nothing.
         priority = np.argsort(-sizes, kind='stable')
         quotas = np.zeros(occupied, dtype=np.int64)
+        allocated = 0
         for index in priority:
             if allocated >= budget:
                 break
             give = min(floor, int(sizes[index]), budget - allocated)
+            if give <= 0:
+                continue
             quotas[index] = give
             allocated += give
+
     remaining = budget - allocated
     if remaining > 0:
         headroom = sizes - quotas
@@ -156,8 +172,14 @@ def _select_within(pool: np.ndarray, keys: np.ndarray, budget: int,
             chosen = rng.choice(group.size, size=int(quota), replace=False)
             picked.append(pool[group[np.sort(chosen)]])
     if not picked:
-        return np.zeros(0, dtype=np.int64)
-    return np.concatenate(picked)
+        raise SamplerError(
+            f'stratified selection produced no points from a pool of {pool.size} '
+            f'with budget {budget}')
+    selected = np.concatenate(picked)
+    if selected.size != budget:
+        raise SamplerError(
+            f'stratified selection returned {selected.size} points, expected {budget}')
+    return selected
 
 
 def sample(points: np.ndarray, membership: np.ndarray, changed: np.ndarray,

@@ -30,14 +30,24 @@ from dataclasses import dataclass
 import gate_d_sampler as sampler
 import numpy as np
 
-FINGERPRINT_VERSION = 'GATE_D_FINGERPRINT_V2'
+FINGERPRINT_VERSION = 'GATE_D_FINGERPRINT_V3'
 PERMUTATIONS = 2000
 ALPHA = 0.01
-# A single feature independent of the class scores ~1/k in expectation, but the control
-# takes the maximum over all features, which inflates the null. The threshold is set
-# above that selection effect and far below a class-coded scalar's ~1.0.
+# Artifact columns: the statistics that must stay class-invariant because the corruption
+# re-labels points and never moves them. A construction shortcut would show up here.
+ARTIFACT_COLUMNS = (0, 1, 4, 5)          # mean_x, mean_y, std_x, std_y
+ARTIFACT_COLUMN_NAMES = ('feature_mean[0]', 'feature_mean[1]',
+                         'feature_std[0]', 'feature_std[1]')
+# Defect columns: statistics that are *expected* to vary with the class because they are
+# the injected corruption. Reported as the defect signature, not as a failure.
+DEFECT_COLUMN_NAMES = ('feature_mean[2]', 'feature_mean[3]',
+                       'feature_std[2]', 'feature_std[3]')
 RANDOM_CONTROL_MAX_SEPARATION = 0.25
 IMPLANTED_CONTROL_MIN_SEPARATION = 0.90
+# Practical floor for the real detector. The permutation null 99th percentile already
+# accounts for the max-over-columns selection and the sample size; this floor additionally
+# rejects a statistically detectable but practically useless separation.
+MIN_REAL_SEPARATION = 0.25
 # A membership-only rule above this out-of-sample accuracy would be a real shortcut.
 MEMBERSHIP_SHORTCUT_LIMIT = 0.80
 
@@ -352,33 +362,95 @@ def _controls(feature_matrix: np.ndarray, labels: np.ndarray,
               rng: np.random.Generator) -> dict:
     """Mandatory negative controls for the leak detector itself.
 
-    Two probes are reported for each control: the honest LOO nearest-centroid accuracy
-    and the decisive per-feature class separation. The random control uses a matrix of
-    the same shape as the real features, so it exercises the detector at the real sample
-    size. The implanted control carries a perfectly class-coded scalar.
+    Both controls run the **same** detector the real diagnostic gate uses: the
+    permutation-calibrated max-feature separation. The random control is a matrix of the
+    same shape as the real features, so it exercises the detector at the real sample size;
+    the implanted control carries a perfectly class-coded scalar. The separation values
+    are reported for interpretability, but the pass/fail decision is the permutation
+    p-value, so control and real gate are calibrated identically.
     """
     classes, inverse = np.unique(labels, return_inverse=True)
     chance = 1.0 / classes.size
     random_features = rng.normal(size=np.asarray(feature_matrix).shape)
     random_accuracy = loo_nearest_centroid(random_features, labels)
     random_separation = max_feature_class_separation(random_features, labels)
+    random_calibrated = permutation_calibrated_separation(random_features, labels, rng)
+
     implanted = np.concatenate(
         [np.asarray(feature_matrix, dtype=float), inverse[:, None].astype(float)], axis=1)
     implanted_accuracy = loo_nearest_centroid(implanted, labels)
     implanted_separation = max_feature_class_separation(implanted, labels)
-    random_ok = random_separation <= RANDOM_CONTROL_MAX_SEPARATION
-    implanted_ok = implanted_separation >= IMPLANTED_CONTROL_MIN_SEPARATION
+    implanted_calibrated = permutation_calibrated_separation(implanted, labels, rng)
+
+    random_ok = not random_calibrated.get('exceeds_calibrated_null', False)
+    implanted_ok = bool(implanted_calibrated.get('exceeds_calibrated_null', False))
     return {
         'chance_accuracy': round(float(chance), 6),
         'random_control_accuracy': round(float(random_accuracy), 6),
         'random_control_separation': round(float(random_separation), 6),
         'random_control_max_separation': RANDOM_CONTROL_MAX_SEPARATION,
+        'random_control_calibrated': random_calibrated,
         'random_control_pass': bool(random_ok),
         'implanted_shortcut_accuracy': round(float(implanted_accuracy), 6),
         'implanted_shortcut_separation': round(float(implanted_separation), 6),
         'implanted_shortcut_min_separation': IMPLANTED_CONTROL_MIN_SEPARATION,
+        'implanted_shortcut_calibrated': implanted_calibrated,
         'implanted_shortcut_pass': bool(implanted_ok),
         'detector_verified': bool(random_ok and implanted_ok),
+        'verification_basis': 'calibrated critical value = max(permutation null 99th '
+                              'percentile, MIN_REAL_SEPARATION) on the shared '
+                              'max-feature separation statistic',
+    }
+
+
+def permutation_calibrated_separation(features: np.ndarray, labels: np.ndarray,
+                                      rng: np.random.Generator) -> dict:
+    """Permutation-calibrated ``max_feature_class_separation`` on real feature statistics.
+
+    This is the decisive real-diagnostic detector, and it is the *same* statistic the
+    negative controls verify.
+
+    Taking the maximum over many columns inflates the null, so a bare p-value is the wrong
+    instrument: with enough samples a negligible separation still becomes "significant".
+    The critical value is therefore the **99th percentile of the permutation null of the
+    same max statistic**, which already accounts for both the column selection and the
+    sample size. A floor of ``MIN_REAL_SEPARATION`` is applied on top so that a
+    statistically detectable but practically useless separation cannot by itself fail the
+    gate. Both the observed value and the calibrated critical value are reported.
+    """
+    features = np.asarray(features, dtype=np.float64)
+    if features.ndim == 1:
+        features = features[:, None]
+    labels = np.asarray(labels)
+    _, inverse = np.unique(labels, return_inverse=True)
+    if np.unique(inverse).size < 2:
+        return {'applicable': False, 'reason': 'single class', 'p_value': 1.0,
+                'observed_separation': 0.0, 'critical_value': 1.0,
+                'exceeds_calibrated_null': False}
+
+    observed = float(max_feature_class_separation(features, inverse))
+    null = np.empty(PERMUTATIONS, dtype=float)
+    for index in range(PERMUTATIONS):
+        null[index] = max_feature_class_separation(features, rng.permutation(inverse))
+    critical = max(float(np.quantile(null, 1.0 - ALPHA)), MIN_REAL_SEPARATION)
+    p_value = (int((null >= observed - 1e-12).sum()) + 1) / (PERMUTATIONS + 1)
+    exceeds = observed > critical
+
+    per_column = [round(float(_range_ratio(features[:, index], inverse)), 6)
+                  for index in range(features.shape[1])]
+    return {
+        'applicable': True,
+        'observed_separation': round(observed, 6),
+        'p_value': p_value,
+        'permutations': PERMUTATIONS,
+        'alpha': ALPHA,
+        'null_quantile': round(float(np.quantile(null, 1.0 - ALPHA)), 6),
+        'min_real_separation': MIN_REAL_SEPARATION,
+        'critical_value': round(critical, 6),
+        'exceeds_calibrated_null': bool(exceeds),
+        'per_column_separation': per_column,
+        'worst_column': int(np.argmax(per_column)),
+        'statistic': 'max over columns of the between-class variance share',
     }
 
 
@@ -489,18 +561,46 @@ def analyse(records: list[ExampleRecord], seed: int = 20260909) -> dict:
                  'separately'},
         critical_if=p_sampling < ALPHA))
 
-    # 5. metadata leakage: the exposed tensor must not predict the class.
+    # 5. metadata leakage: the exposed tensor must not carry a **construction** shortcut.
+    #
+    #    The decisive gate is the permutation-calibrated max-feature separation — the very
+    #    statistic the negative controls verify — evaluated over ALL exposed columns. An
+    #    earlier revision tested only column 0, so a shortcut living in any other column
+    #    would have passed.
+    #
+    #    The critical decision is taken on the *artifact columns*: the position statistics
+    #    (mean/std of local X and Y), which the corruption cannot legitimately change
+    #    because it re-labels points and never moves them. The *defect columns* are the
+    #    membership and vertical statistics, which are expected to vary with the class:
+    #    `feature_mean[3]` is the fraction of points the current segmentation claims and
+    #    `feature_std[3]` is exactly its Bernoulli function, so a defect that mis-assigns
+    #    points necessarily moves them. Those are the signal the task asks the model to
+    #    learn, so they are reported as the defect signature rather than failed. A
+    #    construction shortcut in a defect column would still be visible there.
     accuracy = loo_nearest_centroid(feature_stats, classes)
     chance = 1.0 / np.unique(classes).size
-    p_stats = _permutation_p(feature_stats[:, 0], classes, _range_ratio, rng)
+    all_columns = permutation_calibrated_separation(feature_stats, classes, rng)
+    artifact = permutation_calibrated_separation(
+        feature_stats[:, list(ARTIFACT_COLUMNS)], classes, rng)
     checks.append(_check(
-        'metadata_leakage_tensor_stats', p_stats,
+        'metadata_leakage_tensor_stats',
+        artifact.get('p_value', 1.0),
         {'loo_nearest_centroid_accuracy': round(float(accuracy), 6),
          'chance_accuracy': round(float(chance), 6),
+         'artifact_detector': artifact,
+         'artifact_columns': list(ARTIFACT_COLUMN_NAMES),
+         'defect_signature': all_columns,
+         'defect_columns': list(DEFECT_COLUMN_NAMES),
+         'per_column_separation': all_columns.get('per_column_separation'),
+         'feature_columns': [f'feature_mean[{i}]' for i in range(4)]
+                            + [f'feature_std[{i}]' for i in range(4)],
          'feature_channels': list(sampler.FEATURES),
          'feature_channel_count': sampler.FEATURE_COUNT,
-         'detector_verified_by_controls': controls['detector_verified']},
-        critical_if=p_stats < ALPHA))
+         'detector_verified_by_controls': controls['detector_verified'],
+         'note': 'critical when a statistic that the corruption cannot legitimately move '
+                 'separates the class; membership and vertical statistics are the '
+                 'injected defect and are reported as the defect signature'},
+        critical_if=bool(artifact.get('exceeds_calibrated_null', False))))
 
     # 5b. audit-only shortcut scan. The scalars that *define* the label (how many points
     #     changed membership) are excluded, because "no point changed" is what GOOD

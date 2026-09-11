@@ -1,8 +1,8 @@
 {
   "diagnostic_version": "GATE_D_SYNTHETIC_DIAGNOSTIC_V2",
   "generator_version": "GATE_D_SYNTHETIC_GENERATOR_V2",
-  "generator_digest": "363ca30e5d6ca83f80df4f9d893c602062f909c6c980405df7f17459ba47471b",
-  "sampler_version": "GATE_D_STRUCTURED_SAMPLER_V2",
+  "generator_digest": "fcadab3e8050e2fb85c8fe8f90a34df6ec4536af4070428dd392297fccfd9567",
+  "sampler_version": "GATE_D_STRUCTURED_SAMPLER_V3",
   "scene_version": "GATE_D_BASE_SCENE_V1",
   "membership_channel": "current_candidate_membership",
   "protocol": "GATE_C_CANONICAL_IDENTITY_PROTOCOL_V2 + source isolation remediation",
@@ -16,7 +16,7 @@
     "reason": "GATE_D_NOT_ACCEPTED",
     "expected": {
       "generator_version": "GATE_D_SYNTHETIC_GENERATOR_V2",
-      "generator_digest": "363ca30e5d6ca83f80df4f9d893c602062f909c6c980405df7f17459ba47471b",
+      "generator_digest": "fcadab3e8050e2fb85c8fe8f90a34df6ec4536af4070428dd392297fccfd9567",
       "protocol_digest": "36e4cfca043190d4d12c2ab9ee635d92bb479cb9b56d482ae1121fd797939729"
     }
   },
@@ -98,7 +98,7 @@
   "source_union_mismatches": 0,
   "violations": [],
   "fingerprint": {
-    "fingerprint_version": "GATE_D_FINGERPRINT_V2",
+    "fingerprint_version": "GATE_D_FINGERPRINT_V3",
     "examples": 210,
     "permutations": 2000,
     "alpha": 0.01,
@@ -127,7 +127,7 @@
       },
       {
         "check": "fixed_fraction_fingerprint",
-        "p_value": 0.555722,
+        "p_value": 0.587206,
         "pass": true,
         "critical": false,
         "detail": {
@@ -165,7 +165,7 @@
       },
       {
         "check": "class_specific_sampling_fingerprint",
-        "p_value": 0.078461,
+        "p_value": 0.076462,
         "pass": true,
         "critical": false,
         "detail": {
@@ -201,6 +201,80 @@
         "detail": {
           "loo_nearest_centroid_accuracy": 0.257143,
           "chance_accuracy": 0.142857,
+          "artifact_detector": {
+            "applicable": true,
+            "observed_separation": 0.000194,
+            "p_value": 1.0,
+            "permutations": 2000,
+            "alpha": 0.01,
+            "null_quantile": 0.091635,
+            "min_real_separation": 0.25,
+            "critical_value": 0.25,
+            "exceeds_calibrated_null": false,
+            "per_column_separation": [
+              0.000194,
+              6.4e-05,
+              0.0,
+              0.0
+            ],
+            "worst_column": 0,
+            "statistic": "max over columns of the between-class variance share"
+          },
+          "artifact_columns": [
+            "feature_mean[0]",
+            "feature_mean[1]",
+            "feature_std[0]",
+            "feature_std[1]"
+          ],
+          "defect_signature": {
+            "applicable": true,
+            "observed_separation": 0.453673,
+            "p_value": 0.0004997501249375312,
+            "permutations": 2000,
+            "alpha": 0.01,
+            "null_quantile": 0.098138,
+            "min_real_separation": 0.25,
+            "critical_value": 0.25,
+            "exceeds_calibrated_null": true,
+            "per_column_separation": [
+              0.000194,
+              6.4e-05,
+              0.190446,
+              0.453673,
+              0.0,
+              0.0,
+              2.1e-05,
+              0.410516
+            ],
+            "worst_column": 3,
+            "statistic": "max over columns of the between-class variance share"
+          },
+          "defect_columns": [
+            "feature_mean[2]",
+            "feature_mean[3]",
+            "feature_std[2]",
+            "feature_std[3]"
+          ],
+          "per_column_separation": [
+            0.000194,
+            6.4e-05,
+            0.190446,
+            0.453673,
+            0.0,
+            0.0,
+            2.1e-05,
+            0.410516
+          ],
+          "feature_columns": [
+            "feature_mean[0]",
+            "feature_mean[1]",
+            "feature_mean[2]",
+            "feature_mean[3]",
+            "feature_std[0]",
+            "feature_std[1]",
+            "feature_std[2]",
+            "feature_std[3]"
+          ],
           "feature_channels": [
             "local_x",
             "local_y",
@@ -208,7 +282,8 @@
             "current_candidate_membership"
           ],
           "feature_channel_count": 4,
-          "detector_verified_by_controls": true
+          "detector_verified_by_controls": true,
+          "note": "critical when a statistic that the corruption cannot legitimately move separates the class; membership and vertical statistics are the injected defect and are reported as the defect signature"
         }
       },
       {
@@ -276,12 +351,60 @@
       "random_control_accuracy": 0.138095,
       "random_control_separation": 0.047511,
       "random_control_max_separation": 0.25,
+      "random_control_calibrated": {
+        "applicable": true,
+        "observed_separation": 0.047511,
+        "p_value": 0.6696651674162919,
+        "permutations": 2000,
+        "alpha": 0.01,
+        "null_quantile": 0.09991,
+        "min_real_separation": 0.25,
+        "critical_value": 0.25,
+        "exceeds_calibrated_null": false,
+        "per_column_separation": [
+          0.022737,
+          0.040059,
+          0.023321,
+          0.018018,
+          0.019947,
+          0.047511,
+          0.022036,
+          0.027785
+        ],
+        "worst_column": 5,
+        "statistic": "max over columns of the between-class variance share"
+      },
       "random_control_pass": true,
       "implanted_shortcut_accuracy": 0.485714,
       "implanted_shortcut_separation": 1.0,
       "implanted_shortcut_min_separation": 0.9,
+      "implanted_shortcut_calibrated": {
+        "applicable": true,
+        "observed_separation": 1.0,
+        "p_value": 0.0004997501249375312,
+        "permutations": 2000,
+        "alpha": 0.01,
+        "null_quantile": 0.105558,
+        "min_real_separation": 0.25,
+        "critical_value": 0.25,
+        "exceeds_calibrated_null": true,
+        "per_column_separation": [
+          0.000194,
+          6.4e-05,
+          0.190446,
+          0.453673,
+          0.0,
+          0.0,
+          2.1e-05,
+          0.410516,
+          1.0
+        ],
+        "worst_column": 8,
+        "statistic": "max over columns of the between-class variance share"
+      },
       "implanted_shortcut_pass": true,
-      "detector_verified": true
+      "detector_verified": true,
+      "verification_basis": "calibrated critical value = max(permutation null 99th percentile, MIN_REAL_SEPARATION) on the shared max-feature separation statistic"
     },
     "audit_shortcut_scan": {
       "best_single_scalar": {
@@ -396,5 +519,5 @@
     "gate_d_visuals\\STEM_MISSING_MEDIUM_litchfield_tile_40_-100_Boom11.png",
     "gate_d_visuals\\NOISE_MEDIUM_litchfield_tile_40_-100_Boom11.png"
   ],
-  "deterministic_digest": "17d966950a657ed1476c6e73eaeda063f18fdc002d255d44c18505177ed0e24a"
+  "deterministic_digest": "37767da25f8b47f3c34157be4c3c7fb6af783cd824b67bfb4b1138d606a94d9e"
 }
