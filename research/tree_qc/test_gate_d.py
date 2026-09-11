@@ -966,10 +966,10 @@ class FingerprintRealGate(unittest.TestCase):
     Testing the detector helper alone is not enough; these tests drive the full
     `fingerprint.analyse(records)` path that produces `GENERATOR_FINGERPRINT`.
 
-    The gate decides on the **artifact columns** — the position statistics the corruption
-    cannot legitimately move — because those are where a construction shortcut would
-    appear. Membership and vertical statistics are the injected defect and are reported
-    as the defect signature.
+    The gate decides on the **artifact columns**: all six marginal XYZ mean/std
+    statistics. The corruption re-labels points and never moves them, so none of X, Y or Z
+    may vary with the synthetic class. The membership statistics are the injected defect
+    and are reported as the defect signature.
     """
 
     @staticmethod
@@ -977,40 +977,145 @@ class FingerprintRealGate(unittest.TestCase):
         return next(c for c in result['checks']
                     if c['check'] == 'metadata_leakage_tensor_stats')
 
-    def test_implanted_position_shortcut_makes_analyse_critical(self):
-        """A class-coded scalar in a position statistic must fail the whole gate."""
-        order = {name: index for index, name in enumerate(gen.CLASSES)}
+    @staticmethod
+    def _class_code(example_class):
+        return float(list(gen.CLASSES).index(example_class))
 
-        def mean_of(index, example_class):
+    def _implant_mean(self, column):
+        def factory(index, example_class):
             values = [0.0] * 4
-            values[1] = float(order[example_class])  # shortcut in feature_mean[1]
+            values[column] = self._class_code(example_class)
             return values
+        return factory
 
-        result = fingerprint.analyse(_synthetic_records(feature_mean=mean_of))
+    def _implant_std(self, column):
+        def factory(index, example_class):
+            values = [1.0] * 4
+            values[column] = self._class_code(example_class)
+            return values
+        return factory
+
+    # --- A..F: every XYZ marginal statistic must fail the gate ---
+
+    def test_implanted_mean_x_shortcut_is_critical(self):
+        result = fingerprint.analyse(
+            _synthetic_records(feature_mean=self._implant_mean(0)))
         self.assertEqual(result['GENERATOR_FINGERPRINT'], 'CRITICAL')
         self.assertIn('metadata_leakage_tensor_stats',
                       result['CRITICAL_FINGERPRINTS'])
         check = self._gate(result)
         self.assertTrue(check['critical'])
         self.assertFalse(check['pass'])
-        self.assertTrue(check['detail']['artifact_detector'][
-            'exceeds_calibrated_null'])
+        self.assertEqual(check['detail']['artifact_detector']['worst_column'], 0)
 
-    def test_implanted_shortcut_in_std_position_column_is_found(self):
-        """The gate must not be blind to a shortcut outside column 0."""
-        order = {name: index for index, name in enumerate(gen.CLASSES)}
+    def test_implanted_mean_y_shortcut_is_critical(self):
+        result = fingerprint.analyse(
+            _synthetic_records(feature_mean=self._implant_mean(1)))
+        self.assertEqual(result['GENERATOR_FINGERPRINT'], 'CRITICAL')
+        check = self._gate(result)
+        self.assertEqual(check['detail']['artifact_detector']['worst_column'], 1)
 
-        def std_of(index, example_class):
-            values = [1.0] * 4
-            values[0] = float(order[example_class])  # shortcut in feature_std[0]
-            return values
-
-        result = fingerprint.analyse(_synthetic_records(feature_std=std_of))
+    def test_implanted_mean_z_shortcut_is_critical(self):
+        """Z is a position statistic too: the earlier formulation excluded it."""
+        result = fingerprint.analyse(
+            _synthetic_records(feature_mean=self._implant_mean(2)))
         self.assertEqual(result['GENERATOR_FINGERPRINT'], 'CRITICAL')
         self.assertIn('metadata_leakage_tensor_stats',
                       result['CRITICAL_FINGERPRINTS'])
         check = self._gate(result)
+        self.assertTrue(check['critical'])
+        # Column 2 is mean_z in the artifact slice, which lists XYZ as 0,1,2,4,5,6.
         self.assertEqual(check['detail']['artifact_detector']['worst_column'], 2)
+        self.assertEqual(check['detail']['artifact_column_names'][2],
+                         'feature_mean[2]')
+
+    def test_implanted_std_x_shortcut_is_critical(self):
+        result = fingerprint.analyse(
+            _synthetic_records(feature_std=self._implant_std(0)))
+        self.assertEqual(result['GENERATOR_FINGERPRINT'], 'CRITICAL')
+        check = self._gate(result)
+        # std_x is the fourth artifact column (index 3).
+        self.assertEqual(check['detail']['artifact_detector']['worst_column'], 3)
+        self.assertEqual(check['detail']['artifact_column_names'][3],
+                         'feature_std[0]')
+
+    def test_implanted_std_y_shortcut_is_critical(self):
+        result = fingerprint.analyse(
+            _synthetic_records(feature_std=self._implant_std(1)))
+        self.assertEqual(result['GENERATOR_FINGERPRINT'], 'CRITICAL')
+        check = self._gate(result)
+        self.assertEqual(check['detail']['artifact_detector']['worst_column'], 4)
+
+    def test_implanted_std_z_shortcut_is_critical(self):
+        """The std-Z column must be inside the artifact gate as well."""
+        result = fingerprint.analyse(
+            _synthetic_records(feature_std=self._implant_std(2)))
+        self.assertEqual(result['GENERATOR_FINGERPRINT'], 'CRITICAL')
+        self.assertIn('metadata_leakage_tensor_stats',
+                      result['CRITICAL_FINGERPRINTS'])
+        check = self._gate(result)
+        self.assertEqual(check['detail']['artifact_detector']['worst_column'], 5)
+        self.assertEqual(check['detail']['artifact_column_names'][5],
+                         'feature_std[2]')
+
+    def test_all_six_xyz_columns_are_in_the_artifact_gate(self):
+        """The artifact slice must actually cover mean/std of X, Y and Z."""
+        self.assertEqual(fingerprint.ARTIFACT_COLUMNS, (0, 1, 2, 4, 5, 6))
+        self.assertEqual(fingerprint.ARTIFACT_COLUMN_NAMES,
+                         ('feature_mean[0]', 'feature_mean[1]', 'feature_mean[2]',
+                          'feature_std[0]', 'feature_std[1]', 'feature_std[2]'))
+        self.assertEqual(fingerprint.DEFECT_COLUMNS, (3, 7))
+        self.assertEqual(fingerprint.DEFECT_COLUMN_NAMES,
+                         ('feature_mean[3]', 'feature_std[3]'))
+        # And the running detector reports the same slice it decides on.
+        result = fingerprint.analyse(_synthetic_records(seed=41))
+        check = self._gate(result)
+        self.assertEqual(len(check['detail']['artifact_per_column_separation']), 6)
+        self.assertEqual(check['detail']['artifact_columns'],
+                         list(fingerprint.ARTIFACT_COLUMNS))
+
+    # --- membership defect signature stays a signal, not a failure ---
+
+    def test_membership_mean_defect_signature_is_reported_not_failed(self):
+        """A class signal in feature_mean[3] is the injected defect."""
+        result = fingerprint.analyse(
+            _synthetic_records(feature_mean=self._implant_mean(3)))
+        check = self._gate(result)
+        self.assertFalse(check['critical'])
+        self.assertFalse(check['detail']['artifact_detector'][
+            'exceeds_calibrated_null'])
+        self.assertGreater(
+            check['detail']['defect_signature']['observed_separation'],
+            fingerprint.MIN_REAL_SEPARATION)
+
+    def test_membership_std_defect_signature_is_reported_not_failed(self):
+        """A class signal in feature_std[3] is the Bernoulli image of the same defect."""
+        result = fingerprint.analyse(
+            _synthetic_records(feature_std=self._implant_std(3)))
+        check = self._gate(result)
+        self.assertFalse(check['critical'])
+        self.assertFalse(check['detail']['artifact_detector'][
+            'exceeds_calibrated_null'])
+        self.assertGreater(
+            check['detail']['defect_signature']['observed_separation'],
+            fingerprint.MIN_REAL_SEPARATION)
+
+    def test_membership_only_shortcut_gate_still_runs(self):
+        """Membership is not unconditionally safe: its own gate must remain active."""
+        result = fingerprint.analyse(_synthetic_records(seed=43))
+        names = [c['check'] for c in result['checks']]
+        self.assertIn('membership_only_shortcut', names)
+        check = next(c for c in result['checks']
+                     if c['check'] == 'membership_only_shortcut')
+        detail = check['detail']['detail']
+        for key in ('membership_fraction_cross_partition',
+                    'membership_fraction_leave_one_candidate_out_balanced_accuracy',
+                    'membership_zero_count_loo_balanced_accuracy',
+                    'membership_one_count_loo_balanced_accuracy',
+                    'any_membership_zero'):
+            self.assertIn(key, detail)
+
+    # --- controls and calibration ---
 
     def test_random_exposed_statistics_do_not_trigger_the_gate(self):
         result = fingerprint.analyse(_synthetic_records(seed=17))
@@ -1020,6 +1125,7 @@ class FingerprintRealGate(unittest.TestCase):
         check = self._gate(result)
         self.assertFalse(check['critical'])
         self.assertTrue(check['pass'])
+        self.assertTrue(result['controls']['random_control_pass'])
 
     def test_analyse_reports_the_calibrated_detector(self):
         result = fingerprint.analyse(_synthetic_records(seed=23))
@@ -1041,35 +1147,7 @@ class FingerprintRealGate(unittest.TestCase):
         self.assertIn('max-feature separation',
                       controls['verification_basis'])
         self.assertTrue(controls['detector_verified'])
-
-    def test_defect_columns_are_reported_as_signal_not_failure(self):
-        """A class-coded scalar in a defect column is the injected signal.
-
-        `feature_mean[3]` is the fraction of points the current segmentation claims and
-        `feature_std[3]` is exactly its Bernoulli function, so a mis-assignment defect
-        necessarily moves them. The gate must report that as the defect signature rather
-        than fail, while still passing the artifact columns.
-        """
-        order = {name: index for index, name in enumerate(gen.CLASSES)}
-
-        def mean_of(index, example_class):
-            values = [0.0] * 4
-            values[3] = float(order[example_class])  # membership statistic
-            return values
-
-        result = fingerprint.analyse(_synthetic_records(feature_mean=mean_of))
-        check = self._gate(result)
-        self.assertFalse(check['critical'])
-        self.assertFalse(check['detail']['artifact_detector'][
-            'exceeds_calibrated_null'])
-        # The class signal is still visible and reported.
-        self.assertGreater(
-            check['detail']['defect_signature']['observed_separation'],
-            fingerprint.MIN_REAL_SEPARATION)
-        self.assertEqual(
-            max(check['detail']['per_column_separation'][3],
-                check['detail']['per_column_separation'][7]),
-            check['detail']['defect_signature']['observed_separation'])
+        self.assertTrue(controls['implanted_shortcut_pass'])
 
     def test_detector_ignores_a_negligible_separation(self):
         """A tiny but statistically detectable separation must not fail the gate."""

@@ -2,7 +2,7 @@
 
 Status: **worker protocol, pending GPT-6 Supervisor acceptance. Training remains locked.**
 `GATE_D_GENERATOR_VERSION = GATE_D_SYNTHETIC_GENERATOR_V2`
-`GATE_D_GENERATOR_DIGEST = fcadab3e8050e2fb85c8fe8f90a34df6ec4536af4070428dd392297fccfd9567`
+`GATE_D_GENERATOR_DIGEST = f3c1bd98f74a9ff954e5455c306fb1db47a45a6eb4525dba99c1d587196d644a`
 
 The digest is the SHA-256 over the generator implementation files listed in
 `gate_d_diagnostic.GENERATOR_FILES`. The Supervisor's acceptance marker must carry this
@@ -205,30 +205,70 @@ would have passed, and it computed the LOO accuracy without letting it decide an
 
 ### 9.2 Artifact columns versus defect columns
 
-The critical decision is taken on the **artifact columns**: the position statistics
-(`feature_mean[0]`, `feature_mean[1]`, `feature_std[0]`, `feature_std[1]`). The
-corruption re-labels points and never moves them, so these must stay class-invariant; a
-construction shortcut would appear here.
+The critical decision is taken on the **artifact columns**: all six marginal XYZ mean/std
+statistics.
 
-The **defect columns** are the membership and vertical statistics
-(`feature_mean[2..3]`, `feature_std[2..3]`). They are *expected* to vary with the class,
-because that is the injected corruption: `feature_mean[3]` is the fraction of points the
-current segmentation claims, and `feature_std[3]` is exactly its Bernoulli function
-(measured correlation 1.000, max deviation 2.6e-05). They are reported as the defect
-signature rather than failed. A construction shortcut landing in a defect column would
-still be visible in that reported value.
+```
+ARTIFACT_COLUMNS      = (0, 1, 2, 4, 5, 6)
+ARTIFACT_COLUMN_NAMES = feature_mean[0] mean X
+                        feature_mean[1] mean Y
+                        feature_mean[2] mean Z
+                        feature_std[0]  std X
+                        feature_std[1]  std Y
+                        feature_std[2]  std Z
+```
 
-Measured on the 210-example diagnostic: artifact separation 0.0002 (critical value
-0.250), defect-signature separation 0.454. The full per-column breakdown is `[0.0002,
-0.0001, 0.190, 0.454, 0.0000, 0.0000, 0.0000, 0.411]` — the position columns are clean
-and all class information sits in the membership and vertical channels, which is the
-defect and not an artifact.
+The corruption re-labels points and never moves them, so **no** XYZ statistic — Z
+included — may vary with the synthetic class. Z matters specifically because the model
+input is local X/Y/Z plus membership: if the marginal Z distribution could predict the
+class, the model could learn "this class has a different Z distribution" instead of
+learning the spatial relation between XYZ and current membership. An earlier revision
+admitted only X and Y here and grouped Z with membership, which was inconsistent with the
+frozen corruption semantics.
 
-The **membership-only shortcut** is the metric the Supervisor asked for. It fits a
-threshold on one partition and applies it to the other, and reports **balanced**
-accuracy, because the diagnostic is deliberately imbalanced (6 GOOD vs 36 defect
-examples per candidate). Raw accuracy would report the majority-class rate and look like
-a shortcut when nothing was learned. Measured cross-partition balanced accuracy: 0.508.
+The **defect columns** are the membership statistics alone:
+
+```
+DEFECT_COLUMNS      = (3, 7)
+DEFECT_COLUMN_NAMES = feature_mean[3], feature_std[3]
+```
+
+The essence of every defect is a change to the current segmentation membership, so these
+are *expected* to vary with the class and are reported as the defect signature rather than
+failed: `feature_mean[3]` is the fraction of points the current segmentation claims and
+`feature_std[3]` is exactly its Bernoulli function (measured correlation 1.000, max
+deviation 2.6e-05).
+
+Membership is not treated as unconditionally safe. The independent **membership-only
+shortcut** gate still has to pass: it fits a threshold on one partition and applies it to
+the other and reports **balanced** accuracy, because the diagnostic is deliberately
+imbalanced (6 GOOD vs 36 defect examples per candidate); raw accuracy would report the
+majority-class rate. Measured cross-partition balanced accuracy: 0.508 (chance 0.5).
+
+Measured on the 210-example diagnostic:
+
+| Quantity | Value |
+|---|---|
+| XYZ artifact observed separation | 0.190446 |
+| XYZ artifact critical value | 0.250 |
+| XYZ artifact p-value | 0.0005 |
+| XYZ artifact worst column | 2 (`feature_mean[2]`, mean Z) |
+| XYZ artifact per-column | `[0.000194, 0.000064, 0.190446, 0.0, 0.0, 0.000021]` |
+| XYZ artifact gate | **PASS** (observed below the frozen 0.250 floor) |
+| membership defect signature | 0.453673 (`[0.453673, 0.410516]`) |
+
+`MIN_REAL_SEPARATION`, `ALPHA` and `PERMUTATIONS` were unchanged by this revision: the
+gate passes on its own merits, not by relaxing the detector.
+
+**Known property of the 0.190446 value, recorded for the Supervisor.** The sampler is
+provably class-agnostic: for a fixed seed it selects *identical point indices* for every
+class, so `mean_z` cannot be driven by the membership channel. The residual separation is
+a consequence of `enumerate_specs` assigning each class a distinct, deterministic seed
+range (`10007 * class_index`), so each class receives a different fixed set of RNG draws
+from the same scene. 120 independent draws of one scene give `mean_z` standard deviation
+0.000476, which is the same order as the between-class differences (~1e-3). The effect is
+therefore RNG-draw coupling rather than geometry or membership, it is far below the
+artifact floor, and it does not affect the membership-only gate.
 
 ## 10. Training lock
 
@@ -239,7 +279,7 @@ exists and **matches the current implementation**:
 ```json
 {"gate_d": "ACCEPTED", "training_allowed": true,
  "generator_version": "GATE_D_SYNTHETIC_GENERATOR_V2",
- "generator_digest": "fcadab3e...",
+ "generator_digest": "700bdca243...",
  "protocol_digest": "36e4cfca...",
  "accepted_by": "<supervisor>", "accepted_at": "<iso-8601>"}
 ```

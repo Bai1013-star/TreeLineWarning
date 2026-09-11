@@ -30,18 +30,31 @@ from dataclasses import dataclass
 import gate_d_sampler as sampler
 import numpy as np
 
-FINGERPRINT_VERSION = 'GATE_D_FINGERPRINT_V3'
+FINGERPRINT_VERSION = 'GATE_D_FINGERPRINT_V4'
 PERMUTATIONS = 2000
 ALPHA = 0.01
-# Artifact columns: the statistics that must stay class-invariant because the corruption
-# re-labels points and never moves them. A construction shortcut would show up here.
-ARTIFACT_COLUMNS = (0, 1, 4, 5)          # mean_x, mean_y, std_x, std_y
-ARTIFACT_COLUMN_NAMES = ('feature_mean[0]', 'feature_mean[1]',
-                         'feature_std[0]', 'feature_std[1]')
-# Defect columns: statistics that are *expected* to vary with the class because they are
-# the injected corruption. Reported as the defect signature, not as a failure.
-DEFECT_COLUMN_NAMES = ('feature_mean[2]', 'feature_mean[3]',
-                       'feature_std[2]', 'feature_std[3]')
+# feature_stats layout is [mean_x, mean_y, mean_z, mean_memb, std_x, std_y, std_z, std_memb].
+#
+# Artifact columns: every marginal XYZ mean/std statistic. The corruption re-labels points
+# and never moves them, so no XYZ statistic may vary with the synthetic class. Z is
+# included because the model input is local X/Y/Z plus membership: if the marginal Z
+# distribution could predict the class, the model could learn "CROWN trees have a
+# different Z distribution" instead of learning the spatial relation between XYZ and
+# current membership. A construction shortcut in any of these six columns is a failure.
+ARTIFACT_COLUMNS = (0, 1, 2, 4, 5, 6)
+ARTIFACT_COLUMN_NAMES = ('feature_mean[0]', 'feature_mean[1]', 'feature_mean[2]',
+                         'feature_std[0]', 'feature_std[1]', 'feature_std[2]')
+# Defect columns: the membership statistics alone. The essence of every synthetic defect
+# is a change to the current segmentation membership, so `feature_mean[3]` (the fraction
+# of points the current segmentation claims) and `feature_std[3]` (exactly its Bernoulli
+# function) are expected to vary with the class. They are reported as the defect
+# signature rather than failed, and the independent membership-only shortcut gate still
+# has to pass.
+DEFECT_COLUMNS = (3, 7)
+DEFECT_COLUMN_NAMES = ('feature_mean[3]', 'feature_std[3]')
+# Reported reference value only. The random control's pass/fail decision is its
+# permutation-calibrated p-value, not this constant, which is kept so the control's
+# observed separation can be read against a fixed yardstick across runs.
 RANDOM_CONTROL_MAX_SEPARATION = 0.25
 IMPLANTED_CONTROL_MIN_SEPARATION = 0.90
 # Practical floor for the real detector. The permutation null 99th percentile already
@@ -568,38 +581,48 @@ def analyse(records: list[ExampleRecord], seed: int = 20260909) -> dict:
     #    earlier revision tested only column 0, so a shortcut living in any other column
     #    would have passed.
     #
-    #    The critical decision is taken on the *artifact columns*: the position statistics
-    #    (mean/std of local X and Y), which the corruption cannot legitimately change
-    #    because it re-labels points and never moves them. The *defect columns* are the
-    #    membership and vertical statistics, which are expected to vary with the class:
-    #    `feature_mean[3]` is the fraction of points the current segmentation claims and
-    #    `feature_std[3]` is exactly its Bernoulli function, so a defect that mis-assigns
-    #    points necessarily moves them. Those are the signal the task asks the model to
-    #    learn, so they are reported as the defect signature rather than failed. A
-    #    construction shortcut in a defect column would still be visible there.
+    #    The critical decision is taken on the *artifact columns*: all six marginal XYZ
+    #    mean/std statistics. The corruption re-labels points and never moves them, so no
+    #    XYZ statistic may vary with the synthetic class — Z included. If the marginal Z
+    #    distribution could predict the class, the model could learn "this class has a
+    #    different Z distribution" instead of the spatial relation between XYZ and current
+    #    membership, which is the construction shortcut this gate exists to catch.
+    #
+    #    The *defect columns* are the membership statistics alone. The essence of every
+    #    defect is a change to the current segmentation membership, so `feature_mean[3]`
+    #    (the claimed fraction) and `feature_std[3]` (exactly its Bernoulli function) are
+    #    expected to vary with the class and are reported as the defect signature. The
+    #    independent membership-only shortcut gate below still has to pass, so membership
+    #    is not treated as unconditionally safe.
     accuracy = loo_nearest_centroid(feature_stats, classes)
     chance = 1.0 / np.unique(classes).size
     all_columns = permutation_calibrated_separation(feature_stats, classes, rng)
     artifact = permutation_calibrated_separation(
         feature_stats[:, list(ARTIFACT_COLUMNS)], classes, rng)
+    defect = permutation_calibrated_separation(
+        feature_stats[:, list(DEFECT_COLUMNS)], classes, rng)
     checks.append(_check(
         'metadata_leakage_tensor_stats',
         artifact.get('p_value', 1.0),
         {'loo_nearest_centroid_accuracy': round(float(accuracy), 6),
          'chance_accuracy': round(float(chance), 6),
          'artifact_detector': artifact,
-         'artifact_columns': list(ARTIFACT_COLUMN_NAMES),
-         'defect_signature': all_columns,
-         'defect_columns': list(DEFECT_COLUMN_NAMES),
+         'artifact_columns': list(ARTIFACT_COLUMNS),
+         'artifact_column_names': list(ARTIFACT_COLUMN_NAMES),
+         'artifact_per_column_separation': artifact.get('per_column_separation'),
+         'defect_signature': defect,
+         'defect_columns': list(DEFECT_COLUMNS),
+         'defect_column_names': list(DEFECT_COLUMN_NAMES),
+         'all_column_detector': all_columns,
          'per_column_separation': all_columns.get('per_column_separation'),
          'feature_columns': [f'feature_mean[{i}]' for i in range(4)]
                             + [f'feature_std[{i}]' for i in range(4)],
          'feature_channels': list(sampler.FEATURES),
          'feature_channel_count': sampler.FEATURE_COUNT,
          'detector_verified_by_controls': controls['detector_verified'],
-         'note': 'critical when a statistic that the corruption cannot legitimately move '
-                 'separates the class; membership and vertical statistics are the '
-                 'injected defect and are reported as the defect signature'},
+         'note': 'critical when any marginal XYZ statistic separates the class; the '
+                 'membership statistics are the injected defect and are reported as the '
+                 'defect signature, with an independent membership-only shortcut gate'},
         critical_if=bool(artifact.get('exceeds_calibrated_null', False))))
 
     # 5b. audit-only shortcut scan. The scalars that *define* the label (how many points

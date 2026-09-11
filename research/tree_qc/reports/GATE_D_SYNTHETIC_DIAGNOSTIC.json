@@ -1,7 +1,7 @@
 {
   "diagnostic_version": "GATE_D_SYNTHETIC_DIAGNOSTIC_V2",
   "generator_version": "GATE_D_SYNTHETIC_GENERATOR_V2",
-  "generator_digest": "fcadab3e8050e2fb85c8fe8f90a34df6ec4536af4070428dd392297fccfd9567",
+  "generator_digest": "f3c1bd98f74a9ff954e5455c306fb1db47a45a6eb4525dba99c1d587196d644a",
   "sampler_version": "GATE_D_STRUCTURED_SAMPLER_V3",
   "scene_version": "GATE_D_BASE_SCENE_V1",
   "membership_channel": "current_candidate_membership",
@@ -16,7 +16,7 @@
     "reason": "GATE_D_NOT_ACCEPTED",
     "expected": {
       "generator_version": "GATE_D_SYNTHETIC_GENERATOR_V2",
-      "generator_digest": "fcadab3e8050e2fb85c8fe8f90a34df6ec4536af4070428dd392297fccfd9567",
+      "generator_digest": "f3c1bd98f74a9ff954e5455c306fb1db47a45a6eb4525dba99c1d587196d644a",
       "protocol_digest": "36e4cfca043190d4d12c2ab9ee635d92bb479cb9b56d482ae1121fd797939729"
     }
   },
@@ -98,7 +98,7 @@
   "source_union_mismatches": 0,
   "violations": [],
   "fingerprint": {
-    "fingerprint_version": "GATE_D_FINGERPRINT_V3",
+    "fingerprint_version": "GATE_D_FINGERPRINT_V4",
     "examples": 210,
     "permutations": 2000,
     "alpha": 0.01,
@@ -195,7 +195,7 @@
       },
       {
         "check": "metadata_leakage_tensor_stats",
-        "p_value": 1.0,
+        "p_value": 0.0005,
         "pass": true,
         "critical": false,
         "detail": {
@@ -203,30 +203,75 @@
           "chance_accuracy": 0.142857,
           "artifact_detector": {
             "applicable": true,
-            "observed_separation": 0.000194,
-            "p_value": 1.0,
+            "observed_separation": 0.190446,
+            "p_value": 0.0004997501249375312,
             "permutations": 2000,
             "alpha": 0.01,
-            "null_quantile": 0.091635,
+            "null_quantile": 0.094557,
             "min_real_separation": 0.25,
             "critical_value": 0.25,
             "exceeds_calibrated_null": false,
             "per_column_separation": [
               0.000194,
               6.4e-05,
+              0.190446,
               0.0,
-              0.0
+              0.0,
+              2.1e-05
+            ],
+            "worst_column": 2,
+            "statistic": "max over columns of the between-class variance share"
+          },
+          "artifact_columns": [
+            0,
+            1,
+            2,
+            4,
+            5,
+            6
+          ],
+          "artifact_column_names": [
+            "feature_mean[0]",
+            "feature_mean[1]",
+            "feature_mean[2]",
+            "feature_std[0]",
+            "feature_std[1]",
+            "feature_std[2]"
+          ],
+          "artifact_per_column_separation": [
+            0.000194,
+            6.4e-05,
+            0.190446,
+            0.0,
+            0.0,
+            2.1e-05
+          ],
+          "defect_signature": {
+            "applicable": true,
+            "observed_separation": 0.453673,
+            "p_value": 0.0004997501249375312,
+            "permutations": 2000,
+            "alpha": 0.01,
+            "null_quantile": 0.08191,
+            "min_real_separation": 0.25,
+            "critical_value": 0.25,
+            "exceeds_calibrated_null": true,
+            "per_column_separation": [
+              0.453673,
+              0.410516
             ],
             "worst_column": 0,
             "statistic": "max over columns of the between-class variance share"
           },
-          "artifact_columns": [
-            "feature_mean[0]",
-            "feature_mean[1]",
-            "feature_std[0]",
-            "feature_std[1]"
+          "defect_columns": [
+            3,
+            7
           ],
-          "defect_signature": {
+          "defect_column_names": [
+            "feature_mean[3]",
+            "feature_std[3]"
+          ],
+          "all_column_detector": {
             "applicable": true,
             "observed_separation": 0.453673,
             "p_value": 0.0004997501249375312,
@@ -249,12 +294,6 @@
             "worst_column": 3,
             "statistic": "max over columns of the between-class variance share"
           },
-          "defect_columns": [
-            "feature_mean[2]",
-            "feature_mean[3]",
-            "feature_std[2]",
-            "feature_std[3]"
-          ],
           "per_column_separation": [
             0.000194,
             6.4e-05,
@@ -283,7 +322,7 @@
           ],
           "feature_channel_count": 4,
           "detector_verified_by_controls": true,
-          "note": "critical when a statistic that the corruption cannot legitimately move separates the class; membership and vertical statistics are the injected defect and are reported as the defect signature"
+          "note": "critical when any marginal XYZ statistic separates the class; the membership statistics are the injected defect and are reported as the defect signature, with an independent membership-only shortcut gate"
         }
       },
       {
@@ -519,5 +558,5 @@
     "gate_d_visuals\\STEM_MISSING_MEDIUM_litchfield_tile_40_-100_Boom11.png",
     "gate_d_visuals\\NOISE_MEDIUM_litchfield_tile_40_-100_Boom11.png"
   ],
-  "deterministic_digest": "37767da25f8b47f3c34157be4c3c7fb6af783cd824b67bfb4b1138d606a94d9e"
+  "deterministic_digest": "61609466379ddc9117221ced7b46ede03bbf4e61efef9984caf5df3af0d23b1c"
 }

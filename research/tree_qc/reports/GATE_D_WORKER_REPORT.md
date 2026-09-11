@@ -8,11 +8,105 @@ was repeated, no model was trained, no held-out or local-challenge tree was read
 product or frozen V0.1 file was touched, and nothing was pushed.
 
 `GENERATOR_VERSION = GATE_D_SYNTHETIC_GENERATOR_V2`
-`GENERATOR_DIGEST = fcadab3e8050e2fb85c8fe8f90a34df6ec4536af4070428dd392297fccfd9567`
+`GENERATOR_DIGEST = f3c1bd98f74a9ff954e5455c306fb1db47a45a6eb4525dba99c1d587196d644a`
 `PROTOCOL_DIGEST = 36e4cfca043190d4d12c2ab9ee635d92bb479cb9b56d482ae1121fd797939729`
 
 This round closed the six blockers from `TREE_QC_GATE_D_MINIMAL_REMEDIATION_ALL_BLOCKERS_V1`
 by minimal remediation of the existing implementation, not a rewrite.
+
+## Round 3 addendum — B5 final minimal remediation (`TREE_QC_GATE_D_V2_B5_FINAL_MINIMAL_REMEDIATION_V2`)
+
+The review confirmed blockers 1, 2, 3, 4 and 6 closed and left **Blocker 5** on HOLD: the
+artifact/defect split was internally inconsistent.
+
+`corruption` re-labels points and never moves them, so no XYZ statistic may vary with the
+synthetic class. The previous revision nevertheless admitted only X and Y to the artifact
+gate and grouped **Z with membership**, which was inconsistent with the frozen semantics.
+
+### What changed
+
+```
+ARTIFACT_COLUMNS      = (0, 1, 2, 4, 5, 6)     # mean/std of X, Y, Z
+ARTIFACT_COLUMN_NAMES = feature_mean[0..2], feature_std[0..2]
+DEFECT_COLUMNS        = (3, 7)                 # membership only
+DEFECT_COLUMN_NAMES   = feature_mean[3], feature_std[3]
+```
+
+`FINGERPRINT_VERSION = GATE_D_FINGERPRINT_V4`. The artifact slice is applied to the real
+detector (`feature_stats[:, list(ARTIFACT_COLUMNS)]`), and the detector now reports
+`artifact_columns`, `artifact_column_names` and `artifact_per_column_separation`
+explicitly, so the reported slice and the decided slice cannot drift apart. The defect
+signature is computed on its own membership slice.
+
+Z belongs in the artifact gate because the model input is local X/Y/Z plus membership. If
+the marginal Z distribution could predict the class, the model could learn "CROWN trees
+have a different Z distribution" instead of the spatial relation between XYZ and the
+current membership.
+
+No threshold was relaxed: `PERMUTATIONS = 2000`, `ALPHA = 0.01` and
+`MIN_REAL_SEPARATION = 0.25` are unchanged, and the generator was not modified.
+
+### Real diagnostic result
+
+| Quantity | Value |
+|---|---|
+| XYZ artifact observed separation | **0.190446** |
+| XYZ artifact critical value | 0.250 |
+| XYZ artifact p-value | 0.0005 |
+| XYZ artifact worst column | 2 (`feature_mean[2]`, mean Z) |
+| XYZ artifact per-column | `[0.000194, 0.000064, 0.190446, 0.0, 0.0, 0.000021]` |
+| XYZ artifact gate | **PASS** |
+| membership defect signature | 0.453673 |
+| REAL_DIAGNOSTIC_FINGERPRINT | `NONE_DETECTED` |
+
+### Recorded property of the 0.190446 value
+
+The value is above the permutation null but below the frozen 0.250 floor, so the gate
+passes. For completeness, its origin was investigated and is reported rather than
+explained away:
+
+* the sampler is **provably class-agnostic** — for a fixed seed it selects *identical
+  point indices* for every class, so `mean_z` cannot be driven by the membership channel;
+* 120 independent draws of one identical scene give `mean_z` standard deviation 0.000476
+  and range 0.0026, the same order as the between-class differences (~1e-3);
+* `enumerate_specs` assigns each class a distinct deterministic seed range
+  (`10007 * class_index`), so each class receives a different fixed set of RNG draws from
+  the same scene.
+
+The residual is therefore RNG-draw coupling, not geometry and not membership. It is far
+below the artifact floor, it does not affect the membership-only gate, and it is recorded
+here so the Supervisor can decide whether the class-indexed seed scheme should be
+decoupled in a future round.
+
+### New regression coverage
+
+Fourteen end-to-end tests drive the real `fingerprint.analyse(...)` path — not the helper:
+
+* A–F: a class-coded scalar implanted in **each** of the six XYZ columns
+  (`feature_mean[0..2]`, `feature_std[0..2]`) makes `GENERATOR_FINGERPRINT = CRITICAL`
+  and names the offending column;
+* the artifact slice is asserted to be exactly `(0, 1, 2, 4, 5, 6)` and the running
+  detector to report six artifact columns;
+* a class signal in `feature_mean[3]` and in `feature_std[3]` is reported as the defect
+  signature and does **not** fail the artifact gate;
+* the membership-only shortcut gate is asserted to still be present with all of its
+  sub-checks (`cross_partition`, `leave_one_candidate_out`, `zero/one count`,
+  `any_membership_zero`);
+* random label-independent features do not trigger the gate.
+
+### Round 3 verification
+
+| Check | Result |
+|---|---|
+| `pytest test_gate_d.py` | **123 passed** (+ 8 subtests) |
+| `pytest test_canonical_identity.py` | **30 passed** |
+| combined | **153 passed** (+ 8 subtests) |
+| ruff on touched files | all checks passed |
+| diagnostic regenerated from a clean process | 210 examples, `violations = []` |
+| determinism (two clean runs) | summary, manifest **and fingerprint artifact** byte-identical |
+| training lock | `TRAINING_ALLOWED = False`, no marker, trainers exit 3 |
+| old digest rejected | `fcadab3e…` marker refused with `GATE_D_NOT_ACCEPTED` |
+| new generator digest bound | `f3c1bd98…` read by `current_binding()` |
 
 ## Round 2 addendum — B4/B5 review gaps (`TREE_QC_GATE_D_V2_SUPERVISOR_REMEDIATION_B4_B5`)
 
