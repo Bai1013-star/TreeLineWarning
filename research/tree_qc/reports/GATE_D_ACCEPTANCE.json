@@ -1,0 +1,9 @@
+{
+  "gate_d": "ACCEPTED",
+  "training_allowed": true,
+  "generator_version": "GATE_D_SYNTHETIC_GENERATOR_V2",
+  "generator_digest": "a0550c17ff75cdf7d380fc677840c883f2262f2148a40edbbee0df35410b6b9d",
+  "protocol_digest": "36e4cfca043190d4d12c2ab9ee635d92bb479cb9b56d482ae1121fd797939729",
+  "accepted_by": "GPT-5.6 Sol Supervisor",
+  "accepted_at": "2026-09-11T22:40:00+08:00"
+}
