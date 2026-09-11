@@ -822,6 +822,40 @@ class HeldOutProvenance(unittest.TestCase):
                 cache_root=cache_root)
             self.assertEqual(dataset.exclusions, {})
 
+    def test_held_out_geometry_is_cached_under_its_own_key(self):
+        """Authorization is re-checked every call; the geometry itself is read once."""
+        candidate_id = self.candidates[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = heldout_module.load_heldout_geometry(root, PROVENANCE, self.view,
+                                                         candidate_id)
+            files = sorted(root.glob('*.npz'))
+            self.assertEqual(len(files), 1)
+            second = heldout_module.load_heldout_geometry(root, PROVENANCE, self.view,
+                                                          candidate_id)
+            self.assertEqual(first.candidate_id, second.candidate_id)
+            self.assertEqual(first.context_ids, second.context_ids)
+            self.assertTrue(np.array_equal(first.candidate.points,
+                                           second.candidate.points))
+            # The key depends on the frozen contract, not just the candidate id.
+            other = heldout_module.heldout_geometry_key(PROVENANCE, self.view,
+                                                        candidate_id, 1000)
+            self.assertNotEqual(
+                other,
+                heldout_module.heldout_geometry_key(PROVENANCE, self.view,
+                                                    candidate_id, 2000))
+            self.assertNotEqual(
+                other,
+                heldout_module.heldout_geometry_key(PROVENANCE, self.view,
+                                                    self.candidates[1], 1000))
+
+    def test_held_out_geometry_refuses_a_non_held_out_candidate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(heldout_module.HeldOutError):
+                heldout_module.load_heldout_geometry(
+                    Path(temporary), PROVENANCE, self.view,
+                    sorted(PROVENANCE.train.eligible)[0])
+
     def test_held_out_adapter_builds_a_usable_example(self):
         candidate_id = self.candidates[0]
         dataset = heldout_module.HeldOutDataset(

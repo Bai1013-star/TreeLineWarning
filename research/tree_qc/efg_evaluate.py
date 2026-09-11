@@ -48,7 +48,8 @@ class EvaluationError(RuntimeError):
 # --- scoring ---------------------------------------------------------------
 
 def score_dataset(model, dataset, device, batch_size: int = 8,
-                  strict_exclusion_rate: float = 0.05) -> dict:
+                  strict_exclusion_rate: float = 0.05, progress=None,
+                  progress_every: int = 40) -> dict:
     """Run the frozen network over every example and return scores and labels.
 
     ``dataset`` is any object exposing ``__len__`` and ``__getitem__ -> item`` with
@@ -61,6 +62,9 @@ def score_dataset(model, dataset, device, batch_size: int = 8,
     counted, never substituted. If more than ``strict_exclusion_rate`` of the partition is
     excluded, the run stops rather than reporting a metric over a silently shrunken
     population.
+
+    ``progress`` is called every ``progress_every`` batches with counts and an ETA, so a
+    held-out pass over 15 000 examples is visible while it runs.
     """
     import torch
     from efg_dataset import NotApplicableExample
@@ -74,6 +78,7 @@ def score_dataset(model, dataset, device, batch_size: int = 8,
     excluded: list[dict] = []
     started = time.time()
     total = len(dataset)
+    batches = 0
     with torch.no_grad():
         for start in range(0, total, batch_size):
             stop = min(start + batch_size, total)
@@ -84,6 +89,15 @@ def score_dataset(model, dataset, device, batch_size: int = 8,
                 except NotApplicableExample as exc:
                     excluded.append({'index': index, 'key': exc.key,
                                      'reason': exc.reason, 'detail': exc.detail})
+            batches += 1
+            if progress is not None and progress_every and batches % progress_every == 0:
+                elapsed = time.time() - started
+                rate = stop / max(elapsed, 1e-6)
+                progress({'done': stop, 'total': total,
+                          'scored': len(labels), 'excluded': len(excluded),
+                          'seconds': round(elapsed, 1),
+                          'examples_per_second': round(rate, 2),
+                          'eta_seconds': round((total - stop) / max(rate, 1e-6), 1)})
             if not batch_items:
                 continue
             features = np.stack([item.features for item in batch_items], axis=0)

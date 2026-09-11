@@ -609,6 +609,30 @@ def generate_selftest_example(spec: SamplingSpec, scene, provenance) -> Generate
 
 # --- held-out geometry loading ----------------------------------------------
 
+HELDOUT_GEOMETRY_CACHE_VERSION = 'EFG_HELDOUT_GEOMETRY_CACHE_V1'
+
+
+def heldout_geometry_key(provenance, view: HeldOutView, candidate_id: str,
+                         max_tree_points: int) -> str:
+    """Cache key for held-out geometry, mirroring the frozen key construction.
+
+    The frozen key is unavailable here because it calls ``authorized_context``, which
+    deliberately refuses a held-out tree. The components are otherwise the same, plus the
+    held-out candidate count so a changed manifest cannot re-use old geometry.
+    """
+    payload = json.dumps({
+        'version': HELDOUT_GEOMETRY_CACHE_VERSION,
+        'adapter_version': ADAPTER_VERSION,
+        'identity_manifest_digest': provenance.identity_manifest_digest,
+        'provenance_digest': provenance.provenance_digest,
+        'candidate': candidate_id,
+        'context': list(view.context[candidate_id]),
+        'held_out_candidates': len(view.eligible),
+        'max_tree_points': int(max_tree_points),
+    }, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()[:32]
+
+
 def load_heldout_geometry(cache_root: Path | str, provenance, view: HeldOutView,
                           candidate_id: str, data_root: Path | None = None,
                           max_tree_points: int = geometry_module.MAX_TREE_POINTS
@@ -616,10 +640,14 @@ def load_heldout_geometry(cache_root: Path | str, provenance, view: HeldOutView,
     """Authorise, then read, one held-out candidate and its held-out context.
 
     This is the held-out twin of ``gate_d_geometry.build_candidate_geometry``. It reuses
-    the frozen reader, the frozen stride cap and the frozen cache writer unchanged, and
-    replaces only the authorization step — which for held-out data is
+    the frozen reader, the frozen stride cap and the frozen cache reader/writer unchanged,
+    and replaces only the authorization step — which for held-out data is
     :func:`authorize_heldout_scene` rather than the model-selection allowlist that
     deliberately rejects held-out identifiers.
+
+    Geometry is cached under its own key in its own directory, so the three held-out
+    evaluation passes and the robustness sweep read each candidate from disk once instead
+    of once per pass. Authorization is re-checked on every call, cache hit or not.
     """
     eligible = set(view.eligible)
     if candidate_id not in eligible:
@@ -633,16 +661,29 @@ def load_heldout_geometry(cache_root: Path | str, provenance, view: HeldOutView,
     # whole batch instead of producing partially-legal geometry.
     authorize_heldout_scene(provenance, view, candidate_id,
                             (candidate_id, *context_ids))
-    root = Path(data_root) if data_root is not None else geometry_module.DATA_ROOT
-    candidate = geometry_module._read_tree(candidate_id, provenance, root,
-                                           max_tree_points)
-    context = tuple(geometry_module._read_tree(source_id, provenance, root,
-                                               max_tree_points)
-                    for source_id in context_ids)
     if provenance.partition_of[candidate_id] != HELD_OUT:
         raise HeldOutError('STOP_HELDOUT_MANIFEST_CHANGED', {
             'message': f'{candidate_id} is not held-out'})
-    return geometry_module.CandidateGeometry(candidate=candidate, context=context)
+
+    root = Path(cache_root)
+    path = root / (heldout_geometry_key(provenance, view, candidate_id, max_tree_points)
+                   + '.npz')
+    if path.exists():
+        try:
+            return geometry_module._read_cache(path, candidate_id)
+        except (OSError, KeyError, ValueError, geometry_module.GeometryError):
+            path.unlink(missing_ok=True)
+
+    data_root_path = (Path(data_root) if data_root is not None
+                      else geometry_module.DATA_ROOT)
+    candidate = geometry_module._read_tree(candidate_id, provenance, data_root_path,
+                                           max_tree_points)
+    context = tuple(geometry_module._read_tree(source_id, provenance, data_root_path,
+                                               max_tree_points)
+                    for source_id in context_ids)
+    built = geometry_module.CandidateGeometry(candidate=candidate, context=context)
+    geometry_module.write_cache(path, built)
+    return built
 
 
 def heldout_geometry_cache_root(layout) -> Path:

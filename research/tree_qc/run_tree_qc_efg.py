@@ -1398,8 +1398,11 @@ class Pilot:
         payload = engine.load_checkpoint(run['checkpoint_path'], map_location=device)
         model_object = engine.build_model(model).to(device)
         model_object.load_state_dict(payload['model_state'])
-        scored = evaluate_module.score_dataset(model_object, dataset, device,
-                                              batch_size=int(run['config']['batch_size']))
+        scored = evaluate_module.score_dataset(
+            model_object, dataset, device,
+            batch_size=int(run['config']['batch_size']),
+            progress=lambda row: self.progress(f'heldout.{label}', row),
+            progress_every=40)
         del model_object
         if device.type == 'cuda':
             torch.cuda.empty_cache()
