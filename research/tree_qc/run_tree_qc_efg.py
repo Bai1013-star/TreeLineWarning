@@ -306,11 +306,28 @@ class Pilot:
 
     # --- infrastructure ---------------------------------------------------
     def log(self, message: str) -> None:
+        """Every status line is printed, appended to the run log and mirrored on disk.
+
+        The log is the only durable trace of a run whose terminal may be closed at any
+        moment, so it never depends on a stage boundary to be written.
+        """
         if self.verbose:
             console(message)
+        self.log_line(message)
 
-    def status(self, message: str) -> None:
-        console(message)
+    def log_line(self, message: str) -> None:
+        path = self.layout.path('logs', 'autopilot.log')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('a', encoding='utf-8') as handle:
+            handle.write(f'{state_module.local_timestamp()} {message}\n')
+
+    def progress(self, label: str, payload: dict) -> None:
+        """Long-running work reports progress to the state, the status file and the log."""
+        self.state.payload.setdefault('progress', {})[label] = {
+            **payload, 'updated_at': state_module.local_timestamp()}
+        self.state.save()
+        self.write_current_status()
+        self.log_line(f'{label} {json.dumps(payload)}')
 
     def record_stage(self, name: str, status: str, evidence: dict | None = None,
                      **extra) -> None:
@@ -332,16 +349,35 @@ class Pilot:
                         'status': self.state.stage(name).get('status', 'PENDING')}
                        for name in STAGE_ORDER],
             'last_log': str(self.layout.path('logs', 'autopilot.log')),
+            'progress': self.state.payload.get('progress') or {},
             'run_root': str(self.layout.root),
         }
         state_module.atomic_write_json(self.layout.current_status_path, payload,
                                        with_digest=False)
 
-    def log_line(self, message: str) -> None:
-        path = self.layout.path('logs', 'autopilot.log')
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open('a', encoding='utf-8') as handle:
-            handle.write(f'{state_module.local_timestamp()} {message}\n')
+    def recover_interrupted_stages(self) -> dict:
+        """A stage left RUNNING by a dead process is resumable, not complete.
+
+        A power cut, a closed terminal or a killed process leaves the stage it was executing
+        recorded as ``RUNNING``. Such a stage is set back to ``PENDING`` with the interrupt
+        recorded, so the machine re-enters it instead of silently treating it as finished.
+        Anything the interrupted stage had already durably produced — cached examples, a
+        prewarm exclusion record, a checkpoint — is left in place, so re-entry continues
+        rather than restarts.
+        """
+        recovered = []
+        for name in STAGE_ORDER:
+            entry = self.state.payload['stages'].get(name)
+            if entry and entry.get('status') == state_module.RUNNING:
+                entry['status'] = state_module.PENDING
+                entry['interrupted'] = True
+                entry['interrupt_count'] = int(entry.get('interrupt_count', 0)) + 1
+                entry['last_interrupt_at'] = state_module.local_timestamp()
+                recovered.append(name)
+        if recovered:
+            self.state.save()
+            self.log(f"    recovered interrupted stage(s): {', '.join(recovered)}")
+        return {'recovered': recovered}
 
     def probe(self, name: str) -> tuple[bool, dict]:
         """Whether a stage may be skipped, using only digest-bound evidence."""
@@ -713,8 +749,15 @@ class Pilot:
                  'examples once (each is then a verified cache read) ...')
         tracker_train = trainer_module.NotApplicableTracker()
         tracker_validation = trainer_module.NotApplicableTracker()
-        train_result = train.prewarm(tracker_train)
-        validation_result = validation.prewarm(tracker_validation)
+        train_result = train.prewarm(
+            tracker_train,
+            progress=lambda row: self.progress(f'{name}.train', row))
+        self.log(f"    train prewarm done: {train_result['generated']} generated, "
+                 f"{train_result['excluded']} not applicable "
+                 f"({train_result['seconds']}s)")
+        validation_result = validation.prewarm(
+            tracker_validation,
+            progress=lambda row: self.progress(f'{name}.validation', row))
         summary = {
             'train': {**train_result,
                       'not_applicable': tracker_train.enforce(len(train.dataset.specs))},
@@ -1658,6 +1701,7 @@ class Pilot:
             (S_REPORT, self.stage_report),
         ]
         total = len(stages)
+        self.recover_interrupted_stages()
         for index, (name, function) in enumerate(stages, 1):
             self.guard_no_tuning_after_unblind()
             status = self.state.stage(name).get('status', 'PENDING')

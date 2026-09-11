@@ -313,6 +313,34 @@ class StateMachineGuards(unittest.TestCase):
                 state_module.RunLock(lock_path).acquire()
         self.assertFalse(lock_path.exists())
 
+    def test_O_an_interrupted_running_stage_is_resumed_not_marked_complete(self):
+        pilot = orchestrator.Pilot.__new__(orchestrator.Pilot)
+        pilot.layout = state_module.RunLayout(self.root)
+        pilot.state = state_module.AutopilotState(self.layout.state_path)
+        pilot.verbose = False
+        pilot.state.set_stage(orchestrator.S_PREWARM, state_module.RUNNING, {})
+        pilot.state.set_stage(orchestrator.S_ENVIRONMENT, state_module.COMPLETE, {})
+        result = pilot.recover_interrupted_stages()
+        self.assertEqual(result['recovered'], [orchestrator.S_PREWARM])
+        entry = pilot.state.stage(orchestrator.S_PREWARM)
+        self.assertEqual(entry['status'], state_module.PENDING)
+        self.assertTrue(entry['interrupted'])
+        self.assertEqual(entry['interrupt_count'], 1)
+        self.assertEqual(pilot.state.stage(orchestrator.S_ENVIRONMENT)['status'],
+                         state_module.COMPLETE)
+        # A second interruption accumulates rather than overwriting the history.
+        pilot.state.set_stage(orchestrator.S_PREWARM, state_module.RUNNING, {})
+        pilot.recover_interrupted_stages()
+        entry = pilot.state.stage(orchestrator.S_PREWARM)
+        self.assertEqual(entry['interrupt_count'], 2)
+
+    def test_O_a_stale_lock_from_a_dead_process_is_reclaimable(self):
+        lock_path = self.layout.lock_path
+        state_module.atomic_write_json(lock_path, {'pid': 999999999}, with_digest=False)
+        with state_module.RunLock(lock_path):
+            self.assertTrue(lock_path.exists())
+        self.assertFalse(lock_path.exists())
+
     def test_state_write_is_atomic_and_leaves_no_temp_file(self):
         self.state.set_stage(orchestrator.S_ENVIRONMENT, state_module.COMPLETE, {})
         self.state.save()

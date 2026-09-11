@@ -121,7 +121,7 @@ class CachedExampleSource:
         self.dataset.preload(candidate_ids)
         self.preloaded_candidates = len({spec.candidate_id for spec in self.dataset.specs})
 
-    def prewarm(self, tracker=None, progress_every: int = 2000) -> dict:
+    def prewarm(self, tracker=None, progress_every: int = 500, progress=None) -> dict:
         """Generate and cache every declared example once, up front.
 
         Doing this before training turns the first epoch from a full regeneration pass into
@@ -133,7 +133,8 @@ class CachedExampleSource:
         started = _time.time()
         generated = 0
         excluded = 0
-        for index in range(len(self.dataset)):
+        total = len(self.dataset)
+        for index in range(total):
             spec = self.dataset.specs[index]
             record = self.exclusion(index, spec.key)
             if record is not None:
@@ -148,10 +149,14 @@ class CachedExampleSource:
                 excluded += 1
                 if tracker is not None:
                     tracker.record(exc.key, exc.reason)
-            if progress_every and (index + 1) % progress_every == 0:
-                print(f'      prewarm {index + 1}/{len(self.dataset)} '
-                      f'({generated} generated, {excluded} not applicable)', flush=True)
-        return {'declared': len(self.dataset), 'generated': generated,
+            if progress is not None and progress_every and (index + 1) % progress_every == 0:
+                elapsed = _time.time() - started
+                rate = (index + 1) / max(elapsed, 1e-6)
+                progress({'done': index + 1, 'total': total, 'generated': generated,
+                          'excluded': excluded, 'seconds': round(elapsed, 1),
+                          'examples_per_second': round(rate, 2),
+                          'eta_seconds': round((total - index - 1) / max(rate, 1e-6), 1)})
+        return {'declared': total, 'generated': generated,
                 'excluded': excluded, 'seconds': round(_time.time() - started, 3),
                 'cache': self.cache_stats()}
 
