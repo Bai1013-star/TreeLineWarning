@@ -2,7 +2,7 @@
 
 Status: **worker protocol, pending GPT-6 Supervisor acceptance. Training remains locked.**
 `GATE_D_GENERATOR_VERSION = GATE_D_SYNTHETIC_GENERATOR_V2`
-`GATE_D_GENERATOR_DIGEST = 52c5d7dba0c0d7b80cd8a55be605aaebd0457469f2c278fb0d20b14f4a2fab6e`
+`GATE_D_GENERATOR_DIGEST = a76fc071489352f590827f253b0d97a92e7707032f08cdd6893f12de3c4a4007`
 
 The digest is the SHA-256 over the generator implementation files listed in
 `gate_d_diagnostic.GENERATOR_FILES`. The Supervisor's acceptance marker must carry this
@@ -210,8 +210,9 @@ Measured effect: the XYZ artifact separation fell from **0.190446 to 0.096966**.
 mandatory negative controls.
 
 Checks: scene size constant per candidate, sampled size constant, drawn fraction
-class-independent, corruption axis not class-constant, sampler shift class-independent,
-tensor statistics not predictive, membership-only shortcut, identifier independence.
+class-independent, corruption axis not class-constant, **sampling structure invariants**,
+**sampling ratio bias audit**, tensor statistics not predictive, membership-only shortcut,
+identifier independence.
 
 **The leak detector is honest and verified.** `loo_nearest_centroid` builds class
 references *and standardisation statistics* from the other samples only, then predicts,
@@ -219,6 +220,70 @@ then compares. The random control (features independent of the label) must land 
 chance, and the implanted control (a perfectly class-coded scalar) must be detected; if
 either control misbehaves, the gate itself fails. Measured: random control separation
 0.048, implanted shortcut separation 1.000.
+
+### 9.0 Sampling structure gate and ratio audit
+
+The previous `class_specific_sampling_fingerprint` was a **hard gate on an invalid
+statistic** and has been replaced. It freely permuted the class label across all 210
+examples, but those examples are repeated measures — 10 candidates × 7 classes ×
+3 severities — sharing one `BaseScene` per candidate and paired across the seven classes
+within a `(candidate, severity, repeat)` cell. A freely permuted label does not satisfy
+exchangeability, so the resulting p-value was not a valid hard-gate p-value. The measured
+gap is also an audit-only ratio error, and neither `membership_gap` nor the scene
+membership fraction is a model input.
+
+**`sampling_structure_invariants` (HARD GATE).** Records are grouped by
+`(partition, candidate_id, severity, points_target)`. Within a contract group every
+class-independent quantity must agree, and every example must satisfy its budget
+arithmetic. `critical = bool(violations)`.
+
+| Invariant | Requirement |
+|---|---|
+| `sampling_seed_class_independent` | one sampling seed per group |
+| `pre_reservation_indices_class_independent` | one base-selection digest per group |
+| `candidate_context_budget_independent` | same budgets and scene size per group |
+| `sampled_size_matches_target` | `sampled_points == points_target` |
+| `no_duplicate_indices` | base digest present; `candidate + context == points_target` |
+
+`sample()` now reports `pre_reservation_indices_digest` — a SHA-256 over the base selected
+indices taken *after* the candidate and context group selections but *before* any
+changed-evidence reservation. It depends only on the scene geometry and the
+class-independent sampling seed, so all seven classes of a contract group must produce the
+same value. This is a direct structural proof that the class cannot alter the base sample,
+and it needs no statistical assumption. The reservation may still change the final indices
+through changed membership, which is the changed-evidence requirement; the audit reports
+`reservation_replacements`, `reservation_shortfall`, `changed_evidence_available` and
+`changed_evidence_sampled`, and the final indices are deliberately **not** required to
+match across classes.
+
+**`sampling_ratio_bias_audit` (AUDIT ONLY, never a gate).** Records `mean_gap`,
+`mean_abs_gap`, `max_abs_gap`, `gap_std`, per-class/per-candidate/per-severity mean gaps,
+the scene membership fraction range and the reservation contribution, tagged
+`status = AUDIT_ONLY`, `is_gate = False`, with the caveats
+`REPEATED_MEASURES_NOT_FREELY_EXCHANGEABLE`, `NOT_VALID_AS_GATE_D_INFERENCE` and
+`ratio_estimator_bias_not_random_sampling_error`. The inferential p-value is not computed.
+
+Measured on the 210-example diagnostic:
+
+| Quantity | Value |
+|---|---|
+| contract groups checked | 30 |
+| sampling seed groups passed | 30 / 30 |
+| pre-reservation digest groups passed | 30 / 30 |
+| budget groups passed | 30 / 30 |
+| duplicate / target checks passed | 30 / 30 |
+| structure gate violations | `[]` |
+| ratio bias mean gap | -0.000389 |
+| ratio bias mean abs / max abs | 0.002192 / 0.011281 |
+| scene membership fraction range | 0.013921 … 0.687829 |
+| reservation examples / replacements / shortfall | 22 / 368 / 969 |
+
+Every hard gate on a **model-visible** channel remains hard, and none was relaxed:
+`point_count_fingerprint_source`, `point_count_fingerprint_sampled`,
+`fixed_fraction_fingerprint`, `fixed_axis_fingerprint`, `metadata_leakage_tensor_stats`
+(the six XYZ marginals), `membership_only_shortcut`, `metadata_leakage_identifiers` and the
+detector controls. If local X/Y/Z plus `current_candidate_membership` could stably predict
+the class or label, Gate D still HOLDs.
 
 ### 9.1 Real-gate wiring
 

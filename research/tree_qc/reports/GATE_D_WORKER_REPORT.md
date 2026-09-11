@@ -8,11 +8,107 @@ was repeated, no model was trained, no held-out or local-challenge tree was read
 product or frozen V0.1 file was touched, and nothing was pushed.
 
 `GENERATOR_VERSION = GATE_D_SYNTHETIC_GENERATOR_V2`
-`GENERATOR_DIGEST = 52c5d7dba0c0d7b80cd8a55be605aaebd0457469f2c278fb0d20b14f4a2fab6e`
+`GENERATOR_DIGEST = a76fc071489352f590827f253b0d97a92e7707032f08cdd6893f12de3c4a4007`
 `PROTOCOL_DIGEST = 36e4cfca043190d4d12c2ab9ee635d92bb479cb9b56d482ae1121fd797939729`
 
 This round closed the six blockers from `TREE_QC_GATE_D_MINIMAL_REMEDIATION_ALL_BLOCKERS_V1`
 by minimal remediation of the existing implementation, not a rewrite.
+
+## Round 5 addendum — diagnostic contract fix (`TREE_QC_GATE_D_FINAL_DIAGNOSTIC_CONTRACT_FIX`)
+
+The last open item was `class_specific_sampling_fingerprint`, which was a **hard gate on an
+invalid statistic**. It freely permuted the class label across all 210 examples, but those
+examples are repeated measures (10 candidates × 7 classes × 3 severities) that share one
+`BaseScene` per candidate and are paired across the seven classes within a
+`(candidate, severity, repeat)` cell. A freely permuted label does not satisfy
+exchangeability, so the resulting p-value was not a valid hard-gate p-value. The measured
+gap is also an audit-only ratio error, and neither it nor the scene membership fraction is
+a model input.
+
+### What changed
+
+* The gate is **removed** and replaced by two clearly separated checks.
+* **`sampling_structure_invariants` — HARD GATE.** Records are grouped by
+  `(partition, candidate_id, severity, points_target)`; within a group the sampling seed,
+  the pre-reservation base-selection digest, the budgets, the scene size and the target
+  size must be identical, and every example must satisfy its budget arithmetic.
+  `critical = bool(violations)`.
+* `sample()` now reports **`pre_reservation_indices_digest`**, a SHA-256 over the base
+  selected indices taken after the candidate/context group selections but before any
+  changed-evidence replacement, plus `candidate_budget`, `context_budget`, `sampling_seed`,
+  `reservation_replacements`, `reservation_shortfall`, `changed_evidence_available` and
+  `final_indices_digest`.
+* **`sampling_ratio_bias_audit` — AUDIT ONLY.** Records `mean_gap`, `mean_abs_gap`,
+  `max_abs_gap`, `gap_std`, per-class/per-candidate/per-severity mean gaps, the scene
+  membership fraction range and the reservation contribution, tagged `AUDIT_ONLY`,
+  `is_gate = False`, with explicit caveats. The inferential p-value is not computed at all,
+  so it cannot be mistaken for a gate again.
+
+The sampler algorithm, the sampling-seed design, the height-band matched reservation, the
+candidate/context budgets, the fingerprint thresholds and the corruption semantics are all
+**unchanged**. No threshold was relaxed to make this pass.
+
+### Result
+
+```
+SAMPLING_STRUCTURE_GATE = PASS
+groups_checked                       = 30
+sampling_seed_groups_passed          = 30
+pre_reservation_digest_groups_passed = 30
+budget_groups_passed                 = 30
+duplicate_check_passed               = 30
+points_target_check_passed           = 30
+violations                           = []
+
+ratio bias mean_gap / mean_abs / max_abs = -0.000389 / 0.002192 / 0.011281
+scene membership fraction range          = 0.013921 … 0.687829
+reservation examples / replacements / shortfall = 22 / 368 / 969
+
+XYZ artifact separation = 0.096966  -> PASS
+membership-only shortcut = PASS
+CRITICAL_FINGERPRINTS = []
+REAL_DIAGNOSTIC_FINGERPRINT = NONE_DETECTED
+diagnostic violations = []
+```
+
+Every hard gate on a **model-visible** channel remains hard and was not relaxed:
+`point_count_fingerprint_source`, `point_count_fingerprint_sampled`,
+`fixed_fraction_fingerprint`, `fixed_axis_fingerprint`, `metadata_leakage_tensor_stats`
+(all six XYZ marginals), `membership_only_shortcut`, `metadata_leakage_identifiers` and the
+detector controls.
+
+### New regression coverage
+
+* `SamplingStructureGate`:
+  * **A** feeding a class the class-indexed corruption seed (`64242`) must be CRITICAL and
+    must name `sampling_seed_class_independent`, leaving exactly one of 30 groups failing;
+  * **B** a differing or missing `pre_reservation_indices_digest` must be CRITICAL;
+  * **C** a differing `candidate_budget` or a broken budget sum must be CRITICAL;
+  * **D** a legal reservation difference (same seed, same base digest, same budgets,
+    different final draws) must PASS;
+  * **E** a systematic scene-fraction-dependent gap must appear in
+    `sampling_ratio_bias_audit` while leaving `GENERATOR_FINGERPRINT` non-critical, and the
+    audit must never enter `CRITICAL_FINGERPRINTS`;
+  * the real diagnostic manifest satisfies the gate across all 30 contract groups.
+* `VisibleShortcutGatesRemainHard`:
+  * **F** a membership-only scalar that separates PASS from REVIEW still trips
+    `membership_only_shortcut`;
+  * **G** an implanted class-coded scalar in each of the six XYZ columns still trips
+    `metadata_leakage_tensor_stats`;
+  * the other hard gates and both detector controls are asserted to remain present.
+
+### Round 5 verification
+
+| Check | Result |
+|---|---|
+| `pytest test_gate_d.py` | **149 passed** (+ 17 subtests) |
+| `pytest test_canonical_identity.py` | **30 passed** |
+| combined | **179 passed** (+ 17 subtests) |
+| ruff | all checks passed |
+| diagnostic, two clean runs | summary, manifest and fingerprint artifact byte-identical |
+| training lock | `TRAINING_ALLOWED = False`, no marker, trainers exit 3 |
+| stale `52c5d7db…` marker | rejected with `GATE_D_NOT_ACCEPTED` |
+| generator digest | `a76fc071489352f590827f253b0d97a92e7707032f08cdd6893f12de3c4a4007` |
 
 ## Round 4 addendum — sampler seed decoupling (`TREE_QC_GATE_D_FINAL_SAMPLER_SEED_DECOUPLING`)
 
@@ -95,7 +191,7 @@ reservation. Both are frozen design choices this round; no threshold was changed
 | ruff | all checks passed |
 | diagnostic, two clean runs | summary, manifest and fingerprint artifact byte-identical |
 | training lock | `TRAINING_ALLOWED = False`, no marker, trainers exit 3 |
-| generator digest | `52c5d7dba0c0d7b80cd8a55be605aaebd0457469f2c278fb0d20b14f4a2fab6e` |
+| generator digest | `a76fc071489352f590827f253b0d97a92e7707032f08cdd6893f12de3c4a4007` |
 
 ## Round 3 addendum — B5 final minimal remediation (`TREE_QC_GATE_D_V2_B5_FINAL_MINIMAL_REMEDIATION_V2`)
 

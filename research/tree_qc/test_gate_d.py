@@ -10,6 +10,7 @@ import hashlib
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import gate_d_dataset as dataset_module
@@ -941,6 +942,314 @@ class SamplerSeedContract(unittest.TestCase):
                 self.assertEqual(sample.indices.size, sampler.POINTS_PRIMARY)
 
 
+def _record_from_manifest_row(row: dict) -> fingerprint.ExampleRecord:
+    """Rebuild an ExampleRecord from a GATE_D_DIAGNOSTIC_MANIFEST.jsonl row."""
+    diagnostics = row['sample']['diagnostics']
+    return fingerprint.ExampleRecord(
+        key=row['key'], candidate_id=row['candidate_id'], partition=row['partition'],
+        example_class=row['class'], severity=row['severity'], label=row['label'],
+        point_count=row['point_count'], sampled_points=row['sample']['points'],
+        membership_fraction=row['membership_fraction'],
+        gt_membership_fraction=row['gt_membership_fraction'],
+        intended_membership_shift=round(
+            row['membership_fraction'] - row['gt_membership_fraction'], 6),
+        changed_membership_points=row['changed_membership_points'],
+        changed_membership_fraction=row['changed_membership_fraction'],
+        candidate_points=row['candidate_points'], context_points=row['context_points'],
+        claimed_points=row['claimed_points'], dropped_points=row['dropped_points'],
+        source_count=len(row['actual_point_source_ids']),
+        corruption_fraction=row['corruption']['fraction'],
+        drawn_fraction=row['corruption']['drawn_fraction'],
+        corruption_axis=tuple(row['corruption']['axis'])
+        if row['corruption'].get('axis') else None,
+        membership_sampled=diagnostics['membership_sampled'],
+        candidate_sampled=diagnostics['candidate_sampled'],
+        context_sampled=diagnostics['context_sampled'],
+        changed_evidence_sampled=diagnostics['changed_evidence_sampled'],
+        sampling_seed=int(diagnostics['sampling_seed']),
+        candidate_budget=int(diagnostics['candidate_budget']),
+        context_budget=int(diagnostics['context_budget']),
+        pre_reservation_indices_digest=diagnostics['pre_reservation_indices_digest'],
+        final_indices_digest=diagnostics['final_indices_digest'],
+        reservation_replacements=int(diagnostics['reservation_replacements']),
+        reservation_shortfall=int(diagnostics['reservation_shortfall']),
+        changed_evidence_available=int(diagnostics['changed_evidence_available']),
+        scene_points=int(row['point_count']),
+        spatial_coverage=row['spatial_coverage'], height_coverage=row['height_coverage'],
+        feature_mean=tuple(row['feature_mean']), feature_std=tuple(row['feature_std']),
+        bbox_extent=(1.0, 1.0, 1.0), centroid_norm=1.0, duplicate_rate=0.0)
+
+
+class SamplingStructureGate(unittest.TestCase):
+    """The structural hard gate that replaced the invalid permutation gate.
+
+    `class_specific_sampling_fingerprint` freely permuted the class label across 210
+    examples that are in fact repeated measures (10 candidates x 7 classes x 3 severities)
+    with paired structure, so its p-value did not satisfy exchangeability. It is replaced
+    by direct structural invariants, which are proven here to fire on a real violation and
+    to stay silent on a legal one.
+    """
+
+    CONTRACT = ('c2', 'MEDIUM')
+
+    def _records(self, **overrides):
+        return _synthetic_records(contracts={self.CONTRACT: overrides})
+
+    def _gate(self, records):
+        return next(c for c in fingerprint.analyse(records)['checks']
+                    if c['check'] == 'sampling_structure_invariants')
+
+    # --- Test A: a class-indexed sampling seed must fail ---
+
+    def test_class_indexed_sampling_seed_is_critical(self):
+        """Reproduce the original defect: one class is fed a class-indexed seed.
+
+        The corruption seed is `seed_base + 1_000_003 * candidate + 10_007 * class_index
+        + 101 * severity`, which is exactly the value the sampler used to receive. Feeding
+        it back for a single class must trip the structural gate.
+        """
+        records = _synthetic_records()
+        broken = []
+        for record in records:
+            if (record.candidate_id, record.severity) == self.CONTRACT \
+                    and record.example_class == gen.NOISE:
+                record = replace(record, sampling_seed=64242)
+            broken.append(record)
+        result = fingerprint.analyse(broken)
+        check = next(c for c in result['checks']
+                     if c['check'] == 'sampling_structure_invariants')
+        self.assertTrue(check['critical'])
+        self.assertFalse(check['pass'])
+        self.assertIn('sampling_structure_invariants',
+                      result['CRITICAL_FINGERPRINTS'])
+        self.assertIn('sampling_seed_class_independent',
+                      [v['invariant'] for v in check['detail']['violations']])
+        # Exactly one contract group is affected, out of the full grid.
+        self.assertEqual(check['detail']['sampling_seed_groups_passed'],
+                         check['detail']['groups_checked'] - 1)
+
+    # --- Test B: a class-dependent base sample must fail ---
+
+    def test_pre_reservation_digest_difference_is_critical(self):
+        base = _synthetic_records()
+        broken = []
+        for record in base:
+            if (record.candidate_id, record.severity) == self.CONTRACT \
+                    and record.example_class == gen.CROWN_INCOMPLETE:
+                record = replace(record,
+                                 pre_reservation_indices_digest='tampered-digest')
+            broken.append(record)
+        result = fingerprint.analyse(broken)
+        check = next(c for c in result['checks']
+                     if c['check'] == 'sampling_structure_invariants')
+        self.assertTrue(check['critical'])
+        self.assertIn('pre_reservation_indices_class_independent',
+                      [v['invariant'] for v in check['detail']['violations']])
+        self.assertIn('sampling_structure_invariants',
+                      result['CRITICAL_FINGERPRINTS'])
+
+    def test_missing_pre_reservation_digest_is_critical(self):
+        base = _synthetic_records()
+        broken = []
+        for record in base:
+            if (record.candidate_id, record.severity) == self.CONTRACT \
+                    and record.example_class == gen.GOOD:
+                record = replace(record, pre_reservation_indices_digest='')
+            broken.append(record)
+        check = self._gate(broken)
+        self.assertTrue(check['critical'])
+
+    # --- Test C: a budget difference must fail ---
+
+    def test_budget_difference_is_critical(self):
+        base = _synthetic_records()
+        broken = []
+        for record in base:
+            if (record.candidate_id, record.severity) == self.CONTRACT \
+                    and record.example_class == gen.MERGED_MULTI_TREE:
+                record = replace(record, candidate_budget=record.candidate_budget + 1)
+            broken.append(record)
+        result = fingerprint.analyse(broken)
+        check = next(c for c in result['checks']
+                     if c['check'] == 'sampling_structure_invariants')
+        self.assertTrue(check['critical'])
+        self.assertIn('candidate_context_budget_independent',
+                      [v['invariant'] for v in check['detail']['violations']])
+        self.assertIn('sampling_structure_invariants',
+                      result['CRITICAL_FINGERPRINTS'])
+
+    def test_budget_arithmetic_violation_is_critical(self):
+        """candidate_sampled + context_sampled must equal points_target."""
+        base = _synthetic_records()
+        broken = []
+        for record in base:
+            if (record.candidate_id, record.severity) == self.CONTRACT \
+                    and record.example_class == gen.STEM_MISSING:
+                record = replace(record, context_sampled=record.context_sampled - 1)
+            broken.append(record)
+        check = self._gate(broken)
+        self.assertTrue(check['critical'])
+        self.assertIn('no_duplicate_indices',
+                      [v['invariant'] for v in check['detail']['violations']])
+
+    # --- Test D: a legal reservation difference must pass ---
+
+    def test_legal_reservation_difference_passes(self):
+        """Different final draws from changed evidence are allowed and not a violation."""
+        base = _synthetic_records()
+        varied = []
+        for record in base:
+            if (record.candidate_id, record.severity) == self.CONTRACT \
+                    and record.example_class != gen.GOOD:
+                record = replace(record, final_indices_digest='reserved',
+                                 reservation_replacements=12,
+                                 changed_evidence_sampled=32)
+            varied.append(record)
+        check = self._gate(varied)
+        self.assertFalse(check['critical'])
+        self.assertTrue(check['pass'])
+        self.assertEqual(check['detail']['violations'], [])
+        self.assertGreater(check['detail']['groups_checked'], 0)
+        self.assertEqual(check['detail']['sampling_seed_groups_passed'],
+                         check['detail']['groups_checked'])
+        self.assertEqual(check['detail']['pre_reservation_digest_groups_passed'],
+                         check['detail']['groups_checked'])
+        self.assertEqual(check['detail']['budget_groups_passed'],
+                         check['detail']['groups_checked'])
+
+    def test_real_records_satisfy_the_gate(self):
+        """The contract holds on the real bounded diagnostic artifacts."""
+        manifest = (provenance_module.REPORTS / 'GATE_D_DIAGNOSTIC_MANIFEST.jsonl')
+        if not manifest.exists():
+            self.skipTest('diagnostic manifest not present')
+        rows = [json.loads(line) for line in
+                manifest.read_text(encoding='utf-8').splitlines() if line]
+        records = [_record_from_manifest_row(row) for row in rows]
+        check = self._gate(records)
+        self.assertTrue(check['pass'], check['detail']['violations'])
+        self.assertGreaterEqual(check['detail']['groups_checked'], 30)
+        self.assertEqual(check['detail']['sampling_seed_groups_passed'],
+                         check['detail']['groups_checked'])
+        self.assertEqual(check['detail']['pre_reservation_digest_groups_passed'],
+                         check['detail']['groups_checked'])
+
+    # --- Test E: the ratio bias is audit only ---
+
+    def test_ratio_bias_is_audited_not_gated(self):
+        """A small systematic, scene-dependent gap must not fail Gate D.
+
+        The gap is deliberately made a function of the candidate's scene membership
+        fraction (which is what the real diagnostic shows) and kept identical across
+        classes, so it is not a model-visible shortcut.
+        """
+        base = _synthetic_records()
+        gapped = []
+        for record in base:
+            scene = 0.1 + 0.02 * int(record.candidate_id.lstrip('c'))
+            gapped.append(replace(record, membership_fraction=scene,
+                                  membership_sampled=scene + 0.002))
+        result = fingerprint.analyse(gapped)
+        self.assertNotEqual(result['GENERATOR_FINGERPRINT'], 'CRITICAL')
+        self.assertEqual(result['CRITICAL_FINGERPRINTS'], [])
+        audit = next(c for c in result['checks']
+                     if c['check'] == 'sampling_ratio_bias_audit')
+        self.assertFalse(audit['critical'])
+        self.assertEqual(audit['detail']['status'], 'AUDIT_ONLY')
+        self.assertFalse(audit['detail']['is_gate'])
+        self.assertAlmostEqual(audit['detail']['mean_gap'], 0.002, places=6)
+        # The bias is visible in the audit even though it does not gate.
+        self.assertAlmostEqual(audit['detail']['max_abs_gap'], 0.002, places=6)
+        self.assertEqual(len(set(audit['detail']['per_class_mean_gap'].values())), 1)
+        for key in ('mean_abs_gap', 'max_abs_gap', 'per_class_mean_gap',
+                    'per_candidate_mean_gap', 'per_severity_mean_gap',
+                    'scene_membership_fraction_min',
+                    'scene_membership_fraction_max',
+                    'reservation_contribution', 'caveats'):
+            self.assertIn(key, audit['detail'])
+
+    def test_ratio_audit_never_enters_critical_fingerprints(self):
+        records = _synthetic_records()
+        result = fingerprint.analyse(records)
+        self.assertNotIn('sampling_ratio_bias_audit',
+                         result['CRITICAL_FINGERPRINTS'])
+        self.assertNotIn('class_specific_sampling_fingerprint',
+                         [c['check'] for c in result['checks']])
+
+
+class VisibleShortcutGatesRemainHard(unittest.TestCase):
+    """The gates on the real model-visible channels must stay hard."""
+
+    @staticmethod
+    def _gate(result, name):
+        return next(c for c in result['checks'] if c['check'] == name)
+
+    # --- Test F: a real membership-only shortcut must still fail ---
+
+    def test_membership_only_shortcut_is_critical(self):
+        """A membership scalar that separates PASS from REVIEW end to end."""
+        records = _synthetic_records()
+        # GOOD membership fraction near 1, every defect near 0: a saturated shortcut no
+        # matter which candidate or partition is used.
+        rigged = []
+        for record in records:
+            value = 0.99 if record.example_class == gen.GOOD else 0.01
+            rigged.append(replace(record, membership_sampled=value,
+                                  membership_fraction=value))
+        result = fingerprint.analyse(rigged)
+        check = self._gate(result, 'membership_only_shortcut')
+        self.assertTrue(check['critical'])
+        self.assertFalse(check['pass'])
+        self.assertIn('membership_only_shortcut',
+                      result['CRITICAL_FINGERPRINTS'])
+
+    # --- Test G: a real XYZ shortcut must still fail, per column ---
+
+    def test_xyz_shortcut_columns_remain_critical(self):
+        order = {name: index for index, name in enumerate(gen.CLASSES)}
+        for column in range(3):
+            with self.subTest(column=f'feature_mean[{column}]'):
+
+                def mean_of(index, example_class, column=column):
+                    values = [0.0] * 4
+                    values[column] = float(order[example_class])
+                    return values
+
+                result = fingerprint.analyse(
+                    _synthetic_records(feature_mean=mean_of))
+                self.assertEqual(result['GENERATOR_FINGERPRINT'], 'CRITICAL')
+                self.assertIn('metadata_leakage_tensor_stats',
+                              result['CRITICAL_FINGERPRINTS'])
+        for column in range(3):
+            with self.subTest(column=f'feature_std[{column}]'):
+
+                def std_of(index, example_class, column=column):
+                    values = [1.0] * 4
+                    values[column] = float(order[example_class])
+                    return values
+
+                result = fingerprint.analyse(
+                    _synthetic_records(feature_std=std_of))
+                self.assertEqual(result['GENERATOR_FINGERPRINT'], 'CRITICAL')
+                self.assertIn('metadata_leakage_tensor_stats',
+                              result['CRITICAL_FINGERPRINTS'])
+
+    def test_other_hard_gates_are_still_present(self):
+        result = fingerprint.analyse(_synthetic_records(seed=61))
+        names = [c['check'] for c in result['checks']]
+        for name in ('point_count_fingerprint_source',
+                     'point_count_fingerprint_sampled',
+                     'fixed_fraction_fingerprint',
+                     'fixed_axis_fingerprint',
+                     'metadata_leakage_tensor_stats',
+                     'membership_only_shortcut',
+                     'metadata_leakage_identifiers',
+                     'sampling_structure_invariants'):
+            self.assertIn(name, names, name)
+        self.assertTrue(result['controls']['detector_verified'])
+        self.assertTrue(result['controls']['random_control_pass'])
+        self.assertTrue(result['controls']['implanted_shortcut_pass'])
+
+
 class DatasetContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -1203,24 +1512,40 @@ class SamplerExtremeStrata(unittest.TestCase):
 
 
 def _synthetic_records(feature_mean=None, feature_std=None,
-                       seed: int = 5) -> list:
+                       seed: int = 5, contracts=None) -> list:
     """A full ExampleRecord set covering every class, for `analyse()` level tests.
 
-    Every field is plausible; only the exposed tensor statistics are manipulated.
+    Every field is plausible; only the exposed tensor statistics are manipulated. The
+    structural fields default to valid, class-independent values so the
+    `sampling_structure_invariants` hard gate is satisfied. ``contracts`` may be a mapping
+    ``(candidate_id, severity) -> dict`` of per-contract overrides used to violate an
+    invariant deliberately.
     """
     rng = np.random.default_rng(seed)
     classes = list(gen.CLASSES)
     records = []
-    for index in range(210):
-        example_class = classes[index % len(classes)]
+    candidate_count = 10
+    per_candidate = len(classes) * len(gen.SEVERITIES)   # 21
+    for index in range(candidate_count * per_candidate):
+        slot = index % per_candidate
+        candidate_id = f'c{index // per_candidate}'
+        example_class = classes[slot % len(classes)]
+        severity = gen.SEVERITIES[slot // len(classes)]
+        contract = (contracts or {}).get((candidate_id, severity), {})
+        sampling_seed = contract.get(
+            'sampling_seed',
+            sampler.sampling_seed('train', candidate_id, severity))
+        pre_digest = contract.get(
+            'pre_reservation_indices_digest', f'digest-{candidate_id}-{severity}')
         mean = list(feature_mean(index, example_class)) if callable(feature_mean) \
             else list(feature_mean if feature_mean is not None else rng.normal(size=4))
         std = list(feature_std(index, example_class)) if callable(feature_std) \
             else list(feature_std if feature_std is not None
                       else np.abs(rng.normal(size=4)) + 1.0)
         records.append(fingerprint.ExampleRecord(
-            key=f'k{index}', candidate_id=f'c{index // 21}', partition='train',
-            example_class=example_class, severity=gen.SEVERITIES[index % 3],
+            key=f'{candidate_id}|{example_class}|{severity}',
+            candidate_id=candidate_id, partition='train',
+            example_class=example_class, severity=severity,
             label='PASS' if example_class == gen.GOOD else 'REVIEW_REQUIRED',
             point_count=1000, sampled_points=4096, membership_fraction=0.2,
             gt_membership_fraction=0.2, intended_membership_shift=0.0,
@@ -1228,7 +1553,16 @@ def _synthetic_records(feature_mean=None, feature_std=None,
             candidate_points=100, context_points=900, claimed_points=0,
             dropped_points=0, source_count=2, corruption_fraction=0.1,
             drawn_fraction=0.1, corruption_axis=None, membership_sampled=0.2,
-            candidate_sampled=100, context_sampled=900, changed_evidence_sampled=0,
+            candidate_sampled=contract.get('candidate_sampled', 100),
+            context_sampled=contract.get('context_sampled', 900),
+            changed_evidence_sampled=0,
+            sampling_seed=sampling_seed,
+            candidate_budget=contract.get('candidate_budget', 100),
+            context_budget=contract.get('context_budget', 900),
+            pre_reservation_indices_digest=pre_digest,
+            final_indices_digest=f'final-{candidate_id}-{severity}-{example_class}',
+            reservation_replacements=0, reservation_shortfall=0,
+            changed_evidence_available=0, scene_points=1000,
             spatial_coverage=0.9, height_coverage=1.0,
             feature_mean=tuple(mean), feature_std=tuple(std),
             bbox_extent=(1.0, 1.0, 1.0), centroid_norm=1.0, duplicate_rate=0.0))

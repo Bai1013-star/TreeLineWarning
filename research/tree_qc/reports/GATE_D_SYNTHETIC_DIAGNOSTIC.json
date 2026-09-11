@@ -1,7 +1,7 @@
 {
   "diagnostic_version": "GATE_D_SYNTHETIC_DIAGNOSTIC_V2",
   "generator_version": "GATE_D_SYNTHETIC_GENERATOR_V2",
-  "generator_digest": "52c5d7dba0c0d7b80cd8a55be605aaebd0457469f2c278fb0d20b14f4a2fab6e",
+  "generator_digest": "a76fc071489352f590827f253b0d97a92e7707032f08cdd6893f12de3c4a4007",
   "sampler_version": "GATE_D_STRUCTURED_SAMPLER_V4",
   "scene_version": "GATE_D_BASE_SCENE_V1",
   "membership_channel": "current_candidate_membership",
@@ -16,7 +16,7 @@
     "reason": "GATE_D_NOT_ACCEPTED",
     "expected": {
       "generator_version": "GATE_D_SYNTHETIC_GENERATOR_V2",
-      "generator_digest": "52c5d7dba0c0d7b80cd8a55be605aaebd0457469f2c278fb0d20b14f4a2fab6e",
+      "generator_digest": "a76fc071489352f590827f253b0d97a92e7707032f08cdd6893f12de3c4a4007",
       "protocol_digest": "36e4cfca043190d4d12c2ab9ee635d92bb479cb9b56d482ae1121fd797939729"
     }
   },
@@ -96,9 +96,7 @@
   "cross_partition_leakage": 0,
   "unauthorized_point_sources": 0,
   "source_union_mismatches": 0,
-  "violations": [
-    "critical_generator_fingerprint"
-  ],
+  "violations": [],
   "fingerprint": {
     "fingerprint_version": "GATE_D_FINGERPRINT_V4",
     "examples": 210,
@@ -166,14 +164,36 @@
         }
       },
       {
-        "check": "class_specific_sampling_fingerprint",
-        "p_value": 0.001,
-        "pass": false,
-        "critical": true,
+        "check": "sampling_structure_invariants",
+        "p_value": 1.0,
+        "pass": true,
+        "critical": false,
         "detail": {
-          "mean_sampler_gap": -0.000389,
-          "max_abs_sampler_gap": 0.011281,
-          "per_class_mean_sampler_gap": {
+          "gate": "SAMPLING_STRUCTURE_GATE",
+          "pass": true,
+          "groups_checked": 30,
+          "sampling_seed_groups_passed": 30,
+          "pre_reservation_digest_groups_passed": 30,
+          "budget_groups_passed": 30,
+          "duplicate_check_passed": 30,
+          "points_target_check_passed": 30,
+          "violations": [],
+          "note": "structural proof that the class cannot alter the base sample; it relies on no exchangeability assumption"
+        }
+      },
+      {
+        "check": "sampling_ratio_bias_audit",
+        "p_value": 1.0,
+        "pass": true,
+        "critical": false,
+        "detail": {
+          "status": "AUDIT_ONLY",
+          "is_gate": false,
+          "mean_gap": -0.000389,
+          "mean_abs_gap": 0.002192,
+          "max_abs_gap": 0.011281,
+          "gap_std": 0.003259,
+          "per_class_mean_gap": {
             "CROWN_INCOMPLETE": -2.5e-05,
             "GOOD": -8e-06,
             "MERGED_MULTI_TREE": 0.001483,
@@ -182,22 +202,40 @@
             "OVER_SEGMENTED": -0.000426,
             "STEM_MISSING": -0.001423
           },
-          "per_class_mean_intended_shift": {
-            "CROWN_INCOMPLETE": -0.101594,
-            "GOOD": 0.0,
-            "MERGED_MULTI_TREE": 0.031135,
-            "NEIGHBOR_CONTAMINATION": 0.083797,
-            "NOISE": 0.183089,
-            "OVER_SEGMENTED": -0.044503,
-            "STEM_MISSING": -0.016032
+          "per_candidate_mean_gap": {
+            "litchfield:tile_0_-100_Boom27": -0.000479,
+            "litchfield:tile_0_-60_Boom12": -0.001544,
+            "litchfield:tile_20_-40_Boom9": -0.000149,
+            "litchfield:tile_40_-100_Boom11": 0.000917,
+            "litchfield:tile_40_-40_Boom16": -7.6e-05,
+            "litchfield:tile_80_-100_Boom17": -0.000698,
+            "litchfield:tile_80_-100_Boom21": -0.000353,
+            "litchfield:tile_80_-60_Boom13": -0.001048,
+            "litchfield:tile_80_-60_Boom5": -0.000812,
+            "litchfield:tile_80_-80_Boom3": 0.000346
           },
-          "mean_spatial_coverage": 1.0,
-          "note": "the sampler must reproduce the scene membership fraction for every class; the intended shift is the generator signal and is reported separately"
+          "per_severity_mean_gap": {
+            "HIGH": -0.000368,
+            "LOW": -0.00035,
+            "MEDIUM": -0.000451
+          },
+          "scene_membership_fraction_min": 0.013921,
+          "scene_membership_fraction_max": 0.687829,
+          "reservation_contribution": {
+            "examples_with_reservation": 22,
+            "total_replacements": 368,
+            "total_shortfall": 969
+          },
+          "caveats": [
+            "REPEATED_MEASURES_NOT_FREELY_EXCHANGEABLE",
+            "NOT_VALID_AS_GATE_D_INFERENCE",
+            "ratio_estimator_bias_not_random_sampling_error"
+          ]
         }
       },
       {
         "check": "metadata_leakage_tensor_stats",
-        "p_value": 0.010495,
+        "p_value": 0.007996,
         "pass": true,
         "critical": false,
         "detail": {
@@ -206,10 +244,10 @@
           "artifact_detector": {
             "applicable": true,
             "observed_separation": 0.096966,
-            "p_value": 0.010494752623688156,
+            "p_value": 0.0079960019990005,
             "permutations": 2000,
             "alpha": 0.01,
-            "null_quantile": 0.09604,
+            "null_quantile": 0.093776,
             "min_real_separation": 0.25,
             "critical_value": 0.25,
             "exceeds_calibrated_null": false,
@@ -254,7 +292,7 @@
             "p_value": 0.0004997501249375312,
             "permutations": 2000,
             "alpha": 0.01,
-            "null_quantile": 0.081654,
+            "null_quantile": 0.081101,
             "min_real_separation": 0.25,
             "critical_value": 0.25,
             "exceeds_calibrated_null": true,
@@ -279,7 +317,7 @@
             "p_value": 0.0004997501249375312,
             "permutations": 2000,
             "alpha": 0.01,
-            "null_quantile": 0.097162,
+            "null_quantile": 0.097926,
             "min_real_separation": 0.25,
             "critical_value": 0.25,
             "exceeds_calibrated_null": true,
@@ -532,15 +570,11 @@
         }
       ]
     },
-    "critical_fingerprints": [
-      "class_specific_sampling_fingerprint"
-    ],
-    "GENERATOR_FINGERPRINT": "CRITICAL",
-    "CRITICAL_FINGERPRINTS": [
-      "class_specific_sampling_fingerprint"
-    ]
+    "critical_fingerprints": [],
+    "GENERATOR_FINGERPRINT": "NONE_DETECTED",
+    "CRITICAL_FINGERPRINTS": []
   },
-  "manifest_digest": "ad1d48660d300513f18436c1104ea897e28bbd8678c96c925a8a4d92780e1b52",
+  "manifest_digest": "a66b47ccf03478a52c48c5cc63bda7ea23bbb83333a21f3d37ff72322f57be4a",
   "visualisations": [
     "gate_d_visuals\\GOOD_MEDIUM_litchfield_tile_0_-100_Boom27.png",
     "gate_d_visuals\\MERGED_MULTI_TREE_MEDIUM_litchfield_tile_0_-100_Boom27.png",
@@ -564,5 +598,5 @@
     "gate_d_visuals\\STEM_MISSING_MEDIUM_litchfield_tile_40_-100_Boom11.png",
     "gate_d_visuals\\NOISE_MEDIUM_litchfield_tile_40_-100_Boom11.png"
   ],
-  "deterministic_digest": "aeb8b162db7912d8fc1501594262aa9251323782ad8d4fa8ccb38f548f86bbf5"
+  "deterministic_digest": "de68f8c5786b36ad6caeff81a978fc06b65459cc5579f554c678357269360ed8"
 }

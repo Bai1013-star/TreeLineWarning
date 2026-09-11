@@ -108,6 +108,16 @@ def sampling_seed(partition: str, candidate_id: str, severity: str,
 _ISSUED_SAMPLING_SEEDS: set[int] = set()
 
 
+def indices_digest(indices: np.ndarray) -> str:
+    """Stable SHA-256 over a deterministic int64 index array.
+
+    Used to compare base selections across the seven synthetic classes of a contract
+    group without depending on membership, the changed mask, the class or the label.
+    """
+    payload = np.ascontiguousarray(np.asarray(indices, dtype='<i8'))
+    return hashlib.sha256(payload.tobytes()).hexdigest()
+
+
 def is_sampling_seed(seed: int) -> bool:
     """Whether ``seed`` came from :func:`sampling_seed`."""
     return int(seed) in _ISSUED_SAMPLING_SEEDS
@@ -363,16 +373,25 @@ def sample(points: np.ndarray, membership: np.ndarray, changed: np.ndarray,
     candidate_picked = group_select(candidate_pool, candidate_budget, 'candidate')
     context_picked = group_select(context_pool, context_budget, 'context')
 
+    # Digest of the base selection *before* any changed-evidence reservation. It depends
+    # only on the scene geometry and the class-independent sampling seed, so for one
+    # (partition, candidate, severity, repeat, points_target) contract group all seven
+    # synthetic classes must produce the same value. This is the structural proof that the
+    # class cannot alter the base sample, and it is stronger than any permutation test.
+    base_selected = np.union1d(candidate_picked, context_picked).astype(np.int64)
+    diagnostics['pre_reservation_indices_digest'] = indices_digest(base_selected)
+    diagnostics['pre_reservation_size'] = int(base_selected.size)
+
     # Changed-membership evidence is reserved *inside* the fixed group budgets, so it
     # can never move the candidate/context ratio. Points are never duplicated.
     changed_pool = np.flatnonzero(changed)
-    selected = np.concatenate([p for p in (candidate_picked, context_picked) if p.size]) \
-        if (candidate_picked.size or context_picked.size) else np.zeros(0, dtype=np.int64)
+    selected = base_selected
     have = int(changed[selected].sum()) if selected.size else 0
     reservation = max(0, MIN_CHANGED_EVIDENCE - have)
     diagnostics['changed_evidence_available'] = int(changed_pool.size)
     diagnostics['changed_evidence_before_reserve'] = have
     diagnostics['changed_evidence_reservation'] = int(reservation)
+    replacements = 0
     if reservation > 0:
         for pool, picked, budget, label in (
                 (candidate_pool, candidate_picked, candidate_budget, 'candidate'),
@@ -394,11 +413,14 @@ def sample(points: np.ndarray, membership: np.ndarray, changed: np.ndarray,
             drop = _matched_drop(droppable, add, height, membership, rng)
             updated = np.union1d(np.setdiff1d(picked, drop), add)
             diagnostics[f'{label}_sampled'] = int(updated.size)
+            diagnostics[f'{label}_reservation_replacements'] = int(take)
+            replacements += take
             if label == 'candidate':
                 candidate_picked = updated
             else:
                 context_picked = updated
             reservation -= take
+    diagnostics['reservation_replacements'] = int(replacements)
     chosen = [candidate_picked, context_picked]
     selected = np.concatenate([p for p in chosen if p.size]) \
         if any(p.size for p in chosen) else np.zeros(0, dtype=np.int64)
@@ -416,6 +438,10 @@ def sample(points: np.ndarray, membership: np.ndarray, changed: np.ndarray,
     diagnostics['changed_evidence_sampled'] = int(changed[selected].sum())
     diagnostics['changed_evidence_shortfall'] = int(
         max(0, MIN_CHANGED_EVIDENCE - int(changed[selected].sum())))
+    diagnostics['reservation_shortfall'] = int(
+        max(0, diagnostics['changed_evidence_reservation'] - replacements))
+    diagnostics['final_indices_digest'] = indices_digest(selected)
+    diagnostics['final_size'] = int(selected.size)
     diagnostics['membership_sampled'] = round(float(membership[selected].mean()), 6)
     diagnostics['candidate_sampled'] = int(candidate_mask[selected].sum())
     diagnostics['context_sampled'] = int((~candidate_mask[selected]).sum())
@@ -425,6 +451,7 @@ def sample(points: np.ndarray, membership: np.ndarray, changed: np.ndarray,
     diagnostics['spatial_cells_available'] = int(np.unique(cell).size)
     diagnostics['points_target'] = int(points_target)
     diagnostics['source_count'] = int(total)
+    diagnostics['sampling_seed'] = int(sampling_seed_value)
     diagnostics['candidate_share'] = round(float(candidate_share), 6)
     diagnostics['metric_scale_constant'] = METRIC_SCALE_CONSTANT
     diagnostics['per_example_scaling'] = False

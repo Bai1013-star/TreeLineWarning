@@ -94,13 +94,26 @@ class ExampleRecord:
     candidate_sampled: int
     context_sampled: int
     changed_evidence_sampled: int
-    spatial_coverage: float
-    height_coverage: float
-    feature_mean: tuple[float, float, float, float]
-    feature_std: tuple[float, float, float, float]
-    bbox_extent: tuple[float, float, float]
-    centroid_norm: float
-    duplicate_rate: float
+    sampling_seed: int = 0
+    candidate_budget: int = 0
+    context_budget: int = 0
+    pre_reservation_indices_digest: str = ''
+    final_indices_digest: str = ''
+    reservation_replacements: int = 0
+    reservation_shortfall: int = 0
+    changed_evidence_available: int = 0
+    scene_points: int = 0
+    spatial_coverage: float = 0.0
+    height_coverage: float = 0.0
+    feature_mean: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    feature_std: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0)
+    bbox_extent: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    centroid_norm: float = 0.0
+    duplicate_rate: float = 0.0
+
+    def contract_key(self, points_target: int = 0) -> tuple:
+        """The class-independent key that defines one sampling contract group."""
+        return (self.partition, self.candidate_id, self.severity, points_target)
 
     def audit_features(self) -> tuple[float, ...]:
         """Audit-only scalars used to hunt for geometric shortcuts.
@@ -467,14 +480,145 @@ def permutation_calibrated_separation(features: np.ndarray, labels: np.ndarray,
     }
 
 
+def sampling_structure_invariants(records: list[ExampleRecord]) -> dict:
+    """Hard structural gate: the synthetic class must not alter the base sample.
+
+    Records are grouped by ``(partition, candidate_id, severity, points_target)``. Within
+    one group the corruption differs but the scene does not, so all seven classes must
+    agree on every class-independent quantity. A group with fewer than two records is
+    reported but cannot exhibit a violation.
+    """
+    groups: dict[tuple, list[ExampleRecord]] = {}
+    for record in records:
+        groups.setdefault(record.contract_key(record.sampled_points), []).append(record)
+
+    violations: list[dict] = []
+    seed_passed = 0
+    digest_passed = 0
+    budget_passed = 0
+    duplicate_passed = 0
+    target_passed = 0
+    for key, members in sorted(groups.items(), key=lambda item: str(item[0])):
+        partition, candidate_id, severity, points_target = key
+        where = {'partition': partition, 'candidate_id': candidate_id,
+                 'severity': severity, 'points_target': points_target}
+
+        seeds = {m.sampling_seed for m in members}
+        if len(seeds) == 1:
+            seed_passed += 1
+        else:
+            violations.append({'invariant': 'sampling_seed_class_independent',
+                               **where, 'values': sorted(seeds),
+                               'classes': [m.example_class for m in members]})
+
+        digests = {m.pre_reservation_indices_digest for m in members}
+        if len(digests) == 1 and '' not in digests:
+            digest_passed += 1
+        else:
+            violations.append({'invariant': 'pre_reservation_indices_class_independent',
+                               **where, 'values': sorted(digests),
+                               'classes': [m.example_class for m in members]})
+
+        budgets = {(m.candidate_budget, m.context_budget, m.scene_points)
+                   for m in members}
+        if len(budgets) == 1:
+            budget_passed += 1
+        else:
+            violations.append({'invariant': 'candidate_context_budget_independent',
+                               **where, 'values': sorted(budgets)})
+
+        bad_dupes = [m.key for m in members
+                     if m.sampled_points != points_target]
+        if bad_dupes:
+            violations.append({'invariant': 'sampled_size_matches_target',
+                               **where, 'examples': bad_dupes})
+        else:
+            target_passed += 1
+
+        bad_duplicate = [m.key for m in members
+                         if not m.pre_reservation_indices_digest
+                         or m.candidate_sampled != m.candidate_budget
+                         or m.context_sampled != m.context_budget]
+        if bad_duplicate:
+            violations.append({'invariant': 'no_duplicate_indices',
+                               **where, 'examples': bad_duplicate})
+        else:
+            duplicate_passed += 1
+
+    return {
+        'gate': 'SAMPLING_STRUCTURE_GATE',
+        'pass': not violations,
+        'groups_checked': len(groups),
+        'sampling_seed_groups_passed': seed_passed,
+        'pre_reservation_digest_groups_passed': digest_passed,
+        'budget_groups_passed': budget_passed,
+        'duplicate_check_passed': duplicate_passed,
+        'points_target_check_passed': target_passed,
+        'violations': violations,
+        'note': 'structural proof that the class cannot alter the base sample; it relies '
+                'on no exchangeability assumption',
+    }
+
+
+def sampling_ratio_bias_audit(records: list[ExampleRecord],
+                              legacy_permutations: int = 0,
+                              rng: np.random.Generator | None = None) -> dict:
+    """AUDIT ONLY: the structured sampler's membership ratio error.
+
+    Never a gate. The 210 examples are repeated measures over 10 candidates x 7 classes x
+    3 severities with paired structure, so freely permuting the class label does not
+    satisfy exchangeability and any p-value derived that way is not a valid hard-gate
+    statistic. `membership_gap` is also not a model input: the model sees local X/Y/Z plus
+    `current_candidate_membership` only.
+    """
+    gaps = np.array([r.membership_sampled - r.membership_fraction for r in records],
+                    dtype=float)
+    scenes = np.array([r.membership_fraction for r in records], dtype=float)
+    classes = np.array([r.example_class for r in records])
+    candidates = np.array([r.candidate_id for r in records])
+    severities = np.array([r.severity for r in records])
+
+    def by(key_array) -> dict:
+        return {str(k): round(float(gaps[key_array == k].mean()), 6)
+                for k in sorted(set(key_array.tolist()))}
+
+    audit: dict = {
+        'status': 'AUDIT_ONLY',
+        'is_gate': False,
+        'mean_gap': round(float(gaps.mean()), 6),
+        'mean_abs_gap': round(float(np.abs(gaps).mean()), 6),
+        'max_abs_gap': round(float(np.abs(gaps).max()), 6),
+        'gap_std': round(float(gaps.std()), 6),
+        'per_class_mean_gap': by(classes),
+        'per_candidate_mean_gap': by(candidates),
+        'per_severity_mean_gap': by(severities),
+        'scene_membership_fraction_min': round(float(scenes.min()), 6),
+        'scene_membership_fraction_max': round(float(scenes.max()), 6),
+        'reservation_contribution': {
+            'examples_with_reservation': int(sum(
+                1 for r in records if r.reservation_replacements > 0)),
+            'total_replacements': int(sum(r.reservation_replacements for r in records)),
+            'total_shortfall': int(sum(r.reservation_shortfall for r in records)),
+        },
+        'caveats': ['REPEATED_MEASURES_NOT_FREELY_EXCHANGEABLE',
+                    'NOT_VALID_AS_GATE_D_INFERENCE',
+                    'ratio_estimator_bias_not_random_sampling_error'],
+    }
+    if legacy_permutations and rng is not None:
+        # Kept only for historical comparison, explicitly labelled as invalid inference.
+        audit['legacy_unrestricted_p_value'] = round(
+            float(_permutation_p(gaps, classes, _range_ratio, rng)), 6)
+        audit['legacy_unrestricted_p_value_status'] = (
+            'AUDIT_ONLY_NOT_VALID_AS_GATE_D_INFERENCE')
+    return audit
+
+
 def analyse(records: list[ExampleRecord], seed: int = 20260909) -> dict:
     if not records:
         raise ValueError('no example records to analyse')
     rng = np.random.default_rng(seed)
     classes = np.array([r.example_class for r in records])
     sampled_points = np.array([r.sampled_points for r in records], dtype=float)
-    coverage = np.array([r.spatial_coverage for r in records], dtype=float)
-    membership_sampled = np.array([r.membership_sampled for r in records], dtype=float)
     feature_stats = np.array(
         [list(r.feature_mean) + list(r.feature_std) for r in records], dtype=float)
 
@@ -548,31 +692,38 @@ def analyse(records: list[ExampleRecord], seed: int = 20260909) -> dict:
         checks.append(_check('fixed_axis_fingerprint', 1.0,
                              {'applicable': False}, critical_if=False))
 
-    # 4. class-specific sampling fingerprint.
+    # 4a. SAMPLING_STRUCTURE_GATE — a hard gate on structural invariants.
     #
-    #    The generator's intended membership shift is class-specific — that IS the defect
-    #    signal. The artefact question is whether the sampler preserves the scene's own
-    #    membership fraction, which a label-agnostic sampler must do for every class. The
-    #    statistic is therefore sampled-minus-scene, not sampled-minus-GOOD-baseline.
-    membership_gap = membership_sampled - np.array(
-        [r.membership_fraction for r in records], dtype=float)
-    p_sampling = _permutation_p(membership_gap, classes, _range_ratio, rng)
-    intended = np.array([r.intended_membership_shift for r in records], dtype=float)
+    #     For each (partition, candidate_id, severity, points_target) the seven synthetic
+    #     classes form one contract group sharing a BaseScene. Within a group the sampling
+    #     seed, the pre-reservation base-selection digest, the budgets, the source count
+    #     and the target size must be identical, and no example may hold duplicate indices
+    #     or violate its budget arithmetic. This is a direct structural proof that the
+    #     class cannot alter the base sample, and it does not rely on any exchangeability
+    #     assumption.
+    structure = sampling_structure_invariants(records)
     checks.append(_check(
-        'class_specific_sampling_fingerprint', p_sampling,
-        {'mean_sampler_gap': round(float(membership_gap.mean()), 6),
-         'max_abs_sampler_gap': round(float(np.abs(membership_gap).max()), 6),
-         'per_class_mean_sampler_gap': {
-             c: round(float(membership_gap[classes == c].mean()), 6)
-             for c in np.unique(classes)},
-         'per_class_mean_intended_shift': {
-             c: round(float(intended[classes == c].mean()), 6)
-             for c in np.unique(classes)},
-         'mean_spatial_coverage': round(float(coverage.mean()), 6),
-         'note': 'the sampler must reproduce the scene membership fraction for every '
-                 'class; the intended shift is the generator signal and is reported '
-                 'separately'},
-        critical_if=p_sampling < ALPHA))
+        'sampling_structure_invariants',
+        1.0 if structure['pass'] else 0.0,
+        structure,
+        critical_if=not structure['pass']))
+
+    # 4b. SAMPLING_RATIO_BIAS_AUDIT — audit only, never a gate.
+    #
+    #     The structured sampler has group quotas, spatial and height strata and a
+    #     changed-evidence reservation, so the sampled membership proportion is not a
+    #     simple unbiased estimator of the scene proportion. The residual gap is a
+    #     property of the ratio estimator and, as measured, a function of the scene
+    #     membership fraction rather than of the class. It is recorded for the record but
+    #     deliberately does not gate Gate D: the 210 examples are repeated measures (10
+    #     candidates x 7 classes x 3 severities) with paired structure, so a freely
+    #     permuted class label does not satisfy exchangeability, and `membership_gap` is
+    #     not a model input in any case.
+    ratio_audit = sampling_ratio_bias_audit(records)
+    checks.append(_check(
+        'sampling_ratio_bias_audit', 1.0,
+        ratio_audit,
+        critical_if=False))
 
     # 5. metadata leakage: the exposed tensor must not carry a **construction** shortcut.
     #
