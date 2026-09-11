@@ -1,13 +1,15 @@
 # Gate D digest safety.
 #
 # The Gate D acceptance marker binds a SHA-256 computed over the *bytes on disk* of the
-# frozen generator files. Git's autocrlf/eol conversion can silently rewrite those bytes
-# (LF <-> CRLF) without `git status` reporting anything, which changes the digest and
-# closes the training lock. That happened once during this round to
-# research/tree_qc/gate_d_sampler.py and was recovered from the stored blob.
+# frozen generator files and of the frozen Gate C2 protocol document. Git's autocrlf/eol
+# conversion can silently rewrite those bytes (LF <-> CRLF) without `git status` reporting
+# anything, which changes the digest and closes the training lock. That happened twice
+# during this round — to research/tree_qc/gate_d_sampler.py and to
+# research/tree_qc/gate_d_fingerprint.py — and was recovered from the stored blobs.
 #
-# `-text` disables all end-of-line conversion for the frozen research core so a checkout
-# can never rewrite it again. The files are stored and checked out exactly as committed.
+# `-text` disables all end-of-line conversion for the frozen research core, so the files
+# are stored and checked out exactly as committed and a clean checkout reproduces both
+# accepted digests.
 research/tree_qc/gate_d_provenance.py  -text
 research/tree_qc/gate_d_scene.py       -text
 research/tree_qc/gate_d_geometry.py    -text
@@ -20,3 +22,4 @@ research/tree_qc/gate_d_fingerprint.py -text
 research/tree_qc/gate_d_diagnostic.py  -text
 research/tree_qc/gate_d_lock.py        -text
 research/tree_qc/reports/GATE_D_ACCEPTANCE.json -text
+research/tree_qc/reports/GATE_C_CANONICAL_IDENTITY_PROTOCOL_V2.md -text
