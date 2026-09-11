@@ -1889,17 +1889,52 @@ class TrainingLock(unittest.TestCase):
         path.write_text(json.dumps(payload), encoding='utf-8')
         return path
 
-    def test_lock_is_active(self):
+    def test_lock_is_closed_without_an_acceptance_marker(self):
+        """The lock is fail-closed: no marker means no training, in any reports dir."""
         import gate_d_lock as lock
+        # The module-level constant is the diagnostic guard and never flips.
         self.assertFalse(lock.TRAINING_ALLOWED)
-        state = lock.acceptance_state()
-        self.assertFalse(state['training_allowed'])
-        self.assertEqual(state['reason'], 'GATE_D_NOT_ACCEPTED')
+        with tempfile.TemporaryDirectory() as tmp:
+            state = lock.acceptance_state(Path(tmp))
+            self.assertFalse(state['training_allowed'])
+            self.assertEqual(state['reason'], 'GATE_D_NOT_ACCEPTED')
+            with self.assertRaises(lock.TrainingLockedError):
+                lock.require_training_allowed(Path(tmp))
 
-    def test_require_training_allowed_raises(self):
+    def test_require_training_allowed_raises_without_a_marker(self):
         import gate_d_lock as lock
-        with self.assertRaises(lock.TrainingLockedError):
-            lock.require_training_allowed()
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(lock.TrainingLockedError):
+                lock.require_training_allowed(Path(tmp))
+
+    def test_shipped_acceptance_marker_binds_the_current_code(self):
+        """The signed marker must name exactly the runtime generator and protocol.
+
+        This is the inverse of the earlier round's assertion: the lock is no longer
+        expected to be closed unconditionally. It is expected to be *correct* — open only
+        because a marker exists whose digests equal the current implementation, and closed
+        again the moment either side changes.
+        """
+        import gate_d_lock as lock
+        marker = lock.acceptance_path()
+        self.assertTrue(marker.exists(), f'{marker} must be committed')
+        payload = json.loads(marker.read_text(encoding='utf-8-sig'))
+        self.assertEqual(payload['gate_d'], 'ACCEPTED')
+        self.assertIs(payload['training_allowed'], True)
+        self.assertEqual(payload['generator_version'],
+                         lock.current_binding()['generator_version'])
+        self.assertEqual(payload['generator_digest'],
+                         lock.current_binding()['generator_digest'])
+        self.assertEqual(payload['protocol_digest'],
+                         lock.current_binding()['protocol_digest'])
+        state = lock.acceptance_state()
+        self.assertTrue(state['training_allowed'])
+        self.assertEqual(state['reason'], 'GATE_D_ACCEPTED')
+        lock.require_training_allowed()
+        # A binding computed before a code change closes the lock again.
+        stale = dict(lock.current_binding())
+        stale['generator_digest'] = 'a' * 64
+        self.assertFalse(lock.acceptance_state(binding=stale)['training_allowed'])
 
     def test_missing_marker_rejected(self):
         import gate_d_lock as lock
@@ -1983,10 +2018,32 @@ class TrainingLock(unittest.TestCase):
                 lock.acceptance_state(Path(tmp), binding=stale)['training_allowed'])
 
     def test_trainers_refuse_without_acceptance(self):
+        """With the real marker absent, both trainers still exit with the lock code."""
+        import contextlib
+        import io
+
+        import gate_d_lock as lock
         import train_pointnet
         import train_pointnet2
-        self.assertEqual(train_pointnet.main(['--epochs', '1']), 3)
-        self.assertEqual(train_pointnet2.main(['--epochs', '1']), 3)
+        original = lock.acceptance_path
+        with tempfile.TemporaryDirectory() as tmp:
+            lock.acceptance_path = lambda reports=None: Path(tmp) / lock.ACCEPTANCE_FILE
+            try:
+                for trainer in (train_pointnet, train_pointnet2):
+                    with contextlib.redirect_stderr(io.StringIO()) as captured:
+                        code = trainer.main(['--epochs', '1'])
+                    self.assertEqual(code, 3)
+                    self.assertIn('GATE_D_NOT_ACCEPTED', captured.getvalue())
+            finally:
+                lock.acceptance_path = original
+
+    def test_trainers_proceed_when_the_marker_is_present(self):
+        """The inverse direction: a valid marker must not be refused."""
+        import gate_d_lock as lock
+        lock.require_training_allowed()
+        state = lock.acceptance_state()
+        self.assertTrue(state['training_allowed'])
+        self.assertEqual(state['reason'], 'GATE_D_ACCEPTED')
 
 
 class GeneratorDigestIntegrity(unittest.TestCase):
