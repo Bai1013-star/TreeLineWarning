@@ -130,12 +130,14 @@ class GateDDataset:
         sample_seed = spec.sampling_seed(self.config.points, self.config.seed_base)
         sample = sampler.sample(example.points, example.membership,
                                 example.changed_membership, scene.candidate_mask,
-                                sample_seed, self.config.points)
+                                sample_seed, self.config.points, spec.repeat)
         provenance = dict(example.provenance)
         provenance['sample'] = {
             'sampler_version': sampler.SAMPLER_VERSION,
             'sampling_seed': int(sample_seed),
             'corruption_seed': int(spec.seed),
+            'repeat': int(spec.repeat),
+            'points_target': int(sample.diagnostics['points_target']),
             'points': sample.points,
             'source_points': sample.source_count,
             'features': list(sampler.FEATURES),

@@ -8,11 +8,103 @@ was repeated, no model was trained, no held-out or local-challenge tree was read
 product or frozen V0.1 file was touched, and nothing was pushed.
 
 `GENERATOR_VERSION = GATE_D_SYNTHETIC_GENERATOR_V2`
-`GENERATOR_DIGEST = a76fc071489352f590827f253b0d97a92e7707032f08cdd6893f12de3c4a4007`
+`GENERATOR_DIGEST = a0550c17ff75cdf7d380fc677840c883f2262f2148a40edbbee0df35410b6b9d`
 `PROTOCOL_DIGEST = 36e4cfca043190d4d12c2ab9ee635d92bb479cb9b56d482ae1121fd797939729`
 
 This round closed the six blockers from `TREE_QC_GATE_D_MINIMAL_REMEDIATION_ALL_BLOCKERS_V1`
 by minimal remediation of the existing implementation, not a rewrite.
+
+## Round 6 addendum — acceptance integrity fix (`TREE_QC_GATE_D_FINAL_ACCEPTANCE_INTEGRITY_FIX`)
+
+Two integrity items were raised.
+
+### Blocker 1 — generator digest: the code was correct, my report was not
+
+The digest printed in the round-5 message contained a duplicated hex fragment
+(`…9407a92d97a92e7707…`), which is why it did not match `^[0-9a-f]{64}$`. The committed
+value was always a well-formed 64-character lowercase SHA-256. Verified directly:
+
+```
+GENERATOR_DIGEST (round 5) = a76fc071489352f590827f253b0d97a92e7707032f08cdd6893f12de3c4a4007
+length = 64, regex ^[0-9a-f]{64}$ = True, 16 distinct hex characters
+independent recomputation from GENERATOR_FILES = identical
+artifact == runtime == training_lock.expected  = True
+```
+
+No code defect existed, so nothing was truncated, hand-edited or algorithmically altered.
+The real gap was **test coverage**: nothing asserted the digest format or the three-way
+binding, which is why the transcription error was not caught before reporting. Six
+regression tests now close that gap.
+
+### Blocker 2 — the structural contract key used the achieved sample
+
+`sampling_structure_invariants` grouped records with
+`record.contract_key(record.sampled_points)`, i.e. it keyed on the **result**. An example
+whose sample came out the wrong size would therefore form its own "legal singleton group"
+and escape the target check. `ExampleRecord` now carries explicit `repeat` (from
+`spec.repeat`) and `points_target` (from `sample.diagnostics['points_target']`), and the key
+is the pre-declared contract:
+
+```
+(partition, candidate_id, severity, repeat, points_target)
+```
+
+The synthetic class still never enters the key. The five per-example checks
+(`sampled_size_matches_target`, `budget_sum_matches_target`,
+`candidate_sampled_matches_budget`, `context_sampled_matches_budget`,
+`sampled_sum_matches_target`) now run **outside** the grouping, so they hold regardless of
+how an example is grouped. Each `repeat` is its own group.
+
+No sampler, seed, reservation, corruption, column or threshold change was made.
+
+### Result
+
+```
+SAMPLING_STRUCTURE_GATE = PASS
+groups_checked = 30   examples_checked = 210
+sampling_seed / pre_reservation_digest / budget / duplicate / target = 30 / 30 / 30 / 30 / 30
+violations = []
+
+repeats=2 regression    = PASS, 60 contract groups
+wrong sampled size      = DETECTED (group count stays 30, no singleton escape)
+wrong budget arithmetic = DETECTED
+
+GENERATOR_DIGEST = a0550c17ff75cdf7d380fc677840c883f2262f2148a40edbbee0df35410b6b9d
+length 64, format PASS, diagnostic binding PASS, training-lock binding PASS
+
+XYZ_ARTIFACT_GATE = PASS
+MEMBERSHIP_ONLY_SHORTCUT = PASS
+SAMPLING_RATIO_BIAS_AUDIT = RECORDED (AUDIT_ONLY)
+CRITICAL_FINGERPRINTS = []
+DIAGNOSTIC_VIOLATIONS = []
+```
+
+The new digest follows from the code changes and is recomputed, never hand-written. The
+previous `a76fc071…` marker is now stale and is rejected.
+
+### New regression coverage
+
+* `SamplingStructureGate`: `repeats=2` yields exactly 60 groups with all seven classes
+  agreeing inside each repeat while different repeats have distinct seeds; a wrong
+  `sampled_points` is DETECTED with the group count unchanged and no singleton escape; a
+  broken budget sum is DETECTED; the contract key is asserted never to use the achieved
+  sample and never to contain the class.
+* `GeneratorDigestIntegrity`: the runtime digest is 64 lowercase hex; it is a genuine
+  independent SHA-256 of the declared `GENERATOR_FILES`; the diagnostic artifact is
+  well-formed; runtime == artifact == `training_lock.expected`; the fingerprint remediation
+  artifact records the same value.
+
+### Round 6 verification
+
+| Check | Result |
+|---|---|
+| `pytest test_gate_d.py` | **161 passed** (+ 17 subtests) |
+| `pytest test_canonical_identity.py` | **30 passed** |
+| combined | **191 passed** (+ 17 subtests) |
+| ruff | all checks passed |
+| diagnostic, two clean runs | summary, manifest and fingerprint artifact byte-identical |
+| training lock | `TRAINING_ALLOWED = False`, no marker, trainers exit 3 |
+| stale `a76fc071…` marker | rejected with `GATE_D_NOT_ACCEPTED` |
 
 ## Round 5 addendum — diagnostic contract fix (`TREE_QC_GATE_D_FINAL_DIAGNOSTIC_CONTRACT_FIX`)
 
@@ -108,7 +200,7 @@ detector controls.
 | diagnostic, two clean runs | summary, manifest and fingerprint artifact byte-identical |
 | training lock | `TRAINING_ALLOWED = False`, no marker, trainers exit 3 |
 | stale `52c5d7db…` marker | rejected with `GATE_D_NOT_ACCEPTED` |
-| generator digest | `a76fc071489352f590827f253b0d97a92e7707032f08cdd6893f12de3c4a4007` |
+| generator digest | `a0550c17ff75cdf7d380fc677840c883f2262f2148a40edbbee0df35410b6b9d` |
 
 ## Round 4 addendum — sampler seed decoupling (`TREE_QC_GATE_D_FINAL_SAMPLER_SEED_DECOUPLING`)
 
@@ -191,7 +283,7 @@ reservation. Both are frozen design choices this round; no threshold was changed
 | ruff | all checks passed |
 | diagnostic, two clean runs | summary, manifest and fingerprint artifact byte-identical |
 | training lock | `TRAINING_ALLOWED = False`, no marker, trainers exit 3 |
-| generator digest | `a76fc071489352f590827f253b0d97a92e7707032f08cdd6893f12de3c4a4007` |
+| generator digest | `a0550c17ff75cdf7d380fc677840c883f2262f2148a40edbbee0df35410b6b9d` |
 
 ## Round 3 addendum — B5 final minimal remediation (`TREE_QC_GATE_D_V2_B5_FINAL_MINIMAL_REMEDIATION_V2`)
 

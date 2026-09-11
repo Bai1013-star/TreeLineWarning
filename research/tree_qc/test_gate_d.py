@@ -589,7 +589,7 @@ class SamplerContract(unittest.TestCase):
         parameters = list(inspect.signature(sampler.sample).parameters)
         self.assertEqual(parameters,
                          ['points', 'membership', 'changed', 'candidate_mask',
-                          'sampling_seed_value', 'points_target'])
+                          'sampling_seed_value', 'points_target', 'repeat'])
         # No parameter may carry class, label, corruption or provenance information.
         for forbidden in ('class', 'label', 'spec', 'severity', 'partition',
                           'candidate_id', 'example_class', 'changed_membership'):
@@ -966,6 +966,8 @@ def _record_from_manifest_row(row: dict) -> fingerprint.ExampleRecord:
         candidate_sampled=diagnostics['candidate_sampled'],
         context_sampled=diagnostics['context_sampled'],
         changed_evidence_sampled=diagnostics['changed_evidence_sampled'],
+        repeat=int(diagnostics['repeat']),
+        points_target=int(diagnostics['points_target']),
         sampling_seed=int(diagnostics['sampling_seed']),
         candidate_budget=int(diagnostics['candidate_budget']),
         context_budget=int(diagnostics['context_budget']),
@@ -1089,8 +1091,25 @@ class SamplingStructureGate(unittest.TestCase):
             broken.append(record)
         check = self._gate(broken)
         self.assertTrue(check['critical'])
-        self.assertIn('no_duplicate_indices',
-                      [v['invariant'] for v in check['detail']['violations']])
+        violation = next(v for v in check['detail']['violations']
+                         if v['invariant'] == 'per_example_target_and_budget')
+        self.assertIn('context_sampled_matches_budget', violation['failed'])
+        self.assertIn('sampled_sum_matches_target', violation['failed'])
+
+    def test_budget_sum_violation_is_critical(self):
+        """candidate_budget + context_budget must equal points_target."""
+        base = _synthetic_records()
+        broken = []
+        for record in base:
+            if (record.candidate_id, record.severity) == self.CONTRACT \
+                    and record.example_class == gen.NOISE:
+                record = replace(record, candidate_budget=record.candidate_budget + 1)
+            broken.append(record)
+        check = self._gate(broken)
+        self.assertTrue(check['critical'])
+        invariants = [v['invariant'] for v in check['detail']['violations']]
+        self.assertIn('per_example_target_and_budget', invariants)
+        self.assertIn('candidate_context_budget_independent', invariants)
 
     # --- Test D: a legal reservation difference must pass ---
 
@@ -1116,6 +1135,64 @@ class SamplingStructureGate(unittest.TestCase):
                          check['detail']['groups_checked'])
         self.assertEqual(check['detail']['budget_groups_passed'],
                          check['detail']['groups_checked'])
+
+    # --- Test 1: repeats form their own contract groups ---
+
+    def test_repeats_two_gives_sixty_contract_groups(self):
+        """10 candidates x 3 severities x 2 repeats = 60 groups, 7 classes each."""
+        records = _synthetic_records(repeats=2)
+        self.assertEqual(len(records), 10 * 3 * 2 * 7)
+        check = self._gate(records)
+        self.assertTrue(check['pass'], check['detail']['violations'])
+        self.assertEqual(check['detail']['groups_checked'], 60)
+        self.assertEqual(check['detail']['sampling_seed_groups_passed'], 60)
+        self.assertEqual(check['detail']['pre_reservation_digest_groups_passed'], 60)
+        self.assertEqual(check['detail']['budget_groups_passed'], 60)
+        self.assertEqual(check['detail']['violations'], [])
+
+    def test_repeats_have_distinct_seeds_but_classes_within_a_repeat_agree(self):
+        records = _synthetic_records(repeats=2)
+        by_repeat = {}
+        for record in records:
+            if record.candidate_id != 'c0' or record.severity != 'MEDIUM':
+                continue
+            by_repeat.setdefault(record.repeat, set()).add(record.sampling_seed)
+        self.assertEqual(set(by_repeat), {0, 1})
+        # Within a repeat all seven classes share one seed.
+        for repeat, seeds in by_repeat.items():
+            self.assertEqual(len(seeds), 1, repeat)
+        # Different repeats use different seeds.
+        self.assertNotEqual(by_repeat[0], by_repeat[1])
+
+    # --- Test 2: a wrong sampled size must fail, with no singleton escape ---
+
+    def test_wrong_sampled_size_is_detected_without_singleton_escape(self):
+        """The target comes from points_target, not from the achieved sample."""
+        base = _synthetic_records()
+        broken = []
+        for record in base:
+            if (record.candidate_id, record.severity) == self.CONTRACT \
+                    and record.example_class == gen.CROWN_INCOMPLETE:
+                record = replace(record, sampled_points=record.points_target - 1)
+            broken.append(record)
+        check = self._gate(broken)
+        self.assertTrue(check['critical'])
+        # It must NOT have formed its own legal-looking group: the group count is
+        # unchanged because the key is the pre-declared target, not the result.
+        self.assertEqual(check['detail']['groups_checked'], 30)
+        violation = next(v for v in check['detail']['violations']
+                         if v['invariant'] == 'per_example_target_and_budget')
+        self.assertIn('sampled_size_matches_target', violation['failed'])
+
+    def test_contract_key_never_uses_the_achieved_sample(self):
+        """Two records differing only in sampled_points share one contract key."""
+        base = _synthetic_records()
+        first = base[0]
+        second = replace(first, sampled_points=first.points_target - 7)
+        self.assertEqual(first.contract_key(), second.contract_key())
+        self.assertEqual(first.contract_key()[3], first.repeat)
+        self.assertEqual(first.contract_key()[4], first.points_target)
+        self.assertNotIn(first.example_class, first.contract_key())
 
     def test_real_records_satisfy_the_gate(self):
         """The contract holds on the real bounded diagnostic artifacts."""
@@ -1512,60 +1589,81 @@ class SamplerExtremeStrata(unittest.TestCase):
 
 
 def _synthetic_records(feature_mean=None, feature_std=None,
-                       seed: int = 5, contracts=None) -> list:
+                       seed: int = 5, contracts=None, repeats: int = 1,
+                       candidates: int = 10) -> list:
     """A full ExampleRecord set covering every class, for `analyse()` level tests.
 
     Every field is plausible; only the exposed tensor statistics are manipulated. The
     structural fields default to valid, class-independent values so the
     `sampling_structure_invariants` hard gate is satisfied. ``contracts`` may be a mapping
-    ``(candidate_id, severity) -> dict`` of per-contract overrides used to violate an
-    invariant deliberately.
+    ``(candidate_id, severity, repeat) -> dict`` of per-contract overrides used to violate
+    an invariant deliberately.
     """
     rng = np.random.default_rng(seed)
     classes = list(gen.CLASSES)
     records = []
-    candidate_count = 10
-    per_candidate = len(classes) * len(gen.SEVERITIES)   # 21
-    for index in range(candidate_count * per_candidate):
-        slot = index % per_candidate
-        candidate_id = f'c{index // per_candidate}'
-        example_class = classes[slot % len(classes)]
-        severity = gen.SEVERITIES[slot // len(classes)]
-        contract = (contracts or {}).get((candidate_id, severity), {})
-        sampling_seed = contract.get(
-            'sampling_seed',
-            sampler.sampling_seed('train', candidate_id, severity))
-        pre_digest = contract.get(
-            'pre_reservation_indices_digest', f'digest-{candidate_id}-{severity}')
-        mean = list(feature_mean(index, example_class)) if callable(feature_mean) \
-            else list(feature_mean if feature_mean is not None else rng.normal(size=4))
-        std = list(feature_std(index, example_class)) if callable(feature_std) \
-            else list(feature_std if feature_std is not None
-                      else np.abs(rng.normal(size=4)) + 1.0)
-        records.append(fingerprint.ExampleRecord(
-            key=f'{candidate_id}|{example_class}|{severity}',
-            candidate_id=candidate_id, partition='train',
-            example_class=example_class, severity=severity,
-            label='PASS' if example_class == gen.GOOD else 'REVIEW_REQUIRED',
-            point_count=1000, sampled_points=4096, membership_fraction=0.2,
-            gt_membership_fraction=0.2, intended_membership_shift=0.0,
-            changed_membership_points=0, changed_membership_fraction=0.0,
-            candidate_points=100, context_points=900, claimed_points=0,
-            dropped_points=0, source_count=2, corruption_fraction=0.1,
-            drawn_fraction=0.1, corruption_axis=None, membership_sampled=0.2,
-            candidate_sampled=contract.get('candidate_sampled', 100),
-            context_sampled=contract.get('context_sampled', 900),
-            changed_evidence_sampled=0,
-            sampling_seed=sampling_seed,
-            candidate_budget=contract.get('candidate_budget', 100),
-            context_budget=contract.get('context_budget', 900),
-            pre_reservation_indices_digest=pre_digest,
-            final_indices_digest=f'final-{candidate_id}-{severity}-{example_class}',
-            reservation_replacements=0, reservation_shortfall=0,
-            changed_evidence_available=0, scene_points=1000,
-            spatial_coverage=0.9, height_coverage=1.0,
-            feature_mean=tuple(mean), feature_std=tuple(std),
-            bbox_extent=(1.0, 1.0, 1.0), centroid_norm=1.0, duplicate_rate=0.0))
+    for candidate_index in range(candidates):
+        candidate_id = f'c{candidate_index}'
+        for severity in gen.SEVERITIES:
+            for repeat in range(repeats):
+                contract = (contracts or {}).get((candidate_id, severity, repeat), {})
+                sampling_seed = contract.get(
+                    'sampling_seed',
+                    sampler.sampling_seed('train', candidate_id, severity,
+                                          repeat=repeat))
+                pre_digest = contract.get(
+                    'pre_reservation_indices_digest',
+                    f'digest-{candidate_id}-{severity}-{repeat}')
+                for class_index, example_class in enumerate(classes):
+                    index = (candidate_index * len(gen.SEVERITIES) * repeats
+                             + list(gen.SEVERITIES).index(severity) * repeats
+                             + repeat) * len(classes) + class_index
+                    mean = list(feature_mean(index, example_class)) \
+                        if callable(feature_mean) \
+                        else list(feature_mean if feature_mean is not None
+                                  else rng.normal(size=4))
+                    std = list(feature_std(index, example_class)) \
+                        if callable(feature_std) \
+                        else list(feature_std if feature_std is not None
+                                  else np.abs(rng.normal(size=4)) + 1.0)
+                    points_target = contract.get('points_target', 4096)
+                    candidate_budget = contract.get('candidate_budget', 1024)
+                    context_budget = contract.get(
+                        'context_budget', points_target - candidate_budget)
+                    records.append(fingerprint.ExampleRecord(
+                        key=f'{candidate_id}|{example_class}|{severity}|{repeat}',
+                        candidate_id=candidate_id, partition='train',
+                        example_class=example_class, severity=severity,
+                        label='PASS' if example_class == gen.GOOD
+                        else 'REVIEW_REQUIRED',
+                        point_count=1000,
+                        sampled_points=contract.get('sampled_points', points_target),
+                        membership_fraction=0.2,
+                        gt_membership_fraction=0.2, intended_membership_shift=0.0,
+                        changed_membership_points=0,
+                        changed_membership_fraction=0.0,
+                        candidate_points=1024, context_points=3072, claimed_points=0,
+                        dropped_points=0, source_count=2, corruption_fraction=0.1,
+                        drawn_fraction=0.1, corruption_axis=None,
+                        membership_sampled=0.2,
+                        candidate_sampled=contract.get('candidate_sampled',
+                                                       candidate_budget),
+                        context_sampled=contract.get('context_sampled',
+                                                     context_budget),
+                        changed_evidence_sampled=0,
+                        repeat=repeat, points_target=points_target,
+                        sampling_seed=sampling_seed,
+                        candidate_budget=candidate_budget,
+                        context_budget=context_budget,
+                        pre_reservation_indices_digest=pre_digest,
+                        final_indices_digest=(
+                            f'final-{candidate_id}-{severity}-{repeat}-{example_class}'),
+                        reservation_replacements=0, reservation_shortfall=0,
+                        changed_evidence_available=0, scene_points=4096,
+                        spatial_coverage=0.9, height_coverage=1.0,
+                        feature_mean=tuple(mean), feature_std=tuple(std),
+                        bbox_extent=(1.0, 1.0, 1.0), centroid_norm=1.0,
+                        duplicate_rate=0.0))
     return records
 
 
@@ -1889,6 +1987,71 @@ class TrainingLock(unittest.TestCase):
         import train_pointnet2
         self.assertEqual(train_pointnet.main(['--epochs', '1']), 3)
         self.assertEqual(train_pointnet2.main(['--epochs', '1']), 3)
+
+
+class GeneratorDigestIntegrity(unittest.TestCase):
+    """The generator digest must be a genuine 64-character lowercase SHA-256 and must be
+    bound consistently across the runtime, the diagnostic artifact and the training lock.
+    """
+
+    def _artifact(self) -> dict:
+        return json.loads(
+            (provenance_module.REPORTS / 'GATE_D_SYNTHETIC_DIAGNOSTIC.json')
+            .read_text(encoding='utf-8'))
+
+    def test_runtime_digest_is_64_lowercase_hex(self):
+        import gate_d_diagnostic
+        digest = gate_d_diagnostic.generator_digest()
+        self.assertEqual(len(digest), 64)
+        self.assertRegex(digest, r'^[0-9a-f]{64}$')
+        self.assertEqual(digest, digest.lower())
+
+    def test_digest_is_a_genuine_sha256_of_the_declared_files(self):
+        """Independent recomputation, so a truncated or hand-edited value cannot pass."""
+        import gate_d_diagnostic
+        expected = hashlib.sha256()
+        for name in gate_d_diagnostic.GENERATOR_FILES:
+            expected.update(name.encode('utf-8'))
+            expected.update((gate_d_diagnostic.HERE / name).read_bytes())
+        self.assertEqual(gate_d_diagnostic.generator_digest(), expected.hexdigest())
+
+    def test_artifact_digest_is_well_formed(self):
+        digest = self._artifact()['generator_digest']
+        self.assertEqual(len(digest), 64)
+        self.assertRegex(digest, r'^[0-9a-f]{64}$')
+
+    def test_diagnostic_digest_binding(self):
+        """runtime == diagnostic artifact."""
+        import gate_d_diagnostic
+        self.assertEqual(self._artifact()['generator_digest'],
+                         gate_d_diagnostic.generator_digest())
+
+    def test_training_lock_digest_binding(self):
+        """training_lock.expected.generator_digest == runtime."""
+        import gate_d_diagnostic
+        import gate_d_lock
+        expected = gate_d_lock.current_binding()['generator_digest']
+        self.assertEqual(expected, gate_d_diagnostic.generator_digest())
+        self.assertEqual(len(expected), 64)
+        self.assertRegex(expected, r'^[0-9a-f]{64}$')
+        state = gate_d_lock.acceptance_state()
+        self.assertEqual(state['expected']['generator_digest'], expected)
+
+    def test_all_three_bindings_agree(self):
+        import gate_d_diagnostic
+        import gate_d_lock
+        runtime = gate_d_diagnostic.generator_digest()
+        artifact = self._artifact()['generator_digest']
+        lock = gate_d_lock.current_binding()['generator_digest']
+        self.assertEqual(runtime, artifact)
+        self.assertEqual(runtime, lock)
+
+    def test_fingerprint_remediation_records_the_same_digest(self):
+        payload = json.loads(
+            (provenance_module.REPORTS / 'GATE_D_FINGERPRINT_REMEDIATION.json')
+            .read_text(encoding='utf-8'))
+        self.assertEqual(payload['generator_digest'],
+                         self._artifact()['generator_digest'])
 
 
 class GeneratorDigest(unittest.TestCase):

@@ -1,7 +1,7 @@
 {
   "diagnostic_version": "GATE_D_SYNTHETIC_DIAGNOSTIC_V2",
   "generator_version": "GATE_D_SYNTHETIC_GENERATOR_V2",
-  "generator_digest": "a76fc071489352f590827f253b0d97a92e7707032f08cdd6893f12de3c4a4007",
+  "generator_digest": "a0550c17ff75cdf7d380fc677840c883f2262f2148a40edbbee0df35410b6b9d",
   "sampler_version": "GATE_D_STRUCTURED_SAMPLER_V4",
   "scene_version": "GATE_D_BASE_SCENE_V1",
   "membership_channel": "current_candidate_membership",
@@ -16,7 +16,7 @@
     "reason": "GATE_D_NOT_ACCEPTED",
     "expected": {
       "generator_version": "GATE_D_SYNTHETIC_GENERATOR_V2",
-      "generator_digest": "a76fc071489352f590827f253b0d97a92e7707032f08cdd6893f12de3c4a4007",
+      "generator_digest": "a0550c17ff75cdf7d380fc677840c883f2262f2148a40edbbee0df35410b6b9d",
       "protocol_digest": "36e4cfca043190d4d12c2ab9ee635d92bb479cb9b56d482ae1121fd797939729"
     }
   },
@@ -172,13 +172,14 @@
           "gate": "SAMPLING_STRUCTURE_GATE",
           "pass": true,
           "groups_checked": 30,
+          "examples_checked": 210,
           "sampling_seed_groups_passed": 30,
           "pre_reservation_digest_groups_passed": 30,
           "budget_groups_passed": 30,
           "duplicate_check_passed": 30,
           "points_target_check_passed": 30,
           "violations": [],
-          "note": "structural proof that the class cannot alter the base sample; it relies on no exchangeability assumption"
+          "note": "structural proof that the class cannot alter the base sample; the per-example target and budget checks run outside the grouping so a wrong-sized example cannot escape as a singleton group; no exchangeability assumption is used"
         }
       },
       {
@@ -574,7 +575,7 @@
     "GENERATOR_FINGERPRINT": "NONE_DETECTED",
     "CRITICAL_FINGERPRINTS": []
   },
-  "manifest_digest": "a66b47ccf03478a52c48c5cc63bda7ea23bbb83333a21f3d37ff72322f57be4a",
+  "manifest_digest": "a917628f79920e6a069b2fc50c21be4b5c2fb802c3af19a7a43a8c80e2e29ad5",
   "visualisations": [
     "gate_d_visuals\\GOOD_MEDIUM_litchfield_tile_0_-100_Boom27.png",
     "gate_d_visuals\\MERGED_MULTI_TREE_MEDIUM_litchfield_tile_0_-100_Boom27.png",
@@ -598,5 +599,5 @@
     "gate_d_visuals\\STEM_MISSING_MEDIUM_litchfield_tile_40_-100_Boom11.png",
     "gate_d_visuals\\NOISE_MEDIUM_litchfield_tile_40_-100_Boom11.png"
   ],
-  "deterministic_digest": "de68f8c5786b36ad6caeff81a978fc06b65459cc5579f554c678357269360ed8"
+  "deterministic_digest": "b4693f43b194c3e769eb6bfb52ab9efe5a00dd3672a7532014495c97732bf706"
 }

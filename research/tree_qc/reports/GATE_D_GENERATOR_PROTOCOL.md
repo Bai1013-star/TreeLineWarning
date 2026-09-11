@@ -2,7 +2,7 @@
 
 Status: **worker protocol, pending GPT-6 Supervisor acceptance. Training remains locked.**
 `GATE_D_GENERATOR_VERSION = GATE_D_SYNTHETIC_GENERATOR_V2`
-`GATE_D_GENERATOR_DIGEST = a76fc071489352f590827f253b0d97a92e7707032f08cdd6893f12de3c4a4007`
+`GATE_D_GENERATOR_DIGEST = a0550c17ff75cdf7d380fc677840c883f2262f2148a40edbbee0df35410b6b9d`
 
 The digest is the SHA-256 over the generator implementation files listed in
 `gate_d_diagnostic.GENERATOR_FILES`. The Supervisor's acceptance marker must carry this
@@ -232,20 +232,43 @@ exchangeability, so the resulting p-value was not a valid hard-gate p-value. The
 gap is also an audit-only ratio error, and neither `membership_gap` nor the scene
 membership fraction is a model input.
 
-**`sampling_structure_invariants` (HARD GATE).** Records are grouped by
-`(partition, candidate_id, severity, points_target)`. Within a contract group every
-class-independent quantity must agree, and every example must satisfy its budget
-arithmetic. `critical = bool(violations)`.
+**`sampling_structure_invariants` (HARD GATE).** Records are grouped by the **pre-declared**
+contract key
 
-| Invariant | Requirement |
+```
+(partition, candidate_id, severity, repeat, points_target)
+```
+
+`points_target` comes from `sample.diagnostics['points_target']` and `repeat` from
+`spec.repeat`. The achieved `sampled_points` is **never** used to build the key: using the
+result as a key would let a wrong-sized sample form its own "legal singleton group" and
+escape the per-example target check. The synthetic class never enters the key.
+
+Within a contract group every class-independent quantity must agree, and every example must
+independently satisfy its target and budget arithmetic. The per-example checks run
+**outside** the grouping, so they hold regardless of how an example is grouped.
+`critical = bool(violations)`.
+
+| Per-example check (outside grouping) | Requirement |
+|---|---|
+| `sampled_size_matches_target` | `sampled_points == points_target` |
+| `budget_sum_matches_target` | `candidate_budget + context_budget == points_target` |
+| `candidate_sampled_matches_budget` | `candidate_sampled == candidate_budget` |
+| `context_sampled_matches_budget` | `context_sampled == context_budget` |
+| `sampled_sum_matches_target` | `candidate_sampled + context_sampled == points_target` |
+
+| Per-group check | Requirement |
 |---|---|
 | `sampling_seed_class_independent` | one sampling seed per group |
 | `pre_reservation_indices_class_independent` | one base-selection digest per group |
-| `candidate_context_budget_independent` | same budgets and scene size per group |
-| `sampled_size_matches_target` | `sampled_points == points_target` |
-| `no_duplicate_indices` | base digest present; `candidate + context == points_target` |
+| `candidate_context_budget_independent` | same `candidate_budget`, `context_budget` and `scene_points` per group |
+| `no_duplicate_indices` | every member carries a `pre_reservation_indices_digest` |
 
-`sample()` now reports `pre_reservation_indices_digest` — a SHA-256 over the base selected
+Each `repeat` is its own contract group, so `repeats = 2` over 10 candidates × 3 severities
+yields 60 groups. Different repeats may legitimately have different sampling seeds and base
+digests; within one repeat all seven classes must agree.
+
+`sample()` reports `pre_reservation_indices_digest` — a SHA-256 over the base selected
 indices taken *after* the candidate and context group selections but *before* any
 changed-evidence reservation. It depends only on the scene geometry and the
 class-independent sampling seed, so all seven classes of a contract group must produce the

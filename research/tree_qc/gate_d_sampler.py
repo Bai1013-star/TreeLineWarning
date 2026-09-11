@@ -302,7 +302,7 @@ def _matched_drop(droppable: np.ndarray, add: np.ndarray, height: np.ndarray,
 
 def sample(points: np.ndarray, membership: np.ndarray, changed: np.ndarray,
            candidate_mask: np.ndarray, sampling_seed_value: int,
-           points_target: int = POINTS_PRIMARY) -> Sample:
+           points_target: int = POINTS_PRIMARY, repeat: int = 0) -> Sample:
     """Sample one scene into the fixed model input.
 
     ``changed`` is the set of points whose membership differs from the GOOD baseline; it
@@ -312,6 +312,8 @@ def sample(points: np.ndarray, membership: np.ndarray, changed: np.ndarray,
     ``sampling_seed_value`` must come from :func:`sampling_seed`; a corruption seed is
     rejected, because the corruption seed is indexed by the synthetic class and would
     reintroduce the class-correlated draw artifact this contract exists to prevent.
+    ``repeat`` is carried into the diagnostics so the structural gate can key on the
+    pre-declared contract rather than on the achieved sample.
     """
     if not is_sampling_seed(sampling_seed_value):
         raise SamplerError(
@@ -452,6 +454,7 @@ def sample(points: np.ndarray, membership: np.ndarray, changed: np.ndarray,
     diagnostics['points_target'] = int(points_target)
     diagnostics['source_count'] = int(total)
     diagnostics['sampling_seed'] = int(sampling_seed_value)
+    diagnostics['repeat'] = int(repeat)
     diagnostics['candidate_share'] = round(float(candidate_share), 6)
     diagnostics['metric_scale_constant'] = METRIC_SCALE_CONSTANT
     diagnostics['per_example_scaling'] = False

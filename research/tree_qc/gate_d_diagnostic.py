@@ -97,6 +97,8 @@ def _record(spec, example, sample, coverage, height_cov,
         candidate_sampled=diagnostics['candidate_sampled'],
         context_sampled=diagnostics['context_sampled'],
         changed_evidence_sampled=diagnostics['changed_evidence_sampled'],
+        repeat=int(spec.repeat),
+        points_target=int(diagnostics['points_target']),
         sampling_seed=int(diagnostics['sampling_seed']),
         candidate_budget=int(diagnostics['candidate_budget']),
         context_budget=int(diagnostics['context_budget']),
@@ -174,7 +176,7 @@ def run(per_partition: int = 5, repeats: int = 1, points: int = sampler.POINTS_P
                 sample_seed = spec.sampling_seed(points, seed_base)
                 sample = sampler.sample(example.points, example.membership,
                                         example.changed_membership, scene.candidate_mask,
-                                        sample_seed, points)
+                                        sample_seed, points, spec.repeat)
                 coverage = sampler.spatial_coverage(sample, example.points)
                 height_cov = sampler.height_coverage(sample, example.points)
                 record = _record(spec, example, sample, coverage, height_cov, stats)
@@ -191,6 +193,8 @@ def run(per_partition: int = 5, repeats: int = 1, points: int = sampler.POINTS_P
                                  'sampling_seed': int(sample_seed),
                                  'corruption_seed': int(spec.seed),
                                  'repeat': int(spec.repeat),
+                                 'points_target': int(
+                                     sample.diagnostics['points_target']),
                                  'features': list(sampler.FEATURES),
                                  'diagnostics': sample.diagnostics}
                 row['spatial_coverage'] = record.spatial_coverage

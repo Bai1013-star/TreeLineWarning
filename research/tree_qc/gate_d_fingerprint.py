@@ -94,6 +94,8 @@ class ExampleRecord:
     candidate_sampled: int
     context_sampled: int
     changed_evidence_sampled: int
+    repeat: int = 0
+    points_target: int = 0
     sampling_seed: int = 0
     candidate_budget: int = 0
     context_budget: int = 0
@@ -111,9 +113,31 @@ class ExampleRecord:
     centroid_norm: float = 0.0
     duplicate_rate: float = 0.0
 
-    def contract_key(self, points_target: int = 0) -> tuple:
-        """The class-independent key that defines one sampling contract group."""
-        return (self.partition, self.candidate_id, self.severity, points_target)
+    def contract_key(self) -> tuple:
+        """The class-independent key that defines one sampling contract group.
+
+        ``points_target`` is the *pre-declared* requested sample size, taken from the
+        sampler diagnostics. It must never be derived from ``sampled_points``, which is the
+        achieved result: using the result as a key would let a wrong-sized sample form its
+        own "legal singleton group" and escape the per-example target check.
+        """
+        return (self.partition, self.candidate_id, self.severity, self.repeat,
+                self.points_target)
+
+    def target_violations(self) -> list[str]:
+        """Per-example budget/target checks. Evaluated independently of any grouping."""
+        problems = []
+        if self.sampled_points != self.points_target:
+            problems.append('sampled_size_matches_target')
+        if self.candidate_budget + self.context_budget != self.points_target:
+            problems.append('budget_sum_matches_target')
+        if self.candidate_sampled != self.candidate_budget:
+            problems.append('candidate_sampled_matches_budget')
+        if self.context_sampled != self.context_budget:
+            problems.append('context_sampled_matches_budget')
+        if self.candidate_sampled + self.context_sampled != self.points_target:
+            problems.append('sampled_sum_matches_target')
+        return problems
 
     def audit_features(self) -> tuple[float, ...]:
         """Audit-only scalars used to hunt for geometric shortcuts.
@@ -483,25 +507,50 @@ def permutation_calibrated_separation(features: np.ndarray, labels: np.ndarray,
 def sampling_structure_invariants(records: list[ExampleRecord]) -> dict:
     """Hard structural gate: the synthetic class must not alter the base sample.
 
-    Records are grouped by ``(partition, candidate_id, severity, points_target)``. Within
-    one group the corruption differs but the scene does not, so all seven classes must
-    agree on every class-independent quantity. A group with fewer than two records is
-    reported but cannot exhibit a violation.
+    Records are grouped by the **pre-declared** contract key
+    ``(partition, candidate_id, severity, repeat, points_target)``. Within one group the
+    corruption differs but the scene does not, so all seven classes must agree on every
+    class-independent quantity. The synthetic class never enters the key.
+
+    The per-example target and budget checks run **outside** the grouping, so an example
+    with a wrong sample size cannot escape by forming its own legal-looking group.
     """
     groups: dict[tuple, list[ExampleRecord]] = {}
     for record in records:
-        groups.setdefault(record.contract_key(record.sampled_points), []).append(record)
+        groups.setdefault(record.contract_key(), []).append(record)
 
     violations: list[dict] = []
+
+    # Per-example checks first: independent of grouping, so a wrong-sized example is
+    # always caught even if its key would otherwise isolate it.
+    for record in records:
+        problems = record.target_violations()
+        if problems:
+            violations.append({'invariant': 'per_example_target_and_budget',
+                               'partition': record.partition,
+                               'candidate_id': record.candidate_id,
+                               'severity': record.severity,
+                               'repeat': record.repeat,
+                               'example_class': record.example_class,
+                               'example': record.key,
+                               'failed': problems,
+                               'points_target': record.points_target,
+                               'sampled_points': record.sampled_points,
+                               'candidate_budget': record.candidate_budget,
+                               'context_budget': record.context_budget,
+                               'candidate_sampled': record.candidate_sampled,
+                               'context_sampled': record.context_sampled})
+
     seed_passed = 0
     digest_passed = 0
     budget_passed = 0
     duplicate_passed = 0
     target_passed = 0
     for key, members in sorted(groups.items(), key=lambda item: str(item[0])):
-        partition, candidate_id, severity, points_target = key
+        partition, candidate_id, severity, repeat, points_target = key
         where = {'partition': partition, 'candidate_id': candidate_id,
-                 'severity': severity, 'points_target': points_target}
+                 'severity': severity, 'repeat': repeat,
+                 'points_target': points_target}
 
         seeds = {m.sampling_seed for m in members}
         if len(seeds) == 1:
@@ -527,21 +576,15 @@ def sampling_structure_invariants(records: list[ExampleRecord]) -> dict:
             violations.append({'invariant': 'candidate_context_budget_independent',
                                **where, 'values': sorted(budgets)})
 
-        bad_dupes = [m.key for m in members
-                     if m.sampled_points != points_target]
-        if bad_dupes:
-            violations.append({'invariant': 'sampled_size_matches_target',
-                               **where, 'examples': bad_dupes})
-        else:
+        if all(not m.target_violations() for m in members):
             target_passed += 1
 
-        bad_duplicate = [m.key for m in members
-                         if not m.pre_reservation_indices_digest
-                         or m.candidate_sampled != m.candidate_budget
-                         or m.context_sampled != m.context_budget]
-        if bad_duplicate:
+        missing_digest = [m.key for m in members
+                          if not m.pre_reservation_indices_digest]
+        if missing_digest:
             violations.append({'invariant': 'no_duplicate_indices',
-                               **where, 'examples': bad_duplicate})
+                               **where, 'examples': missing_digest,
+                               'detail': 'missing pre_reservation_indices_digest'})
         else:
             duplicate_passed += 1
 
@@ -549,14 +592,17 @@ def sampling_structure_invariants(records: list[ExampleRecord]) -> dict:
         'gate': 'SAMPLING_STRUCTURE_GATE',
         'pass': not violations,
         'groups_checked': len(groups),
+        'examples_checked': len(records),
         'sampling_seed_groups_passed': seed_passed,
         'pre_reservation_digest_groups_passed': digest_passed,
         'budget_groups_passed': budget_passed,
         'duplicate_check_passed': duplicate_passed,
         'points_target_check_passed': target_passed,
         'violations': violations,
-        'note': 'structural proof that the class cannot alter the base sample; it relies '
-                'on no exchangeability assumption',
+        'note': 'structural proof that the class cannot alter the base sample; the '
+                'per-example target and budget checks run outside the grouping so a '
+                'wrong-sized example cannot escape as a singleton group; no '
+                'exchangeability assumption is used',
     }
 
 

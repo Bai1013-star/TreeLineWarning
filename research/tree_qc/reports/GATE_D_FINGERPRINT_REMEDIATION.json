@@ -74,13 +74,14 @@
           "gate": "SAMPLING_STRUCTURE_GATE",
           "pass": true,
           "groups_checked": 30,
+          "examples_checked": 210,
           "sampling_seed_groups_passed": 30,
           "pre_reservation_digest_groups_passed": 30,
           "budget_groups_passed": 30,
           "duplicate_check_passed": 30,
           "points_target_check_passed": 30,
           "violations": [],
-          "note": "structural proof that the class cannot alter the base sample; it relies on no exchangeability assumption"
+          "note": "structural proof that the class cannot alter the base sample; the per-example target and budget checks run outside the grouping so a wrong-sized example cannot escape as a singleton group; no exchangeability assumption is used"
         }
       },
       {
@@ -622,7 +623,7 @@
     ]
   },
   "examples": 210,
-  "generator_digest": "a76fc071489352f590827f253b0d97a92e7707032f08cdd6893f12de3c4a4007",
+  "generator_digest": "a0550c17ff75cdf7d380fc677840c883f2262f2148a40edbbee0df35410b6b9d",
   "membership_channel": "current_candidate_membership",
   "violations": []
 }
