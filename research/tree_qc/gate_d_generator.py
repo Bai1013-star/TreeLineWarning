@@ -98,13 +98,21 @@ class NotApplicableError(GeneratorError):
 
 @dataclass(frozen=True)
 class ExampleSpec:
-    """Frozen, serialisable recipe. Reproduces one example byte-for-byte."""
+    """Frozen, serialisable recipe. Reproduces one example byte-for-byte.
+
+    ``seed`` drives the **corruption** RNG and is intentionally class-indexed, so each
+    class draws its own defect parameters. It must never drive the sampler: the sampler
+    seed comes from :func:`gate_d_sampler.sampling_seed`, which excludes the class.
+    ``repeat`` records the repeat index within a (candidate, class, severity) cell so the
+    class-independent sampling seed can be reproduced from the spec alone.
+    """
 
     candidate_id: str
     partition: str
     example_class: str
     severity: str
     seed: int
+    repeat: int = 0
 
     def __post_init__(self) -> None:
         if self.example_class not in CLASSES:
@@ -113,6 +121,8 @@ class ExampleSpec:
             raise GeneratorError(f'unknown severity {self.severity!r}')
         if self.partition not in MODEL_SELECTION_PARTITIONS:
             raise GeneratorError(f'partition {self.partition!r} is not model-selection')
+        if int(self.repeat) < 0:
+            raise GeneratorError(f'repeat must be non-negative, got {self.repeat!r}')
 
     @property
     def key(self) -> str:
@@ -122,13 +132,23 @@ class ExampleSpec:
     def as_row(self) -> dict:
         return {'candidate_id': self.candidate_id, 'partition': self.partition,
                 'class': self.example_class, 'severity': self.severity,
-                'seed': self.seed, 'key': self.key}
+                'seed': self.seed, 'repeat': self.repeat, 'key': self.key}
 
     @classmethod
     def from_row(cls, row: dict) -> ExampleSpec:
         return cls(candidate_id=row['candidate_id'], partition=row['partition'],
                    example_class=row['class'], severity=row['severity'],
-                   seed=int(row['seed']))
+                   seed=int(row['seed']), repeat=int(row.get('repeat', 0)))
+
+    def sampling_seed(self, points_target: int = 4096, seed_base: int = 0) -> int:
+        """Class-independent sampler seed for this example.
+
+        Every class of the same (candidate, severity, repeat) resolves to one value.
+        """
+        import gate_d_sampler as _sampler
+        return _sampler.sampling_seed(self.partition, self.candidate_id, self.severity,
+                                      points_target=points_target,
+                                      repeat=self.repeat, seed_base=seed_base)
 
 
 @dataclass
@@ -507,7 +527,12 @@ def generate_example(spec: ExampleSpec, geometry, provenance) -> SyntheticExampl
 def enumerate_specs(candidate_ids, partition: str, classes=CLASSES,
                     severities=SEVERITIES, seed_base: int = 0,
                     repeats: int = 1) -> list[ExampleSpec]:
-    """Deterministic, order-stable spec list for a bounded diagnostic or a full run."""
+    """Deterministic, order-stable spec list for a bounded diagnostic or a full run.
+
+    ``seed`` is the corruption seed and is class-indexed by design. It is **not** the
+    sampler seed: callers must obtain that from ``ExampleSpec.sampling_seed()`` (or
+    ``gate_d_sampler.sampling_seed``), which excludes the class.
+    """
     specs: list[ExampleSpec] = []
     for index, candidate_id in enumerate(candidate_ids):
         for class_index, example_class in enumerate(classes):
@@ -518,5 +543,6 @@ def enumerate_specs(candidate_ids, partition: str, classes=CLASSES,
                     specs.append(ExampleSpec(candidate_id=candidate_id,
                                              partition=partition,
                                              example_class=example_class,
-                                             severity=severity, seed=seed))
+                                             severity=severity, seed=seed,
+                                             repeat=repeat))
     return specs

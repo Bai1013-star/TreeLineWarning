@@ -2,7 +2,7 @@
 
 Status: **worker protocol, pending GPT-6 Supervisor acceptance. Training remains locked.**
 `GATE_D_GENERATOR_VERSION = GATE_D_SYNTHETIC_GENERATOR_V2`
-`GATE_D_GENERATOR_DIGEST = f3c1bd98f74a9ff954e5455c306fb1db47a45a6eb4525dba99c1d587196d644a`
+`GATE_D_GENERATOR_DIGEST = 52c5d7dba0c0d7b80cd8a55be605aaebd0457469f2c278fb0d20b14f4a2fab6e`
 
 The digest is the SHA-256 over the generator implementation files listed in
 `gate_d_diagnostic.GENERATOR_FILES`. The Supervisor's acceptance marker must carry this
@@ -175,9 +175,38 @@ The branch is **latent at the current diagnostic scale** — the minimum group b
 of the 210 examples reaches it. It is covered by direct `_select_within` tests and by a
 `sample()`-level test that verifies the group budgets survive.
 
+### 8.2 Sampler seed decoupling (`GATE_D_STRUCTURED_SAMPLER_V4`)
+
+`enumerate_specs` deliberately indexes the **corruption** seed by the synthetic class
+(`10_007 * class_index`), so each class draws its own defect parameters. That seed used to
+drive the sampler as well. Although `sample` has no class parameter, its RNG therefore
+still depended on the class, producing a real, deterministic, class-correlated XYZ
+artifact.
+
+The two RNGs are now separate:
+
+* **corruption seed** — `ExampleSpec.seed`, class-indexed by design;
+* **sampling seed** — `gate_d_sampler.sampling_seed(partition, candidate_id, severity,
+  points_target, repeat, seed_base)`, hashed with `SAMPLING_SEED_VERSION` for domain
+  separation. `example_class`, `class_index`, the label, the corruption mechanism and the
+  changed-membership count are **absent** from the key.
+
+`sample` refuses any seed that did not come from `sampling_seed`, so a caller cannot
+silently fall back to the corruption seed. `ExampleSpec` gained a `repeat` field so the
+sampling seed is reproducible from the spec alone.
+
+The changed-evidence reservation may still replace points inside the fixed group budgets
+when a defect carries changed membership; that is the changed-evidence requirement, not a
+class-specific RNG. Its replacement is **height-band matched** (`_matched_drop`), because
+changed points are spatially clustered by construction (crown tops, stem bottoms) and a
+free choice of which selected point to drop would shift the sampled vertical profile in a
+class-dependent direction.
+
+Measured effect: the XYZ artifact separation fell from **0.190446 to 0.096966**.
+
 ## 9. Fingerprint diagnostics
 
-`GATE_D_FINGERPRINT_V3` runs permutation tests (2000 permutations, α = 0.01) plus two
+`GATE_D_FINGERPRINT_V4` runs permutation tests (2000 permutations, α = 0.01) plus two
 mandatory negative controls.
 
 Checks: scene size constant per candidate, sampled size constant, drawn fraction
@@ -249,16 +278,41 @@ Measured on the 210-example diagnostic:
 
 | Quantity | Value |
 |---|---|
-| XYZ artifact observed separation | 0.190446 |
+| XYZ artifact observed separation | **0.096966** (was 0.190446 before seed decoupling) |
 | XYZ artifact critical value | 0.250 |
-| XYZ artifact p-value | 0.0005 |
+| XYZ artifact p-value | 0.0105 |
+| XYZ artifact null 99th percentile | 0.09604 |
 | XYZ artifact worst column | 2 (`feature_mean[2]`, mean Z) |
-| XYZ artifact per-column | `[0.000194, 0.000064, 0.190446, 0.0, 0.0, 0.000021]` |
+| XYZ artifact per-column | `[0.000199, 0.000112, 0.096966, 0.0, 0.0, 0.000011]` |
 | XYZ artifact gate | **PASS** (observed below the frozen 0.250 floor) |
-| membership defect signature | 0.453673 (`[0.453673, 0.410516]`) |
+| membership defect signature | 0.44958 |
+| membership-only shortcut | PASS (cross-partition balanced accuracy 0.6) |
 
 `MIN_REAL_SEPARATION`, `ALPHA` and `PERMUTATIONS` were unchanged by this revision: the
 gate passes on its own merits, not by relaxing the detector.
+
+**Open item reported to the Supervisor: `class_specific_sampling_fingerprint` is
+CRITICAL.** After decoupling, this check fails while every other check passes. It is not a
+class-indexed RNG artifact — the sampling seed is provably class-independent — and it is
+not the reservation alone:
+
+* the base sampler gap (measured with the changed mask zeroed) is a **pure function of the
+  scene membership fraction**, not of the class. Classes whose scenes share a fraction
+  receive byte-identical gaps: for the first train candidate, `GOOD` has scene fraction
+  0.315592 and gap `+0.00008182` for all three severities, and a class with a different
+  scene fraction gets a different gap. A fraction sweep (0.10 → 0.60) confirmed the gap
+  varies with the ratio, not with any class label;
+* the magnitude is small and far below the scene variation it estimates: per-class mean
+  gaps are `-0.0022 … +0.0015`, the base gap standard deviation is 0.0029, while scene
+  membership fractions span 0.014 … 0.687. The largest single-example gap is 0.0113;
+* the changed-evidence reservation adds about `+0.0016` (MERGED) and `-0.0014` (STEM) and
+  is height-band matched to protect the XYZ marginals.
+
+The check is a permutation test on a `210`-example set, so it detects even a negligible
+systematic deviation. The remaining effect is a property of the stratified ratio estimator
+and of the changed-evidence reservation, both of which are frozen design choices in this
+round. It was **not** addressed by changing any threshold, and it is recorded here for the
+Supervisor's decision.
 
 **Known property of the 0.190446 value, recorded for the Supervisor.** The sampler is
 provably class-agnostic: for a fixed seed it selects *identical point indices* for every

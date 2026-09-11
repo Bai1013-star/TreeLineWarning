@@ -125,12 +125,17 @@ class GateDDataset:
                 f'{spec.key} is not applicable: {exc.reason} {exc.detail}') from exc
         scene = scene_module.build_base_scene(spec.candidate_id, spec.partition,
                                               geometry_for_candidate, self.provenance)
+        # Corruption RNG uses spec.seed (class-indexed by design); the sampler RNG uses
+        # the class-independent sampling seed so the class cannot leak through the draw.
+        sample_seed = spec.sampling_seed(self.config.points, self.config.seed_base)
         sample = sampler.sample(example.points, example.membership,
                                 example.changed_membership, scene.candidate_mask,
-                                spec.seed, self.config.points)
+                                sample_seed, self.config.points)
         provenance = dict(example.provenance)
         provenance['sample'] = {
             'sampler_version': sampler.SAMPLER_VERSION,
+            'sampling_seed': int(sample_seed),
+            'corruption_seed': int(spec.seed),
             'points': sample.points,
             'source_points': sample.source_count,
             'features': list(sampler.FEATURES),

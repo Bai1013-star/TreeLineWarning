@@ -160,9 +160,12 @@ def run(per_partition: int = 5, repeats: int = 1, points: int = sampler.POINTS_P
                                            'detail': {k: v for k, v in exc.detail.items()
                                                       if k != 'lower_mask'}})
                     continue
+                # Corruption RNG uses spec.seed (class-indexed by design); the sampler RNG
+                # uses the class-independent sampling seed.
+                sample_seed = spec.sampling_seed(points, seed_base)
                 sample = sampler.sample(example.points, example.membership,
                                         example.changed_membership, scene.candidate_mask,
-                                        spec.seed, points)
+                                        sample_seed, points)
                 coverage = sampler.spatial_coverage(sample, example.points)
                 height_cov = sampler.height_coverage(sample, example.points)
                 record = _record(spec, example, sample, coverage, height_cov, stats)
@@ -176,6 +179,9 @@ def run(per_partition: int = 5, repeats: int = 1, points: int = sampler.POINTS_P
                 row = dict(example.provenance)
                 row['sample'] = {'points': sample.points,
                                  'source_points': sample.source_count,
+                                 'sampling_seed': int(sample_seed),
+                                 'corruption_seed': int(spec.seed),
+                                 'repeat': int(spec.repeat),
                                  'features': list(sampler.FEATURES),
                                  'diagnostics': sample.diagnostics}
                 row['spatial_coverage'] = record.spatial_coverage

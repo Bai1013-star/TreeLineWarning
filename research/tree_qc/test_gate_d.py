@@ -559,7 +559,15 @@ class SamplerContract(unittest.TestCase):
         self.changed = np.zeros(20000, dtype=bool)
         self.changed[:500] = True
 
-    def _sample(self, target=sampler.POINTS_PRIMARY, seed=1):
+    @staticmethod
+    def _seed(tag, target=sampler.POINTS_PRIMARY, severity='LOW', repeat=0):
+        """A valid sampling seed; ``sample`` refuses arbitrary integers."""
+        return sampler.sampling_seed('train', f'test:{tag}', severity,
+                                     points_target=target, repeat=repeat)
+
+    def _sample(self, target=sampler.POINTS_PRIMARY, seed=None):
+        if seed is None:
+            seed = self._seed('contract', target)
         return sampler.sample(self.points, self.membership, self.changed,
                               self.candidate_mask, seed, target)
 
@@ -577,15 +585,21 @@ class SamplerContract(unittest.TestCase):
 
     def test_sampler_has_no_label_parameter(self):
         import inspect
-        self.assertEqual(list(inspect.signature(sampler.sample).parameters),
+        parameters = list(inspect.signature(sampler.sample).parameters)
+        self.assertEqual(parameters,
                          ['points', 'membership', 'changed', 'candidate_mask',
-                          'spec_seed', 'points_target'])
+                          'sampling_seed_value', 'points_target'])
+        # No parameter may carry class, label, corruption or provenance information.
+        for forbidden in ('class', 'label', 'spec', 'severity', 'partition',
+                          'candidate_id', 'example_class', 'changed_membership'):
+            for name in parameters:
+                self.assertNotIn(forbidden, name, forbidden)
 
     def test_metric_scale_is_preserved(self):
         """No per-example RMS scaling: a 10 m tree stays 10 m."""
         big = self.points * 10.0
         sample = sampler.sample(big, self.membership, self.changed,
-                                self.candidate_mask, 1)
+                                self.candidate_mask, self._seed('metric'))
         extent = sample.features[:, :3].max(axis=0) - sample.features[:, :3].min(axis=0)
         # Local coordinates are metres divided by the fixed constant only.
         expected = (big.max(axis=0) - big.min(axis=0)) / sampler.METRIC_SCALE_CONSTANT
@@ -608,7 +622,7 @@ class SamplerContract(unittest.TestCase):
         membership_b = self.membership.copy()
         membership_b[10000:12000] = True
         sample_b = sampler.sample(self.points, membership_b, self.changed,
-                                  self.candidate_mask, 1)
+                                  self.candidate_mask, self._seed('quota'))
         self.assertEqual(sample_a.diagnostics['candidate_sampled'],
                          sample_b.diagnostics['candidate_sampled'])
         self.assertEqual(sample_a.diagnostics['context_sampled'],
@@ -623,7 +637,7 @@ class SamplerContract(unittest.TestCase):
         tiny = np.zeros(20000, dtype=bool)
         tiny[:10] = True
         sample = sampler.sample(self.points, self.membership, tiny,
-                                self.candidate_mask, 1)
+                                self.candidate_mask, self._seed('nodup'))
         self.assertLessEqual(sample.diagnostics['changed_evidence_sampled'], 10)
         self.assertEqual(sample.indices.size, len(np.unique(sample.indices)))
 
@@ -642,12 +656,13 @@ class SamplerContract(unittest.TestCase):
     def test_misaligned_inputs_rejected(self):
         with self.assertRaises(sampler.SamplerError):
             sampler.sample(self.points, self.membership[:10], self.changed,
-                           self.candidate_mask, 1)
+                           self.candidate_mask, self._seed('misaligned'))
 
     def test_empty_scene_rejected(self):
         with self.assertRaises(sampler.SamplerError):
             sampler.sample(np.zeros((0, 3), np.float32), np.zeros(0, bool),
-                           np.zeros(0, bool), np.zeros(0, bool), 1)
+                           np.zeros(0, bool), np.zeros(0, bool),
+                           self._seed('empty'))
 
     def test_sparse_stem_is_represented(self):
         """A sparse lower region must still appear in the sample."""
@@ -655,7 +670,8 @@ class SamplerContract(unittest.TestCase):
         points[:200, 2] = 0.0  # a thin sparse floor layer
         mask = np.zeros(20000, dtype=bool)
         mask[200:] = True
-        sample = sampler.sample(points, mask, np.zeros(20000, bool), mask, 2)
+        sample = sampler.sample(points, mask, np.zeros(20000, bool), mask,
+                                self._seed('sparse-stem'))
         low = points[sample.indices][:, 2] < 0.05
         self.assertGreater(int(low.sum()), 0)
 
@@ -665,9 +681,264 @@ class SamplerContract(unittest.TestCase):
         sparse = rng.normal(5, 1.5, size=(1000, 3)).astype(np.float32)
         points = np.concatenate([dense, sparse])
         mask = np.concatenate([np.ones(19000, bool), np.zeros(1000, bool)])
-        sample = sampler.sample(points, mask, np.zeros(20000, bool), mask, 3)
+        sample = sampler.sample(points, mask, np.zeros(20000, bool), mask,
+                                self._seed('uneven-density'))
         sampled = points[sample.indices]
         self.assertGreater(int((sampled[:, 0] > 2.5).sum()), 0)
+
+
+class SamplerSeedDecoupling(unittest.TestCase):
+    """The sampler RNG must not depend on the synthetic class.
+
+    Regression for the class-indexed sampling seed: `enumerate_specs` gives every class a
+    distinct corruption seed (`10_007 * class_index`), and that seed used to drive the
+    sampler as well. Although `sample` has no class parameter, its RNG therefore still
+    depended on the class, which produced a deterministic, class-correlated XYZ artifact
+    (mean-Z separation 0.190446).
+    """
+
+    CANDIDATE = PROVENANCE.train.eligible[0]
+
+    def setUp(self):
+        self.geometry = fixture_geometry(self.CANDIDATE, seed=13)
+
+    def specs(self, severity='MEDIUM', seed_base=4200, repeats=1):
+        return gen.enumerate_specs([self.CANDIDATE], 'train', severities=[severity],
+                                   seed_base=seed_base, repeats=repeats)
+
+    # --- Test A: the sampling seed itself is class-independent ---
+
+    def test_sampling_seed_is_identical_across_all_seven_classes(self):
+        for severity in gen.SEVERITIES:
+            with self.subTest(severity=severity):
+                group = self.specs(severity)
+                self.assertEqual(len(group), len(gen.CLASSES))
+                seeds = {spec.sampling_seed(4096, 4200) for spec in group}
+                self.assertEqual(len(seeds), 1,
+                                 f'sampling seed varies by class: {seeds}')
+
+    def test_corruption_seed_still_varies_by_class(self):
+        group = self.specs('MEDIUM')
+        self.assertEqual(len({spec.seed for spec in group}), len(gen.CLASSES))
+
+    def test_sampling_seed_ignores_class_label_and_corruption_mechanism(self):
+        """Only class-independent components may enter the sampler seed."""
+        base = sampler.sampling_seed('train', self.CANDIDATE, 'MEDIUM',
+                                     points_target=4096, repeat=0, seed_base=4200)
+        for spec in self.specs('MEDIUM'):
+            self.assertEqual(spec.sampling_seed(4096, 4200), base, spec.example_class)
+
+    def test_sampling_seed_varies_with_class_independent_components(self):
+        """It must still respond to the components that legitimately define a scene."""
+        base = sampler.sampling_seed('train', self.CANDIDATE, 'MEDIUM',
+                                     points_target=4096, repeat=0, seed_base=4200)
+        variants = {
+            'partition': sampler.sampling_seed('validation', self.CANDIDATE, 'MEDIUM',
+                                               points_target=4096, repeat=0,
+                                               seed_base=4200),
+            'candidate': sampler.sampling_seed('train', 'other:tree', 'MEDIUM',
+                                               points_target=4096, repeat=0,
+                                               seed_base=4200),
+            'severity': sampler.sampling_seed('train', self.CANDIDATE, 'HIGH',
+                                              points_target=4096, repeat=0,
+                                              seed_base=4200),
+            'points_target': sampler.sampling_seed('train', self.CANDIDATE, 'MEDIUM',
+                                                   points_target=2048, repeat=0,
+                                                   seed_base=4200),
+            'repeat': sampler.sampling_seed('train', self.CANDIDATE, 'MEDIUM',
+                                            points_target=4096, repeat=1,
+                                            seed_base=4200),
+            'seed_base': sampler.sampling_seed('train', self.CANDIDATE, 'MEDIUM',
+                                               points_target=4096, repeat=0,
+                                               seed_base=99),
+        }
+        for name, value in variants.items():
+            self.assertNotEqual(value, base, name)
+
+    def test_sampling_seed_is_deterministic(self):
+        first = self.specs('LOW')[0].sampling_seed(4096, 4200)
+        second = self.specs('LOW')[0].sampling_seed(4096, 4200)
+        self.assertEqual(first, second)
+
+    # --- Test B: base sampler indices are class-independent ---
+
+    def test_base_sampler_indices_are_identical_across_classes(self):
+        """Same scene, same sampling seed, same masks -> identical indices."""
+        group = self.specs('MEDIUM')
+        reference = None
+        for spec in group:
+            example = gen.generate_example(spec, self.geometry, PROVENANCE)
+            scene = scene_module.build_base_scene(spec.candidate_id, spec.partition,
+                                                  self.geometry, PROVENANCE)
+            sample = sampler.sample(
+                example.points, example.membership, example.changed_membership,
+                scene.candidate_mask, spec.sampling_seed(4096, 4200))
+            if reference is None:
+                reference = sample.indices
+            self.assertTrue(np.array_equal(sample.indices, reference),
+                            spec.example_class)
+
+    # --- Test C: only changed evidence may move points ---
+
+    def test_changed_evidence_reservation_preserves_budgets(self):
+        good = gen.enumerate_specs([self.CANDIDATE], 'train',
+                                   classes=[gen.GOOD], severities=['MEDIUM'],
+                                   seed_base=4200)[0]
+        defect = gen.enumerate_specs([self.CANDIDATE], 'train',
+                                     classes=[gen.CROWN_INCOMPLETE],
+                                     severities=['MEDIUM'], seed_base=4200)[0]
+        seed = good.sampling_seed(4096, 4200)
+        self.assertEqual(seed, defect.sampling_seed(4096, 4200))
+        scene = scene_module.build_base_scene(self.CANDIDATE, 'train', self.geometry,
+                                              PROVENANCE)
+        samples = {}
+        for spec in (good, defect):
+            example = gen.generate_example(spec, self.geometry, PROVENANCE)
+            samples[spec.example_class] = sampler.sample(
+                example.points, example.membership, example.changed_membership,
+                scene.candidate_mask, seed)
+        for name, sample in samples.items():
+            diagnostics = sample.diagnostics
+            self.assertEqual(diagnostics['candidate_sampled'],
+                             diagnostics['candidate_budget'], name)
+            self.assertEqual(diagnostics['context_sampled'],
+                             diagnostics['context_budget'], name)
+            self.assertEqual(sample.indices.size, diagnostics['points_target'], name)
+            self.assertEqual(len(np.unique(sample.indices)), sample.indices.size, name)
+        # Budgets are identical across the two classes even if the points differ.
+        good_diag = samples[gen.GOOD].diagnostics
+        defect_diag = samples[gen.CROWN_INCOMPLETE].diagnostics
+        self.assertEqual(good_diag['candidate_budget'], defect_diag['candidate_budget'])
+        self.assertEqual(good_diag['context_budget'], defect_diag['context_budget'])
+
+    def test_only_the_reservation_may_change_indices(self):
+        """Any index difference must be explained by the changed-evidence reservation."""
+        good = gen.enumerate_specs([self.CANDIDATE], 'train', classes=[gen.GOOD],
+                                   severities=['MEDIUM'], seed_base=4200)[0]
+        defect = gen.enumerate_specs([self.CANDIDATE], 'train',
+                                     classes=[gen.CROWN_INCOMPLETE],
+                                     severities=['MEDIUM'], seed_base=4200)[0]
+        seed = good.sampling_seed(4096, 4200)
+        scene = scene_module.build_base_scene(self.CANDIDATE, 'train', self.geometry,
+                                              PROVENANCE)
+        good_example = gen.generate_example(good, self.geometry, PROVENANCE)
+        defect_example = gen.generate_example(defect, self.geometry, PROVENANCE)
+        good_sample = sampler.sample(
+            good_example.points, good_example.membership,
+            good_example.changed_membership, scene.candidate_mask, seed)
+        defect_sample = sampler.sample(
+            defect_example.points, defect_example.membership,
+            defect_example.changed_membership, scene.candidate_mask, seed)
+        # Same seed and same scene: with no changed evidence the draws must agree.
+        no_change = sampler.sample(
+            good_example.points, good_example.membership,
+            np.zeros_like(good_example.changed_membership), scene.candidate_mask, seed)
+        self.assertTrue(np.array_equal(no_change.indices, good_sample.indices))
+        # When they do differ, the difference is bounded by the reservation.
+        if not np.array_equal(good_sample.indices, defect_sample.indices):
+            reservation = defect_sample.diagnostics['changed_evidence_reservation']
+            self.assertGreaterEqual(
+                defect_sample.diagnostics['changed_evidence_sampled'],
+                min(sampler.MIN_CHANGED_EVIDENCE,
+                    defect_sample.diagnostics['changed_evidence_available']))
+            self.assertLessEqual(reservation, sampler.MIN_CHANGED_EVIDENCE)
+
+    # --- Test D: XYZ cannot change through RNG alone ---
+
+    def test_sampled_xyz_is_byte_identical_across_classes(self):
+        """With no changed-evidence replacement, features[:, :3] must not move.
+
+        This is the decisive test for the decoupling: the synthetic class may only show
+        through the membership channel, never through which points were drawn.
+        """
+        group = self.specs('MEDIUM')
+        scene = scene_module.build_base_scene(self.CANDIDATE, 'train', self.geometry,
+                                              PROVENANCE)
+        reference_xyz = None
+        for spec in group:
+            example = gen.generate_example(spec, self.geometry, PROVENANCE)
+            # Force the same changed mask so only the class differs.
+            sample = sampler.sample(
+                example.points, example.membership,
+                np.zeros_like(example.changed_membership),
+                scene.candidate_mask, spec.sampling_seed(4096, 4200))
+            xyz = np.ascontiguousarray(sample.features[:, :3])
+            if reference_xyz is None:
+                reference_xyz = xyz.tobytes()
+            self.assertEqual(xyz.tobytes(), reference_xyz, spec.example_class)
+
+    def test_sampled_xyz_is_byte_identical_across_severities(self):
+        """Severity changes the corruption seed, not the sampling seed.
+
+        Severity is part of the sampling-seed key by design, so this asserts the weaker
+        but still required property: for a fixed severity, class cannot move the XYZ.
+        """
+        scene = scene_module.build_base_scene(self.CANDIDATE, 'train', self.geometry,
+                                              PROVENANCE)
+        for severity in gen.SEVERITIES:
+            group = self.specs(severity)
+            reference = None
+            for spec in group:
+                example = gen.generate_example(spec, self.geometry, PROVENANCE)
+                sample = sampler.sample(
+                    example.points, example.membership,
+                    np.zeros_like(example.changed_membership),
+                    scene.candidate_mask, spec.sampling_seed(4096, 4200))
+                payload = np.ascontiguousarray(
+                    sample.features[:, :3]).tobytes()
+                if reference is None:
+                    reference = payload
+                self.assertEqual(payload, reference,
+                                 f'{severity}/{spec.example_class}')
+
+
+class SamplerSeedContract(unittest.TestCase):
+    """``sample`` must refuse anything that is not a sampling seed."""
+
+    def setUp(self):
+        rng = np.random.default_rng(0)
+        self.points = rng.random((8000, 3)).astype(np.float32)
+        self.mask = np.ones(8000, dtype=bool)
+        self.changed = np.zeros(8000, dtype=bool)
+
+    def test_corruption_seed_is_rejected(self):
+        spec = gen.enumerate_specs([SamplerSeedDecoupling.CANDIDATE], 'train',
+                                   classes=[gen.GOOD], severities=['LOW'],
+                                   seed_base=4200)[0]
+        self.assertFalse(sampler.is_sampling_seed(spec.seed))
+        with self.assertRaises(sampler.SamplerError):
+            sampler.sample(self.points, self.mask, self.changed, self.mask, spec.seed)
+
+    def test_arbitrary_int_is_rejected(self):
+        for raw in (0, 1, 42, 12345):
+            self.assertFalse(sampler.is_sampling_seed(raw))
+            with self.assertRaises(sampler.SamplerError):
+                sampler.sample(self.points, self.mask, self.changed, self.mask, raw)
+
+    def test_helper_seed_is_accepted(self):
+        seed = sampler.sampling_seed('train', 'x:y', 'LOW')
+        self.assertTrue(sampler.is_sampling_seed(seed))
+        self.assertGreater(seed, 0)
+        self.assertLess(seed, 1 << 64)
+        sample = sampler.sample(self.points, self.mask, self.changed, self.mask, seed)
+        self.assertEqual(sample.points, sampler.POINTS_PRIMARY)
+
+    def test_full_range_seed_does_not_overflow(self):
+        """Sampling seeds are drawn from the full uint64 range.
+
+        Mixing them with the golden-ratio constant must not emit a numpy overflow
+        warning, which the previous unmasked addition did.
+        """
+        import warnings
+        seeds = [sampler.sampling_seed('train', f'x:{i}', 'LOW') for i in range(64)]
+        self.assertTrue(any(seed > 1 << 63 for seed in seeds),
+                        'expected some seeds above 2**63')
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', RuntimeWarning)
+            for seed in seeds:
+                sample = sampler.sample(self.points, self.mask, self.changed,
+                                        self.mask, seed)
+                self.assertEqual(sample.indices.size, sampler.POINTS_PRIMARY)
 
 
 class DatasetContract(unittest.TestCase):
@@ -884,7 +1155,9 @@ class SamplerExtremeStrata(unittest.TestCase):
         changed = np.zeros(count, dtype=bool)
         changed[:100] = True
 
-        sample = sampler.sample(points, membership, changed, candidate_mask, 3)
+        sample = sampler.sample(
+            points, membership, changed, candidate_mask,
+            sampler.sampling_seed('train', 'budget-test', 'LOW'))
         diagnostics = sample.diagnostics
         self.assertEqual(diagnostics['candidate_sampled'],
                          diagnostics['candidate_budget'])
@@ -911,7 +1184,9 @@ class SamplerExtremeStrata(unittest.TestCase):
         changed = np.zeros(points.shape[0], dtype=bool)
         changed[:64] = True
 
-        sample = sampler.sample(points, membership, changed, candidate_mask, 5)
+        sample = sampler.sample(
+            points, membership, changed, candidate_mask,
+            sampler.sampling_seed('train', 'extreme-strata', 'LOW'))
         diagnostics = sample.diagnostics
         self.assertEqual(sample.indices.size, diagnostics['points_target'])
         self.assertEqual(len(np.unique(sample.indices)), sample.indices.size)

@@ -8,11 +8,94 @@ was repeated, no model was trained, no held-out or local-challenge tree was read
 product or frozen V0.1 file was touched, and nothing was pushed.
 
 `GENERATOR_VERSION = GATE_D_SYNTHETIC_GENERATOR_V2`
-`GENERATOR_DIGEST = f3c1bd98f74a9ff954e5455c306fb1db47a45a6eb4525dba99c1d587196d644a`
+`GENERATOR_DIGEST = 52c5d7dba0c0d7b80cd8a55be605aaebd0457469f2c278fb0d20b14f4a2fab6e`
 `PROTOCOL_DIGEST = 36e4cfca043190d4d12c2ab9ee635d92bb479cb9b56d482ae1121fd797939729`
 
 This round closed the six blockers from `TREE_QC_GATE_D_MINIMAL_REMEDIATION_ALL_BLOCKERS_V1`
 by minimal remediation of the existing implementation, not a rewrite.
+
+## Round 4 addendum — sampler seed decoupling (`TREE_QC_GATE_D_FINAL_SAMPLER_SEED_DECOUPLING`)
+
+The last open item was `CLASS_INDEXED_SAMPLER_SEED`. `enumerate_specs` deliberately indexes
+the **corruption** seed by the synthetic class (`10_007 * class_index`), and that seed also
+drove the sampler. Although `sample` has no class parameter, its RNG therefore still
+depended on the class, producing a real, deterministic XYZ artifact.
+
+### What changed
+
+* `gate_d_sampler.sampling_seed(partition, candidate_id, severity, points_target, repeat,
+  seed_base)` — the sampler seed key, hashed with `SAMPLING_SEED_VERSION` for domain
+  separation. `example_class`, `class_index`, the label, the corruption mechanism and the
+  changed-membership count are **absent**.
+* `sample` now rejects any seed not produced by that helper, so a caller cannot silently
+  fall back to the class-indexed corruption seed.
+* `ExampleSpec` gained a `repeat` field and a `sampling_seed()` method, so the
+  class-independent seed is reproducible from the spec alone.
+* `gate_d_dataset` and `gate_d_diagnostic` pass the sampling seed and record both
+  `sampling_seed` and `corruption_seed` in the provenance.
+* `_matched_drop` makes the changed-evidence reservation **height-band matched**, because
+  changed points are spatially clustered by construction (crown tops, stem bottoms) and a
+  free choice of which selected point to drop would move the sampled vertical profile in a
+  class-dependent direction. Measured: this alone cut the XYZ artifact from 0.1438 to
+  0.0970. Membership-first matching was tried and rejected — it gave 0.1463 with no
+  membership-gap improvement.
+
+`SAMPLER_VERSION = GATE_D_STRUCTURED_SAMPLER_V4`. `FINGERPRINT_VERSION` stays
+`GATE_D_FINGERPRINT_V4`; `ARTIFACT_COLUMNS`, `DEFECT_COLUMNS`, `MIN_REAL_SEPARATION`,
+`ALPHA` and `PERMUTATIONS` are untouched.
+
+### Result
+
+| Quantity | Before | After |
+|---|---|---|
+| XYZ artifact separation | 0.190446 | **0.096966** |
+| XYZ artifact per-column | `[0.000194, 0.000064, 0.190446, 0.0, 0.0, 0.000021]` | `[0.000199, 0.000112, 0.096966, 0.0, 0.0, 0.000011]` |
+| XYZ artifact gate | PASS | PASS |
+| membership defect signature | 0.453673 | 0.44958 |
+| membership-only shortcut | PASS | PASS |
+
+`XYZ_ARTIFACT_OBSERVED_SEPARATION` halved, and the residual is no longer a class-indexed
+RNG effect: with the changed mask zeroed the XYZ separation is now exactly **0.0**.
+
+### Open item: `class_specific_sampling_fingerprint` is CRITICAL
+
+Every other check passes. This one fails, and it is reported rather than tuned away. It is
+neither a class-indexed RNG artifact nor purely the reservation:
+
+* the base sampler gap (changed mask zeroed) is a **pure function of the scene membership
+  fraction**, not the class — classes sharing a scene fraction get byte-identical gaps
+  (`GOOD`, scene 0.315592, gap `+0.00008182` at all three severities), and a fraction sweep
+  (0.10 → 0.60) confirmed the dependence is on the ratio;
+* magnitudes are far below the scene variation being estimated: per-class mean gaps
+  `-0.0022 … +0.0015`, base-gap sd 0.0029, largest single gap 0.0113, while scene
+  fractions span 0.014 … 0.687;
+* the reservation contributes about `+0.0016` (MERGED) and `-0.0014` (STEM).
+
+The check is a permutation test over 210 examples and detects even a negligible systematic
+deviation, so it flags the inherent ratio bias of the stratified estimator plus the
+reservation. Both are frozen design choices this round; no threshold was changed.
+
+### New regression coverage
+
+* `SamplerSeedDecoupling` (A–D): the sampling seed is identical across all seven classes
+  while the corruption seed still varies; it still responds to partition, candidate,
+  severity, points_target, repeat and seed_base; base sampler indices are identical across
+  classes for one scene; `features[:, :3]` is **byte-identical** across classes once the
+  changed mask is held equal; budgets and target size survive with no duplicate indices.
+* `SamplerSeedContract`: the corruption seed and arbitrary integers are rejected;
+  full-range seeds are accepted without a numpy overflow warning.
+
+### Round 4 verification
+
+| Check | Result |
+|---|---|
+| `pytest test_gate_d.py` | **137 passed** (+ 11 subtests) |
+| `pytest test_canonical_identity.py` | **30 passed** |
+| combined | **167 passed** (+ 11 subtests) |
+| ruff | all checks passed |
+| diagnostic, two clean runs | summary, manifest and fingerprint artifact byte-identical |
+| training lock | `TRAINING_ALLOWED = False`, no marker, trainers exit 3 |
+| generator digest | `52c5d7dba0c0d7b80cd8a55be605aaebd0457469f2c278fb0d20b14f4a2fab6e` |
 
 ## Round 3 addendum — B5 final minimal remediation (`TREE_QC_GATE_D_V2_B5_FINAL_MINIMAL_REMEDIATION_V2`)
 
