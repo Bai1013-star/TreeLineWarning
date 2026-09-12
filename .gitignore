@@ -48,3 +48,15 @@ research/tree_qc_v2/**/*.npz
 # re-running the bakeoff. The aggregate report is tracked instead.
 research/tree_qc_v2/reports/BAKEOFF_ROWS_*.json
 research/tree_qc_v2/reports/*_QUICK.json
+
+# Tree QC V2.5 GO/NO-GO round. Source, configs, frozen gates and reports are
+# tracked; the per-row dumps are ~7 MB of scored examples that the runner
+# regenerates, so they stay out of the repository. Both protocol revisions are
+# tracked in aggregate, because the revision is part of the record.
+research/tree_qc_v25/**/__pycache__/
+research/tree_qc_v25/**/*.pt
+research/tree_qc_v25/**/*.pth
+research/tree_qc_v25/**/*.onnx
+research/tree_qc_v25/**/*.npz
+research/tree_qc_v25/reports/V25_ROWS_*.json
+research/tree_qc_v25/reports/PILOT_V1_UNWEIGHTED_ROWS_*.json

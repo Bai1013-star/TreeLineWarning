@@ -1,0 +1,14 @@
+{
+  "probe": "single GT_CORRECT row, many steps, then scored on the full ROI",
+  "example": "litchfield_w12m_g00#0|GT_CORRECT",
+  "steps": 400,
+  "sampled_points": 2048,
+  "current_iou": 1.0,
+  "refined_iou": 0.9975943074938771,
+  "delta_iou": -0.0024056925061228807,
+  "removed_points": 166,
+  "added_points": 0,
+  "masked_points": 69003,
+  "verdict": "the head can honour a correct mask when trained on it",
+  "interpretation": "If the heads can preserve a correct mask when that mask is all they train on, a negative result on the full corpus is about the difficulty of per-point keep/remove discrimination at forest scale, not about a coding defect."
+}

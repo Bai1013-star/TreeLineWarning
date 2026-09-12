@@ -1,0 +1,1815 @@
+{
+  "schema": "tree_qc_v25_go_no_go_v1",
+  "round": "TREE_QC_V25_FINAL_DEEP_LEARNING_GO_NO_GO",
+  "config_digest": "63fdc3f00a9d3ac0007a5f8ac950fa1e1a46fb6a907f69fdea730cb0e8b93465",
+  "base_head": "169d42dccd9b1173193d17167937bbde1a6638c0",
+  "frozen_thresholds": {
+    "decision_threshold_on_heads": 0.5,
+    "gate_min_probability": 0.7,
+    "gate_min_coverage": 0.1,
+    "gate_coverage_target": 0.3,
+    "gate_benefit_iou": 0.005,
+    "good_iou_threshold": 0.8,
+    "good_degradation_iou": 0.01,
+    "bad_improvement_iou": 0.01,
+    "protocol_revision": 2,
+    "frozen_before_wytham": true,
+    "tuned_on": "train + validation only"
+  },
+  "criteria": {
+    "CROSS_SITE_BAD_MEAN_DELTA_IOU": {
+      "op": ">",
+      "value": 0.0
+    },
+    "CROSS_SITE_GOOD_MEAN_DELTA_IOU": {
+      "op": ">=",
+      "value": -0.005
+    },
+    "CROSS_SITE_GOOD_DEGRADATION_RATE": {
+      "op": "<=",
+      "value": 0.05
+    },
+    "CROSS_SITE_AUTO_EDIT_SUCCESS_RATE": {
+      "op": ">=",
+      "value": 0.8
+    },
+    "CROSS_SITE_AUTO_EDIT_COVERAGE": {
+      "op": ">=",
+      "value": 0.1
+    }
+  },
+  "model": {
+    "architecture": "PointNeXt-S backbone (imported from the frozen V2 code) + REMOVE head + ADD head",
+    "parameter_breakdown": null
+  },
+  "library": {
+    "target_count": 308,
+    "targets_per_site": {
+      "litchfield": 190,
+      "wytham": 118
+    },
+    "index_sha256": "ac61a8c3f515b675cf6fe8c34bc37aba0d3e398679ac6307bc465761977987e0",
+    "index_path": "D:\\TreeQCData\\v2_feasibility\\roi_library\\index.json"
+  },
+  "result_a_v2_frozen_full_mask": {
+    "status": "OK",
+    "source": "research/tree_qc_v2/reports/MINI_REFINER_BAKEOFF.json",
+    "baseline_is_retrained_this_round": false,
+    "base_head": "169d42dccd9b1173193d17167937bbde1a6638c0",
+    "configurations": {
+      "cross_site_test_wytham": {
+        "models": {
+          "A": {
+            "name": "MODEL_A_POINTNET2",
+            "parameters": 485475,
+            "checkpoint_digest": "5b381e97e055757e934e03633502f52d",
+            "delta_iou_mean": -0.1485506082328165,
+            "delta_iou_median": -0.09378541225339168,
+            "current_iou_mean": 0.7686369605105356,
+            "refined_iou_mean": 0.620086352277719,
+            "change_region_f1_mean": 0.22957859366255756,
+            "good_mean_delta_iou": -0.2584099447249512,
+            "good_degradation_rate": 0.8705533596837944,
+            "bad_mean_delta_iou": -0.04748001866005251,
+            "bad_improvement_rate": 0.38727272727272727,
+            "identity_copy_fraction": 0.0
+          },
+          "B": {
+            "name": "MODEL_B_POINTNEXT_S",
+            "parameters": 1535139,
+            "checkpoint_digest": "22a9cdc9b17dcf218d3dfa5b99094791",
+            "delta_iou_mean": -0.060349360070877385,
+            "delta_iou_median": -0.011616905119509746,
+            "current_iou_mean": 0.7686369605105356,
+            "refined_iou_mean": 0.7082876004396582,
+            "change_region_f1_mean": 0.26235255634098265,
+            "good_mean_delta_iou": -0.133950474031566,
+            "good_degradation_rate": 0.7282608695652174,
+            "bad_mean_delta_iou": 0.007363664772956147,
+            "bad_improvement_rate": 0.4681818181818182,
+            "identity_copy_fraction": 0.03125
+          },
+          "C": {
+            "name": "MODEL_C_POINTNEXT_S_MULTITASK",
+            "parameters": 1566957,
+            "checkpoint_digest": "fd26ea10d440a64a6f592577e73c3a1b",
+            "delta_iou_mean": -0.053952903335845084,
+            "delta_iou_median": -0.006435602814016894,
+            "current_iou_mean": 0.7686369605105356,
+            "refined_iou_mean": 0.7146840571746905,
+            "change_region_f1_mean": 0.2884980487738966,
+            "good_mean_delta_iou": -0.12715820288741245,
+            "good_degradation_rate": 0.6907114624505929,
+            "bad_mean_delta_iou": 0.013395972251596881,
+            "bad_improvement_rate": 0.4690909090909091,
+            "identity_copy_fraction": 0.014204545454545454
+          }
+        }
+      },
+      "in_site_test_litchfield": {
+        "models": {
+          "A": {
+            "name": "MODEL_A_POINTNET2",
+            "parameters": 485475,
+            "checkpoint_digest": "8afee1ea18ac3feef795125c0fda7545",
+            "delta_iou_mean": 0.10734053236824612,
+            "delta_iou_median": 0.08933886380963874,
+            "current_iou_mean": 0.7727359766716547,
+            "refined_iou_mean": 0.8800765090399008,
+            "change_region_f1_mean": 0.4728729641661838,
+            "good_mean_delta_iou": 0.013740402967861737,
+            "good_degradation_rate": 0.24096385542168675,
+            "bad_mean_delta_iou": 0.1933421272785624,
+            "bad_improvement_rate": 0.8671586715867159,
+            "identity_copy_fraction": 0.08846153846153847
+          },
+          "B": {
+            "name": "MODEL_B_POINTNEXT_S",
+            "parameters": 1535139,
+            "checkpoint_digest": "fd775c6c2f469e828bc22025ee558203",
+            "delta_iou_mean": 0.09384687389529736,
+            "delta_iou_median": 0.08703949236384667,
+            "current_iou_mean": 0.7727359766716547,
+            "refined_iou_mean": 0.8665828505669521,
+            "change_region_f1_mean": 0.45939945652287206,
+            "good_mean_delta_iou": -0.0013498110390627767,
+            "good_degradation_rate": 0.3373493975903614,
+            "bad_mean_delta_iou": 0.1813154146652445,
+            "bad_improvement_rate": 0.8523985239852399,
+            "identity_copy_fraction": 0.06538461538461539
+          },
+          "C": {
+            "name": "MODEL_C_POINTNEXT_S_MULTITASK",
+            "parameters": 1566957,
+            "checkpoint_digest": "7f08cee8112c0119dc14f637772d4562",
+            "delta_iou_mean": 0.08528122878869644,
+            "delta_iou_median": 0.07897885089168716,
+            "current_iou_mean": 0.7727359766716547,
+            "refined_iou_mean": 0.8580172054603511,
+            "change_region_f1_mean": 0.45924283075704614,
+            "good_mean_delta_iou": -0.008121826747968608,
+            "good_degradation_rate": 0.2971887550200803,
+            "bad_mean_delta_iou": 0.1711017484515363,
+            "bad_improvement_rate": 0.8450184501845018,
+            "identity_copy_fraction": 0.08269230769230769
+          }
+        }
+      }
+    }
+  },
+  "folds": [
+    {
+      "label": "cross_site_test_wytham",
+      "configuration": "cross_site_test_wytham",
+      "split": {
+        "train": 156,
+        "validation": 34,
+        "test": 118
+      },
+      "training": {
+        "epochs_budget": 15,
+        "epochs_run": 14,
+        "patience": 3,
+        "best_epoch": 10,
+        "best_validation_loss": 0.8734182112540824,
+        "history": [
+          {
+            "epoch": 0,
+            "train_loss": 1.0447560617655047,
+            "validation_loss": 1.0022375084179318,
+            "epoch_seconds": 54.5
+          },
+          {
+            "epoch": 1,
+            "train_loss": 0.9696043548672414,
+            "validation_loss": 0.9950574692064338,
+            "epoch_seconds": 54.9
+          },
+          {
+            "epoch": 2,
+            "train_loss": 0.931779661294227,
+            "validation_loss": 0.9885032480360053,
+            "epoch_seconds": 51.4
+          },
+          {
+            "epoch": 3,
+            "train_loss": 0.9009272361788022,
+            "validation_loss": 0.9271263204112575,
+            "epoch_seconds": 48.5
+          },
+          {
+            "epoch": 4,
+            "train_loss": 0.8906935825837662,
+            "validation_loss": 0.993908671037265,
+            "epoch_seconds": 47.9
+          },
+          {
+            "epoch": 5,
+            "train_loss": 0.8785773865166472,
+            "validation_loss": 0.9232078580926562,
+            "epoch_seconds": 53.8
+          },
+          {
+            "epoch": 6,
+            "train_loss": 0.8528158499749002,
+            "validation_loss": 0.907097442450578,
+            "epoch_seconds": 45.6
+          },
+          {
+            "epoch": 7,
+            "train_loss": 0.8432122493606491,
+            "validation_loss": 0.9060661176222631,
+            "epoch_seconds": 46.7
+          },
+          {
+            "epoch": 8,
+            "train_loss": 0.8305812953372145,
+            "validation_loss": 0.9177336577697979,
+            "epoch_seconds": 51.2
+          },
+          {
+            "epoch": 9,
+            "train_loss": 0.8207648688988407,
+            "validation_loss": 0.8907632131233153,
+            "epoch_seconds": 47.1
+          },
+          {
+            "epoch": 10,
+            "train_loss": 0.8092670699159021,
+            "validation_loss": 0.8734182112540824,
+            "epoch_seconds": 57.5
+          },
+          {
+            "epoch": 11,
+            "train_loss": 0.802804665881795,
+            "validation_loss": 0.9149245865606442,
+            "epoch_seconds": 55.9
+          },
+          {
+            "epoch": 12,
+            "train_loss": 0.7946059497208806,
+            "validation_loss": 0.8933793744118046,
+            "epoch_seconds": 55.9
+          },
+          {
+            "epoch": 13,
+            "train_loss": 0.7883959699969489,
+            "validation_loss": 0.8804255402029634,
+            "epoch_seconds": 55.9
+          }
+        ],
+        "seed": 101,
+        "seed_policy": "one fixed seed; no search, no best-of-N",
+        "sampling": {
+          "rows": 2804,
+          "good_rows": 1356,
+          "bad_rows": 1448,
+          "realised_good_fraction": 0.483595,
+          "target_good_fraction": 0.5,
+          "good_repeat": 1,
+          "per_proposal_kind": {
+            "GT_CORRECT": 156,
+            "REAL_ALGORITHM_PROPOSAL": 308,
+            "SIMULATED_PROPOSAL": 2340
+          },
+          "per_corruption": {
+            "ADD_CONTAMINATION": 468,
+            "ALGORITHM_OUTPUT": 308,
+            "CROWN_INCOMPLETE": 468,
+            "MERGED_NEIGHBOR": 468,
+            "NONE": 156,
+            "REMOVE_MISSING": 468,
+            "STEM_MISSING": 468
+          },
+          "good_rows_are_explicit_training_samples": true
+        },
+        "examples": {
+          "train": 2804,
+          "train_before_resampling": 2804,
+          "validation": 611,
+          "test": 2112
+        },
+        "parameters": 1540582,
+        "seconds": 730.37
+      },
+      "gate": {
+        "coefficients": [
+          -2.3495815620783747,
+          -2.5708500771591356,
+          -0.08497863456739158,
+          -1.6073815303695083,
+          -1.159985712568007,
+          -1.8222025730098939,
+          0.6622168604418872
+        ],
+        "coverage": 0.3011456628477905,
+        "coverage_target": 0.3,
+        "coverage_target_met": true,
+        "edited_rows": 611,
+        "effective_threshold": 0.7,
+        "feature_order": [
+          "gate_remove_top",
+          "gate_remove_mean",
+          "gate_add_top",
+          "gate_add_mean",
+          "gate_change_fraction",
+          "gate_remove_fraction",
+          "gate_add_fraction"
+        ],
+        "fitted": true,
+        "fitted_on": "validation rows only",
+        "frozen_before_test": true,
+        "intercept": 2.2606238097633846,
+        "min_probability_floor": 0.7,
+        "positive_rows": 20,
+        "rows": 611,
+        "success_rate": 0.10869565217391304,
+        "threshold": 0.028315092736492947,
+        "threshold_selection": "smallest threshold reaching the declared coverage target that maximises observed success on validation; if none reaches it, the smallest threshold whose success rate clears the declared floor"
+      },
+      "gate_frozen_sha256": "25a4e01c37ea8c72e91481d275573d49d3573143ab1507c3c4a96e7984a259fe",
+      "gate_frozen_file": "E:\\TreeLineWarning-tree-qc-pointnet2-final-pilot-v1\\research\\tree_qc_v25\\reports\\FROZEN_GATE_cross_site_test_wytham.json",
+      "thresholds_frozen_before_test": true,
+      "frozen_thresholds": {
+        "bad_improvement_iou": 0.01,
+        "decision_threshold_on_heads": 0.5,
+        "frozen_before_wytham": true,
+        "gate_benefit_iou": 0.005,
+        "gate_coverage_target": 0.3,
+        "gate_min_coverage": 0.1,
+        "gate_min_probability": 0.7,
+        "good_degradation_iou": 0.01,
+        "good_iou_threshold": 0.8,
+        "protocol_revision": 2,
+        "tuned_on": "train + validation only"
+      },
+      "validation": {
+        "ungated": {
+          "label": "validation_ungated",
+          "rows": 611,
+          "ALL": {
+            "rows": 611,
+            "current_iou_mean": 0.772212432054878,
+            "current_iou_median": 0.7782214932610712,
+            "refined_iou_mean": 0.1989957117767346,
+            "refined_iou_median": 0.08124864513331888,
+            "delta_iou_mean": -0.5732167202781434,
+            "delta_iou_median": -0.6265104424519133,
+            "improved_fraction": 0.03764320785597381,
+            "unchanged_fraction": 0.0,
+            "degraded_fraction": 0.9623567921440261,
+            "improved_gt_threshold": 0.03273322422258593,
+            "degraded_gt_threshold": 0.9541734860883797
+          },
+          "GOOD": {
+            "rows": 291,
+            "current_iou_mean": 0.9269958452332228,
+            "current_iou_median": 0.9083493282149712,
+            "refined_iou_mean": 0.17679218421746704,
+            "refined_iou_median": 0.042194168489760785,
+            "delta_iou_mean": -0.7502036610157558,
+            "delta_iou_median": -0.8372162188956083,
+            "improved_fraction": 0.0,
+            "unchanged_fraction": 0.0,
+            "degraded_fraction": 1.0,
+            "improved_gt_threshold": 0.0,
+            "degraded_gt_threshold": 0.9965635738831615
+          },
+          "BAD": {
+            "rows": 320,
+            "current_iou_mean": 0.6314562656958207,
+            "current_iou_median": 0.6395353589458246,
+            "refined_iou_mean": 0.21918704465094363,
+            "refined_iou_median": 0.1742949025671203,
+            "delta_iou_mean": -0.4122692210448771,
+            "delta_iou_median": -0.4978019984301594,
+            "improved_fraction": 0.071875,
+            "unchanged_fraction": 0.0,
+            "degraded_fraction": 0.928125,
+            "improved_gt_threshold": 0.0625,
+            "degraded_gt_threshold": 0.915625
+          },
+          "GOOD_MEAN_DELTA_IOU": -0.7502036610157558,
+          "GOOD_DEGRADATION_RATE": 0.9965635738831615,
+          "BAD_MEAN_DELTA_IOU": -0.4122692210448771,
+          "BAD_IMPROVEMENT_RATE": 0.0625,
+          "EDIT_RATE": 1.0,
+          "NO_OP_RATE": 0.0,
+          "edited_success_rate": 0.03273322422258593,
+          "edited_rows": 611,
+          "change_region_f1_mean": 0.09190232822227594,
+          "change_region_iou_mean": 0.060905162809477435,
+          "by_corruption": {
+            "ADD_CONTAMINATION": {
+              "rows": 102,
+              "current_iou_mean": 0.8162943761397202,
+              "refined_iou_mean": 0.03393579034539296,
+              "delta_iou_mean": -0.7823585857943273,
+              "delta_iou_median": -0.7996914293630337,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "ALGORITHM_OUTPUT": {
+              "rows": 67,
+              "current_iou_mean": 0.9152105461488481,
+              "refined_iou_mean": 0.23965454374037787,
+              "delta_iou_mean": -0.6755560024084702,
+              "delta_iou_median": -0.7587509397289913,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "CROWN_INCOMPLETE": {
+              "rows": 102,
+              "current_iou_mean": 0.7333616916330655,
+              "refined_iou_mean": 0.19207199894818708,
+              "delta_iou_mean": -0.5412896926848784,
+              "delta_iou_median": -0.5447415391669157,
+              "improved_fraction": 0.00980392156862745,
+              "no_op_rate": 0.0
+            },
+            "MERGED_NEIGHBOR": {
+              "rows": 102,
+              "current_iou_mean": 0.6522617663377737,
+              "refined_iou_mean": 0.3032101842186941,
+              "delta_iou_mean": -0.34905158211907983,
+              "delta_iou_median": -0.29830172315883824,
+              "improved_fraction": 0.14705882352941177,
+              "no_op_rate": 0.0
+            },
+            "NONE": {
+              "rows": 34,
+              "current_iou_mean": 1.0,
+              "refined_iou_mean": 0.2633149498396868,
+              "delta_iou_mean": -0.7366850501603132,
+              "delta_iou_median": -0.9507707515191892,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "REMOVE_MISSING": {
+              "rows": 102,
+              "current_iou_mean": 0.7332863424313792,
+              "refined_iou_mean": 0.1543693217255358,
+              "delta_iou_mean": -0.5789170207058434,
+              "delta_iou_median": -0.5880940800722587,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "STEM_MISSING": {
+              "rows": 102,
+              "current_iou_mean": 0.755998660649803,
+              "refined_iou_mean": 0.2632442456487607,
+              "delta_iou_mean": -0.4927544150010422,
+              "delta_iou_median": -0.5521786749406612,
+              "improved_fraction": 0.06862745098039216,
+              "no_op_rate": 0.0
+            }
+          },
+          "by_proposal_kind": {
+            "GT_CORRECT": {
+              "rows": 34,
+              "current_iou_mean": 1.0,
+              "refined_iou_mean": 0.2633149498396868,
+              "delta_iou_mean": -0.7366850501603132,
+              "delta_iou_median": -0.9507707515191892,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "REAL_ALGORITHM_PROPOSAL": {
+              "rows": 67,
+              "current_iou_mean": 0.9152105461488481,
+              "refined_iou_mean": 0.23965454374037787,
+              "delta_iou_mean": -0.6755560024084702,
+              "delta_iou_median": -0.7587509397289913,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "SIMULATED_PROPOSAL": {
+              "rows": 510,
+              "current_iou_mean": 0.7382405674383482,
+              "refined_iou_mean": 0.1893663081773141,
+              "delta_iou_mean": -0.5488742592610342,
+              "delta_iou_median": -0.5882680324885647,
+              "improved_fraction": 0.045098039215686274,
+              "no_op_rate": 0.0
+            }
+          },
+          "REMOVE_PRECISION": 0.0356412358174462,
+          "REMOVE_RECALL": 0.1907437245367788,
+          "REMOVE_F1": 0.060060015084711926,
+          "REMOVE_TP": 545388,
+          "REMOVE_FP": 14756775,
+          "REMOVE_FN": 2313883,
+          "ADD_PRECISION": 0.8134773870947919,
+          "ADD_RECALL": 0.35890887364416724,
+          "ADD_F1": 0.4980683628161352,
+          "ADD_TP": 1072260,
+          "ADD_FP": 245859,
+          "ADD_FN": 1915295
+        },
+        "gated": {
+          "label": "validation_gated",
+          "rows": 611,
+          "ALL": {
+            "rows": 611,
+            "current_iou_mean": 0.772212432054878,
+            "current_iou_median": 0.7782214932610712,
+            "refined_iou_mean": 0.772212432054878,
+            "refined_iou_median": 0.7782214932610712,
+            "delta_iou_mean": 0.0,
+            "delta_iou_median": 0.0,
+            "improved_fraction": 0.0,
+            "unchanged_fraction": 1.0,
+            "degraded_fraction": 0.0,
+            "improved_gt_threshold": 0.0,
+            "degraded_gt_threshold": 0.0
+          },
+          "GOOD": {
+            "rows": 291,
+            "current_iou_mean": 0.9269958452332228,
+            "current_iou_median": 0.9083493282149712,
+            "refined_iou_mean": 0.9269958452332228,
+            "refined_iou_median": 0.9083493282149712,
+            "delta_iou_mean": 0.0,
+            "delta_iou_median": 0.0,
+            "improved_fraction": 0.0,
+            "unchanged_fraction": 1.0,
+            "degraded_fraction": 0.0,
+            "improved_gt_threshold": 0.0,
+            "degraded_gt_threshold": 0.0
+          },
+          "BAD": {
+            "rows": 320,
+            "current_iou_mean": 0.6314562656958207,
+            "current_iou_median": 0.6395353589458246,
+            "refined_iou_mean": 0.6314562656958207,
+            "refined_iou_median": 0.6395353589458246,
+            "delta_iou_mean": 0.0,
+            "delta_iou_median": 0.0,
+            "improved_fraction": 0.0,
+            "unchanged_fraction": 1.0,
+            "degraded_fraction": 0.0,
+            "improved_gt_threshold": 0.0,
+            "degraded_gt_threshold": 0.0
+          },
+          "AUTO_EDIT_COVERAGE": 0.0,
+          "AUTO_EDIT_COUNT": 0,
+          "AUTO_EDIT_SUCCESS_RATE": null,
+          "AUTO_EDIT_HARM_RATE": null,
+          "AUTO_EDIT_MEAN_DELTA_IOU": null,
+          "NO_OP_RATE": 1.0,
+          "GOOD_MEAN_DELTA_IOU": 0.0,
+          "GOOD_DEGRADATION_RATE": 0.0,
+          "BAD_MEAN_DELTA_IOU": 0.0,
+          "BAD_IMPROVEMENT_RATE": 0.0,
+          "GOOD_AUTO_EDIT_COVERAGE": 0.0,
+          "BAD_AUTO_EDIT_COVERAGE": 0.0,
+          "by_corruption": {
+            "ADD_CONTAMINATION": {
+              "rows": 102,
+              "current_iou_mean": 0.8162943761397202,
+              "gated_refined_iou_mean": 0.8162943761397202,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "ALGORITHM_OUTPUT": {
+              "rows": 67,
+              "current_iou_mean": 0.9152105461488481,
+              "gated_refined_iou_mean": 0.9152105461488481,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "CROWN_INCOMPLETE": {
+              "rows": 102,
+              "current_iou_mean": 0.7333616916330655,
+              "gated_refined_iou_mean": 0.7333616916330655,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "MERGED_NEIGHBOR": {
+              "rows": 102,
+              "current_iou_mean": 0.6522617663377737,
+              "gated_refined_iou_mean": 0.6522617663377737,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "NONE": {
+              "rows": 34,
+              "current_iou_mean": 1.0,
+              "gated_refined_iou_mean": 1.0,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "REMOVE_MISSING": {
+              "rows": 102,
+              "current_iou_mean": 0.7332863424313792,
+              "gated_refined_iou_mean": 0.7332863424313792,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "STEM_MISSING": {
+              "rows": 102,
+              "current_iou_mean": 0.755998660649803,
+              "gated_refined_iou_mean": 0.755998660649803,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            }
+          },
+          "by_proposal_kind": {
+            "GT_CORRECT": {
+              "rows": 34,
+              "current_iou_mean": 1.0,
+              "gated_refined_iou_mean": 1.0,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "REAL_ALGORITHM_PROPOSAL": {
+              "rows": 67,
+              "current_iou_mean": 0.9152105461488481,
+              "gated_refined_iou_mean": 0.9152105461488481,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "SIMULATED_PROPOSAL": {
+              "rows": 510,
+              "current_iou_mean": 0.7382405674383482,
+              "gated_refined_iou_mean": 0.7382405674383482,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            }
+          },
+          "remove_precision": null,
+          "remove_recall": null,
+          "remove_f1": null,
+          "add_precision": null,
+          "add_recall": null,
+          "add_f1": null
+        }
+      },
+      "test": {
+        "ungated": {
+          "label": "test_ungated",
+          "rows": 2112,
+          "ALL": {
+            "rows": 2112,
+            "current_iou_mean": 0.7686369605105356,
+            "current_iou_median": 0.7981490239857243,
+            "refined_iou_mean": 0.12846493891740943,
+            "refined_iou_median": 0.036941273326015364,
+            "delta_iou_mean": -0.640172021593126,
+            "delta_iou_median": -0.6836486640338348,
+            "improved_fraction": 0.011363636363636364,
+            "unchanged_fraction": 0.000946969696969697,
+            "degraded_fraction": 0.9876893939393939,
+            "improved_gt_threshold": 0.009943181818181818,
+            "degraded_gt_threshold": 0.9815340909090909
+          },
+          "GOOD": {
+            "rows": 1012,
+            "current_iou_mean": 0.9265223030934606,
+            "current_iou_median": 0.9092788194099533,
+            "refined_iou_mean": 0.1417263594699379,
+            "refined_iou_median": 0.029570679351344407,
+            "delta_iou_mean": -0.7847959436235228,
+            "delta_iou_median": -0.8735332381976662,
+            "improved_fraction": 0.0,
+            "unchanged_fraction": 0.0009881422924901185,
+            "degraded_fraction": 0.9990118577075099,
+            "improved_gt_threshold": 0.0,
+            "degraded_gt_threshold": 0.9950592885375494
+          },
+          "BAD": {
+            "rows": 1100,
+            "current_iou_mean": 0.6233824453342446,
+            "current_iou_median": 0.6339111803661862,
+            "refined_iou_mean": 0.11626443200908333,
+            "refined_iou_median": 0.044045434177560586,
+            "delta_iou_mean": -0.5071180133251613,
+            "delta_iou_median": -0.5432247902458989,
+            "improved_fraction": 0.02181818181818182,
+            "unchanged_fraction": 0.0009090909090909091,
+            "degraded_fraction": 0.9772727272727273,
+            "improved_gt_threshold": 0.019090909090909092,
+            "degraded_gt_threshold": 0.9690909090909091
+          },
+          "GOOD_MEAN_DELTA_IOU": -0.7847959436235228,
+          "GOOD_DEGRADATION_RATE": 0.9950592885375494,
+          "BAD_MEAN_DELTA_IOU": -0.5071180133251613,
+          "BAD_IMPROVEMENT_RATE": 0.019090909090909092,
+          "EDIT_RATE": 0.9990530303030303,
+          "NO_OP_RATE": 0.0009469696969697239,
+          "edited_success_rate": 0.00995260663507109,
+          "edited_rows": 2110,
+          "change_region_f1_mean": 0.005516006991122483,
+          "change_region_iou_mean": 0.003049993098143197,
+          "by_corruption": {
+            "ADD_CONTAMINATION": {
+              "rows": 354,
+              "current_iou_mean": 0.7967004284463421,
+              "refined_iou_mean": 0.2060727732192588,
+              "delta_iou_mean": -0.5906276552270833,
+              "delta_iou_median": -0.6556214718152295,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.005649717514124294
+            },
+            "ALGORITHM_OUTPUT": {
+              "rows": 224,
+              "current_iou_mean": 0.9057485807801996,
+              "refined_iou_mean": 0.13497856531740643,
+              "delta_iou_mean": -0.7707700154627931,
+              "delta_iou_median": -0.9261295939877188,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "CROWN_INCOMPLETE": {
+              "rows": 354,
+              "current_iou_mean": 0.7348445888157972,
+              "refined_iou_mean": 0.09887891469258481,
+              "delta_iou_mean": -0.6359656741232125,
+              "delta_iou_median": -0.652736074784562,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "MERGED_NEIGHBOR": {
+              "rows": 354,
+              "current_iou_mean": 0.5721230310837399,
+              "refined_iou_mean": 0.1679333662046031,
+              "delta_iou_mean": -0.40418966487913677,
+              "delta_iou_median": -0.4549740078625505,
+              "improved_fraction": 0.06779661016949153,
+              "no_op_rate": 0.0
+            },
+            "NONE": {
+              "rows": 118,
+              "current_iou_mean": 1.0,
+              "refined_iou_mean": 0.1414870345449884,
+              "delta_iou_mean": -0.8585129654550115,
+              "delta_iou_median": -0.9789981791456408,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "REMOVE_MISSING": {
+              "rows": 354,
+              "current_iou_mean": 0.7332099243153356,
+              "refined_iou_mean": 0.0521700204703007,
+              "delta_iou_mean": -0.6810399038450349,
+              "delta_iou_median": -0.7174093479943018,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "STEM_MISSING": {
+              "rows": 354,
+              "current_iou_mean": 0.8424259214164305,
+              "refined_iou_mean": 0.10880730475269078,
+              "delta_iou_mean": -0.7336186166637398,
+              "delta_iou_median": -0.8047616454367916,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            }
+          },
+          "by_proposal_kind": {
+            "GT_CORRECT": {
+              "rows": 118,
+              "current_iou_mean": 1.0,
+              "refined_iou_mean": 0.1414870345449884,
+              "delta_iou_mean": -0.8585129654550115,
+              "delta_iou_median": -0.9789981791456408,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "REAL_ALGORITHM_PROPOSAL": {
+              "rows": 224,
+              "current_iou_mean": 0.9057485807801996,
+              "refined_iou_mean": 0.13497856531740643,
+              "delta_iou_mean": -0.7707700154627931,
+              "delta_iou_median": -0.9261295939877188,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "SIMULATED_PROPOSAL": {
+              "rows": 1770,
+              "current_iou_mean": 0.735860778815529,
+              "refined_iou_mean": 0.12677247586788765,
+              "delta_iou_mean": -0.6090883029476414,
+              "delta_iou_median": -0.6491293041558677,
+              "improved_fraction": 0.013559322033898305,
+              "no_op_rate": 0.0011299435028248588
+            }
+          },
+          "REMOVE_PRECISION": 0.11192538217330258,
+          "REMOVE_RECALL": 0.5040329768655999,
+          "REMOVE_F1": 0.18317499141225768,
+          "REMOVE_TP": 3791642,
+          "REMOVE_FP": 30084874,
+          "REMOVE_FN": 3730965,
+          "ADD_PRECISION": 0.24059531369164053,
+          "ADD_RECALL": 0.01441893037766743,
+          "ADD_F1": 0.02720732004577735,
+          "ADD_TP": 75398,
+          "ADD_FP": 237983,
+          "ADD_FN": 5153700
+        },
+        "gated": {
+          "label": "test_gated",
+          "rows": 2112,
+          "ALL": {
+            "rows": 2112,
+            "current_iou_mean": 0.7686369605105356,
+            "current_iou_median": 0.7981490239857243,
+            "refined_iou_mean": 0.7686369605105356,
+            "refined_iou_median": 0.7981490239857243,
+            "delta_iou_mean": 0.0,
+            "delta_iou_median": 0.0,
+            "improved_fraction": 0.0,
+            "unchanged_fraction": 1.0,
+            "degraded_fraction": 0.0,
+            "improved_gt_threshold": 0.0,
+            "degraded_gt_threshold": 0.0
+          },
+          "GOOD": {
+            "rows": 1012,
+            "current_iou_mean": 0.9265223030934606,
+            "current_iou_median": 0.9092788194099533,
+            "refined_iou_mean": 0.9265223030934606,
+            "refined_iou_median": 0.9092788194099533,
+            "delta_iou_mean": 0.0,
+            "delta_iou_median": 0.0,
+            "improved_fraction": 0.0,
+            "unchanged_fraction": 1.0,
+            "degraded_fraction": 0.0,
+            "improved_gt_threshold": 0.0,
+            "degraded_gt_threshold": 0.0
+          },
+          "BAD": {
+            "rows": 1100,
+            "current_iou_mean": 0.6233824453342446,
+            "current_iou_median": 0.6339111803661862,
+            "refined_iou_mean": 0.6233824453342446,
+            "refined_iou_median": 0.6339111803661862,
+            "delta_iou_mean": 0.0,
+            "delta_iou_median": 0.0,
+            "improved_fraction": 0.0,
+            "unchanged_fraction": 1.0,
+            "degraded_fraction": 0.0,
+            "improved_gt_threshold": 0.0,
+            "degraded_gt_threshold": 0.0
+          },
+          "AUTO_EDIT_COVERAGE": 0.0,
+          "AUTO_EDIT_COUNT": 0,
+          "AUTO_EDIT_SUCCESS_RATE": null,
+          "AUTO_EDIT_HARM_RATE": null,
+          "AUTO_EDIT_MEAN_DELTA_IOU": null,
+          "NO_OP_RATE": 1.0,
+          "GOOD_MEAN_DELTA_IOU": 0.0,
+          "GOOD_DEGRADATION_RATE": 0.0,
+          "BAD_MEAN_DELTA_IOU": 0.0,
+          "BAD_IMPROVEMENT_RATE": 0.0,
+          "GOOD_AUTO_EDIT_COVERAGE": 0.0,
+          "BAD_AUTO_EDIT_COVERAGE": 0.0,
+          "by_corruption": {
+            "ADD_CONTAMINATION": {
+              "rows": 354,
+              "current_iou_mean": 0.7967004284463421,
+              "gated_refined_iou_mean": 0.7967004284463421,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "ALGORITHM_OUTPUT": {
+              "rows": 224,
+              "current_iou_mean": 0.9057485807801996,
+              "gated_refined_iou_mean": 0.9057485807801996,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "CROWN_INCOMPLETE": {
+              "rows": 354,
+              "current_iou_mean": 0.7348445888157972,
+              "gated_refined_iou_mean": 0.7348445888157972,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "MERGED_NEIGHBOR": {
+              "rows": 354,
+              "current_iou_mean": 0.5721230310837399,
+              "gated_refined_iou_mean": 0.5721230310837399,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "NONE": {
+              "rows": 118,
+              "current_iou_mean": 1.0,
+              "gated_refined_iou_mean": 1.0,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "REMOVE_MISSING": {
+              "rows": 354,
+              "current_iou_mean": 0.7332099243153356,
+              "gated_refined_iou_mean": 0.7332099243153356,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "STEM_MISSING": {
+              "rows": 354,
+              "current_iou_mean": 0.8424259214164305,
+              "gated_refined_iou_mean": 0.8424259214164305,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            }
+          },
+          "by_proposal_kind": {
+            "GT_CORRECT": {
+              "rows": 118,
+              "current_iou_mean": 1.0,
+              "gated_refined_iou_mean": 1.0,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "REAL_ALGORITHM_PROPOSAL": {
+              "rows": 224,
+              "current_iou_mean": 0.9057485807801996,
+              "gated_refined_iou_mean": 0.9057485807801996,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "SIMULATED_PROPOSAL": {
+              "rows": 1770,
+              "current_iou_mean": 0.735860778815529,
+              "gated_refined_iou_mean": 0.735860778815529,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            }
+          },
+          "remove_precision": null,
+          "remove_recall": null,
+          "remove_f1": null,
+          "add_precision": null,
+          "add_recall": null,
+          "add_f1": null
+        }
+      },
+      "seconds": 837.54,
+      "device": "cuda"
+    },
+    {
+      "label": "in_site_test_litchfield",
+      "configuration": "in_site_test_litchfield",
+      "split": {
+        "train": 133,
+        "validation": 28,
+        "test": 29
+      },
+      "training": {
+        "epochs_budget": 15,
+        "epochs_run": 8,
+        "patience": 3,
+        "best_epoch": 4,
+        "best_validation_loss": 0.8562376859410856,
+        "history": [
+          {
+            "epoch": 0,
+            "train_loss": 1.046515420727108,
+            "validation_loss": 1.0144599844399789,
+            "epoch_seconds": 45.7
+          },
+          {
+            "epoch": 1,
+            "train_loss": 0.9790926236771421,
+            "validation_loss": 0.9447782442536553,
+            "epoch_seconds": 39.6
+          },
+          {
+            "epoch": 2,
+            "train_loss": 0.9386632847148041,
+            "validation_loss": 0.9221944842139485,
+            "epoch_seconds": 37.2
+          },
+          {
+            "epoch": 3,
+            "train_loss": 0.9226969103749381,
+            "validation_loss": 0.909381077730395,
+            "epoch_seconds": 35.2
+          },
+          {
+            "epoch": 4,
+            "train_loss": 0.9021448937546848,
+            "validation_loss": 0.8562376859410856,
+            "epoch_seconds": 33.1
+          },
+          {
+            "epoch": 5,
+            "train_loss": 0.886489890490886,
+            "validation_loss": 0.8613697738344105,
+            "epoch_seconds": 31.5
+          },
+          {
+            "epoch": 6,
+            "train_loss": 0.8737982126781374,
+            "validation_loss": 0.8566222591381186,
+            "epoch_seconds": 34.2
+          },
+          {
+            "epoch": 7,
+            "train_loss": 0.8600715123690091,
+            "validation_loss": 0.8673697956513695,
+            "epoch_seconds": 33.2
+          }
+        ],
+        "seed": 101,
+        "seed_policy": "one fixed seed; no search, no best-of-N",
+        "sampling": {
+          "rows": 2392,
+          "good_rows": 1150,
+          "bad_rows": 1242,
+          "realised_good_fraction": 0.480769,
+          "target_good_fraction": 0.5,
+          "good_repeat": 1,
+          "per_proposal_kind": {
+            "GT_CORRECT": 133,
+            "REAL_ALGORITHM_PROPOSAL": 264,
+            "SIMULATED_PROPOSAL": 1995
+          },
+          "per_corruption": {
+            "ADD_CONTAMINATION": 399,
+            "ALGORITHM_OUTPUT": 264,
+            "CROWN_INCOMPLETE": 399,
+            "MERGED_NEIGHBOR": 399,
+            "NONE": 133,
+            "REMOVE_MISSING": 399,
+            "STEM_MISSING": 399
+          },
+          "good_rows_are_explicit_training_samples": true
+        },
+        "examples": {
+          "train": 2392,
+          "train_before_resampling": 2392,
+          "validation": 503,
+          "test": 520
+        },
+        "parameters": 1540582,
+        "seconds": 289.65
+      },
+      "gate": {
+        "coefficients": [
+          -0.23189478706907657,
+          -0.4793069255420962,
+          -1.3208712850766076,
+          -1.1146713146758775,
+          0.16092699565707697,
+          0.2372590996166146,
+          -0.07633210395953827
+        ],
+        "coverage": 0.30019880715705766,
+        "coverage_target": 0.3,
+        "coverage_target_met": true,
+        "edited_rows": 503,
+        "effective_threshold": 0.7,
+        "feature_order": [
+          "gate_remove_top",
+          "gate_remove_mean",
+          "gate_add_top",
+          "gate_add_mean",
+          "gate_change_fraction",
+          "gate_remove_fraction",
+          "gate_add_fraction"
+        ],
+        "fitted": true,
+        "fitted_on": "validation rows only",
+        "frozen_before_test": true,
+        "intercept": -3.5181731790759345,
+        "min_probability_floor": 0.7,
+        "positive_rows": 3,
+        "rows": 503,
+        "success_rate": 0.019867549668874173,
+        "threshold": 0.005974180930468828,
+        "threshold_selection": "smallest threshold reaching the declared coverage target that maximises observed success on validation; if none reaches it, the smallest threshold whose success rate clears the declared floor"
+      },
+      "gate_frozen_sha256": "33de2d33138b0241d131a23677e2f547c703af49f8272c455c4dfc112675a630",
+      "gate_frozen_file": "E:\\TreeLineWarning-tree-qc-pointnet2-final-pilot-v1\\research\\tree_qc_v25\\reports\\FROZEN_GATE_in_site_test_litchfield.json",
+      "thresholds_frozen_before_test": true,
+      "frozen_thresholds": {
+        "bad_improvement_iou": 0.01,
+        "decision_threshold_on_heads": 0.5,
+        "frozen_before_wytham": true,
+        "gate_benefit_iou": 0.005,
+        "gate_coverage_target": 0.3,
+        "gate_min_coverage": 0.1,
+        "gate_min_probability": 0.7,
+        "good_degradation_iou": 0.01,
+        "good_iou_threshold": 0.8,
+        "protocol_revision": 2,
+        "tuned_on": "train + validation only"
+      },
+      "validation": {
+        "ungated": {
+          "label": "validation_ungated",
+          "rows": 503,
+          "ALL": {
+            "rows": 503,
+            "current_iou_mean": 0.7816819048408344,
+            "current_iou_median": 0.7994089636215819,
+            "refined_iou_mean": 0.14627553211366331,
+            "refined_iou_median": 0.07543901362046126,
+            "delta_iou_mean": -0.6354063727271709,
+            "delta_iou_median": -0.7139108902369752,
+            "improved_fraction": 0.011928429423459244,
+            "unchanged_fraction": 0.0,
+            "degraded_fraction": 0.9880715705765407,
+            "improved_gt_threshold": 0.005964214711729622,
+            "degraded_gt_threshold": 0.9781312127236581
+          },
+          "GOOD": {
+            "rows": 248,
+            "current_iou_mean": 0.9276967565212976,
+            "current_iou_median": 0.9090937596654982,
+            "refined_iou_mean": 0.07378414044573751,
+            "refined_iou_median": 1.6983118779932748e-05,
+            "delta_iou_mean": -0.8539126160755602,
+            "delta_iou_median": -0.8886608636565132,
+            "improved_fraction": 0.0,
+            "unchanged_fraction": 0.0,
+            "degraded_fraction": 1.0,
+            "improved_gt_threshold": 0.0,
+            "degraded_gt_threshold": 0.9798387096774194
+          },
+          "BAD": {
+            "rows": 255,
+            "current_iou_mean": 0.6396753039908152,
+            "current_iou_median": 0.6712946700929915,
+            "refined_iou_mean": 0.21677696401031277,
+            "refined_iou_median": 0.22164196123147092,
+            "delta_iou_mean": -0.4228983399805023,
+            "delta_iou_median": -0.49999357846473935,
+            "improved_fraction": 0.023529411764705882,
+            "unchanged_fraction": 0.0,
+            "degraded_fraction": 0.9764705882352941,
+            "improved_gt_threshold": 0.011764705882352941,
+            "degraded_gt_threshold": 0.9764705882352941
+          },
+          "GOOD_MEAN_DELTA_IOU": -0.8539126160755602,
+          "GOOD_DEGRADATION_RATE": 0.9798387096774194,
+          "BAD_MEAN_DELTA_IOU": -0.4228983399805023,
+          "BAD_IMPROVEMENT_RATE": 0.011764705882352941,
+          "EDIT_RATE": 1.0,
+          "NO_OP_RATE": 0.0,
+          "edited_success_rate": 0.005964214711729622,
+          "edited_rows": 503,
+          "change_region_f1_mean": 0.13322327047977628,
+          "change_region_iou_mean": 0.0852803462888341,
+          "by_corruption": {
+            "ADD_CONTAMINATION": {
+              "rows": 84,
+              "current_iou_mean": 0.8351065456310254,
+              "refined_iou_mean": 0.05513850671526885,
+              "delta_iou_mean": -0.7799680389157563,
+              "delta_iou_median": -0.8,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "ALGORITHM_OUTPUT": {
+              "rows": 55,
+              "current_iou_mean": 0.8708600075484535,
+              "refined_iou_mean": 0.07530543494216196,
+              "delta_iou_mean": -0.7955545726062915,
+              "delta_iou_median": -1.0,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "CROWN_INCOMPLETE": {
+              "rows": 84,
+              "current_iou_mean": 0.7333523933459818,
+              "refined_iou_mean": 0.14789511001214126,
+              "delta_iou_mean": -0.5854572833338404,
+              "delta_iou_median": -0.5497894902805605,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "MERGED_NEIGHBOR": {
+              "rows": 84,
+              "current_iou_mean": 0.7107911095054771,
+              "refined_iou_mean": 0.21512298969828814,
+              "delta_iou_mean": -0.4956681198071887,
+              "delta_iou_median": -0.5214858637891376,
+              "improved_fraction": 0.07142857142857142,
+              "no_op_rate": 0.0
+            },
+            "NONE": {
+              "rows": 28,
+              "current_iou_mean": 1.0,
+              "refined_iou_mean": 0.048115035888582854,
+              "delta_iou_mean": -0.9518849641114172,
+              "delta_iou_median": -1.0,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "REMOVE_MISSING": {
+              "rows": 84,
+              "current_iou_mean": 0.7335955907992601,
+              "refined_iou_mean": 0.23519136595918633,
+              "delta_iou_mean": -0.4984042248400738,
+              "delta_iou_median": -0.5012422166180339,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "STEM_MISSING": {
+              "rows": 84,
+              "current_iou_mean": 0.7644007621441457,
+              "refined_iou_mean": 0.15721836959694188,
+              "delta_iou_mean": -0.6071823925472037,
+              "delta_iou_median": -0.6463891231825483,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            }
+          },
+          "by_proposal_kind": {
+            "GT_CORRECT": {
+              "rows": 28,
+              "current_iou_mean": 1.0,
+              "refined_iou_mean": 0.048115035888582854,
+              "delta_iou_mean": -0.9518849641114172,
+              "delta_iou_median": -1.0,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "REAL_ALGORITHM_PROPOSAL": {
+              "rows": 55,
+              "current_iou_mean": 0.8708600075484535,
+              "refined_iou_mean": 0.07530543494216196,
+              "delta_iou_mean": -0.7955545726062915,
+              "delta_iou_median": -1.0,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "SIMULATED_PROPOSAL": {
+              "rows": 420,
+              "current_iou_mean": 0.755449280285178,
+              "refined_iou_mean": 0.16211326839636533,
+              "delta_iou_mean": -0.5933360118888127,
+              "delta_iou_median": -0.6790897400569487,
+              "improved_fraction": 0.014285714285714285,
+              "no_op_rate": 0.0
+            }
+          },
+          "REMOVE_PRECISION": 0.030435084958048367,
+          "REMOVE_RECALL": 0.21493485822861225,
+          "REMOVE_F1": 0.05331998357808254,
+          "REMOVE_TP": 521254,
+          "REMOVE_FP": 16605493,
+          "REMOVE_FN": 1903918,
+          "ADD_PRECISION": 0.8767032706467233,
+          "ADD_RECALL": 0.5805366889890167,
+          "ADD_F1": 0.6985238232065949,
+          "ADD_TP": 1767347,
+          "ADD_FP": 248554,
+          "ADD_FN": 1276986
+        },
+        "gated": {
+          "label": "validation_gated",
+          "rows": 503,
+          "ALL": {
+            "rows": 503,
+            "current_iou_mean": 0.7816819048408344,
+            "current_iou_median": 0.7994089636215819,
+            "refined_iou_mean": 0.7816819048408344,
+            "refined_iou_median": 0.7994089636215819,
+            "delta_iou_mean": 0.0,
+            "delta_iou_median": 0.0,
+            "improved_fraction": 0.0,
+            "unchanged_fraction": 1.0,
+            "degraded_fraction": 0.0,
+            "improved_gt_threshold": 0.0,
+            "degraded_gt_threshold": 0.0
+          },
+          "GOOD": {
+            "rows": 248,
+            "current_iou_mean": 0.9276967565212976,
+            "current_iou_median": 0.9090937596654982,
+            "refined_iou_mean": 0.9276967565212976,
+            "refined_iou_median": 0.9090937596654982,
+            "delta_iou_mean": 0.0,
+            "delta_iou_median": 0.0,
+            "improved_fraction": 0.0,
+            "unchanged_fraction": 1.0,
+            "degraded_fraction": 0.0,
+            "improved_gt_threshold": 0.0,
+            "degraded_gt_threshold": 0.0
+          },
+          "BAD": {
+            "rows": 255,
+            "current_iou_mean": 0.6396753039908152,
+            "current_iou_median": 0.6712946700929915,
+            "refined_iou_mean": 0.6396753039908152,
+            "refined_iou_median": 0.6712946700929915,
+            "delta_iou_mean": 0.0,
+            "delta_iou_median": 0.0,
+            "improved_fraction": 0.0,
+            "unchanged_fraction": 1.0,
+            "degraded_fraction": 0.0,
+            "improved_gt_threshold": 0.0,
+            "degraded_gt_threshold": 0.0
+          },
+          "AUTO_EDIT_COVERAGE": 0.0,
+          "AUTO_EDIT_COUNT": 0,
+          "AUTO_EDIT_SUCCESS_RATE": null,
+          "AUTO_EDIT_HARM_RATE": null,
+          "AUTO_EDIT_MEAN_DELTA_IOU": null,
+          "NO_OP_RATE": 1.0,
+          "GOOD_MEAN_DELTA_IOU": 0.0,
+          "GOOD_DEGRADATION_RATE": 0.0,
+          "BAD_MEAN_DELTA_IOU": 0.0,
+          "BAD_IMPROVEMENT_RATE": 0.0,
+          "GOOD_AUTO_EDIT_COVERAGE": 0.0,
+          "BAD_AUTO_EDIT_COVERAGE": 0.0,
+          "by_corruption": {
+            "ADD_CONTAMINATION": {
+              "rows": 84,
+              "current_iou_mean": 0.8351065456310254,
+              "gated_refined_iou_mean": 0.8351065456310254,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "ALGORITHM_OUTPUT": {
+              "rows": 55,
+              "current_iou_mean": 0.8708600075484535,
+              "gated_refined_iou_mean": 0.8708600075484535,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "CROWN_INCOMPLETE": {
+              "rows": 84,
+              "current_iou_mean": 0.7333523933459818,
+              "gated_refined_iou_mean": 0.7333523933459818,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "MERGED_NEIGHBOR": {
+              "rows": 84,
+              "current_iou_mean": 0.7107911095054771,
+              "gated_refined_iou_mean": 0.7107911095054771,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "NONE": {
+              "rows": 28,
+              "current_iou_mean": 1.0,
+              "gated_refined_iou_mean": 1.0,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "REMOVE_MISSING": {
+              "rows": 84,
+              "current_iou_mean": 0.7335955907992601,
+              "gated_refined_iou_mean": 0.7335955907992601,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "STEM_MISSING": {
+              "rows": 84,
+              "current_iou_mean": 0.7644007621441457,
+              "gated_refined_iou_mean": 0.7644007621441457,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            }
+          },
+          "by_proposal_kind": {
+            "GT_CORRECT": {
+              "rows": 28,
+              "current_iou_mean": 1.0,
+              "gated_refined_iou_mean": 1.0,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "REAL_ALGORITHM_PROPOSAL": {
+              "rows": 55,
+              "current_iou_mean": 0.8708600075484535,
+              "gated_refined_iou_mean": 0.8708600075484535,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "SIMULATED_PROPOSAL": {
+              "rows": 420,
+              "current_iou_mean": 0.755449280285178,
+              "gated_refined_iou_mean": 0.755449280285178,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            }
+          },
+          "remove_precision": null,
+          "remove_recall": null,
+          "remove_f1": null,
+          "add_precision": null,
+          "add_recall": null,
+          "add_f1": null
+        }
+      },
+      "test": {
+        "ungated": {
+          "label": "test_ungated",
+          "rows": 520,
+          "ALL": {
+            "rows": 520,
+            "current_iou_mean": 0.7727359766716547,
+            "current_iou_median": 0.7869321001131334,
+            "refined_iou_mean": 0.130821517317429,
+            "refined_iou_median": 0.05451412529999192,
+            "delta_iou_mean": -0.6419144593542256,
+            "delta_iou_median": -0.7316789166018276,
+            "improved_fraction": 0.03461538461538462,
+            "unchanged_fraction": 0.0,
+            "degraded_fraction": 0.9653846153846154,
+            "improved_gt_threshold": 0.03461538461538462,
+            "degraded_gt_threshold": 0.948076923076923
+          },
+          "GOOD": {
+            "rows": 249,
+            "current_iou_mean": 0.9321852780061616,
+            "current_iou_median": 0.9097718554411468,
+            "refined_iou_mean": 0.047937814013233784,
+            "refined_iou_median": 0.0,
+            "delta_iou_mean": -0.8842474639929279,
+            "delta_iou_median": -0.9090014471780029,
+            "improved_fraction": 0.0,
+            "unchanged_fraction": 0.0,
+            "degraded_fraction": 1.0,
+            "improved_gt_threshold": 0.0,
+            "degraded_gt_threshold": 0.9879518072289156
+          },
+          "BAD": {
+            "rows": 271,
+            "current_iou_mean": 0.6262308990617202,
+            "current_iou_median": 0.6262179456105482,
+            "refined_iou_mean": 0.2069766543017264,
+            "refined_iou_median": 0.19288441513363416,
+            "delta_iou_mean": -0.41925424475999384,
+            "delta_iou_median": -0.5001287190614541,
+            "improved_fraction": 0.06642066420664207,
+            "unchanged_fraction": 0.0,
+            "degraded_fraction": 0.933579335793358,
+            "improved_gt_threshold": 0.06642066420664207,
+            "degraded_gt_threshold": 0.9114391143911439
+          },
+          "GOOD_MEAN_DELTA_IOU": -0.8842474639929279,
+          "GOOD_DEGRADATION_RATE": 0.9879518072289156,
+          "BAD_MEAN_DELTA_IOU": -0.41925424475999384,
+          "BAD_IMPROVEMENT_RATE": 0.06642066420664207,
+          "EDIT_RATE": 1.0,
+          "NO_OP_RATE": 0.0,
+          "edited_success_rate": 0.03461538461538462,
+          "edited_rows": 520,
+          "change_region_f1_mean": 0.1297072047223799,
+          "change_region_iou_mean": 0.08205778046961547,
+          "by_corruption": {
+            "ADD_CONTAMINATION": {
+              "rows": 87,
+              "current_iou_mean": 0.8321341469945116,
+              "refined_iou_mean": 0.022516016034132186,
+              "delta_iou_mean": -0.8096181309603796,
+              "delta_iou_median": -0.8009242519650286,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "ALGORITHM_OUTPUT": {
+              "rows": 56,
+              "current_iou_mean": 0.9053926435204626,
+              "refined_iou_mean": 0.0414310779363888,
+              "delta_iou_mean": -0.8639615655840738,
+              "delta_iou_median": -1.0,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "CROWN_INCOMPLETE": {
+              "rows": 87,
+              "current_iou_mean": 0.7334480635561746,
+              "refined_iou_mean": 0.11808869429917115,
+              "delta_iou_mean": -0.6153593692570034,
+              "delta_iou_median": -0.6096647565762758,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "MERGED_NEIGHBOR": {
+              "rows": 87,
+              "current_iou_mean": 0.6507992093448439,
+              "refined_iou_mean": 0.26240777308680846,
+              "delta_iou_mean": -0.3883914362580355,
+              "delta_iou_median": -0.2568750813875272,
+              "improved_fraction": 0.20689655172413793,
+              "no_op_rate": 0.0
+            },
+            "NONE": {
+              "rows": 29,
+              "current_iou_mean": 1.0,
+              "refined_iou_mean": 0.012563790646046997,
+              "delta_iou_mean": -0.9874362093539529,
+              "delta_iou_median": -1.0,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "REMOVE_MISSING": {
+              "rows": 87,
+              "current_iou_mean": 0.7332245802528745,
+              "refined_iou_mean": 0.23293720294771972,
+              "delta_iou_mean": -0.5002873773051544,
+              "delta_iou_median": -0.5186020026858711,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "STEM_MISSING": {
+              "rows": 87,
+              "current_iou_mean": 0.7529310094161302,
+              "refined_iou_mean": 0.11511581606768499,
+              "delta_iou_mean": -0.6378151933484452,
+              "delta_iou_median": -0.6955242543488653,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            }
+          },
+          "by_proposal_kind": {
+            "GT_CORRECT": {
+              "rows": 29,
+              "current_iou_mean": 1.0,
+              "refined_iou_mean": 0.012563790646046997,
+              "delta_iou_mean": -0.9874362093539529,
+              "delta_iou_median": -1.0,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "REAL_ALGORITHM_PROPOSAL": {
+              "rows": 56,
+              "current_iou_mean": 0.9053926435204626,
+              "refined_iou_mean": 0.0414310779363888,
+              "delta_iou_mean": -0.8639615655840738,
+              "delta_iou_median": -1.0,
+              "improved_fraction": 0.0,
+              "no_op_rate": 0.0
+            },
+            "SIMULATED_PROPOSAL": {
+              "rows": 435,
+              "current_iou_mean": 0.7405074019129069,
+              "refined_iou_mean": 0.15021310048710332,
+              "delta_iou_mean": -0.5902943014258036,
+              "delta_iou_median": -0.6887884902184402,
+              "improved_fraction": 0.041379310344827586,
+              "no_op_rate": 0.0
+            }
+          },
+          "REMOVE_PRECISION": 0.05863671596604758,
+          "REMOVE_RECALL": 0.37600583122096626,
+          "REMOVE_F1": 0.10145231878274877,
+          "REMOVE_TP": 864052,
+          "REMOVE_FP": 13871630,
+          "REMOVE_FN": 1433923,
+          "ADD_PRECISION": 0.8614783446209353,
+          "ADD_RECALL": 0.5606844968142067,
+          "ADD_F1": 0.67927179377391,
+          "ADD_TP": 1408754,
+          "ADD_FP": 226521,
+          "ADD_FN": 1103807
+        },
+        "gated": {
+          "label": "test_gated",
+          "rows": 520,
+          "ALL": {
+            "rows": 520,
+            "current_iou_mean": 0.7727359766716547,
+            "current_iou_median": 0.7869321001131334,
+            "refined_iou_mean": 0.7727359766716547,
+            "refined_iou_median": 0.7869321001131334,
+            "delta_iou_mean": 0.0,
+            "delta_iou_median": 0.0,
+            "improved_fraction": 0.0,
+            "unchanged_fraction": 1.0,
+            "degraded_fraction": 0.0,
+            "improved_gt_threshold": 0.0,
+            "degraded_gt_threshold": 0.0
+          },
+          "GOOD": {
+            "rows": 249,
+            "current_iou_mean": 0.9321852780061616,
+            "current_iou_median": 0.9097718554411468,
+            "refined_iou_mean": 0.9321852780061616,
+            "refined_iou_median": 0.9097718554411468,
+            "delta_iou_mean": 0.0,
+            "delta_iou_median": 0.0,
+            "improved_fraction": 0.0,
+            "unchanged_fraction": 1.0,
+            "degraded_fraction": 0.0,
+            "improved_gt_threshold": 0.0,
+            "degraded_gt_threshold": 0.0
+          },
+          "BAD": {
+            "rows": 271,
+            "current_iou_mean": 0.6262308990617202,
+            "current_iou_median": 0.6262179456105482,
+            "refined_iou_mean": 0.6262308990617202,
+            "refined_iou_median": 0.6262179456105482,
+            "delta_iou_mean": 0.0,
+            "delta_iou_median": 0.0,
+            "improved_fraction": 0.0,
+            "unchanged_fraction": 1.0,
+            "degraded_fraction": 0.0,
+            "improved_gt_threshold": 0.0,
+            "degraded_gt_threshold": 0.0
+          },
+          "AUTO_EDIT_COVERAGE": 0.0,
+          "AUTO_EDIT_COUNT": 0,
+          "AUTO_EDIT_SUCCESS_RATE": null,
+          "AUTO_EDIT_HARM_RATE": null,
+          "AUTO_EDIT_MEAN_DELTA_IOU": null,
+          "NO_OP_RATE": 1.0,
+          "GOOD_MEAN_DELTA_IOU": 0.0,
+          "GOOD_DEGRADATION_RATE": 0.0,
+          "BAD_MEAN_DELTA_IOU": 0.0,
+          "BAD_IMPROVEMENT_RATE": 0.0,
+          "GOOD_AUTO_EDIT_COVERAGE": 0.0,
+          "BAD_AUTO_EDIT_COVERAGE": 0.0,
+          "by_corruption": {
+            "ADD_CONTAMINATION": {
+              "rows": 87,
+              "current_iou_mean": 0.8321341469945116,
+              "gated_refined_iou_mean": 0.8321341469945116,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "ALGORITHM_OUTPUT": {
+              "rows": 56,
+              "current_iou_mean": 0.9053926435204626,
+              "gated_refined_iou_mean": 0.9053926435204626,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "CROWN_INCOMPLETE": {
+              "rows": 87,
+              "current_iou_mean": 0.7334480635561746,
+              "gated_refined_iou_mean": 0.7334480635561746,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "MERGED_NEIGHBOR": {
+              "rows": 87,
+              "current_iou_mean": 0.6507992093448439,
+              "gated_refined_iou_mean": 0.6507992093448439,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "NONE": {
+              "rows": 29,
+              "current_iou_mean": 1.0,
+              "gated_refined_iou_mean": 1.0,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "REMOVE_MISSING": {
+              "rows": 87,
+              "current_iou_mean": 0.7332245802528745,
+              "gated_refined_iou_mean": 0.7332245802528745,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "STEM_MISSING": {
+              "rows": 87,
+              "current_iou_mean": 0.7529310094161302,
+              "gated_refined_iou_mean": 0.7529310094161302,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            }
+          },
+          "by_proposal_kind": {
+            "GT_CORRECT": {
+              "rows": 29,
+              "current_iou_mean": 1.0,
+              "gated_refined_iou_mean": 1.0,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "REAL_ALGORITHM_PROPOSAL": {
+              "rows": 56,
+              "current_iou_mean": 0.9053926435204626,
+              "gated_refined_iou_mean": 0.9053926435204626,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            },
+            "SIMULATED_PROPOSAL": {
+              "rows": 435,
+              "current_iou_mean": 0.7405074019129069,
+              "gated_refined_iou_mean": 0.7405074019129069,
+              "gated_delta_iou_mean": 0.0,
+              "auto_edit_coverage": 0.0,
+              "auto_edit_success_rate": null
+            }
+          },
+          "remove_precision": null,
+          "remove_recall": null,
+          "remove_f1": null,
+          "add_precision": null,
+          "add_recall": null,
+          "add_f1": null
+        }
+      },
+      "seconds": 324.55,
+      "device": "cuda"
+    }
+  ],
+  "verdict": {
+    "evaluated_on": "cross_site_test_wytham",
+    "criteria": {
+      "CROSS_SITE_BAD_MEAN_DELTA_IOU": {
+        "observed": 0.0,
+        "rule": "> 0.0",
+        "passed": false
+      },
+      "CROSS_SITE_GOOD_MEAN_DELTA_IOU": {
+        "observed": 0.0,
+        "rule": ">= -0.005",
+        "passed": true
+      },
+      "CROSS_SITE_GOOD_DEGRADATION_RATE": {
+        "observed": 0.0,
+        "rule": "<= 0.05",
+        "passed": true
+      },
+      "CROSS_SITE_AUTO_EDIT_SUCCESS_RATE": {
+        "observed": null,
+        "rule": ">= 0.8",
+        "passed": false
+      },
+      "CROSS_SITE_AUTO_EDIT_COVERAGE": {
+        "observed": 0.0,
+        "rule": ">= 0.1",
+        "passed": false
+      }
+    },
+    "core_passed": false,
+    "edit_passed": false,
+    "verdict": "DEEP_LEARNING_NO_GO",
+    "TREE_QC_DEEP_LEARNING_ROUTE": "STOPPED",
+    "cross_site": {
+      "BAD_MEAN_DELTA_IOU": 0.0,
+      "BAD_IMPROVEMENT_RATE": 0.0,
+      "GOOD_MEAN_DELTA_IOU": 0.0,
+      "GOOD_DEGRADATION_RATE": 0.0,
+      "AUTO_EDIT_COVERAGE": 0.0,
+      "AUTO_EDIT_SUCCESS_RATE": null,
+      "delta_iou_mean_gated": 0.0,
+      "delta_iou_mean_ungated": -0.640172021593126,
+      "no_op_rate_gated": 1.0,
+      "no_op_rate_ungated": 0.0009469696969697239
+    },
+    "in_site": {
+      "BAD_MEAN_DELTA_IOU": 0.0,
+      "BAD_IMPROVEMENT_RATE": 0.0,
+      "GOOD_MEAN_DELTA_IOU": 0.0,
+      "GOOD_DEGRADATION_RATE": 0.0,
+      "AUTO_EDIT_COVERAGE": 0.0,
+      "AUTO_EDIT_SUCCESS_RATE": null,
+      "delta_iou_mean_gated": 0.0,
+      "delta_iou_mean_ungated": -0.6419144593542256,
+      "no_op_rate_gated": 1.0,
+      "no_op_rate_ungated": 0.0
+    },
+    "result_a_v2_baseline_cross_site_delta": -0.053952903335845084,
+    "result_a_v2_baseline_name": "MODEL_C_POINTNEXT_S_MULTITASK",
+    "recommended_next_route": [
+      "CROWN_STEM_HYBRID as the primary tree algorithm",
+      "deterministic geometry / structural QC instead of a learned refiner",
+      "human review for the cases those two cannot settle"
+    ]
+  }
+}

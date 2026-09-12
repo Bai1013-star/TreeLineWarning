@@ -1,0 +1,52 @@
+{
+  "config_digest": "63fdc3f00a9d3ac0007a5f8ac950fa1e1a46fb6a907f69fdea730cb0e8b93465",
+  "frozen_before_wytham_test": true,
+  "frozen_thresholds": {
+    "bad_improvement_iou": 0.01,
+    "decision_threshold_on_heads": 0.5,
+    "frozen_before_wytham": true,
+    "gate_benefit_iou": 0.005,
+    "gate_coverage_target": 0.3,
+    "gate_min_coverage": 0.1,
+    "gate_min_probability": 0.7,
+    "good_degradation_iou": 0.01,
+    "good_iou_threshold": 0.8,
+    "protocol_revision": 2,
+    "tuned_on": "train + validation only"
+  },
+  "gate": {
+    "coefficients": [
+      -2.3495815620783747,
+      -2.5708500771591356,
+      -0.08497863456739158,
+      -1.6073815303695083,
+      -1.159985712568007,
+      -1.8222025730098939,
+      0.6622168604418872
+    ],
+    "coverage": 0.3011456628477905,
+    "coverage_target": 0.3,
+    "coverage_target_met": true,
+    "edited_rows": 611,
+    "effective_threshold": 0.7,
+    "feature_order": [
+      "gate_remove_top",
+      "gate_remove_mean",
+      "gate_add_top",
+      "gate_add_mean",
+      "gate_change_fraction",
+      "gate_remove_fraction",
+      "gate_add_fraction"
+    ],
+    "fitted": true,
+    "fitted_on": "validation rows only",
+    "frozen_before_test": true,
+    "intercept": 2.2606238097633846,
+    "min_probability_floor": 0.7,
+    "positive_rows": 20,
+    "rows": 611,
+    "success_rate": 0.10869565217391304,
+    "threshold": 0.028315092736492947,
+    "threshold_selection": "smallest threshold reaching the declared coverage target that maximises observed success on validation; if none reaches it, the smallest threshold whose success rate clears the declared floor"
+  }
+}
