@@ -6,10 +6,10 @@ worth continuing as a deep learning direction, or does the project move to
 CROWN_STEM_HYBRID plus deterministic geometry QC plus human review?
 
 ```
-GIT_HEAD = 169d42dccd9b1173193d17167937bbde1a6638c0
+GIT_HEAD = 9569910aff67af4ff8e3b4a22d22ea3e3ab918a8
 BRANCH = research/tree-qc-v25-final-go-no-go
 BASE_HEAD = 169d42dccd9b1173193d17167937bbde1a6638c0
-WORKTREE_CLEAN = NO
+WORKTREE_CLEAN = YES
 
 V2_BASELINE_CROSS_SITE_DELTA = -0.0540
 DELTA_REFINER_CROSS_SITE_DELTA = -0.6402
