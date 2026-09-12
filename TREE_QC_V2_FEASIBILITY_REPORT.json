@@ -2,11 +2,11 @@
   "schema": "tree_qc_v2_feasibility_v1",
   "task": "TREE_QC_V2_FEASIBILITY_AUDIT",
   "git": {
-    "head": "fe3fae1f5cf818b55002c1a9fc9056882ca95060",
+    "head": "877f1c48762319de01bd864997aa323719208739",
     "branch": "research/tree-qc-v2-feasibility",
     "base_commit_before_round": "ff9604b48748de42d0d4422a243bcfe03c63dd00",
     "v1_branch": "research/tree-qc-efg-public-pilot-v1",
-    "worktree_status": "clean"
+    "worktree_status": "M TREE_QC_V2_FEASIBILITY_REPORT.json\n M TREE_QC_V2_FEASIBILITY_REPORT.md\n M research/tree_qc_v2/test_v2_feasibility.py\n M research/tree_qc_v2/v2_report.py\n?? research/tree_qc_v2/verify_report.py"
   },
   "v1_history_untouched": {
     "v1_reports_modified": false,
@@ -1403,7 +1403,7 @@
     "epochs": 20,
     "device": "cuda",
     "seed": 101,
-    "library_index_sha256": null,
+    "library_index_sha256": "ac61a8c3f515b675cf6fe8c34bc37aba0d3e398679ac6307bc465761977987e0",
     "target_count": 308,
     "targets_per_site": {
       "litchfield": 190,
@@ -3123,7 +3123,25 @@
           }
         }
       }
-    }
+    },
+    "limitation": {
+      "status": "COMPLETE_WITH_LIMITATION",
+      "cross_site_folds_run": [
+        "cross_site_test_wytham"
+      ],
+      "cross_site_folds_expected_for_a_full_rotation": 2,
+      "cross_site_folds_missing": [
+        "cross_site_test_litchfield"
+      ],
+      "in_site_folds_run": [
+        "in_site_test_litchfield"
+      ],
+      "models_per_configuration": 3,
+      "why_incomplete": "The three architectures share one epoch budget, which is what makes them comparable. At that budget a second full cross-site fold did not fit the round's time window, so only Litchfield -> Wytham was trained. The protocol requires at least one unseen-site test; that requirement is met, and the missing reverse fold is recorded rather than replaced by an in-site number.",
+      "what_is_not_affected": "Within the configurations that did run, every architecture was trained to the same budget, scored on the same full ROIs, and put through the same gates, so the comparison between the three architectures and the cross-site versus in-site contrast both stand as reported.",
+      "reverse_fold_deliberately_not_backfilled": true
+    },
+    "library_index_sha256_source": "resolved from research/tree_qc_v2/reports/ROI_LIBRARY.json, because the bakeoff payload did not carry it"
   },
   "baseline_identity_copier": {
     "description": "a refiner that returns current_mask unchanged; it defines the identity-copy failure the gate exists to catch",
@@ -3133,6 +3151,49 @@
     "removed_point_f1_mean": 0.0,
     "identity_copy_fraction": 1.0,
     "identity_copy_gate": "FAIL"
+  },
+  "stage_status": {
+    "round": "TREE_QC_V2_FEASIBILITY_AUDIT",
+    "stages": [
+      {
+        "stage": "SITE_FINGERPRINT_TEST",
+        "status": "COMPLETE",
+        "artefact": "research/tree_qc_v2/reports/SITE_FINGERPRINT.json"
+      },
+      {
+        "stage": "PUBLIC_GT_PROPOSAL_TEST",
+        "status": "COMPLETE",
+        "artefact": "research/tree_qc_v2/reports/PUBLIC_GT_PROPOSAL.json"
+      },
+      {
+        "stage": "ROI_LIBRARY",
+        "status": "COMPLETE",
+        "artefact": "research/tree_qc_v2/reports/ROI_LIBRARY.json"
+      },
+      {
+        "stage": "MINI_REFINER_BAKEOFF",
+        "status": "COMPLETE_WITH_LIMITATION",
+        "artefact": "research/tree_qc_v2/reports/MINI_REFINER_BAKEOFF.json",
+        "cross_site_folds_run": [
+          "cross_site_test_wytham"
+        ],
+        "cross_site_folds_missing": [
+          "cross_site_test_litchfield"
+        ],
+        "note": "only Litchfield -> Wytham was trained; the reverse fold cross_site_test_litchfield was not run and was deliberately not backfilled"
+      },
+      {
+        "stage": "FINAL_REPORT",
+        "status": "COMPLETE",
+        "artefact": "TREE_QC_V2_FEASIBILITY_REPORT.md, TREE_QC_V2_FEASIBILITY_REPORT.json"
+      }
+    ],
+    "all_stages_reached_a_terminal_state": true,
+    "stages_with_limitation": [
+      "MINI_REFINER_BAKEOFF"
+    ],
+    "round_stopped_at_verdict": true,
+    "further_training_started": false
   },
   "final_verdict": {
     "site_problem_diagnosed": true,

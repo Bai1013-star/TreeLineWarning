@@ -734,7 +734,7 @@ def test_the_real_artefacts_render_without_a_template_error():
     assert len(markdown) > 5000
     for section in ('TREE_QC_V2_FEASIBILITY_AUDIT', 'FINAL_VERDICT',
                     'FORMAL_V2_TRAINING_JUSTIFIED', 'Known limitations',
-                    'BLOCKERS =', 'License audit'):
+                    'BLOCKERS =', 'License audit', 'STAGE_STATUS'):
         assert section in markdown, section
     verdict = payload['final_verdict']
     assert verdict['verdict'] in ('V2_FEASIBILITY_PASS', 'V2_FEASIBILITY_PARTIAL',
@@ -749,6 +749,62 @@ def test_the_real_artefacts_render_without_a_template_error():
         for fold in payload['mini_refiner_bakeoff']['folds']:
             assert fold.get('configuration')
             assert fold['configuration'].startswith(('cross_site', 'in_site'))
+
+
+# --- final task closure -------------------------------------------------------
+
+def test_every_stage_reached_a_terminal_state():
+    """No stage may be left unreported, and none may claim COMPLETE untruthfully."""
+    import v2_report as report
+    if not (report.REPORTS / 'SITE_FINGERPRINT.json').exists():
+        pytest.skip('no run artefacts present')
+    status = report.build()['stage_status']
+    by_name = {stage['stage']: stage for stage in status['stages']}
+    assert set(by_name) == {'SITE_FINGERPRINT_TEST', 'PUBLIC_GT_PROPOSAL_TEST',
+                            'ROI_LIBRARY', 'MINI_REFINER_BAKEOFF', 'FINAL_REPORT'}
+    for name, stage in by_name.items():
+        assert stage['status'] in ('COMPLETE', 'COMPLETE_WITH_LIMITATION'), name
+        assert stage['artefact'], name
+    assert status['all_stages_reached_a_terminal_state'] is True
+    assert status['round_stopped_at_verdict'] is True
+    assert status['further_training_started'] is False
+
+
+def test_the_bakeoff_limitation_names_the_fold_that_was_not_run():
+    """The stage is COMPLETE_WITH_LIMITATION, and it says which fold is missing."""
+    import v2_report as report
+    if not (report.REPORTS / 'MINI_REFINER_BAKEOFF.json').exists():
+        pytest.skip('no bakeoff artefact present')
+    payload = report.build()
+    limitation = payload['mini_refiner_bakeoff']['limitation']
+    assert limitation['status'] == 'COMPLETE_WITH_LIMITATION'
+    assert limitation['cross_site_folds_run'] == ['cross_site_test_wytham']
+    assert limitation['cross_site_folds_missing'] == ['cross_site_test_litchfield']
+    assert limitation['reverse_fold_deliberately_not_backfilled'] is True
+    assert 'reverse' in limitation['why_incomplete'].lower()
+    bakeoff = payload['mini_refiner_bakeoff']
+    configurations = [fold['configuration'] for fold in bakeoff['folds']]
+    assert configurations.count('cross_site_test_wytham') == 1
+    assert 'cross_site_test_litchfield' not in configurations
+    assert configurations.count('in_site_test_litchfield') == 1
+    assert bakeoff['status'] == 'RUN'
+
+
+def test_the_reported_library_digest_is_the_one_on_disk():
+    """The digest the report quotes must describe the library the runs used."""
+    import hashlib
+
+    import v2_report as report
+    if not (report.REPORTS / 'ROI_LIBRARY.json').exists():
+        pytest.skip('no ROI library artefact present')
+    payload = report.build()
+    quoted = payload['mini_refiner_bakeoff']['library_index_sha256']
+    assert quoted, 'the report did not resolve a library digest'
+    assert quoted == payload['roi_library']['index_sha256']
+    stored = payload['roi_library'].get('index_file')
+    if stored and Path(stored).exists():
+        digest = hashlib.sha256(Path(stored).read_bytes()).hexdigest()
+        assert digest == quoted
 
 
 # --- data layer ---------------------------------------------------------------

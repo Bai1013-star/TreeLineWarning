@@ -12,9 +12,18 @@ training? Every number below is read from an artefact a run wrote.
 ```
 TREE_QC_V2_FEASIBILITY_AUDIT
 
-GIT_HEAD = fe3fae1f5cf818b55002c1a9fc9056882ca95060
+GIT_HEAD = 877f1c48762319de01bd864997aa323719208739
 BRANCH = research/tree-qc-v2-feasibility
-WORKTREE_CLEAN = YES
+WORKTREE_CLEAN = NO
+
+STAGE_STATUS
+  SITE_FINGERPRINT_TEST      = COMPLETE
+  PUBLIC_GT_PROPOSAL_TEST    = COMPLETE
+  ROI_LIBRARY                = COMPLETE
+  MINI_REFINER_BAKEOFF       = COMPLETE_WITH_LIMITATION
+  FINAL_REPORT               = COMPLETE
+  MINI_REFINER_BAKEOFF cross-site folds run   = cross_site_test_wytham
+  MINI_REFINER_BAKEOFF cross-site folds missing = cross_site_test_litchfield
 
 V1_HISTORY_UNTOUCHED = YES
 LOCAL_20_TREES_ACCESSED = NO
@@ -55,8 +64,12 @@ BLOCKERS =
 
 ## 1. State of the repository and of V1
 
-- HEAD `fe3fae1f5cf818b55002c1a9fc9056882ca95060` on `research/tree-qc-v2-feasibility`, branched from the V1 pilot tip `ff9604b48748de42d0d4422a243bcfe03c63dd00`.
-- Working tree: `clean`.
+- HEAD `877f1c48762319de01bd864997aa323719208739` on `research/tree-qc-v2-feasibility`, branched from the V1 pilot tip `ff9604b48748de42d0d4422a243bcfe03c63dd00`.
+- Working tree: `M TREE_QC_V2_FEASIBILITY_REPORT.json
+ M TREE_QC_V2_FEASIBILITY_REPORT.md
+ M research/tree_qc_v2/test_v2_feasibility.py
+ M research/tree_qc_v2/v2_report.py
+?? research/tree_qc_v2/verify_report.py`.
 - Files changed under `research/tree_qc/`: 0. Under `algorithms/`: 0. Under `core/`: 0.
 - this round added research/tree_qc_v2/ only; no file under research/tree_qc/, algorithms/ or core/ was modified.
 
@@ -202,7 +215,15 @@ recovered by any refiner, so this bounds what repair could achieve.
 
 ## 6. Task C - MINI_REFINER_BAKEOFF
 
-308 ROI targets ({'litchfield': 190, 'wytham': 118}) from a library whose index digest is `unrecorded`.
+308 ROI targets ({'litchfield': 190, 'wytham': 118}) from a library whose index digest is `ac61a8c3f515b675`.
+
+**MINI_REFINER_BAKEOFF status: COMPLETE_WITH_LIMITATION**
+
+- Cross-site folds run: cross_site_test_wytham
+- Cross-site folds missing: cross_site_test_litchfield (of 2 needed for a full rotation)
+- In-site diagnostic folds: in_site_test_litchfield
+- Why: The three architectures share one epoch budget, which is what makes them comparable. At that budget a second full cross-site fold did not fit the round's time window, so only Litchfield -> Wytham was trained. The protocol requires at least one unseen-site test; that requirement is met, and the missing reverse fold is recorded rather than replaced by an in-site number.
+- What is not affected: Within the configurations that did run, every architecture was trained to the same budget, scored on the same full ROIs, and put through the same gates, so the comparison between the three architectures and the cross-site versus in-site contrast both stand as reported.
 
 ### Protocol shared by all three models
 
@@ -243,10 +264,12 @@ number.
 Only one cross-site fold was run: the model is trained on Litchfield
 trees and tested on Wytham, a different forest, a different species mix
 and a different acquisition. That is the unseen-site evidence. The
-reverse fold was not trained, because the epoch budget that makes the
-three architectures comparable made a second full fold exceed the time
-this round had. One unseen-site test is what the protocol requires; two
-would be stronger, and that gap is recorded rather than glossed over.
+reverse fold, `cross_site_test_litchfield`, was not run: with three
+architectures at a shared epoch budget a second fold exceeded the time
+this round had. One unseen-site test is what the protocol requires, so
+the requirement is met, and the missing fold is recorded here and on the
+stage rather than being replaced by an in-site number or backfilled
+after the fact.
 
 #### Cross-site: `cross_site_test_wytham` - test site `wytham` (trained on litchfield)
 

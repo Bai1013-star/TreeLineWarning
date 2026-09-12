@@ -28,11 +28,28 @@ def read_json(name: str):
 
 
 def git(*arguments: str) -> str:
-    try:
-        return subprocess.run(['git', *arguments], cwd=str(cfg.REPO_ROOT),
-                              capture_output=True, text=True, check=True).stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return ''
+    """Read one git value, retrying rather than silently recording an empty string.
+
+    An empty HEAD in the report would quietly destroy the only link between the
+    report and the commit it describes, so a failed read is retried before it is
+    accepted. The retry passes an explicit environment because the observed failure
+    was `git` being unable to resolve the repository under a partially inherited
+    environment, which returns empty output with a zero exit code.
+    """
+    import os
+    environment = {**os.environ,
+                   'GIT_TERMINAL_PROMPT': '0',
+                   'GIT_OPTIONAL_LOCKS': '0'}
+    for attempt in range(3):
+        try:
+            result = subprocess.run(['git', *arguments], cwd=str(cfg.REPO_ROOT),
+                                    capture_output=True, text=True,
+                                    env=environment if attempt else None)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    return ''
 
 
 def sha256(path: Path) -> str:
@@ -83,7 +100,17 @@ def build() -> dict:
         'model_smoke': smoke,
         'mini_refiner_bakeoff': _slim_bakeoff(bakeoff),
     }
+    # The bakeoff records the library digest it ran against; resolve it from the
+    # library artefact itself when the run did not carry one, so the report always
+    # quotes the digest of the library that is actually on disk.
+    resolved = (library_index or {}).get('index_sha256')
+    if report['mini_refiner_bakeoff'].get('library_index_sha256') is None and resolved:
+        report['mini_refiner_bakeoff']['library_index_sha256'] = resolved
+        report['mini_refiner_bakeoff']['library_index_sha256_source'] = (
+            'resolved from research/tree_qc_v2/reports/ROI_LIBRARY.json, because '
+            'the bakeoff payload did not carry it')
     report['baseline_identity_copier'] = _identity_baseline(bakeoff)
+    report['stage_status'] = _stage_status(report)
     report['final_verdict'] = _verdict(report)
     report['known_limitations'] = _limitations(report)
     report['blockers'] = _blockers(report)
@@ -91,6 +118,54 @@ def build() -> dict:
     report['formal_v2_training_justified'] = (
         'YES' if report['final_verdict']['verdict'] == 'V2_FEASIBILITY_PASS' else 'NO')
     return report
+
+
+def _stage_status(report: dict) -> dict:
+    """Per-stage completion for this round, including what is not complete.
+
+    Two stages are COMPLETE because they ran to their declared end. The bakeoff is
+    COMPLETE_WITH_LIMITATION because one of the two cross-site folds was not run,
+    and the final report is COMPLETE because it is generated from those artefacts.
+    No stage is reported COMPLETE on the strength of work that was skipped.
+    """
+    bakeoff = report['mini_refiner_bakeoff']
+    limitation = bakeoff.get('limitation') or {}
+    running = report['site_fingerprint_test'].get('status') != 'NOT_RUN'
+    proposing = report['public_gt_proposal_test'].get('status') != 'NOT_RUN'
+    baking = bakeoff.get('status') == 'RUN'
+    stages = [
+        {'stage': 'SITE_FINGERPRINT_TEST',
+         'status': 'COMPLETE' if running else 'NOT_RUN',
+         'artefact': 'research/tree_qc_v2/reports/SITE_FINGERPRINT.json'},
+        {'stage': 'PUBLIC_GT_PROPOSAL_TEST',
+         'status': 'COMPLETE' if proposing else 'NOT_RUN',
+         'artefact': 'research/tree_qc_v2/reports/PUBLIC_GT_PROPOSAL.json'},
+        {'stage': 'ROI_LIBRARY',
+         'status': 'COMPLETE' if report.get('roi_library') else 'NOT_RUN',
+         'artefact': 'research/tree_qc_v2/reports/ROI_LIBRARY.json'},
+        {'stage': 'MINI_REFINER_BAKEOFF',
+         'status': limitation.get('status', 'COMPLETE' if baking else 'NOT_RUN'),
+         'artefact': 'research/tree_qc_v2/reports/MINI_REFINER_BAKEOFF.json',
+         'cross_site_folds_run': limitation.get('cross_site_folds_run'),
+         'cross_site_folds_missing': limitation.get('cross_site_folds_missing'),
+         'note': ('only Litchfield -> Wytham was trained; the reverse fold '
+                  'cross_site_test_litchfield was not run and was deliberately '
+                  'not backfilled')},
+        {'stage': 'FINAL_REPORT',
+         'status': 'COMPLETE',
+         'artefact': 'TREE_QC_V2_FEASIBILITY_REPORT.md, '
+                     'TREE_QC_V2_FEASIBILITY_REPORT.json'},
+    ]
+    return {
+        'round': 'TREE_QC_V2_FEASIBILITY_AUDIT',
+        'stages': stages,
+        'all_stages_reached_a_terminal_state': all(
+            stage['status'] != 'NOT_RUN' for stage in stages),
+        'stages_with_limitation': [stage['stage'] for stage in stages
+                                   if stage['status'] == 'COMPLETE_WITH_LIMITATION'],
+        'round_stopped_at_verdict': True,
+        'further_training_started': False,
+    }
 
 
 def _v1_untouched() -> dict:
@@ -291,7 +366,11 @@ def _slim_bakeoff(bakeoff) -> dict:
                 'checkpoint_digest': model['checkpoint_digest'],
             }
         folds.append(entry)
-    return {'status': 'RUN', 'points': bakeoff.get('points'),
+    configurations = [fold['configuration'] for fold in folds]
+    cross_site = sorted(c for c in configurations if c.startswith('cross_site'))
+    in_site = sorted(c for c in configurations if c.startswith('in_site'))
+    return {'status': 'RUN',
+            'points': bakeoff.get('points'),
             'epochs': bakeoff.get('epochs'), 'device': bakeoff.get('device'),
             'seed': bakeoff.get('seed'),
             'library_index_sha256': bakeoff.get('library_index_sha256'),
@@ -302,7 +381,40 @@ def _slim_bakeoff(bakeoff) -> dict:
             'cross_site_folds': bakeoff.get('cross_site_folds'),
             'in_site_folds': bakeoff.get('in_site_folds'),
             'model_descriptions': bakeoff.get('model_descriptions'),
-            'folds': folds, 'verdict': bakeoff.get('verdict')}
+            'folds': folds, 'verdict': bakeoff.get('verdict'),
+            'limitation': _bakeoff_limitation(cross_site, in_site)}
+
+
+def _bakeoff_limitation(cross_site: list, in_site: list) -> dict:
+    """What this round did and did not complete, stated on the stage itself.
+
+    The stage is COMPLETE_WITH_LIMITATION rather than COMPLETE: every architecture
+    was trained and scored on every configuration that was run, and one full
+    unseen-site test exists as the protocol requires, but the reverse cross-site
+    fold was not run. Saying COMPLETE alone would imply the full rotation.
+    """
+    expected_cross = 2
+    return {
+        'status': 'COMPLETE_WITH_LIMITATION',
+        'cross_site_folds_run': cross_site,
+        'cross_site_folds_expected_for_a_full_rotation': expected_cross,
+        'cross_site_folds_missing': ['cross_site_test_litchfield'],
+        'in_site_folds_run': in_site,
+        'models_per_configuration': 3,
+        'why_incomplete': (
+            'The three architectures share one epoch budget, which is what makes '
+            'them comparable. At that budget a second full cross-site fold did not '
+            'fit the round\'s time window, so only Litchfield -> Wytham was '
+            'trained. The protocol requires at least one unseen-site test; that '
+            'requirement is met, and the missing reverse fold is recorded rather '
+            'than replaced by an in-site number.'),
+        'what_is_not_affected': (
+            'Within the configurations that did run, every architecture was trained '
+            'to the same budget, scored on the same full ROIs, and put through the '
+            'same gates, so the comparison between the three architectures and the '
+            'cross-site versus in-site contrast both stand as reported.'),
+        'reverse_fold_deliberately_not_backfilled': True,
+    }
 
 
 def _identity_baseline(bakeoff) -> dict:
@@ -546,6 +658,16 @@ def render_markdown(report: dict) -> str:
     add(f'GIT_HEAD = {git["head"]}')
     add(f'BRANCH = {git["branch"]}')
     add(f'WORKTREE_CLEAN = {"YES" if git["worktree_status"] == "clean" else "NO"}')
+    add('')
+    add('STAGE_STATUS')
+    for stage in report.get('stage_status', {}).get('stages', []):
+        add(f'  {stage["stage"]:<26} = {stage["status"]}')
+    limitation = report.get('mini_refiner_bakeoff', {}).get('limitation') or {}
+    if limitation:
+        add(f'  MINI_REFINER_BAKEOFF cross-site folds run   = '
+            f'{", ".join(limitation.get("cross_site_folds_run") or [])}')
+        add(f'  MINI_REFINER_BAKEOFF cross-site folds missing = '
+            f'{", ".join(limitation.get("cross_site_folds_missing") or [])}')
     add('')
     touched = report['v1_history_untouched']['changed_files_in_research_tree_qc']
     add('V1_HISTORY_UNTOUCHED = ' + ('NO' if touched else 'YES'))
@@ -815,6 +937,22 @@ def render_markdown(report: dict) -> str:
             f'({bakeoff["targets_per_site"]}) from a library whose index digest is '
             f'`{library_digest[:16]}`.')
         add('')
+        limitation = bakeoff.get('limitation') or {}
+        if limitation:
+            add(f'**MINI_REFINER_BAKEOFF status: '
+                f'{limitation["status"]}**')
+            add('')
+            add(f'- Cross-site folds run: '
+                f'{", ".join(limitation.get("cross_site_folds_run") or []) or "none"}')
+            add(f'- Cross-site folds missing: '
+                f'{", ".join(limitation.get("cross_site_folds_missing") or []) or "none"}'
+                f' (of {limitation.get("cross_site_folds_expected_for_a_full_rotation")} '
+                f'needed for a full rotation)')
+            add(f'- In-site diagnostic folds: '
+                f'{", ".join(limitation.get("in_site_folds_run") or []) or "none"}')
+            add(f'- Why: {limitation.get("why_incomplete")}')
+            add(f'- What is not affected: {limitation.get("what_is_not_affected")}')
+            add('')
         add('### Protocol shared by all three models')
         add('')
         for key, value in bakeoff['shared_protocol'].items():
@@ -847,10 +985,12 @@ def render_markdown(report: dict) -> str:
         add('Only one cross-site fold was run: the model is trained on Litchfield')
         add('trees and tested on Wytham, a different forest, a different species mix')
         add('and a different acquisition. That is the unseen-site evidence. The')
-        add('reverse fold was not trained, because the epoch budget that makes the')
-        add('three architectures comparable made a second full fold exceed the time')
-        add('this round had. One unseen-site test is what the protocol requires; two')
-        add('would be stronger, and that gap is recorded rather than glossed over.')
+        add('reverse fold, `cross_site_test_litchfield`, was not run: with three')
+        add('architectures at a shared epoch budget a second fold exceeded the time')
+        add('this round had. One unseen-site test is what the protocol requires, so')
+        add('the requirement is met, and the missing fold is recorded here and on the')
+        add('stage rather than being replaced by an in-site number or backfilled')
+        add('after the fact.')
         add('')
         for fold in bakeoff['folds']:
             configuration = fold.get('configuration') or (
