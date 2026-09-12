@@ -1,0 +1,177 @@
+{
+  "schema": "tree_qc_v2_feasibility_v1",
+  "config_digest": "44ac652b7a6018ba86cdd400798b0af53e4628c6d8c92de91a1331d9d8dd9794",
+  "sites": {
+    "litchfield": {
+      "present": true,
+      "root": "D:\\TreeQCData\\extracted_manual_verified\\litchfield\\trees",
+      "files": 737,
+      "points": 112751388,
+      "bytes": 3189840738,
+      "by_partition": {
+        "test": {
+          "files": 146,
+          "points": 25155690,
+          "subfolders": [
+            "in_plot_th0.90",
+            "out_plot_th0.90"
+          ],
+          "bytes": 301889502
+        },
+        "train": {
+          "files": 449,
+          "points": 64138762,
+          "subfolders": [
+            ""
+          ],
+          "bytes": 2119438005
+        },
+        "val": {
+          "files": 142,
+          "points": 23456936,
+          "subfolders": [
+            ""
+          ],
+          "bytes": 768513231
+        }
+      },
+      "manifest_digest": "64f2d0112fe70072fccf9ff9f2a706ab76eb6f5a0198142be0c100ccd40ee9f2"
+    },
+    "wytham": {
+      "present": true,
+      "root": "D:\\TreeQCData\\extracted_manual_verified\\wytham\\trees",
+      "files": 956,
+      "points": 182180502,
+      "bytes": 3324125426,
+      "by_partition": {
+        "test": {
+          "files": 280,
+          "points": 39956669,
+          "subfolders": [
+            "in_plot_th0.90",
+            "out_plot_th0.90"
+          ],
+          "bytes": 479520711
+        },
+        "train": {
+          "files": 476,
+          "points": 102579218,
+          "subfolders": [
+            ""
+          ],
+          "bytes": 2051674545
+        },
+        "val": {
+          "files": 200,
+          "points": 39644615,
+          "subfolders": [
+            ""
+          ],
+          "bytes": 792930170
+        }
+      },
+      "manifest_digest": "3df3faa08d746811ac391182590b02de29ec17e3c35221bd348d1cc8e95d02b5"
+    }
+  },
+  "absent_sites": [
+    "ofental",
+    "robsoncreek"
+  ],
+  "geometry_sample": {
+    "litchfield": {
+      "sampled": 40,
+      "points_median": 60427.0,
+      "points_p10": 22057.3,
+      "points_p90": 150138.40000000008,
+      "height_median_m": 8.365500450134277,
+      "height_p10_m": 6.108575344085693,
+      "height_p90_m": 14.40384979248047,
+      "bbox_area_median_m2": 4.608662128448486
+    },
+    "wytham": {
+      "sampled": 40,
+      "points_median": 50656.0,
+      "points_p10": 13699.1,
+      "points_p90": 287987.80000000005,
+      "height_median_m": 14.228544235229492,
+      "height_p10_m": 6.381912612915039,
+      "height_p90_m": 22.508098602294922,
+      "bbox_area_median_m2": 26.174378395080566
+    }
+  },
+  "plot_clouds": {
+    "litchfield": {
+      "train": {
+        "bytes": 2739223811,
+        "points": 85600738,
+        "properties": [
+          "x",
+          "y",
+          "z",
+          "semantic",
+          "instance"
+        ]
+      },
+      "val": {
+        "bytes": 951173027,
+        "points": 29724151,
+        "properties": [
+          "x",
+          "y",
+          "z",
+          "instance",
+          "semantic"
+        ]
+      },
+      "test": {
+        "bytes": 947729315,
+        "points": 29616535,
+        "properties": [
+          "x",
+          "y",
+          "z",
+          "instance",
+          "semantic"
+        ]
+      }
+    },
+    "wytham": {
+      "train": {
+        "bytes": 2052040293,
+        "points": 102602005,
+        "properties": [
+          "x",
+          "y",
+          "z",
+          "instance",
+          "semantic"
+        ]
+      },
+      "val": {
+        "bytes": 609941512,
+        "points": 30497066,
+        "properties": [
+          "x",
+          "y",
+          "z",
+          "instance",
+          "semantic"
+        ]
+      },
+      "test": {
+        "bytes": 600327472,
+        "points": 30016364,
+        "properties": [
+          "x",
+          "y",
+          "z",
+          "instance",
+          "semantic"
+        ]
+      }
+    }
+  },
+  "total_tree_files": 1693,
+  "seconds": 1.48,
+  "mean_points_per_tree": 174206.6686355582
+}

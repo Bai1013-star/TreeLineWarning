@@ -1,0 +1,58 @@
+{
+  "device": "cuda",
+  "in_channels": 5,
+  "smoke_points": 512,
+  "smoke_batch": 2,
+  "models": {
+    "MODEL_A_POINTNET2": {
+      "parameters": 485475,
+      "finite_gradients": "72/72",
+      "forward_backward_seconds": 0.934,
+      "gpu_peak_memory_mb": 65.4,
+      "auxiliary_heads": false
+    },
+    "MODEL_B_POINTNEXT_S": {
+      "parameters": 1535139,
+      "finite_gradients": "108/108",
+      "forward_backward_seconds": 0.153,
+      "gpu_peak_memory_mb": 109.2,
+      "auxiliary_heads": false
+    },
+    "MODEL_C_POINTNEXT_S_MULTITASK": {
+      "parameters": 1566957,
+      "finite_gradients": "122/122",
+      "forward_backward_seconds": 0.149,
+      "gpu_peak_memory_mb": 142.4,
+      "auxiliary_heads": true
+    }
+  },
+  "describe": {
+    "MODEL_A_POINTNET2": {
+      "key": "A",
+      "parameters": 485475,
+      "auxiliary_heads": false,
+      "in_channels": 5,
+      "reference_implementation": "PointNet++ (Qi et al. 2017), SSG variant",
+      "implementation": "LOCAL_IMPLEMENTATION (plain torch, no external code)",
+      "pretrained_weights": null
+    },
+    "MODEL_B_POINTNEXT_S": {
+      "key": "B",
+      "parameters": 1535139,
+      "auxiliary_heads": false,
+      "in_channels": 5,
+      "reference_implementation": "PointNeXt-S (Qian et al. 2022), inverted residual blocks",
+      "implementation": "LOCAL_IMPLEMENTATION (plain torch, no external code)",
+      "pretrained_weights": null
+    },
+    "MODEL_C_POINTNEXT_S_MULTITASK": {
+      "key": "C",
+      "parameters": 1566957,
+      "auxiliary_heads": true,
+      "in_channels": 5,
+      "reference_implementation": "PointNeXt-S + TreeLearn-style stem offset + mask quality head",
+      "implementation": "LOCAL_IMPLEMENTATION (plain torch, no external code)",
+      "pretrained_weights": null
+    }
+  }
+}

@@ -23,3 +23,13 @@ research/tree_qc/gate_d_diagnostic.py  -text
 research/tree_qc/gate_d_lock.py        -text
 research/tree_qc/reports/GATE_D_ACCEPTANCE.json -text
 research/tree_qc/reports/GATE_C_CANONICAL_IDENTITY_PROTOCOL_V2.md -text
+
+# Tree QC V2 feasibility round.
+#
+# The ROI library index records the SHA-256 of every stored artefact, and the
+# library index's own digest is quoted in the bakeoff report, so the report can be
+# traced to the exact bytes it was computed from. Git's autocrlf conversion can
+# rewrite LF <-> CRLF on checkout without `git status` reporting anything, which
+# breaks that chain silently. `-text` stores and checks out these files exactly as
+# committed, so a clean checkout reproduces the digest the run recorded.
+research/tree_qc_v2/** -text

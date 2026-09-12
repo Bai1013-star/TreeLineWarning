@@ -1,0 +1,634 @@
+{
+  "schema": "tree_qc_v2_feasibility_v1",
+  "library_version": "tree_qc_v2_roi_library_v1",
+  "config_digest": "44ac652b7a6018ba86cdd400798b0af53e4628c6d8c92de91a1331d9d8dd9794",
+  "window_m": 12.0,
+  "minimum_points": 8000,
+  "target_count": 308,
+  "targets_per_site": {
+    "litchfield": 190,
+    "wytham": 118
+  },
+  "proposal_rows": 5527,
+  "windows": [
+    {
+      "patch_id": "litchfield_w12m_g00",
+      "site": "litchfield",
+      "bounds": [
+        64.0,
+        -76.0,
+        76.0,
+        -64.0
+      ],
+      "points": 979819,
+      "instances": 21,
+      "qualifying": 13,
+      "kept": 13
+    },
+    {
+      "patch_id": "litchfield_w12m_g01",
+      "site": "litchfield",
+      "bounds": [
+        44.0,
+        -96.0,
+        56.0,
+        -84.0
+      ],
+      "points": 1795257,
+      "instances": 25,
+      "qualifying": 12,
+      "kept": 12
+    },
+    {
+      "patch_id": "litchfield_w12m_g02",
+      "site": "litchfield",
+      "bounds": [
+        64.0,
+        -16.0,
+        76.0,
+        -4.0
+      ],
+      "points": 1332451,
+      "instances": 21,
+      "qualifying": 12,
+      "kept": 12
+    },
+    {
+      "patch_id": "litchfield_w12m_g03",
+      "site": "litchfield",
+      "bounds": [
+        44.0,
+        -76.0,
+        56.0,
+        -64.0
+      ],
+      "points": 2336422,
+      "instances": 21,
+      "qualifying": 7,
+      "kept": 7
+    },
+    {
+      "patch_id": "litchfield_w12m_g04",
+      "site": "litchfield",
+      "bounds": [
+        24.0,
+        -96.0,
+        36.0,
+        -84.0
+      ],
+      "points": 1399833,
+      "instances": 21,
+      "qualifying": 9,
+      "kept": 9
+    },
+    {
+      "patch_id": "litchfield_w12m_g05",
+      "site": "litchfield",
+      "bounds": [
+        4.0,
+        -16.0,
+        16.0,
+        -4.0
+      ],
+      "points": 1400215,
+      "instances": 21,
+      "qualifying": 11,
+      "kept": 11
+    },
+    {
+      "patch_id": "litchfield_w12m_g06",
+      "site": "litchfield",
+      "bounds": [
+        84.0,
+        -56.0,
+        96.0,
+        -44.0
+      ],
+      "points": 1073379,
+      "instances": 16,
+      "qualifying": 7,
+      "kept": 7
+    },
+    {
+      "patch_id": "litchfield_w12m_g07",
+      "site": "litchfield",
+      "bounds": [
+        24.0,
+        -56.0,
+        36.0,
+        -44.0
+      ],
+      "points": 1540454,
+      "instances": 15,
+      "qualifying": 9,
+      "kept": 9
+    },
+    {
+      "patch_id": "litchfield_w12m_g08",
+      "site": "litchfield",
+      "bounds": [
+        44.0,
+        -56.0,
+        56.0,
+        -44.0
+      ],
+      "points": 3907579,
+      "instances": 17,
+      "qualifying": 6,
+      "kept": 6
+    },
+    {
+      "patch_id": "litchfield_w12m_g09",
+      "site": "litchfield",
+      "bounds": [
+        44.0,
+        -16.0,
+        56.0,
+        -4.0
+      ],
+      "points": 1135700,
+      "instances": 16,
+      "qualifying": 7,
+      "kept": 7
+    },
+    {
+      "patch_id": "litchfield_w12m_g10",
+      "site": "litchfield",
+      "bounds": [
+        24.0,
+        -16.0,
+        36.0,
+        -4.0
+      ],
+      "points": 1378627,
+      "instances": 17,
+      "qualifying": 10,
+      "kept": 10
+    },
+    {
+      "patch_id": "litchfield_w12m_g11",
+      "site": "litchfield",
+      "bounds": [
+        64.0,
+        -96.0,
+        76.0,
+        -84.0
+      ],
+      "points": 1352819,
+      "instances": 14,
+      "qualifying": 4,
+      "kept": 4
+    },
+    {
+      "patch_id": "litchfield_w12m_g12",
+      "site": "litchfield",
+      "bounds": [
+        64.0,
+        -56.0,
+        76.0,
+        -44.0
+      ],
+      "points": 1510471,
+      "instances": 17,
+      "qualifying": 8,
+      "kept": 8
+    },
+    {
+      "patch_id": "litchfield_w12m_g13",
+      "site": "litchfield",
+      "bounds": [
+        4.0,
+        -56.0,
+        16.0,
+        -44.0
+      ],
+      "points": 3632860,
+      "instances": 13,
+      "qualifying": 6,
+      "kept": 6
+    },
+    {
+      "patch_id": "litchfield_w12m_g14",
+      "site": "litchfield",
+      "bounds": [
+        44.0,
+        -36.0,
+        56.0,
+        -24.0
+      ],
+      "points": 1736600,
+      "instances": 16,
+      "qualifying": 10,
+      "kept": 10
+    },
+    {
+      "patch_id": "litchfield_w12m_g15",
+      "site": "litchfield",
+      "bounds": [
+        64.0,
+        -36.0,
+        76.0,
+        -24.0
+      ],
+      "points": 2023431,
+      "instances": 19,
+      "qualifying": 12,
+      "kept": 12
+    },
+    {
+      "patch_id": "litchfield_w12m_g16",
+      "site": "litchfield",
+      "bounds": [
+        84.0,
+        -16.0,
+        96.0,
+        -4.0
+      ],
+      "points": 2045586,
+      "instances": 15,
+      "qualifying": 7,
+      "kept": 7
+    },
+    {
+      "patch_id": "litchfield_w12m_g17",
+      "site": "litchfield",
+      "bounds": [
+        4.0,
+        -36.0,
+        16.0,
+        -24.0
+      ],
+      "points": 841167,
+      "instances": 16,
+      "qualifying": 11,
+      "kept": 11
+    },
+    {
+      "patch_id": "litchfield_w12m_g18",
+      "site": "litchfield",
+      "bounds": [
+        84.0,
+        -36.0,
+        96.0,
+        -24.0
+      ],
+      "points": 1302507,
+      "instances": 17,
+      "qualifying": 12,
+      "kept": 12
+    },
+    {
+      "patch_id": "litchfield_w12m_g19",
+      "site": "litchfield",
+      "bounds": [
+        4.0,
+        -96.0,
+        16.0,
+        -84.0
+      ],
+      "points": 829739,
+      "instances": 14,
+      "qualifying": 6,
+      "kept": 6
+    },
+    {
+      "patch_id": "litchfield_w12m_g20",
+      "site": "litchfield",
+      "bounds": [
+        24.0,
+        -36.0,
+        36.0,
+        -24.0
+      ],
+      "points": 3882237,
+      "instances": 14,
+      "qualifying": 7,
+      "kept": 7
+    },
+    {
+      "patch_id": "litchfield_w12m_g21",
+      "site": "litchfield",
+      "bounds": [
+        84.0,
+        -96.0,
+        96.0,
+        -84.0
+      ],
+      "points": 973804,
+      "instances": 10,
+      "qualifying": 4,
+      "kept": 4
+    },
+    {
+      "patch_id": "wytham_w12m_g00",
+      "site": "wytham",
+      "bounds": [
+        24.0,
+        104.0,
+        36.0,
+        116.0
+      ],
+      "points": 2682883,
+      "instances": 45,
+      "qualifying": 8,
+      "kept": 8
+    },
+    {
+      "patch_id": "wytham_w12m_g01",
+      "site": "wytham",
+      "bounds": [
+        24.0,
+        124.0,
+        36.0,
+        136.0
+      ],
+      "points": 2521235,
+      "instances": 41,
+      "qualifying": 12,
+      "kept": 12
+    },
+    {
+      "patch_id": "wytham_w12m_g02",
+      "site": "wytham",
+      "bounds": [
+        4.0,
+        124.0,
+        16.0,
+        136.0
+      ],
+      "points": 1041060,
+      "instances": 31,
+      "qualifying": 5,
+      "kept": 5
+    },
+    {
+      "patch_id": "wytham_w12m_g03",
+      "site": "wytham",
+      "bounds": [
+        24.0,
+        144.0,
+        36.0,
+        156.0
+      ],
+      "points": 3604004,
+      "instances": 29,
+      "qualifying": 10,
+      "kept": 10
+    },
+    {
+      "patch_id": "wytham_w12m_g04",
+      "site": "wytham",
+      "bounds": [
+        4.0,
+        104.0,
+        16.0,
+        116.0
+      ],
+      "points": 982156,
+      "instances": 20,
+      "qualifying": 2,
+      "kept": 2
+    },
+    {
+      "patch_id": "wytham_w12m_g05",
+      "site": "wytham",
+      "bounds": [
+        44.0,
+        184.0,
+        56.0,
+        196.0
+      ],
+      "points": 2208227,
+      "instances": 32,
+      "qualifying": 5,
+      "kept": 5
+    },
+    {
+      "patch_id": "wytham_w12m_g06",
+      "site": "wytham",
+      "bounds": [
+        104.0,
+        144.0,
+        116.0,
+        156.0
+      ],
+      "points": 1611600,
+      "instances": 24,
+      "qualifying": 6,
+      "kept": 6
+    },
+    {
+      "patch_id": "wytham_w12m_g07",
+      "site": "wytham",
+      "bounds": [
+        124.0,
+        124.0,
+        136.0,
+        136.0
+      ],
+      "points": 2204305,
+      "instances": 22,
+      "qualifying": 6,
+      "kept": 6
+    },
+    {
+      "patch_id": "wytham_w12m_g08",
+      "site": "wytham",
+      "bounds": [
+        104.0,
+        124.0,
+        116.0,
+        136.0
+      ],
+      "points": 1999788,
+      "instances": 25,
+      "qualifying": 6,
+      "kept": 6
+    },
+    {
+      "patch_id": "wytham_w12m_g09",
+      "site": "wytham",
+      "bounds": [
+        44.0,
+        164.0,
+        56.0,
+        176.0
+      ],
+      "points": 2149042,
+      "instances": 28,
+      "qualifying": 7,
+      "kept": 7
+    },
+    {
+      "patch_id": "wytham_w12m_g10",
+      "site": "wytham",
+      "bounds": [
+        64.0,
+        184.0,
+        76.0,
+        196.0
+      ],
+      "points": 1471437,
+      "instances": 23,
+      "qualifying": 3,
+      "kept": 3
+    },
+    {
+      "patch_id": "wytham_w12m_g11",
+      "site": "wytham",
+      "bounds": [
+        104.0,
+        104.0,
+        116.0,
+        116.0
+      ],
+      "points": 1725808,
+      "instances": 24,
+      "qualifying": 8,
+      "kept": 8
+    },
+    {
+      "patch_id": "wytham_w12m_g12",
+      "site": "wytham",
+      "bounds": [
+        4.0,
+        164.0,
+        16.0,
+        176.0
+      ],
+      "points": 1600491,
+      "instances": 21,
+      "qualifying": 4,
+      "kept": 4
+    },
+    {
+      "patch_id": "wytham_w12m_g13",
+      "site": "wytham",
+      "bounds": [
+        24.0,
+        184.0,
+        36.0,
+        196.0
+      ],
+      "points": 1986582,
+      "instances": 21,
+      "qualifying": 7,
+      "kept": 7
+    },
+    {
+      "patch_id": "wytham_w12m_g14",
+      "site": "wytham",
+      "bounds": [
+        124.0,
+        104.0,
+        136.0,
+        116.0
+      ],
+      "points": 2304220,
+      "instances": 22,
+      "qualifying": 5,
+      "kept": 5
+    },
+    {
+      "patch_id": "wytham_w12m_g15",
+      "site": "wytham",
+      "bounds": [
+        24.0,
+        164.0,
+        36.0,
+        176.0
+      ],
+      "points": 2033607,
+      "instances": 25,
+      "qualifying": 4,
+      "kept": 4
+    },
+    {
+      "patch_id": "wytham_w12m_g16",
+      "site": "wytham",
+      "bounds": [
+        44.0,
+        104.0,
+        56.0,
+        116.0
+      ],
+      "points": 3437059,
+      "instances": 12,
+      "qualifying": 0,
+      "kept": 0
+    },
+    {
+      "patch_id": "wytham_w12m_g17",
+      "site": "wytham",
+      "bounds": [
+        124.0,
+        144.0,
+        136.0,
+        156.0
+      ],
+      "points": 1262281,
+      "instances": 21,
+      "qualifying": 6,
+      "kept": 6
+    },
+    {
+      "patch_id": "wytham_w12m_g18",
+      "site": "wytham",
+      "bounds": [
+        4.0,
+        144.0,
+        16.0,
+        156.0
+      ],
+      "points": 1401104,
+      "instances": 22,
+      "qualifying": 6,
+      "kept": 6
+    },
+    {
+      "patch_id": "wytham_w12m_g19",
+      "site": "wytham",
+      "bounds": [
+        44.0,
+        124.0,
+        56.0,
+        136.0
+      ],
+      "points": 1351319,
+      "instances": 20,
+      "qualifying": 1,
+      "kept": 1
+    },
+    {
+      "patch_id": "wytham_w12m_g20",
+      "site": "wytham",
+      "bounds": [
+        64.0,
+        144.0,
+        76.0,
+        156.0
+      ],
+      "points": 1055244,
+      "instances": 15,
+      "qualifying": 1,
+      "kept": 1
+    },
+    {
+      "patch_id": "wytham_w12m_g21",
+      "site": "wytham",
+      "bounds": [
+        104.0,
+        184.0,
+        116.0,
+        196.0
+      ],
+      "points": 1646787,
+      "instances": 21,
+      "qualifying": 6,
+      "kept": 6
+    }
+  ],
+  "seconds": 514.48,
+  "index_file": "D:\\TreeQCData\\v2_feasibility\\roi_library\\index.json",
+  "index_sha256": "ac61a8c3f515b675cf6fe8c34bc37aba0d3e398679ac6307bc465761977987e0"
+}
