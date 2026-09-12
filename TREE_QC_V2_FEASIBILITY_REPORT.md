@@ -12,9 +12,9 @@ training? Every number below is read from an artefact a run wrote.
 ```
 TREE_QC_V2_FEASIBILITY_AUDIT
 
-GIT_HEAD = ff9604b48748de42d0d4422a243bcfe03c63dd00
+GIT_HEAD = fe3fae1f5cf818b55002c1a9fc9056882ca95060
 BRANCH = research/tree-qc-v2-feasibility
-WORKTREE_CLEAN = NO
+WORKTREE_CLEAN = YES
 
 V1_HISTORY_UNTOUCHED = YES
 LOCAL_20_TREES_ACCESSED = NO
@@ -55,11 +55,8 @@ BLOCKERS =
 
 ## 1. State of the repository and of V1
 
-- HEAD `ff9604b48748de42d0d4422a243bcfe03c63dd00` on `research/tree-qc-v2-feasibility`, branched from the V1 pilot tip `ff9604b48748de42d0d4422a243bcfe03c63dd00`.
-- Working tree: `M .gitignore
-?? TREE_QC_V2_FEASIBILITY_REPORT.json
-?? TREE_QC_V2_FEASIBILITY_REPORT.md
-?? research/tree_qc_v2/`.
+- HEAD `fe3fae1f5cf818b55002c1a9fc9056882ca95060` on `research/tree-qc-v2-feasibility`, branched from the V1 pilot tip `ff9604b48748de42d0d4422a243bcfe03c63dd00`.
+- Working tree: `clean`.
 - Files changed under `research/tree_qc/`: 0. Under `algorithms/`: 0. Under `core/`: 0.
 - this round added research/tree_qc_v2/ only; no file under research/tree_qc/, algorithms/ or core/ was modified.
 
