@@ -2,11 +2,11 @@
   "schema": "tree_qc_v2_feasibility_v1",
   "task": "TREE_QC_V2_FEASIBILITY_AUDIT",
   "git": {
-    "head": "877f1c48762319de01bd864997aa323719208739",
+    "head": "bd9c28a7bfae70e5fa423a9ab0b6306d3ff5a9aa",
     "branch": "research/tree-qc-v2-feasibility",
     "base_commit_before_round": "ff9604b48748de42d0d4422a243bcfe03c63dd00",
     "v1_branch": "research/tree-qc-efg-public-pilot-v1",
-    "worktree_status": "M TREE_QC_V2_FEASIBILITY_REPORT.json\n M TREE_QC_V2_FEASIBILITY_REPORT.md\n M research/tree_qc_v2/test_v2_feasibility.py\n M research/tree_qc_v2/v2_report.py\n?? research/tree_qc_v2/verify_report.py"
+    "worktree_status": "M TREE_QC_V2_FEASIBILITY_REPORT.json\n M TREE_QC_V2_FEASIBILITY_REPORT.md"
   },
   "v1_history_untouched": {
     "v1_reports_modified": false,

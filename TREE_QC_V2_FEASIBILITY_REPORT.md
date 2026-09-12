@@ -12,7 +12,7 @@ training? Every number below is read from an artefact a run wrote.
 ```
 TREE_QC_V2_FEASIBILITY_AUDIT
 
-GIT_HEAD = 877f1c48762319de01bd864997aa323719208739
+GIT_HEAD = bd9c28a7bfae70e5fa423a9ab0b6306d3ff5a9aa
 BRANCH = research/tree-qc-v2-feasibility
 WORKTREE_CLEAN = NO
 
@@ -64,12 +64,9 @@ BLOCKERS =
 
 ## 1. State of the repository and of V1
 
-- HEAD `877f1c48762319de01bd864997aa323719208739` on `research/tree-qc-v2-feasibility`, branched from the V1 pilot tip `ff9604b48748de42d0d4422a243bcfe03c63dd00`.
+- HEAD `bd9c28a7bfae70e5fa423a9ab0b6306d3ff5a9aa` on `research/tree-qc-v2-feasibility`, branched from the V1 pilot tip `ff9604b48748de42d0d4422a243bcfe03c63dd00`.
 - Working tree: `M TREE_QC_V2_FEASIBILITY_REPORT.json
- M TREE_QC_V2_FEASIBILITY_REPORT.md
- M research/tree_qc_v2/test_v2_feasibility.py
- M research/tree_qc_v2/v2_report.py
-?? research/tree_qc_v2/verify_report.py`.
+ M TREE_QC_V2_FEASIBILITY_REPORT.md`.
 - Files changed under `research/tree_qc/`: 0. Under `algorithms/`: 0. Under `core/`: 0.
 - this round added research/tree_qc_v2/ only; no file under research/tree_qc/, algorithms/ or core/ was modified.
 
