@@ -36,6 +36,8 @@ import time
 import traceback
 from pathlib import Path
 
+import numpy as np
+
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
@@ -365,6 +367,11 @@ class Pilot:
         Anything the interrupted stage had already durably produced — cached examples, a
         prewarm exclusion record, a checkpoint — is left in place, so re-entry continues
         rather than restarts.
+
+        A stop recorded by an earlier attempt is cleared here too, because the stop it
+        describes is no longer the state of the run; leaving it in place would make
+        ``CURRENT_STATUS.json`` and the launcher's summary report a failure that this
+        attempt is actively moving past. The stop is kept as history under ``stop_history``.
         """
         recovered = []
         for name in STAGE_ORDER:
@@ -378,7 +385,23 @@ class Pilot:
         if recovered:
             self.state.save()
             self.log(f"    recovered interrupted stage(s): {', '.join(recovered)}")
-        return {'recovered': recovered}
+        previous = self.state.payload.get('stop') or {}
+        if previous.get('code'):
+            history = list(self.state.payload.get('stop_history') or [])
+            history.append({**previous, 'superseded_at': state_module.local_timestamp()})
+            self.state.payload['stop_history'] = history[-20:]
+            self.state.clear_stop()
+            self.state.save()
+            self.log(f"    previous stop {previous['code']} is recorded as history; "
+                     'this attempt continues past it')
+        stale = {key: value for key, value in (self.state.payload.get('progress') or {}
+                                               ).items()
+                 if key.split('.')[0] in recovered}
+        for key in stale:
+            self.state.payload['progress'].pop(key, None)
+        if recovered:
+            self.state.save()
+        return {'recovered': recovered, 'cleared_stop': previous.get('code')}
 
     def probe(self, name: str) -> tuple[bool, dict]:
         """Whether a stage may be skipped, using only digest-bound evidence."""
@@ -1454,6 +1477,19 @@ class Pilot:
         payload_path = self.layout.path('evaluation', 'heldout', f'{label}.json')
         state_module.atomic_write_json(payload_path, record, with_digest=False)
         record['record_path'] = str(payload_path)
+        # Per-example raw scores and labels are written alongside the metrics so the
+        # operating point can be audited and re-thresholded after the fact without
+        # re-running the evaluation. They are the evidence behind every reported number.
+        raw_path = self.layout.path('evaluation', 'heldout', f'{label}_scores.npz')
+        np.savez_compressed(
+            raw_path,
+            scores=np.asarray(scored['scores'], dtype=np.float64),
+            labels=np.asarray(scored['labels'], dtype=np.int64),
+            classes=np.asarray(scored['classes'], dtype='U32'),
+            severities=np.asarray(scored['severities'], dtype='U8'),
+            keys=np.asarray(scored['keys'], dtype='U200'))
+        record['scores_path'] = str(raw_path)
+        record['scores_sha256'] = state_module.digest_file(raw_path)
         primary = record['primary_moderate_high'] or {}
         self.log(f"    {label}: examples {record['examples']}  BAD_RECALL "
                  f"{primary.get('BAD_RECALL')}  BAD_FALSE_PASS "
@@ -1574,6 +1610,26 @@ class Pilot:
         name = S_REPORT
         selected = self.state.payload['selected_architecture']
         freeze_state = freeze_module.require_valid_freeze(self.layout.freeze_path)
+        # The resume contract is a property of the code, not of this particular run, so the
+        # report stage exercises it here instead of leaving the field NOT_RUN. It is
+        # self-contained and writes only inside its own temporary directory.
+        try:
+            outcome = resume_test(self.layout.root)
+            self.state.payload['tests'] = {
+                **(self.state.payload.get('tests') or {}),
+                'RESUME_TEST': outcome['RESUME_TEST'],
+                'resume_test_checks': len(outcome['checks']),
+            }
+        except Exception as exc:  # noqa: BLE001 - a missing test must not fake a pass
+            outcome = None
+            self.state.payload['tests'] = {
+                **(self.state.payload.get('tests') or {}),
+                'RESUME_TEST': f'ERROR: {type(exc).__name__}',
+            }
+        self.state.save()
+        self.log(f"    resume test: "
+                 f"{self.state.payload['tests']['RESUME_TEST']} "
+                 f"({self.state.payload['tests'].get('resume_test_checks', 0)} checks)")
         heldout_records = leakage_module.read_records(
             self.layout.path('evaluation', 'heldout'))
         leakage = leakage_module.heldout_protocol_audit(
@@ -1809,6 +1865,58 @@ def _new_run_id() -> str:
     import uuid
     stamp = time.strftime('%Y%m%dT%H%M%S', time.localtime())
     return f'public_pilot_v1_{stamp}_{uuid.uuid4().hex[:8]}'
+
+
+def refresh_report(run_root: Path | str = DEFAULT_RUN_ROOT) -> dict:
+    """Regenerate the final report from the frozen artifacts of a finished run.
+
+    The report is a pure function of the artifacts the run already wrote: the experiment
+    freeze, the per-seed threshold files, the held-out records and the state. Rebuilding it
+    cannot change a metric, because every number is read back from those artifacts — and the
+    held-out scores the metrics came from are now stored beside each record, so the
+    operating point can be audited without re-running the evaluation.
+
+    This exists so a reporting gap (a missing field, a clearer wording, a newer field) can
+    be closed without touching an experiment that has already been unblinded. It refuses to
+    run on an unfinished run.
+    """
+    layout = state_module.RunLayout(run_root)
+    state = state_module.AutopilotState.load(layout.state_path)
+    if not layout.freeze_path.exists():
+        raise state_module.StateError(
+            f'no experiment freeze at {layout.freeze_path}; nothing to report')
+    if not state.payload['heldout'].get('accessed'):
+        raise state_module.StateError('held-out was never accessed; there is no result')
+    pilot = Pilot.__new__(Pilot)
+    pilot.layout = layout
+    pilot.state = state
+    pilot.verbose = True
+    pilot.runs = {}
+    pilot.heldout_records = {}
+    pilot.comparison = {}
+    pilot.validation_evidence = {}
+    pilot.calibration = state.payload.get('calibration') or {}
+    pilot.smoke_test = bool(state.payload.get('smoke_test'))
+    pilot.provenance = None
+    for seed in gates.MODEL_SEEDS:
+        key = run_key(state.payload['selected_architecture'], seed)
+        record = state.model_run(key)
+        if record:
+            pilot.runs[seed] = record
+    pilot.state.payload['stages'][S_REPORT] = state_module.StageRecord.pending(S_REPORT)
+    pilot.recover_interrupted_stages()
+    # Every held-out record is read back from disk: the report is built from artifacts, and
+    # the verdict must be recomputed from the same evidence the run produced.
+    pilot.heldout_records = leakage_module.read_records(
+        layout.path('evaluation', 'heldout'))
+    if not pilot.heldout_records:
+        raise state_module.StateError(
+            f'no held-out records under {layout.path("evaluation", "heldout")}')
+    pilot.stage_report()
+    final = state.payload.get('final') or {}
+    return {'status': 'REPORT_REFRESHED', 'verdict': final.get('verdict'),
+            'report': final.get('report_json'), 'markdown': final.get('report_md'),
+            'report_sha256': final.get('report_sha256')}
 
 
 # --- dry run ---------------------------------------------------------------
@@ -2095,6 +2203,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--status', action='store_true', help='read-only progress report')
     parser.add_argument('--resume-test', action='store_true',
                         help='prove resume/staleness/guard behaviour')
+    parser.add_argument('--refresh-report', action='store_true',
+                        help='regenerate the final report of a finished run from its '
+                             'frozen artifacts; never touches the experiment')
     parser.add_argument('--run-root', default=str(DEFAULT_RUN_ROOT))
     parser.add_argument('--epochs', type=int, default=gates.EPOCHS)
     parser.add_argument('--points', type=int, default=POINTS_PRIMARY,
@@ -2126,6 +2237,15 @@ def main(argv=None) -> int:
         return 0 if result['RESUME_TEST'] == 'PASS' else 1
     if args.status:
         print(json.dumps(status_report(args.run_root), indent=2, default=str))
+        return 0
+    if args.refresh_report:
+        try:
+            with state_module.RunLock(state_module.RunLayout(args.run_root).lock_path):
+                result = refresh_report(args.run_root)
+        except state_module.StateError as exc:
+            print(f'REFUSED: {exc}', file=sys.stderr)
+            return 4
+        print(json.dumps(result, indent=2, default=str))
         return 0
     bounded = (args.max_comparison_candidates is not None
                or args.max_heldout_candidates is not None

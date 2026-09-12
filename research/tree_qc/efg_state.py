@@ -315,6 +315,8 @@ class AutopilotState:
             'robustness': {},
             'final': {'verdict': None, 'report_json': None, 'report_md': None},
             'stop': {'code': None, 'detail': None, 'timestamp': None},
+            'stop_history': [],
+            'progress': {},
             'resume': {'count': 0, 'events': []},
         }
 
