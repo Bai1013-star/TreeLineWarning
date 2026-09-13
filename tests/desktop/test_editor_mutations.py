@@ -253,6 +253,25 @@ def test_delete_and_undo_reset_done_state_and_drive_final_projection(tmp_path: P
     }
 
 
+def test_background_finalize_keeps_generated_excel_cache_current(tmp_path: Path):
+    workflow, _matrix, _polygon = ready(tmp_path)
+    workflow.start_finalize()
+    thread = workflow._finalize_thread
+    assert thread is not None
+    thread.join(10)
+    assert workflow.editor_state()["step"] == "DONE"
+
+    editor = workflow._ensure_editor()
+    workbook = workflow.project_root / "exports" / "Prediction_Input.xlsx"
+    batch = editor.artifact_root / "batch.json"
+    assert workbook.is_file() and batch.is_file()
+    assert workbook.stat().st_mtime_ns >= batch.stat().st_mtime_ns
+    modified = workbook.stat().st_mtime_ns
+
+    assert workflow.export_prediction() == workbook
+    assert workbook.stat().st_mtime_ns == modified
+
+
 def request(base, path, payload=None):
     data = None if payload is None else json.dumps(payload).encode()
     req = urllib.request.Request(

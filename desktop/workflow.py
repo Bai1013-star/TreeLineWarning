@@ -1995,6 +1995,10 @@ class DesktopWorkflow:
                 editor.result = self._result
                 editor.finalization_performance = performance
                 editor._write_json(editor.artifact_root / "batch.json", self._result.to_dict())
+                # Performance metadata is published after Excel generation.
+                # Advance the verified workbook timestamp so the normal cache
+                # gate does not regenerate an identical workbook on download.
+                path.touch()
             self._log(
                 "tree_editor_finalized",
                 analysis_run_id=self._result.analysis_run_id,
