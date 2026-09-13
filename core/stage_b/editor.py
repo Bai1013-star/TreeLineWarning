@@ -36,11 +36,16 @@ class BatchTreeEditor:
         config: FastBaselineConfig | None = None,
         acceleration_mode: str = "AUTO",
     ) -> None:
+        load_started = time.perf_counter()
         reconciled = getattr(result, "global_reconciled", None)
         if reconciled is None:
             raise BatchTreeEditorError("TREE_EDITOR_REQUIRES_GLOBAL_RECONCILIATION")
         self.project_root = Path(project_root).expanduser().resolve()
         self.result = result
+        # Keep the analysis publication immutable in memory while successive
+        # DELETE/UNDO finalizations update ``self.result``.  This mirrors the
+        # original -> edits -> final membership architecture for clearance.
+        self.original_clearance = result.final_clearance
         self.config = config or FastBaselineConfig()
         from algorithms.spans.gpu_clearance import normalize_gpu_mode
 
@@ -64,6 +69,9 @@ class BatchTreeEditor:
             str(key): tuple(int(value) for value in values)
             for key, values in (tree_ids_by_span or {}).items()
         }
+        self.tree_load_seconds = time.perf_counter() - load_started
+        self.last_viewer_update_seconds = 0.0
+        self.finalization_performance: dict[str, Any] = {}
 
     def _check_span(self, span_id: str, tree_ids: list[int]) -> None:
         allowed = set(self.tree_ids_by_span.get(span_id, ()))
@@ -363,11 +371,129 @@ class BatchTreeEditor:
                 statuses[span_id] = BatchSpanStatus.USER_REVIEWED
         self.result = replace(self.result, span_statuses=statuses)
 
+    def _clearance_matches_membership(
+        self,
+        clearance: Any | None,
+        final: TreeReconciliationResult,
+    ) -> bool:
+        if clearance is None:
+            return False
+        final_records = {
+            int(record.global_tree_id): record for record in final.global_tree_records
+        }
+        clearance_records: dict[int, Any] = {}
+        for record in clearance.records:
+            tree_id = int(record.global_tree_id)
+            if tree_id in clearance_records:
+                return False
+            clearance_records[tree_id] = record
+        if set(clearance_records) != set(final_records):
+            return False
+        return all(
+            int(clearance_records[tree_id].tree_point_count)
+            == int(record.full_resolution_point_count)
+            and getattr(clearance_records[tree_id], "persistent_tree_id", None)
+            == getattr(record, "persistent_tree_id", None)
+            for tree_id, record in final_records.items()
+        )
+
+    def _reuse_delete_only_clearance(self, final: TreeReconciliationResult) -> Any | None:
+        """Project existing exact per-tree clearance through whole-tree DELETE edits.
+
+        A DELETE removes complete memberships and changes neither the coordinates
+        nor wire geometry of any survivor.  Therefore every surviving per-tree
+        record and danger observation is already the exact result the frozen
+        clearance algorithm would recompute.  The strict inventory and point
+        count checks below fail closed for legacy/incomplete publications.
+        """
+
+        clearance = self.original_clearance
+        operations = self.session.operations
+        if clearance is None or not operations or any(
+            operation.get("type") != "DELETE" for operation in operations
+        ):
+            return None
+        original_records = {
+            str(record.persistent_tree_id): record
+            for record in self.original_reconciled.global_tree_records
+        }
+        clearance_records: dict[str, Any] = {}
+        for record in clearance.records:
+            persistent_id = str(record.persistent_tree_id)
+            if persistent_id in clearance_records:
+                return None
+            clearance_records[persistent_id] = record
+        if set(clearance_records) != set(original_records):
+            return None
+        final_records = {
+            str(record.persistent_tree_id): record for record in final.global_tree_records
+        }
+        if not set(final_records) <= set(original_records):
+            return None
+        for persistent_id, record in final_records.items():
+            prior = clearance_records[persistent_id]
+            original = original_records[persistent_id]
+            if (
+                int(record.full_resolution_point_count)
+                != int(original.full_resolution_point_count)
+                or int(prior.tree_point_count) != int(record.full_resolution_point_count)
+                or getattr(prior, "persistent_tree_id", None)
+                != getattr(record, "persistent_tree_id", None)
+            ):
+                return None
+        new_tree_id = {
+            persistent_id: int(record.global_tree_id)
+            for persistent_id, record in final_records.items()
+        }
+        records = tuple(
+            replace(
+                clearance_records[persistent_id],
+                global_tree_id=new_tree_id[persistent_id],
+            )
+            for persistent_id in sorted(final_records, key=lambda key: new_tree_id[key])
+        )
+        danger_points = tuple(
+            replace(point, global_tree_id=new_tree_id[str(point.persistent_tree_id)])
+            for point in getattr(clearance, "danger_points", ())
+            if str(point.persistent_tree_id) in final_records
+        )
+        minima = [
+            float(record.minimum_clearance_m)
+            for record in records
+            if record.minimum_clearance_m is not None
+        ]
+        diagnostics = dict(clearance.diagnostics)
+        diagnostics.update(
+            {
+                "tree_count": len(records),
+                "evaluated_edge_total": sum(
+                    int(record.evaluated_edge_count) for record in records
+                ),
+                "danger_point_count": len(danger_points),
+                "clearance_broad_phase_points": sum(
+                    int(record.tree_point_count) for record in records
+                ),
+                "clearance_exact_points": sum(
+                    int(record.tree_point_count) for record in records
+                ),
+                "final_projection_source": "EXACT_DELETE_ONLY_FILTER",
+                "scientific_equivalence": "UNCHANGED_SURVIVOR_MEMBERSHIP_AND_WIRES",
+            }
+        )
+        return replace(
+            clearance,
+            records=records,
+            global_minimum_clearance_m=min(minima) if minima else None,
+            diagnostics=diagnostics,
+            danger_points=danger_points,
+        )
+
     def finalize(self, *, progress: Any = None) -> Any:
         """Persist edited memberships and return a finalized exportable result."""
 
         from core.stage_b.batch import BatchSpanStatus
 
+        total_started = time.perf_counter()
         if any(status is BatchSpanStatus.FAILED for status in self.result.span_statuses.values()):
             raise BatchTreeEditorError("FINALIZE_REQUIRES_NO_FAILED_SPANS")
         statuses = dict(self.result.span_statuses)
@@ -378,19 +504,35 @@ class BatchTreeEditor:
             raise BatchTreeEditorError("FINALIZE_REQUIRES_USER_REVIEW")
         if progress is not None:
             progress("APPLYING_EDITS")
+        final_projection_started = time.perf_counter()
         final_membership = self.persist()
         final = self.final_reconciled(final_membership)
+        final_projection_seconds = time.perf_counter() - final_projection_started
         final_clearance = self.result.final_clearance
         operation_count = len(self.session.operations)
+        wire_load_started = time.perf_counter()
         wire_results = [
             value.wire_result
             for value in self.result.span_results.values()
             if value.wire_result is not None
         ]
+        wire_load_seconds = time.perf_counter() - wire_load_started
         complete_wire_set = bool(wire_results) and len(wire_results) == len(
             self.result.span_statuses
         )
-        if complete_wire_set:
+        clearance_source = "UNAVAILABLE"
+        clearance_started = time.perf_counter()
+        if operation_count == 0 and self._clearance_matches_membership(
+            self.original_clearance, final
+        ):
+            final_clearance = self.original_clearance
+            clearance_source = "EXISTING_ANALYSIS_RESULT"
+        else:
+            projected_clearance = self._reuse_delete_only_clearance(final)
+            if projected_clearance is not None:
+                final_clearance = projected_clearance
+                clearance_source = "EXACT_DELETE_ONLY_FILTER"
+        if clearance_source == "UNAVAILABLE" and complete_wire_set:
             if progress is not None:
                 progress("RECALCULATING_CLEARANCE")
             from algorithms.spans.clearance import run_span_tree_wire_clearance
@@ -404,7 +546,8 @@ class BatchTreeEditor:
                 ),
                 acceleration_mode=self.acceleration_mode,
             )
-        elif operation_count > 0:
+            clearance_source = "FULL_EXACT_RECALCULATION"
+        elif clearance_source == "UNAVAILABLE" and operation_count > 0:
             # Partial wire geometry cannot be passed into the existing global
             # clearance function: it concatenates supplied wires and evaluates
             # every final tree against them.  Retaining pre-edit clearance would
@@ -423,16 +566,57 @@ class BatchTreeEditor:
                 # Keep the established desktop progress contract compatible;
                 # the exact invalidation reason is published in diagnostics.
                 progress("VALIDATING_CLEARANCE")
+        elif clearance_source == "UNAVAILABLE" and operation_count == 0:
+            # A prior DELETE publication may have fewer records than an UNDO
+            # projection.  Never label that subset as the restored result.
+            final_clearance = None
+            if progress is not None:
+                progress("VALIDATING_CLEARANCE")
         elif progress is not None:
             progress("VALIDATING_CLEARANCE")
+        clearance_calc_seconds = time.perf_counter() - clearance_started
+        clearance_diagnostics = (
+            dict(getattr(final_clearance, "diagnostics", {}) or {})
+            if final_clearance is not None
+            else {}
+        )
+        acceleration = dict(clearance_diagnostics.get("acceleration") or {})
+        gpu_effective = acceleration.get("effective_mode") == "GPU_CERTIFIED_CPU_EXACT"
+        performance = {
+            "TREE_LOAD_TIME": float(self.tree_load_seconds),
+            "WIRE_LOAD_TIME": float(wire_load_seconds),
+            "INDEX_BUILD_TIME": (
+                float(clearance_diagnostics.get("index_build_seconds", 0.0) or 0.0)
+                if clearance_source == "FULL_EXACT_RECALCULATION"
+                else 0.0
+            ),
+            "CLEARANCE_CALC_TIME": float(clearance_calc_seconds),
+            "RISK_UPDATE_TIME": 0.0,
+            "VIEWER_UPDATE_TIME": float(self.last_viewer_update_seconds),
+            "TOTAL_TIME": float(time.perf_counter() - total_started),
+            "FINAL_PROJECTION_TIME": float(final_projection_seconds),
+            "CLEARANCE_SOURCE": clearance_source,
+            "GPU_USED_FOR": (
+                "CERTIFIED_CLEARANCE_CANDIDATE_SCREENING"
+                if gpu_effective
+                else "NONE"
+            ),
+            "GPU_NOT_USED_FOR": (
+                "GROUND,HAG,WIRE_RECONSTRUCTION,TREE_MEMBERSHIP,DBH,RISK,VIEWER"
+            ),
+        }
         statuses = {span_id: BatchSpanStatus.FINALIZED for span_id in statuses}
+        batch_diagnostics = dict(self.result.batch_diagnostics)
+        batch_diagnostics["finalization_performance"] = performance
         self.result = replace(
             self.result,
             status="COMPLETE",
             span_statuses=statuses,
             global_reconciled=final,
             final_clearance=final_clearance,
+            batch_diagnostics=batch_diagnostics,
         )
+        self.finalization_performance = performance
         persist_final_danger_points(
             self.project_root,
             self.result.analysis_run_id,

@@ -63,6 +63,8 @@ def test_desktop_bridge_exports_required_methods_without_public_object_graph():
         "create_project",
         "import_point_cloud",
         "import_gis",
+        "export_excel",
+        "export_html",
     }
     assert all(callable(getattr(bridge, name)) for name in required)
     assert not hasattr(bridge, "window")

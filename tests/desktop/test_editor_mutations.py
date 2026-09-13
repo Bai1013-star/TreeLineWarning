@@ -215,6 +215,44 @@ def test_lightweight_display_numbering_matches_full_reconciliation(tmp_path: Pat
     assert lightweight == full
 
 
+def test_delete_and_undo_reset_done_state_and_drive_final_projection(tmp_path: Path):
+    workflow, _matrix, _polygon = ready(tmp_path)
+    workflow.finalize()
+    initial = workflow.final_projection()
+    editor = workflow._ensure_editor()
+    tree_id = int(editor.snapshot()["trees"][0]["tree_id"])
+    persistent_id = initial["trees"][0]["persistent_tree_id"]
+
+    workflow.select_editor_trees([tree_id])
+    deleted = workflow.delete_selected()
+
+    assert deleted["editor_revision"] == 1
+    assert workflow.editor_state()["step"] == "TREE_EDITING"
+    assert workflow._workflow["finalize_state"]["status"] == "IDLE"
+    assert persistent_id not in {
+        row["persistent_tree_id"] for row in workflow.final_projection()["trees"]
+    }
+    assert workflow.batch_projection()["tree_count_source"] == "EDITOR_FINAL_PROJECTION"
+    assert workflow.current_report()["status"] == "LOCKED"
+    with pytest.raises(ValueError, match="完成复核"):
+        workflow.export_prediction()
+
+    workflow.finalize()
+    assert persistent_id not in {
+        row["persistent_tree_id"] for row in workflow.current_report()["trees"]
+    }
+
+    workflow.undo_editor()
+    assert workflow.editor_state()["step"] == "TREE_EDITING"
+    assert persistent_id in {
+        row["persistent_tree_id"] for row in workflow.final_projection()["trees"]
+    }
+    workflow.finalize()
+    assert persistent_id in {
+        row["persistent_tree_id"] for row in workflow.current_report()["trees"]
+    }
+
+
 def request(base, path, payload=None):
     data = None if payload is None else json.dumps(payload).encode()
     req = urllib.request.Request(

@@ -300,7 +300,7 @@
       const futureAction = state.canPredict
         ? '<button data-action="open-future-preview">预测与模拟</button>'
         : '<button data-action="open-future-preview" disabled>预测与模拟 🔒</button>';
-      $('stageHost').innerHTML = stageCard('步骤 6 / 6', '结果已完成', '单木复核和档距结果已定稿。现在可以查看当前最终报告、实验性场景预览或导出预测输入。', `<button data-action="open-viewer">打开复核视图</button><button data-action="open-current-report">打开当前最终报告</button>${futureAction}<button class="primary" data-action="export-prediction">导出预测输入</button>`, `<div class="result-summary"><div class="summary-tile"><span>已定稿档距</span><b>${completed}</b></div><div class="summary-tile"><span>风险阈值</span><b>${esc(state.batch.risk_policy?.warning_clearance_threshold_m)} m</b></div><div class="summary-tile"><span>结果状态</span><b class="status-good">已完成</b></div></div>`);
+      $('stageHost').innerHTML = stageCard('步骤 6 / 6', '结果已完成', '单木复核和档距结果已定稿。现在可以查看当前最终报告、实验性场景预览或导出预测输入。', `<button data-action="open-viewer">打开复核视图</button><button data-action="open-current-report">打开当前最终报告</button>${futureAction}<button class="primary" data-action="export-prediction">导出预测输入</button><button data-action="export-html">导出 HTML 报告</button>`, `<div class="result-summary"><div class="summary-tile"><span>已定稿档距</span><b>${completed}</b></div><div class="summary-tile"><span>风险阈值</span><b>${esc(state.batch.risk_policy?.warning_clearance_threshold_m)} m</b></div><div class="summary-tile"><span>结果状态</span><b class="status-good">已完成</b></div></div>`);
     }
   }
 
@@ -571,10 +571,41 @@
   async function exportPrediction() {
     try {
       if (!state.finalized) { setStatus('请先完成当前项目的单木复核', 'warn'); return; }
-      window.open('/download_prediction', '_blank');
+      const bridge = nativeApi();
+      const result = bridge?.export_excel
+        ? await bridge.export_excel()
+        : await browserDownload('/download_prediction', 'Prediction_Input.xlsx');
+      if (result?.cancelled) { setStatus('已取消 Excel 导出', 'warn'); return; }
       await loadWorkspace();
-      setStatus('已请求导出 Prediction_Input.xlsx', 'good');
+      setStatus(`Excel 已保存${result?.path ? `：${result.path}` : ''}`, 'good');
     } catch (error) { setStatus(userError(error, '导出失败，请先完成单木复核。'), 'bad'); }
+  }
+  async function browserDownload(url, filename) {
+    const response = await fetch(url, {cache: 'no-store'});
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error?.message || `下载失败 (${response.status})`);
+    }
+    const anchor = document.createElement('a');
+    const objectUrl = URL.createObjectURL(await response.blob());
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    return {ok: true};
+  }
+  async function exportHtml() {
+    try {
+      if (!state.finalized) { setStatus('请先完成当前项目的单木复核', 'warn'); return; }
+      const bridge = nativeApi();
+      const result = bridge?.export_html
+        ? await bridge.export_html()
+        : await browserDownload('/download_report_html', 'TreeLineWarning_Current_Report.html');
+      if (result?.cancelled) { setStatus('已取消 HTML 导出', 'warn'); return; }
+      setStatus(`HTML 报告已保存${result?.path ? `：${result.path}` : ''}`, 'good');
+    } catch (error) { setStatus(userError(error, 'HTML 报告导出失败。'), 'bad'); }
   }
   async function saveRisk() {
     const value = Number($('riskThreshold').value);
@@ -606,6 +637,7 @@
   $('finalizeBatch').addEventListener('click', finalizeBatch);
   $('exportPrediction').addEventListener('click', exportPrediction);
   $('exportWorkOrder').addEventListener('click', exportPrediction);
+  $('exportHtml').addEventListener('click', exportHtml);
   $('saveRisk').addEventListener('click', saveRisk);
   $('stageHost').addEventListener('click', event => {
     const action = event.target.closest('[data-action]')?.dataset.action;
@@ -619,6 +651,7 @@
     else if (action === 'open-current-report') window.location.href = '/step3';
     else if (action === 'open-future-preview') openFuturePreview();
     else if (action === 'export-prediction') exportPrediction();
+    else if (action === 'export-html') exportHtml();
   });
   window.addEventListener('error', event => {
     console.error('Unhandled UI error', event.error || event.message);

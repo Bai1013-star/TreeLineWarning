@@ -168,7 +168,7 @@ def test_batch_publication_persists_exact_danger_points_before_viewer_open(tmp_p
     assert xyz.tolist() == [[0.0, 0.0, 2.5]]
 
 
-def test_tree_edit_invalidates_clearance_when_wire_set_cannot_be_recomputed(tmp_path) -> None:
+def test_whole_tree_delete_reuses_exact_survivor_clearance_without_wires(tmp_path) -> None:
     clearance = _clearance()
     result = _result(clearance)
     persist_final_danger_points(tmp_path, result.analysis_run_id, clearance)
@@ -183,15 +183,37 @@ def test_tree_edit_invalidates_clearance_when_wire_set_cannot_be_recomputed(tmp_
     stages: list[str] = []
     finalized = editor.finalize(progress=stages.append)
 
-    assert finalized.final_clearance is None
+    assert finalized.final_clearance is not None
+    assert [record.global_tree_id for record in finalized.final_clearance.records] == [1]
+    assert finalized.final_clearance.records[0].minimum_clearance_m == (
+        clearance.records[1].minimum_clearance_m
+    )
+    assert finalized.final_clearance.global_minimum_clearance_m == 0.9
+    assert finalized.final_clearance.danger_points == ()
     assert stages == ["APPLYING_EDITS", "VALIDATING_CLEARANCE"]
+    performance = finalized.batch_diagnostics["finalization_performance"]
+    assert performance["CLEARANCE_SOURCE"] == "EXACT_DELETE_ONLY_FILTER"
+    assert performance["INDEX_BUILD_TIME"] == 0.0
+    assert set(performance) >= {
+        "TREE_LOAD_TIME", "WIRE_LOAD_TIME", "INDEX_BUILD_TIME",
+        "CLEARANCE_CALC_TIME", "RISK_UPDATE_TIME", "VIEWER_UPDATE_TIME", "TOTAL_TIME",
+        "GPU_USED_FOR", "GPU_NOT_USED_FOR",
+    }
+    danger = load_final_danger_points(tmp_path, result.analysis_run_id)
+    assert danger is not None and len(danger[0]) == 0
+
+
+def test_merge_still_invalidates_clearance_when_wires_cannot_be_recomputed(tmp_path) -> None:
+    result = _result(_clearance())
+    editor = BatchTreeEditor(tmp_path, result, tree_ids_by_span={"span-a": (0, 1)})
+    editor.merge("span-a", [0, 1])
+
+    finalized = editor.finalize()
+
+    assert finalized.final_clearance is None
     assert finalized.global_reconciled.diagnostics["clearance_state"] == (
         "INVALIDATED_AFTER_TREE_EDIT"
     )
-    assert finalized.global_reconciled.diagnostics["clearance_reason"] == (
-        "INCOMPLETE_WIRE_RESULTS"
-    )
-    assert load_final_danger_points(tmp_path, result.analysis_run_id) is None
 
 
 def test_no_tree_edit_keeps_existing_clearance_when_runtime_wires_are_unavailable(
@@ -211,6 +233,9 @@ def test_no_tree_edit_keeps_existing_clearance_when_runtime_wires_are_unavailabl
     assert finalized.final_clearance is clearance
     assert stages == ["APPLYING_EDITS", "VALIDATING_CLEARANCE"]
     assert "clearance_state" not in finalized.global_reconciled.diagnostics
+    assert finalized.batch_diagnostics["finalization_performance"]["CLEARANCE_SOURCE"] == (
+        "EXISTING_ANALYSIS_RESULT"
+    )
 
 
 def test_dbh_failure_does_not_roll_back_finalized_clearance(tmp_path, monkeypatch) -> None:

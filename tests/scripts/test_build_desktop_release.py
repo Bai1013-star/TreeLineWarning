@@ -252,7 +252,7 @@ def test_prepare_writes_manifest_and_rejects_reuse(
 
     receipt = release.run_release(options)
     assert receipt["package_status"] == "PREPARED_ONLY"
-    package = options.dist_root / "TreeLineWarning"
+    package = options.dist_root / release.FINAL_PACKAGE_NAME
     manifest_path = package / "release_file_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     listed = {item["path"]: item for item in manifest["files"]}

@@ -956,6 +956,8 @@
 
   async function refreshCommittedDisplay(snapshot) {
     // Retain the server-confirmed journal count even when the display fetch fails.
+    state.workflowDone = false;
+    state.redirectOnDone = false;
     updateJournalCount(snapshot);
     byId('editmsg').textContent = '编辑已提交，正在刷新3D复核显示...';
     try {

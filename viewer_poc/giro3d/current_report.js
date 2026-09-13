@@ -32,6 +32,40 @@
     node.textContent = message;
   }
 
+  async function browserDownload(url, filename) {
+    const response = await fetch(url, {cache: 'no-store'});
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error?.message || `下载失败 (${response.status})`);
+    }
+    const objectUrl = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    return {ok: true};
+  }
+
+  async function saveReport(kind) {
+    try {
+      const bridge = window.pywebview?.api;
+      const excel = kind === 'excel';
+      const result = bridge?.[excel ? 'export_excel' : 'export_html']
+        ? await bridge[excel ? 'export_excel' : 'export_html']()
+        : await browserDownload(
+          excel ? '/download_prediction' : '/download_report_html',
+          excel ? 'Prediction_Input.xlsx' : 'TreeLineWarning_Current_Report.html'
+        );
+      if (result?.cancelled) { showStatus('已取消导出。', 'locked'); return; }
+      showStatus(`${excel ? 'Excel' : 'HTML 报告'}已保存${result?.path ? `：${result.path}` : ''}`);
+    } catch (error) {
+      showStatus(`导出失败：${error.message || error}`, 'error');
+    }
+  }
+
   function renderKpis(kpis = {}) {
     const cards = [
       ['最终全局单木', value(kpis.tree_count, 0)],
@@ -114,5 +148,7 @@
   }
 
   $('printReport').addEventListener('click', () => window.print());
+  $('downloadExcel').addEventListener('click', () => saveReport('excel'));
+  $('downloadHtml').addEventListener('click', () => saveReport('html'));
   load();
 })();

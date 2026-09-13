@@ -369,6 +369,17 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._exception_error(exc)
             return
+        if path == "/download_report_html":
+            try:
+                output = self.workflow.export_html_report()
+                self._send_bytes(
+                    output.read_bytes(),
+                    content_type="text/html; charset=utf-8",
+                    download_name="TreeLineWarning_Current_Report.html",
+                )
+            except Exception as exc:
+                self._exception_error(exc)
+            return
         self._error("未找到本地资源", status=HTTPStatus.NOT_FOUND)
 
     def _handle_post(self, path: str) -> None:

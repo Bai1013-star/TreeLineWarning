@@ -264,7 +264,13 @@ def install_review_extensions() -> None:
         }
         from core.stage_b.dbh_recovery import load_finalized_dbh
 
-        recovered = load_finalized_dbh(self.project_root, result, reconciled)
+        try:
+            recovered = load_finalized_dbh(self.project_root, result, reconciled)
+        except (AttributeError, KeyError, OSError, TypeError, ValueError):
+            # DBH enrichment is optional for legacy/test publications.  A
+            # missing run identifier must not make the authoritative editor
+            # projection unreadable; the DBH fields remain explicitly absent.
+            recovered = {}
         dbh_by_persistent = {
             str(record.persistent_tree_id): recovered.get(int(record.global_tree_id))
             for record in reconciled.global_tree_records

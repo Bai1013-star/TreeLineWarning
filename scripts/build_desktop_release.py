@@ -58,6 +58,7 @@ WEBVIEW2_RECEIPTS = (
 MAX_BUILD_TIMEOUT_SECONDS = 7_200.0
 BUILD_SCHEMA = "treeline-desktop-release-receipt-v1"
 MANIFEST_SCHEMA = "treeline-desktop-release-file-manifest-v1"
+FINAL_PACKAGE_NAME = "TreeLineWarning-Engineering-Release-2026-Final"
 
 
 class ReleaseError(RuntimeError):
@@ -545,7 +546,7 @@ def _render_version(
     proj_data: ProjData | None,
 ) -> str:
     lines = [
-        "TreeLineWarning Windows release candidate",
+        "TreeLineWarning Engineering Release 2026 Final",
         f"version = {version}",
         f"status = {status}",
         "baseline = Survey Core",
@@ -808,6 +809,32 @@ def _copy_package_metadata(
 ) -> dict[str, Any]:
     package_root.mkdir(parents=True, exist_ok=True)
     _copy_exact(options.guide_path, package_root / options.guide_path.name)
+    (package_root / "README.md").write_text(
+        "# TreeLineWarning Engineering Release 2026 Final\n\n"
+        "## 软件介绍\n\nTreeLineWarning 是 Windows x64 输电线路点云分析与单木复核工具。"
+        "本版本支持 LAS/LAZ 导入、AUTO 分析、3D 复核、DELETE/MERGE/UNDO，"
+        "以及 XLSX/HTML 最终报告导出。\n\n"
+        "## 系统要求\n\n- Windows 10/11 x64\n- 建议 16 GB 以上内存和足够的本地磁盘空间\n"
+        "- Microsoft Edge WebView2 Runtime；包内附离线安装程序\n"
+        "- GPU 可选，CPU fallback 为权威路径\n\n"
+        "## 安装运行方式\n\n完整解压 ZIP 到可写本地目录，保留 `_internal` 和所有相邻文件，"
+        "双击 `TreeLineWarning.exe`。"
+        "无需安装 Python、Conda 或 PDAL。\n\n"
+        "## LAS/LAZ 导入方法\n\n新建或打开项目，点击“导入点云”，选择 `.las` 或 `.laz`；"
+        "确认单位、杆塔顺序与档距。"
+        "中文路径和含空格路径受支持。\n\n"
+        "## 分析流程\n\n选择档距并执行 AUTO 分析；打开 3D 单木复核，使用 DELETE、MERGE、UNDO；"
+        "确认后点击“完成复核”生成 final state。原始分割保持只读，修改仅记录在 edits 层。\n\n"
+        "## 导出方法\n\n定稿后点击“导出预测输入”保存 `Prediction_Input.xlsx`，"
+        "或点击“导出 HTML 报告”。"
+        "两个导出均来自同一 final projection。\n\n"
+        "## 已知限制\n\n- 首次大型点云分析可能较慢，速度取决于磁盘与内存。\n"
+        "- GPU 仅用于经认证的净空候选筛选；精确距离判定仍由 CPU 完成。\n"
+        "- 编辑后必须重新完成复核才能导出，以防旧报告泄漏。\n"
+        "- 若系统缺少 WebView2，请由用户或 IT 手动运行包内离线安装程序。\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     (package_root / "QUICK_START.md").write_text(
         "# TreeLineWarning Quick Start\n\n"
         "1. Extract the entire folder to a writable local Windows x64 directory.\n"
@@ -819,7 +846,7 @@ def _copy_package_metadata(
         "5. New/Open Project > import LAS/LAZ > confirm units > towers/spans >\n"
         "   analyze (AUTO or SERIAL) > Tree Review > Finalize > current report/export.\n"
         "6. Close and restart, reopen the project, and verify finalized state/export.\n\n"
-        "Independent clean-PC acceptance is PENDING. Parallel is unavailable.\n"
+        "Parallel is unavailable in this release.\n"
         "Local future preview is experimental, not a validated forecast or safety result.\n"
         "See WINDOWS_USER_GUIDE.zh-CN.md and THIRD_PARTY_NOTICES.txt.\n",
         encoding="utf-8",
@@ -827,6 +854,25 @@ def _copy_package_metadata(
     )
     _copy_exact(options.notice_text, package_root / "THIRD_PARTY_NOTICES.txt")
     _copy_exact(options.notice_json, package_root / "THIRD_PARTY_NOTICES.json")
+    _copy_exact(options.notice_text, package_root / "licenses" / "THIRD_PARTY_NOTICES.txt")
+    _copy_exact(options.notice_json, package_root / "licenses" / "THIRD_PARTY_NOTICES.json")
+    (package_root / "examples" / "README.md").parent.mkdir(parents=True, exist_ok=True)
+    (package_root / "examples" / "README.md").write_text(
+        "# Examples\n\nUse your own LAS/LAZ data. This directory is intentionally "
+        "data-free so the release stays compact.\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (package_root / "configs" / "default.json").parent.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        package_root / "configs" / "default.json",
+        {
+            "schema": "treeline-engineering-release-config-v1",
+            "execution_mode": "AUTO",
+            "acceleration_mode": "AUTO",
+            "scientific_configuration": "BUILT_IN_FROZEN_DEFAULTS",
+        },
+    )
     (package_root / "VERSION.txt").write_text(
         _render_version(
             version=version,
@@ -925,9 +971,16 @@ def run_release(options: ReleaseOptions) -> dict[str, Any]:
         "timed_out": False,
         "elapsed_seconds": 0.0,
     }
-    package_root = options.dist_root / "TreeLineWarning"
+    pyinstaller_package_root = options.dist_root / "TreeLineWarning"
+    package_root = options.dist_root / FINAL_PACKAGE_NAME
     if options.execute:
         process = _run_pyinstaller(options, options.work_root)
+        if (
+            process.get("returncode") == 0
+            and pyinstaller_package_root.is_dir()
+            and not package_root.exists()
+        ):
+            pyinstaller_package_root.replace(package_root)
         source_end = tracked_source_digest()
         build_ok = (
             process.get("returncode") == 0

@@ -5,11 +5,15 @@ from __future__ import annotations
 import argparse
 import json
 import multiprocessing
+import os
+import shutil
 import sys
 import threading
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+from uuid import uuid4
 
 from desktop.packaged_diagnostics import (
     PackagedPrerequisiteError,
@@ -205,6 +209,62 @@ class DesktopApi:
             return None
         descriptor = import_gis_file(self._backend.project_root, Path(selected[0]))
         return self._configure_project(Path(descriptor["root"]))
+
+    def _save_generated_file(
+        self,
+        source: Path,
+        *,
+        save_filename: str,
+        file_types: tuple[str, ...],
+    ) -> dict[str, Any]:
+        """Use WebView2's native save dialog, then publish with atomic replace."""
+
+        if self._window is None:
+            return {"ok": False, "cancelled": True}
+        import webview
+
+        selected = self._window.create_file_dialog(
+            webview.SAVE_DIALOG,
+            directory="",
+            allow_multiple=False,
+            save_filename=save_filename,
+            file_types=file_types,
+        )
+        if not selected:
+            return {"ok": False, "cancelled": True}
+        target = Path(selected[0])
+        expected_suffix = Path(save_filename).suffix
+        if expected_suffix and not target.suffix:
+            target = target.with_suffix(expected_suffix)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.resolve() != target.resolve():
+            temporary = target.with_name(target.name + "." + uuid4().hex + ".tmp")
+            try:
+                shutil.copyfile(source, temporary)
+                os.replace(temporary, target)
+            finally:
+                temporary.unlink(missing_ok=True)
+        return {"ok": True, "path": str(target.resolve()), "bytes": target.stat().st_size}
+
+    def export_excel(self) -> dict[str, Any]:
+        if self._backend.local_app is None:
+            raise RuntimeError("当前项目后端尚未就绪")
+        source = self._backend.local_app.workflow.export_prediction()
+        return self._save_generated_file(
+            source,
+            save_filename="Prediction_Input.xlsx",
+            file_types=("Excel workbook (*.xlsx)",),
+        )
+
+    def export_html(self) -> dict[str, Any]:
+        if self._backend.local_app is None:
+            raise RuntimeError("当前项目后端尚未就绪")
+        source = self._backend.local_app.workflow.export_html_report()
+        return self._save_generated_file(
+            source,
+            save_filename="TreeLineWarning_Current_Report.html",
+            file_types=("HTML report (*.html)",),
+        )
 
 
 def _write_diagnostic(path: Path | None, payload: dict) -> int:

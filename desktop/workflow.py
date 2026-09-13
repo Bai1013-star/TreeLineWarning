@@ -1199,6 +1199,42 @@ class DesktopWorkflow:
         global_tree_count = global_reconciliation.get("tree_count")
         if type(global_tree_count) is not int or global_tree_count < 0:
             global_tree_count = None
+        tree_count_source = "PERSISTED_GLOBAL_RECONCILIATION"
+        # Once the editor is hydrated, its replayed journal is the live final
+        # projection.  Never put a pre-edit count back on the dashboard while
+        # DELETE/MERGE/UNDO is awaiting republication.
+        editor = getattr(self, "_editor", None)
+        if editor is not None:
+            current = self._editor_snapshot(editor)
+            visible_ids = {
+                int(item["tree_id"])
+                for item in current.get("trees", [])
+                if item.get("tree_id") is not None
+            }
+            global_tree_count = int(current.get("current_tree_count", len(visible_ids)))
+            tree_count_source = "EDITOR_FINAL_PROJECTION"
+            clearance_records = (
+                final_clearance.get("records")
+                if isinstance(final_clearance, Mapping)
+                else ()
+            )
+            risk_counts, unavailable_risk_count = _risk_counts_from_saved_clearance(
+                [
+                    item
+                    for item in (clearance_records or ())
+                    if isinstance(item, Mapping)
+                    and int(item.get("global_tree_id", -1)) in visible_ids
+                ],
+                policy,
+            )
+            unavailable_risk_count += len(
+                visible_ids
+                - {
+                    int(item.get("global_tree_id", -1))
+                    for item in (clearance_records or ())
+                    if isinstance(item, Mapping)
+                }
+            )
         selected = set(self._workflow.get("selected_span_ids") or [])
         spans = []
         source_preparation_failed = False
@@ -1257,7 +1293,7 @@ class DesktopWorkflow:
             # of adding those summaries together.
             "global_reconciliation_tree_count": global_tree_count,
             "final_tree_count": global_tree_count,
-            "tree_count_source": "PERSISTED_GLOBAL_RECONCILIATION",
+            "tree_count_source": tree_count_source,
             "error": self._batch_error or self._workflow.get("last_error"),
             "risk_policy": policy.to_dict(),
             "risk_counts": risk_counts,
@@ -1710,6 +1746,17 @@ class DesktopWorkflow:
         )
         # No fallible rebuild follows the durable commit point.
         editor.session = working.session
+        with self._lock:
+            self._finalize_stage = "IDLE"
+            self._finalize_message = ""
+            self._finalize_error = None
+            self._finalize_detail = None
+            self._workflow["finalize_state"] = {
+                "status": "IDLE",
+                "run_id": self._finalize_run_id(editor),
+                "editor_revision": int(editor.session.revision),
+            }
+            self._save_workflow()
         self._editor_snapshot_cache = None
         self._editor_display_cache = None
         delta_started = time.perf_counter()
@@ -1725,6 +1772,7 @@ class DesktopWorkflow:
                 "revision": int(editor.session.revision),
             }
         timings["viewer_artifact_rebuild"] = time.perf_counter() - delta_started
+        editor.last_viewer_update_seconds = timings["viewer_artifact_rebuild"]
         snapshot["editor_revision"] = int(editor.session.revision)
         snapshot["timings_seconds"] = timings
         try:
@@ -1926,12 +1974,27 @@ class DesktopWorkflow:
                 self._set_finalize_stage(stage, export_messages[stage])
 
             path = self._root / "exports" / "Prediction_Input.xlsx"
-            export_batch_prediction(
-                self._result,
-                path,
-                final_reconciled=self._result.global_reconciled,
-                progress=export_progress,
-            )
+            export_timings: dict[str, float] = {}
+            export_kwargs: dict[str, Any] = {
+                "final_reconciled": self._result.global_reconciled,
+                "progress": export_progress,
+            }
+            if "timing_sink" in inspect.signature(export_batch_prediction).parameters:
+                export_kwargs["timing_sink"] = export_timings
+            export_batch_prediction(self._result, path, **export_kwargs)
+            if export_timings:
+                diagnostics = dict(self._result.batch_diagnostics)
+                performance = dict(diagnostics.get("finalization_performance") or {})
+                performance.update(export_timings)
+                performance["TOTAL_TIME"] = float(
+                    performance.get("TOTAL_TIME", 0.0)
+                    + export_timings.get("EXPORT_TOTAL_TIME", 0.0)
+                )
+                diagnostics["finalization_performance"] = performance
+                self._result = replace(self._result, batch_diagnostics=diagnostics)
+                editor.result = self._result
+                editor.finalization_performance = performance
+                editor._write_json(editor.artifact_root / "batch.json", self._result.to_dict())
             self._log(
                 "tree_editor_finalized",
                 analysis_run_id=self._result.analysis_run_id,
@@ -2145,6 +2208,16 @@ class DesktopWorkflow:
 
         return build_current_report(self)
 
+    def export_html_report(self) -> Path:
+        """Write a self-contained report from the same gated final projection."""
+
+        from desktop.report_export import write_current_report_html
+
+        path = self._root / "exports" / "TreeLineWarning_Current_Report.html"
+        output = write_current_report_html(self, path)
+        self._log("html_report_export", path=str(output))
+        return output
+
     def future_preview(self, horizon_years: int = 1) -> dict[str, Any]:
         """Build a detached experimental view; never publish current science."""
 
@@ -2159,10 +2232,30 @@ class DesktopWorkflow:
         if self._result is None:
             self._result = editor.result
         snapshot = self._editor_snapshot(editor)
-        reconciled = self._result.global_reconciled
+        editor_revision = int(
+            getattr(editor.session, "revision", len(editor.session.operations))
+        )
+        published_editor_revision = (
+            (getattr(self._result, "batch_diagnostics", {}) or {})
+            .get("editor_publication", {})
+            .get("operation_count")
+        )
+        final_reconciled = getattr(editor, "final_reconciled", None)
+        reconciled = (
+            final_reconciled()
+            if callable(final_reconciled)
+            else self._result.global_reconciled
+        )
         records = {
             int(record.global_tree_id): record
             for record in (reconciled.global_tree_records if reconciled is not None else ())
+        }
+        clearance_by_persistent = {
+            str(record.persistent_tree_id): record
+            for record in (
+                self._result.final_clearance.records if self._result.final_clearance else ()
+            )
+            if getattr(record, "persistent_tree_id", None) is not None
         }
         clearance_by_tree = {
             int(record.global_tree_id): record
@@ -2170,12 +2263,22 @@ class DesktopWorkflow:
                 self._result.final_clearance.records if self._result.final_clearance else ()
             )
         }
+        persisted_by_persistent = {
+            str(item.get("persistent_tree_id")): item
+            for item in self._final_tree_records.values()
+            if item.get("persistent_tree_id") is not None
+        }
         rows = []
         for tree in snapshot.get("trees", []):
             tree_id = int(tree.get("tree_id"))
             record = records.get(tree_id)
-            persisted_record = self._final_tree_records.get(tree_id, {})
-            clearance = clearance_by_tree.get(tree_id)
+            persistent_id = (
+                record.persistent_tree_id if record is not None else f"tree-{tree_id}"
+            )
+            persisted_record = persisted_by_persistent.get(str(persistent_id), {})
+            clearance = clearance_by_persistent.get(
+                str(persistent_id), clearance_by_tree.get(tree_id)
+            )
             minimum = None if clearance is None else clearance.minimum_clearance_m
             current_risk = None
             record_review = bool(persisted_record.get("review", record.review if record else False))
@@ -2237,6 +2340,10 @@ class DesktopWorkflow:
                 else self.editor_data()
             ),
             "metadata": {
+                "state_source": "EDITOR_FINAL_PROJECTION",
+                "editor_revision": editor_revision,
+                "published_editor_revision": published_editor_revision,
+                "revision_current": published_editor_revision == editor_revision,
                 "tree_backend": "CROWN_STEM_HYBRID",
                 "wire_exclusion_policy": "EXACT_ORIGINAL_INDEX",
                 "risk_policy": self._risk_policy().to_dict(),
