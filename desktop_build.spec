@@ -354,4 +354,18 @@ def _retain_staged_sqlite(entries):
 a.binaries = _retain_staged_sqlite(a.binaries)
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="TreeLineWarning", console=False)
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="TreeLineWarning")
+package_directory_name = os.environ.get(
+    "TREELINE_PACKAGE_DIR_NAME", "TreeLineWarning"
+).strip()
+if not package_directory_name or any(
+    character in package_directory_name for character in '<>:"/\\|?*'
+):
+    raise SystemExit("TREELINE_PACKAGE_DIR_NAME is not a safe Windows directory name")
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name=package_directory_name,
+)

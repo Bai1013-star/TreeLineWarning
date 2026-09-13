@@ -680,6 +680,7 @@ def _run_pyinstaller(options: ReleaseOptions, work_root: Path) -> dict[str, Any]
     env = os.environ.copy()
     env["TREELINE_PDAL_RUNTIME_ENV"] = str(options.native_runtime)
     env["TREELINE_COMPAT_DLL_ROOT"] = str(options.native_runtime / "compat")
+    env["TREELINE_PACKAGE_DIR_NAME"] = FINAL_PACKAGE_NAME
     if options.proj_data_root is not None:
         env["TREELINE_PDAL_PROJ_DATA_ROOT"] = str(options.proj_data_root)
     for name in (
@@ -772,6 +773,7 @@ def _run_pyinstaller(options: ReleaseOptions, work_root: Path) -> dict[str, Any]
         "environment": {
             "TREELINE_PDAL_RUNTIME_ENV": str(options.native_runtime),
             "TREELINE_COMPAT_DLL_ROOT": str(options.native_runtime / "compat"),
+            "TREELINE_PACKAGE_DIR_NAME": FINAL_PACKAGE_NAME,
             "TREELINE_PDAL_PROJ_DATA_ROOT": (
                 str(options.proj_data_root) if options.proj_data_root is not None else None
             ),
