@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 from core.stage_b import BatchSpanStatus
 from core.stage_b.dbh_recovery import DBH_FIELDS
+from core.stage_b.final_generation import derived_generation_map
 from core.stage_b.measurement_fields import CLEARANCE_FIELDS
 
 CURRENT_REPORT_SCHEMA = "treeline-current-final-report-v1"
@@ -326,6 +327,10 @@ def current_finalized_gate(workflow: Any, *, hydrate_editor: bool = True) -> dic
     revision_match: bool | None = None
     published_operation_count = None
     operation_count = None
+    generation_status = "UNVERIFIED"
+    final_generation_id = None
+    result_generation_id = None
+    risk_generation_id = None
     if batch_path is None or not batch_path.is_file():
         _append_reason(reasons, "缺少批次发布文件")
     else:
@@ -362,11 +367,72 @@ def current_finalized_gate(workflow: Any, *, hydrate_editor: bool = True) -> dic
             try:
                 from desktop.review_extensions import _result_matches_editor_revision
 
+                # Editor hydration may replace the analysis-time original
+                # result with the replayed final object.  Always audit that
+                # current object, never the pre-hydration local reference.
+                result = getattr(workflow, "_result", None) or result
                 revision_match = bool(_result_matches_editor_revision(editor, result))
             except (AttributeError, TypeError, ValueError):
                 revision_match = False
             if not revision_match:
                 _append_reason(reasons, "当前编辑修订与最终归并结果不一致")
+            else:
+                reconciled = getattr(result, "global_reconciled", None)
+                final_records = tuple(
+                    getattr(reconciled, "global_tree_records", ()) or ()
+                )
+                final_generation_id = (
+                    getattr(reconciled, "diagnostics", {}) or {}
+                ).get("final_generation_id")
+                generations = derived_generation_map(result)
+                result_generation_id = generations.get("result_generation_id")
+                risk_generation_id = generations.get("risk_generation_id")
+                published_final = generations.get("final_generation_id")
+                clearance = getattr(result, "final_clearance", None)
+                clearance_records = tuple(
+                    getattr(clearance, "records", ()) or ()
+                )
+                final_by_id = {
+                    str(record.persistent_tree_id): int(
+                        record.full_resolution_point_count
+                    )
+                    for record in final_records
+                }
+                clearance_by_id = {
+                    str(record.persistent_tree_id): int(record.tree_point_count)
+                    for record in clearance_records
+                }
+                # A finalized batch may legitimately have no clearance product
+                # (for example, no reconstructable wires).  When a clearance
+                # product exists it must cover the exact final tree generation;
+                # absence is represented explicitly instead of being mistaken
+                # for a stale, empty generation.
+                if clearance is not None and final_by_id != clearance_by_id:
+                    _append_reason(reasons, "净空/风险来源与最终单木代次不一致")
+                marker_values = [
+                    published_final,
+                    result_generation_id,
+                    risk_generation_id,
+                ]
+                present_markers = [value for value in marker_values if value]
+                if present_markers:
+                    if (
+                        not final_generation_id
+                        or any(value != final_generation_id for value in present_markers)
+                        or len(present_markers) != len(marker_values)
+                    ):
+                        _append_reason(reasons, "派生结果代次与最终单木代次不一致")
+                        generation_status = "MISMATCH"
+                    else:
+                        generation_status = "VERIFIED"
+                elif (
+                    (clearance is None or final_by_id == clearance_by_id)
+                    and final_generation_id
+                ):
+                    # Baseline projects predate explicit markers.  They remain
+                    # readable only after exact journal replay and membership /
+                    # clearance identity validation above.
+                    generation_status = "INFERRED_VALIDATED_LEGACY"
 
     return {
         "status": "PASS" if not reasons else "LOCKED",
@@ -382,6 +448,10 @@ def current_finalized_gate(workflow: Any, *, hydrate_editor: bool = True) -> dic
         "editor_operation_count": operation_count,
         "journal_mtime_ns": journal_mtime_ns,
         "batch_mtime_ns": batch_mtime_ns,
+        "generation_status": generation_status,
+        "final_generation_id": final_generation_id,
+        "result_generation_id": result_generation_id or final_generation_id,
+        "risk_generation_id": risk_generation_id or final_generation_id,
         "reasons": reasons,
     }
 
@@ -586,6 +656,46 @@ def _current_row(row: Any) -> dict[str, Any]:
     return output
 
 
+def _cached_export_rows(workflow: Any, result: Any) -> list[dict[str, Any]] | None:
+    """Load already-computed final metrics from the generation-bound XLSX.
+
+    Opening the result page must not rescan tens of millions of final member
+    points merely to reproduce values that finalization already exported.
+    The workflow cache validator checks run identity, exact tree inventory and
+    (for current publications) the final generation before these rows are used.
+    """
+
+    path = _project_root(workflow) / "exports" / "Prediction_Input.xlsx"
+    validator = getattr(workflow, "_prediction_export_cache_matches_final", None)
+    if not path.is_file() or not callable(validator):
+        return None
+    try:
+        if not validator(path, result):
+            return None
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(path, read_only=True, data_only=True)
+        try:
+            sheet = workbook["Trees"]
+            values = sheet.iter_rows(values_only=True)
+            headers = [str(value) if value is not None else "" for value in next(values)]
+            rows = []
+            for raw in values:
+                if not any(value is not None for value in raw):
+                    continue
+                source = {
+                    headers[index]: value
+                    for index, value in enumerate(raw)
+                    if index < len(headers) and headers[index]
+                }
+                rows.append(_current_row(source))
+            return rows
+        finally:
+            workbook.close()
+    except (ImportError, KeyError, OSError, StopIteration, TypeError, ValueError):
+        return None
+
+
 def _kpis(rows: list[dict[str, Any]], result: Any) -> dict[str, Any]:
     clearance = getattr(result, "final_clearance", None)
     minimum = getattr(clearance, "global_minimum_clearance_m", None)
@@ -651,8 +761,16 @@ def build_current_report(workflow: Any) -> dict[str, Any]:
             "message": "当前最终结果暂时不可用，请重新打开项目。",
         }
     try:
-        projection = workflow.final_projection(persist_display_evidence=False)
-        rows = [_current_row(row) for row in projection.get("trees", [])]
+        setattr(workflow, "_skip_final_projection_metrics", True)
+        try:
+            projection = workflow.final_projection(persist_display_evidence=False)
+        finally:
+            setattr(workflow, "_skip_final_projection_metrics", False)
+        rows = _cached_export_rows(workflow, result)
+        row_source = "GENERATION_BOUND_PREDICTION_XLSX"
+        if rows is None:
+            rows = [_current_row(row) for row in projection.get("trees", [])]
+            row_source = projection.get("metadata", {}).get("tree_metrics_source")
         display = {
             "trees3d": _bounded_tree_display(
                 projection.get("display"), max_points=MAX_TREE_DISPLAY_POINTS
@@ -675,6 +793,11 @@ def build_current_report(workflow: Any) -> dict[str, Any]:
         "wires": wires,
         "metadata": {
             "tree_metrics_source": projection.get("metadata", {}).get("tree_metrics_source"),
+            "row_source": row_source,
+            "final_generation_id": gate.get("final_generation_id"),
+            "result_generation_id": gate.get("result_generation_id"),
+            "risk_generation_id": gate.get("risk_generation_id"),
+            "report_generation_id": gate.get("final_generation_id"),
             "wire_source": wires["source"],
             "wire_geometry_kind": wires["geometry_kind"],
             "coordinate_space": wires["coordinate_space"],

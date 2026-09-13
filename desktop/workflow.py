@@ -27,6 +27,7 @@ from zipfile import BadZipFile
 import numpy as np
 from algorithms.folder_pipeline.tree_editor import load_edits_payload
 from algorithms.spans.project_adapter import SourceSharedPreparation, SpanScienceResult
+from algorithms.spans.reconcile import GlobalTreeRecord, TreeReconciliationResult
 from core.config.fast_baseline import canonical_digest
 from core.stage_a import (
     CapabilityState,
@@ -112,6 +113,109 @@ def _load_json(path: Path) -> dict[str, Any] | None:
     except (OSError, ValueError, json.JSONDecodeError):
         return None
     return value if isinstance(value, dict) else None
+
+
+def _global_record_from_dict(raw: Mapping[str, Any]) -> GlobalTreeRecord:
+    return GlobalTreeRecord(
+        global_tree_id=int(raw["global_tree_id"]),
+        line_id=int(raw["line_id"]),
+        span_id=int(raw["span_id"]),
+        span_name=str(raw["span_name"]),
+        external_name=str(raw["external_name"]),
+        primary_span_tree_id=int(raw["primary_span_tree_id"]),
+        apex_xy_local_m=tuple(float(value) for value in raw["apex_xy_local_m"]),
+        apex_height_m=float(raw["apex_height_m"]),
+        full_resolution_point_count=int(raw["full_resolution_point_count"]),
+        core_point_count=int(raw["core_point_count"]),
+        halo_point_count=int(raw["halo_point_count"]),
+        core_fraction=float(raw["core_fraction"]),
+        review=bool(raw["review"]),
+        merged_span_tree_keys=tuple(
+            (int(pair[0]), int(pair[1]))
+            for pair in raw.get("merged_span_tree_keys", ())
+        ),
+        persistent_tree_id=raw.get("persistent_tree_id"),
+        identity_state=str(raw.get("identity_state", "RUN_LOCAL_ONLY")),
+        candidate_persistent_tree_ids=tuple(
+            str(value) for value in raw.get("candidate_persistent_tree_ids", ())
+        ),
+        longitudinal_s_m=raw.get("longitudinal_s_m"),
+        lateral_n_m=raw.get("lateral_n_m"),
+        span_order_index=raw.get("span_order_index"),
+    )
+
+
+def _load_finalized_reconciliation(
+    artifact_root: Path,
+    manifest: Mapping[str, Any],
+    original: TreeReconciliationResult,
+) -> TreeReconciliationResult:
+    """Load and verify the durable final membership published by review."""
+
+    global_payload = manifest.get("global_reconciliation")
+    if not isinstance(global_payload, Mapping):
+        raise ValueError("FINAL_PUBLICATION_MISSING")
+    raw_records = global_payload.get("trees")
+    if not isinstance(raw_records, list):
+        raise ValueError("FINAL_PUBLICATION_RECORDS_MISSING")
+    records = tuple(_global_record_from_dict(raw) for raw in raw_records)
+    path = artifact_root / "tree_segmentation_final.npz"
+    with np.load(path, allow_pickle=False) as arrays:
+        final_index = np.asarray(arrays["original_index"], dtype=np.int64)
+        final_xyz = np.asarray(arrays["xyz_local_m"], dtype=np.float64)
+        final_tree = np.asarray(arrays["tree_id"], dtype=np.int32)
+    if (
+        final_index.ndim != 1
+        or final_tree.shape != final_index.shape
+        or final_xyz.shape != (len(final_index), 3)
+        or len(final_index) != len(np.unique(final_index))
+    ):
+        raise ValueError("FINAL_PUBLICATION_MEMBERSHIP_INVALID")
+    record_ids = {int(record.global_tree_id) for record in records}
+    member_ids = {int(value) for value in np.unique(final_tree) if int(value) >= 0}
+    if member_ids != record_ids:
+        raise ValueError("FINAL_PUBLICATION_TREE_IDS_MISMATCH")
+    if any(
+        int(np.count_nonzero(final_tree == record.global_tree_id))
+        != int(record.full_resolution_point_count)
+        for record in records
+    ):
+        raise ValueError("FINAL_PUBLICATION_POINT_COUNTS_MISMATCH")
+    diagnostics = dict(global_payload.get("diagnostics") or {})
+    operation_count = diagnostics.get("editor_operation_count")
+    if type(operation_count) is not int or operation_count < 0:
+        raise ValueError("FINAL_PUBLICATION_EDITOR_REVISION_INVALID")
+    from core.stage_b.final_generation import final_generation_id
+
+    computed_generation = final_generation_id(
+        str(manifest["analysis_run_id"]), records, operation_count
+    )
+    published_generation = diagnostics.get("final_generation_id")
+    if published_generation and published_generation != computed_generation:
+        raise ValueError("FINAL_GENERATION_MISMATCH")
+    diagnostics.update(
+        {
+            "original_tree_count": len(original.global_tree_records),
+            "global_tree_count": len(records),
+            "final_generation_id": computed_generation,
+        }
+    )
+    span_map = {
+        key: int(record.global_tree_id)
+        for record in records
+        for key in record.merged_span_tree_keys
+    }
+    return TreeReconciliationResult(
+        global_tree_records=records,
+        final_original_index=final_index,
+        final_xyz_local_m=final_xyz,
+        final_tree_id=final_tree,
+        review_tree_ids=tuple(
+            int(record.global_tree_id) for record in records if record.review
+        ),
+        span_tree_to_global=span_map,
+        diagnostics=diagnostics,
+    )
 
 
 def _dynamic_risk_snapshot(policy: RiskPolicy) -> dict[str, Any]:
@@ -295,6 +399,7 @@ class DesktopWorkflow:
         self._finalize_error: str | None = None
         self._finalize_detail: str | None = None
         self._final_tree_records: dict[int, dict[str, Any]] = {}
+        self._analysis_stage_started: dict[str, float] = {}
         self._root = project_root.resolve()
         self._desktop_home = desktop_home
         self._logger = logging.getLogger(f"treeline.desktop.{id(self)}")
@@ -332,6 +437,7 @@ class DesktopWorkflow:
         self._finalize_error = None
         self._finalize_detail = None
         self._final_tree_records = {}
+        self._analysis_stage_started = {}
         manifest = _load_json(self._manifest_path()) or {}
         if manifest.get("schema_version") not in {None, WORKFLOW_SCHEMA}:
             self._log("workflow_manifest_ignored", reason="unsupported_schema")
@@ -344,6 +450,7 @@ class DesktopWorkflow:
             "last_batch_status": manifest.get("last_batch_status"),
             "last_error": manifest.get("last_error"),
             "finalize_state": dict(manifest.get("finalize_state") or {}),
+            "analysis_progress": list(manifest.get("analysis_progress") or []),
             "updated_at": manifest.get("updated_at", _now()),
         }
         self._log("project_open", project_root=str(self._root))
@@ -359,6 +466,45 @@ class DesktopWorkflow:
     def _save_workflow(self) -> None:
         self._workflow["updated_at"] = _now()
         _atomic_json(self._manifest_path(), self._workflow)
+
+    def _analysis_progress_update(
+        self, stage: str, backend: str, status: str
+    ) -> None:
+        """Publish one truthful scheduler stage without inventing parallel work."""
+
+        from core.stage_b.runtime_profile import STAGE_ORDER
+
+        now = time.perf_counter()
+        current = {
+            str(item.get("stage")): dict(item)
+            for item in (self._workflow.get("analysis_progress") or [])
+            if isinstance(item, Mapping) and item.get("stage")
+        }
+        for name in STAGE_ORDER:
+            current.setdefault(
+                name,
+                {
+                    "stage": name,
+                    "status": "PENDING",
+                    "backend": "UNKNOWN",
+                    "cache": "UNKNOWN",
+                    "elapsed_seconds": None,
+                },
+            )
+        item = current.setdefault(stage, {"stage": stage})
+        item.update(backend=backend, status=status)
+        if status == "RUNNING":
+            self._analysis_stage_started[stage] = now
+        elif stage in self._analysis_stage_started:
+            item["elapsed_seconds"] = now - self._analysis_stage_started.pop(stage)
+        if status == "CACHED":
+            item["cache"] = "HIT"
+        elif status in {"DONE", "FAILED"} and item.get("cache") == "UNKNOWN":
+            item["cache"] = "MISS" if stage == "CACHE_BUILD" else "N/A"
+        self._workflow["analysis_progress"] = [
+            current[name] for name in STAGE_ORDER if name != "TOTAL"
+        ]
+        self._save_workflow()
 
     def _stage_project(self) -> Project:
         with self._lock:
@@ -457,30 +603,20 @@ class DesktopWorkflow:
                 self._root, project, scan.scan_id, risk_policy=self._risk_policy()
             )
             global_reconciled = scheduler._load_persisted_global(str(manifest["analysis_run_id"]))
-            # The persisted global sidecar deliberately stays at the immutable
-            # pre-editor membership so TreeEditSession can replay its journal.
-            # Finalization metadata, however, is published in batch.json. Keep
-            # the two revision markers when hydrating so exact post-editor
-            # clearance/danger evidence is not incorrectly marked stale.
-            published_diagnostics = dict(
-                (manifest.get("global_reconciliation") or {}).get("diagnostics") or {}
-            )
-            if global_reconciled is not None and published_diagnostics.get(
-                "editor_schema"
-            ) == "treeline-stage-b-batch-editor-v1":
-                operation_count = published_diagnostics.get("editor_operation_count")
-                if type(operation_count) is int:
-                    diagnostics = dict(global_reconciled.diagnostics)
-                    diagnostics.update(
-                        {
-                            "editor_schema": "treeline-stage-b-batch-editor-v1",
-                            "editor_operation_count": operation_count,
-                        }
-                    )
-                    global_reconciled = replace(
-                        global_reconciled,
-                        diagnostics=diagnostics,
-                    )
+            # This sidecar and membership NPZ are intentionally immutable
+            # analysis-time originals.  Do not copy post-editor revision marks
+            # onto them: doing so made an original 15-tree object look current
+            # after restart while batch.json and the edit journal described 10.
+            # ``_ensure_editor`` replays the journal and replaces the runtime
+            # result with the verified final projection.
+            if global_reconciled is not None and statuses and all(
+                status is BatchSpanStatus.FINALIZED for status in statuses.values()
+            ):
+                global_reconciled = _load_finalized_reconciliation(
+                    artifact_root,
+                    manifest,
+                    global_reconciled,
+                )
             return BatchAnalysisResult(
                 analysis_run_id=str(manifest["analysis_run_id"]),
                 project_id=str(manifest["project_id"]),
@@ -996,6 +1132,8 @@ class DesktopWorkflow:
                     kwargs["execution_mode"] = execution_mode
                 if "acceleration_mode" in inspect.signature(BatchAnalysisScheduler).parameters:
                     kwargs["acceleration_mode"] = acceleration_mode
+                if "progress_callback" in inspect.signature(BatchAnalysisScheduler).parameters:
+                    kwargs["progress_callback"] = self._analysis_progress_update
                 if mode == "FIXTURE":
                     kwargs.update(
                         {
@@ -1094,6 +1232,21 @@ class DesktopWorkflow:
                     "acceleration_mode": acceleration_mode,
                     "source_cache_hint": source_cache_hint,
                     "finalize_state": {"run_id": run_id, "status": "IDLE"},
+                    "analysis_progress": [
+                        {
+                            "stage": name,
+                            "status": "PENDING",
+                            "backend": "UNKNOWN",
+                            "cache": "UNKNOWN",
+                            "elapsed_seconds": None,
+                        }
+                        for name in (
+                            "RAW_IMPORT", "LAS_LAZ_DECODE", "PDAL_PROCESSING",
+                            "CACHE_BUILD", "GROUND", "HAG", "WIRE",
+                            "VEGETATION", "TREE_SEGMENTATION", "SPAN_ORGANIZATION",
+                            "CLEARANCE", "RISK", "REPORT_BUILD", "VIEWER_PAYLOAD",
+                        )
+                    ],
                 }
             )
             self._batch_error = None
@@ -1301,6 +1454,13 @@ class DesktopWorkflow:
             "stage_timings_seconds": dict(
                 ((manifest or {}).get("telemetry") or {}).get("STAGE_TIME") or {}
             ),
+            "analysis_progress": list(self._workflow.get("analysis_progress") or []),
+            "production_runtime_profile": dict(
+                ((manifest or {}).get("batch_diagnostics") or {}).get(
+                    "production_runtime_profile"
+                )
+                or {}
+            ),
             "duplicate_final_original_index": int(
                 ((manifest or {}).get("global_reconciliation") or {}).get(
                     "duplicate_final_original_index", 0
@@ -1388,6 +1548,60 @@ class DesktopWorkflow:
         edits = _load_json(self._editor.artifact_root / "tree_edits.json")
         if edits:
             self._editor.session.operations = load_edits_payload(edits.get("operations", []))
+        # The scheduler must open the edit session over immutable original
+        # membership.  Once the journal is loaded, every downstream runtime
+        # object is rebound to its replayed final projection.  This prevents
+        # result/risk/report callers from retaining the original object after
+        # an application restart.
+        published_is_final = bool(result.span_statuses) and all(
+            status is BatchSpanStatus.FINALIZED
+            for status in result.span_statuses.values()
+        )
+        result_is_final = (
+            result.global_reconciled.diagnostics.get("editor_schema")
+            == "treeline-stage-b-batch-editor-v1"
+            and result.global_reconciled.diagnostics.get("editor_operation_count")
+            == len(self._editor.session.operations)
+        )
+        final = (
+            result.global_reconciled
+            if result_is_final
+            else self._editor.final_reconciled()
+        )
+        if result_is_final:
+            self._editor._final_reconciled_cache = (
+                tuple(id(operation) for operation in self._editor.session.operations),
+                final,
+            )
+        published_records = {
+            str(item.get("persistent_tree_id")): item
+            for item in self._final_tree_records.values()
+            if item.get("persistent_tree_id") is not None
+        }
+        final_records = {
+            str(item.persistent_tree_id): item for item in final.global_tree_records
+        }
+        if published_is_final and published_records and (
+            set(published_records) != set(final_records)
+            or any(
+                int(published_records[key].get("full_resolution_point_count", -1))
+                != int(final_records[key].full_resolution_point_count)
+                for key in final_records
+            )
+        ):
+            self._editor = None
+            raise ValueError("FINAL_PUBLICATION_MEMBERSHIP_MISMATCH")
+        published_generation = (
+            (getattr(result, "batch_diagnostics", {}) or {})
+            .get("derived_generations", {})
+            .get("final_generation_id")
+        )
+        replayed_generation = final.diagnostics.get("final_generation_id")
+        if published_generation and published_generation != replayed_generation:
+            self._editor = None
+            raise ValueError("FINAL_GENERATION_MISMATCH")
+        self._result = replace(result, global_reconciled=final)
+        self._editor.result = self._result
         return self._editor
 
     @staticmethod
@@ -1991,6 +2205,11 @@ class DesktopWorkflow:
                     + export_timings.get("EXPORT_TOTAL_TIME", 0.0)
                 )
                 diagnostics["finalization_performance"] = performance
+                generations = dict(diagnostics.get("derived_generations") or {})
+                final_generation = generations.get("final_generation_id")
+                if final_generation:
+                    generations["prediction_export_generation_id"] = final_generation
+                    diagnostics["derived_generations"] = generations
                 self._result = replace(self._result, batch_diagnostics=diagnostics)
                 editor.result = self._result
                 editor.finalization_performance = performance
@@ -2083,6 +2302,18 @@ class DesktopWorkflow:
                     "science_run_id": result.analysis_run_id,
                     "science_scope": "FINAL_GLOBAL_RECONCILED_POST_EDITOR",
                 }.items()
+            ):
+                return False
+
+            generations = (
+                (getattr(result, "batch_diagnostics", {}) or {})
+                .get("derived_generations", {})
+            )
+            required_generation = generations.get("final_generation_id")
+            if required_generation and (
+                metadata.get("final_generation_id") != required_generation
+                or metadata.get("result_generation_id") != required_generation
+                or metadata.get("risk_generation_id") != required_generation
             ):
                 return False
 
@@ -2229,7 +2460,12 @@ class DesktopWorkflow:
 
         return build_future_preview(self, horizon_years=horizon_years)
 
-    def final_projection(self, *, persist_display_evidence: bool = True) -> dict[str, Any]:
+    def final_projection(
+        self,
+        *,
+        persist_display_evidence: bool = True,
+        include_metrics: bool = True,
+    ) -> dict[str, Any]:
         editor = self._ensure_editor()
         if editor is None:
             return {"trees": [], "display": _empty_display(), "metadata": {}}
@@ -2244,11 +2480,13 @@ class DesktopWorkflow:
             .get("editor_publication", {})
             .get("operation_count")
         )
-        final_reconciled = getattr(editor, "final_reconciled", None)
+        del include_metrics  # consumed by the desktop metrics extension
+        from desktop.review_extensions import _result_matches_editor_revision
+
         reconciled = (
-            final_reconciled()
-            if callable(final_reconciled)
-            else self._result.global_reconciled
+            self._result.global_reconciled
+            if _result_matches_editor_revision(editor, self._result)
+            else editor.final_reconciled()
         )
         records = {
             int(record.global_tree_id): record
@@ -2348,6 +2586,14 @@ class DesktopWorkflow:
                 "editor_revision": editor_revision,
                 "published_editor_revision": published_editor_revision,
                 "revision_current": published_editor_revision == editor_revision,
+                "final_generation_id": (
+                    getattr(reconciled, "diagnostics", {}) or {}
+                ).get("final_generation_id"),
+                "result_generation_id": (
+                    (getattr(self._result, "batch_diagnostics", {}) or {})
+                    .get("derived_generations", {})
+                    .get("result_generation_id")
+                ),
                 "tree_backend": "CROWN_STEM_HYBRID",
                 "wire_exclusion_policy": "EXACT_ORIGINAL_INDEX",
                 "risk_policy": self._risk_policy().to_dict(),

@@ -165,6 +165,9 @@ _METADATA_ROWS = [
     ("risk_config_digest", "risk_config_digest", "危险净空配置摘要"),
     ("viewer_mode", "viewer_mode", "浏览器模式"),
     ("science_scope", "science_scope", "科学范围"),
+    ("final_generation_id", "final_generation_id", "最终态生成标识"),
+    ("result_generation_id", "result_generation_id", "结果生成标识"),
+    ("risk_generation_id", "risk_generation_id", "风险生成标识"),
     ("created_at", "created_at", "创建时间"),
     ("git_commit", "git_commit", "Git 提交"),
 ]

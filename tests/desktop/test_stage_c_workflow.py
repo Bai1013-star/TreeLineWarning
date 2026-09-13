@@ -157,7 +157,17 @@ def test_stage_c_restart_retains_finalized_editor_revision(tmp_path: Path) -> No
 
     assert result is not None
     assert editor is not None
+    assert len(result.global_reconciled.global_tree_records) == 1
+    assert len(restarted.final_projection()["trees"]) == 1
+    assert len(restarted.current_report()["trees"]) == 1
     assert result.global_reconciled.diagnostics["editor_operation_count"] == 1
+    final_generation = result.global_reconciled.diagnostics["final_generation_id"]
+    assert result.batch_diagnostics["derived_generations"] == {
+        "final_generation_id": final_generation,
+        "result_generation_id": final_generation,
+        "risk_generation_id": final_generation,
+        "report_generation_id": final_generation,
+    }
     assert _result_matches_editor_revision(editor, result)
 
 

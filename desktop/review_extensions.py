@@ -231,7 +231,15 @@ def install_review_extensions() -> None:
     def final_projection_with_metrics(
         self: Any, *args: Any, **kwargs: Any
     ) -> dict[str, Any]:
+        include_metrics = bool(kwargs.get("include_metrics", True)) and not bool(
+            getattr(self, "_skip_final_projection_metrics", False)
+        )
         projection = original_final_projection(self, *args, **kwargs)
+        if not include_metrics:
+            projection.setdefault("metadata", {})["tree_metrics_source"] = (
+                "FINAL_EXPORT_CACHE_OR_BASIC_PROJECTION"
+            )
+            return projection
         editor = self._ensure_editor()
         if editor is None:
             return projection

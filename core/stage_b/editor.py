@@ -33,6 +33,7 @@ class BatchTreeEditor:
         result: Any,
         *,
         tree_ids_by_span: Mapping[str, tuple[int, ...]] | None = None,
+        original_reconciled: TreeReconciliationResult | None = None,
         config: FastBaselineConfig | None = None,
         acceleration_mode: str = "AUTO",
     ) -> None:
@@ -50,7 +51,7 @@ class BatchTreeEditor:
         from algorithms.spans.gpu_clearance import normalize_gpu_mode
 
         self.acceleration_mode = normalize_gpu_mode(acceleration_mode)
-        self.original_reconciled = reconciled
+        self.original_reconciled = original_reconciled or reconciled
         self.artifact_root = (
             self.project_root
             / "artifacts"
@@ -59,10 +60,10 @@ class BatchTreeEditor:
             / result.analysis_run_id
         )
         self.original = build_original_trees(
-            reconciled.global_tree_records,
-            reconciled.final_original_index,
-            reconciled.final_xyz_local_m,
-            reconciled.final_tree_id,
+            self.original_reconciled.global_tree_records,
+            self.original_reconciled.final_original_index,
+            self.original_reconciled.final_xyz_local_m,
+            self.original_reconciled.final_tree_id,
         )
         self.session = RegionTreeEditSession(self.original)
         self.tree_ids_by_span = {
@@ -72,6 +73,7 @@ class BatchTreeEditor:
         self.tree_load_seconds = time.perf_counter() - load_started
         self.last_viewer_update_seconds = 0.0
         self.finalization_performance: dict[str, Any] = {}
+        self._final_reconciled_cache: tuple[tuple[int, ...], TreeReconciliationResult] | None = None
 
     def _check_span(self, span_id: str, tree_ids: list[int]) -> None:
         allowed = set(self.tree_ids_by_span.get(span_id, ()))
@@ -181,7 +183,20 @@ class BatchTreeEditor:
 
         self.persist_edits()
         final_path = self.artifact_root / "tree_segmentation_final.npz"
-        if not self.session.operations:
+        cache_key = tuple(id(operation) for operation in self.session.operations)
+        cached_final = (
+            self._final_reconciled_cache[1]
+            if self._final_reconciled_cache is not None
+            and self._final_reconciled_cache[0] == cache_key
+            and final_path.is_file()
+            else None
+        )
+        if cached_final is not None:
+            final_index = cached_final.final_original_index
+            final_tree = cached_final.final_tree_id
+            final_xyz = cached_final.final_xyz_local_m
+            summary = {}
+        elif not self.session.operations:
             # Before the first edit the final membership is byte-for-byte the
             # immutable original membership.  Rebuilding three multi-million
             # row arrays and serialising a duplicate NPZ added seconds to every
@@ -237,6 +252,16 @@ class BatchTreeEditor:
     ) -> TreeReconciliationResult:
         """Return the post-editor, unique full-resolution publication result."""
 
+        cache_key = tuple(id(operation) for operation in self.session.operations)
+        if self._final_reconciled_cache is not None:
+            cached = self._final_reconciled_cache[1]
+            same_membership = final_membership is None or (
+                final_membership[0] is cached.final_original_index
+                and final_membership[1] is cached.final_tree_id
+                and final_membership[2] is cached.final_xyz_local_m
+            )
+            if self._final_reconciled_cache[0] == cache_key and same_membership:
+                return cached
         final_index, final_tree, final_xyz, _summary = (
             final_membership if final_membership is not None else self.session.build_final()
         )
@@ -338,15 +363,27 @@ class BatchTreeEditor:
             for source_record in source_records:
                 for key in source_record.merged_span_tree_keys:
                     span_tree_to_global[key] = final_id
+        from core.stage_b.final_generation import final_generation_id
+
+        generation_id = final_generation_id(
+            self.result.analysis_run_id,
+            records,
+            len(self.session.operations),
+        )
         diagnostics = dict(self.original_reconciled.diagnostics)
         diagnostics.update(
             {
                 "editor_schema": "treeline-stage-b-batch-editor-v1",
                 "editor_operation_count": len(self.session.operations),
                 "duplicate_final_original_index": 0,
+                "original_tree_count": len(
+                    self.original_reconciled.global_tree_records
+                ),
+                "global_tree_count": len(records),
+                "final_generation_id": generation_id,
             }
         )
-        return TreeReconciliationResult(
+        output = TreeReconciliationResult(
             global_tree_records=tuple(records),
             final_original_index=final_index,
             final_xyz_local_m=final_xyz,
@@ -355,6 +392,8 @@ class BatchTreeEditor:
             span_tree_to_global=span_tree_to_global,
             diagnostics=diagnostics,
         )
+        self._final_reconciled_cache = (cache_key, output)
+        return output
 
     def mark_reviewed(self, span_ids: list[str] | tuple[str, ...] | None = None) -> None:
         """Advance completed Span review states without touching failed Spans."""
@@ -522,7 +561,19 @@ class BatchTreeEditor:
         )
         clearance_source = "UNAVAILABLE"
         clearance_started = time.perf_counter()
-        if operation_count == 0 and self._clearance_matches_membership(
+        current_result_clearance = self.result.final_clearance
+        result_generation = (
+            getattr(self.result.global_reconciled, "diagnostics", {}) or {}
+        ).get("final_generation_id")
+        final_generation = final.diagnostics.get("final_generation_id")
+        if (
+            result_generation
+            and result_generation == final_generation
+            and self._clearance_matches_membership(current_result_clearance, final)
+        ):
+            final_clearance = current_result_clearance
+            clearance_source = "EXISTING_FINAL_RESULT"
+        elif operation_count == 0 and self._clearance_matches_membership(
             self.original_clearance, final
         ):
             final_clearance = self.original_clearance
@@ -605,9 +656,16 @@ class BatchTreeEditor:
                 "GROUND,HAG,WIRE_RECONSTRUCTION,TREE_MEMBERSHIP,DBH,RISK,VIEWER"
             ),
         }
+        generation_id = str(final.diagnostics["final_generation_id"])
         statuses = {span_id: BatchSpanStatus.FINALIZED for span_id in statuses}
         batch_diagnostics = dict(self.result.batch_diagnostics)
         batch_diagnostics["finalization_performance"] = performance
+        batch_diagnostics["derived_generations"] = {
+            "final_generation_id": generation_id,
+            "result_generation_id": generation_id,
+            "risk_generation_id": generation_id,
+            "report_generation_id": generation_id,
+        }
         self.result = replace(
             self.result,
             status="COMPLETE",

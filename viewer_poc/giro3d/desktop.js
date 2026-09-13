@@ -251,9 +251,22 @@
   function towerPicker() {
     return `<div class="picker-card"><div class="picker-head"><div><h3>真实三维点云杆塔选取器</h3><p>斜视、侧视或自由旋转看清杆塔后单击；点击将使用真实局部点云确认坐标与高度。</p></div><div class="picker-controls"><select id="displayMode"><option value="height" selected>高度着色</option><option value="rgb">RGB</option><option value="intensity">强度</option></select><label>点大小 <input id="pointSize" type="range" min="1" max="8" value="2"></label><button id="perspectiveTowerView" class="small">透视视图</button><button id="topTowerView" class="small">俯视</button><button id="sideTowerView" class="small">侧视</button><button id="resetTowerView" class="small">重置视角</button></div></div><div id="towerLoad" class="notice">正在准备点云显示…</div><div id="towerDiagnostics" class="picker-diagnostics"></div><div class="picker-grid"><canvas id="towerCanvas" aria-label="可旋转真实三维点云主视图"></canvas><canvas id="tower3dCanvas" aria-label="局部高密度三维确认视图"></canvas></div><div class="picker-caption"><span>左：主 3D（左键旋转 · 右/中键平移 · 滚轮缩放 · 单击选杆）</span><span>右：局部高密度 3D 确认（同样支持旋转、平移、缩放）</span></div></div>`;
   }
-  function pipelineMarkup(mode) {
-    const names = ['地面处理', '导线识别', '植被提取', '单木分割', '跨档整理', '净空计算', '风险分析'];
-    return names.map(name => `<div class="stage ${mode}">${name}<br><small>${mode === 'done' ? '完成' : (mode === 'fail' ? '失败' : '进行中')}</small></div>`).join('');
+  function pipelineMarkup(mode, progress = []) {
+    const stages = [
+      ['GROUND', '地面处理'], ['WIRE', '导线识别'], ['VEGETATION', '植被提取'],
+      ['TREE_SEGMENTATION', '单木分割'], ['SPAN_ORGANIZATION', '跨档整理'],
+      ['CLEARANCE', '净空计算'], ['RISK', '风险分析']
+    ];
+    const byStage = new Map((progress || []).map(item => [item.stage, item]));
+    const labels = {PENDING: '等待', RUNNING: '进行中', CACHED: '缓存命中', DONE: '完成', FAILED: '失败'};
+    return stages.map(([key, name]) => {
+      const item = byStage.get(key) || {};
+      const status = mode === 'done' ? 'DONE' : (mode === 'fail' ? 'FAILED' : (item.status || 'PENDING'));
+      const cls = status === 'RUNNING' ? 'current' : (status === 'FAILED' ? 'fail' : (['DONE', 'CACHED'].includes(status) ? 'done' : 'pending'));
+      const backend = item.backend && item.backend !== 'UNKNOWN' ? ` · ${item.backend}` : '';
+      const elapsed = Number.isFinite(item.elapsed_seconds) ? ` · ${Number(item.elapsed_seconds).toFixed(2)}s` : '';
+      return `<div class="stage ${cls}">${name}<br><small>${labels[status] || status}${backend}${elapsed}</small></div>`;
+    }).join('');
   }
 
   function renderWorkspace() {
@@ -284,7 +297,7 @@
       $('stageHost').innerHTML = stageCard('步骤 4 / 6', '准备开始分析', '线路拓扑已确认。请选择需要处理的档距，然后开始离线分析。', '<button class="primary" data-action="start-analysis">开始分析</button>', `<div class="topology-summary"><div class="summary-tile"><span>线路</span><b>${state.project.lines ?? 0}</b></div><div class="summary-tile"><span>杆塔</span><b>${state.project.towers ?? 0}</b></div><div class="summary-tile"><span>逻辑档距</span><b>${state.project.spans ?? 0}</b></div></div>`);
     } else if (uiState === 'ANALYSIS_RUNNING') {
       show('batchSection'); show('analysisOverview');
-      $('pipelineStages').innerHTML = pipelineMarkup('current');
+      $('pipelineStages').innerHTML = pipelineMarkup('current', state.batch?.analysis_progress);
       const cacheMessage = state.batch?.source_cache_message || '首次处理大型点云，正在建立可复用缓存。';
       $('stageHost').innerHTML = stageCard('步骤 4 / 6', '正在分析', '软件正在本机完成地面、导线、植被、单木、净空和风险分析。可继续查看右侧任务状态。', '', `<div class="stage-progress"><i></i></div><div class="notice">${esc(cacheMessage)}<br>请保持软件运行。全部计算均在本机完成。</div>`);
     } else if (uiState === 'TREE_REVIEW_READY') {

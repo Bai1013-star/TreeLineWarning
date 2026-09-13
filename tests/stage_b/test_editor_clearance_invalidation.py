@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 from algorithms.spans.clearance import (
     SpanClearanceResult,
@@ -252,4 +254,89 @@ def test_dbh_failure_does_not_roll_back_finalized_clearance(tmp_path, monkeypatc
     assert set(finalized.span_statuses.values()) == {BatchSpanStatus.FINALIZED}
     assert editor.dbh_recovery_status == {
         "status": "UNAVAILABLE", "reason": "TEST_DBH_RECOVERY_FAILURE"
+    }
+
+
+def test_real_bug_shape_fifteen_delete_five_publishes_one_ten_tree_generation(
+    tmp_path,
+) -> None:
+    records = tuple(
+        GlobalTreeRecord(
+            global_tree_id=tree_id,
+            line_id=1,
+            span_id=0,
+            span_name="S001",
+            external_name=f"Tree-{tree_id}",
+            primary_span_tree_id=tree_id,
+            apex_xy_local_m=(float(tree_id), 0.0, 3.0),
+            apex_height_m=3.0,
+            full_resolution_point_count=2,
+            core_point_count=2,
+            halo_point_count=0,
+            core_fraction=1.0,
+            review=False,
+            merged_span_tree_keys=((0, tree_id),),
+            persistent_tree_id=f"tree-{tree_id}",
+        )
+        for tree_id in range(15)
+    )
+    original = TreeReconciliationResult(
+        global_tree_records=records,
+        final_original_index=np.arange(30, dtype=np.int64),
+        final_xyz_local_m=np.column_stack(
+            (np.repeat(np.arange(15), 2), np.zeros(30), np.ones(30))
+        ).astype(np.float64),
+        final_tree_id=np.repeat(np.arange(15), 2).astype(np.int32),
+        review_tree_ids=(),
+        span_tree_to_global={(0, tree_id): tree_id for tree_id in range(15)},
+        diagnostics={"duplicate_final_original_index": 0},
+    )
+    clearance = SpanClearanceResult(
+        records=tuple(
+            SpanTreeWireRecord(
+                global_tree_id=tree_id,
+                external_name=f"Tree-{tree_id}",
+                line_id=1,
+                span_id=0,
+                span_name="S001",
+                nearest_wire_id=0,
+                minimum_clearance_m=1.0 + tree_id,
+                nearest_tree_original_index=tree_id * 2,
+                nearest_tree_xyz_local_m=(float(tree_id), 0.0, 1.0),
+                nearest_wire_xyz_local_m=(float(tree_id), 0.0, 2.0),
+                tree_point_count=2,
+                evaluated_edge_count=2,
+                status="VALID",
+                persistent_tree_id=f"tree-{tree_id}",
+                danger_point_count=0,
+            )
+            for tree_id in range(15)
+        ),
+        status="VALID",
+        global_minimum_clearance_m=1.0,
+        edge_count=1,
+        diagnostics={"schema": "fixture"},
+    )
+    result = _result(clearance)
+    result = replace(
+        result,
+        global_reconciled=original,
+        telemetry=BatchTelemetry(source_point_count=30, span_count=1),
+    )
+    editor = BatchTreeEditor(
+        tmp_path,
+        result,
+        tree_ids_by_span={"span-a": tuple(range(15))},
+    )
+
+    editor.delete("span-a", [0, 1, 2, 3, 4])
+    finalized = editor.finalize()
+
+    assert len(editor.original_reconciled.global_tree_records) == 15
+    assert len(finalized.global_reconciled.global_tree_records) == 10
+    assert len(finalized.final_clearance.records) == 10
+    assert finalized.global_reconciled.diagnostics["original_tree_count"] == 15
+    generation = finalized.global_reconciled.diagnostics["final_generation_id"]
+    assert set(finalized.batch_diagnostics["derived_generations"].values()) == {
+        generation
     }

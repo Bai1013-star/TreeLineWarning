@@ -377,6 +377,24 @@ def recover_finalized_dbh_v3(
 
 
 def finalize_dbh(root, result, reconciled):
+    existing = v1.load_finalized_dbh(Path(root), result, reconciled)
+    expected = {
+        int(record.global_tree_id): record.persistent_tree_id
+        for record in reconciled.global_tree_records
+    }
+    if set(existing) == set(expected) and all(
+        existing[tree_id].get("persistent_tree_id") == persistent_id
+        for tree_id, persistent_id in expected.items()
+    ):
+        # The proof loader revalidates the editor binding, membership hash and
+        # every evidence hash. Re-running raw ROI queries for that identical
+        # final generation changes no output and cost ~30 s on the 105 M-point
+        # production survey, so reuse the already-certified rows.
+        return {
+            "schema": "treeline-dbh-finalized-cache-v1",
+            "cache_hit": True,
+            "trees": [existing[tree_id] for tree_id in sorted(existing)],
+        }
     try:
         v2._load_base(Path(root), result, reconciled)
     except (OSError, ValueError, KeyError):

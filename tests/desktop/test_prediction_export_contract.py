@@ -39,7 +39,12 @@ def _workflow(tmp_path: Path, project: Project) -> DesktopWorkflow:
     return workflow
 
 
-def _result(project: Project, *, run_id: str = "analysis-7") -> SimpleNamespace:
+def _result(
+    project: Project,
+    *,
+    run_id: str = "analysis-7",
+    generation_id: str | None = None,
+) -> SimpleNamespace:
     record = SimpleNamespace(
         global_tree_id=7,
         persistent_tree_id="tree-7",
@@ -53,11 +58,21 @@ def _result(project: Project, *, run_id: str = "analysis-7") -> SimpleNamespace:
             "editor_operation_count": 0,
         },
     )
+    derived = (
+        {}
+        if generation_id is None
+        else {
+            "final_generation_id": generation_id,
+            "result_generation_id": generation_id,
+            "risk_generation_id": generation_id,
+        }
+    )
     return SimpleNamespace(
         project_id=project.project_id,
         analysis_run_id=run_id,
         span_statuses={"span-1": BatchSpanStatus.FINALIZED},
         global_reconciled=reconciled,
+        batch_diagnostics={"derived_generations": derived},
     )
 
 
@@ -69,6 +84,7 @@ def _write_cache(
     row_start: str | None = "tower-1",
     row_end: str | None = "tower-2",
     rows: bool = True,
+    generation_id: str | None = None,
 ) -> None:
     write_prediction_input_excel(
         path,
@@ -88,6 +104,9 @@ def _write_cache(
             "project_id": project.project_id,
             "science_run_id": run_id,
             "science_scope": "FINAL_GLOBAL_RECONCILED_POST_EDITOR",
+            "final_generation_id": generation_id,
+            "result_generation_id": generation_id,
+            "risk_generation_id": generation_id,
         },
     )
 
@@ -107,6 +126,21 @@ def test_export_cache_rejects_wrong_run_and_wrong_tower(tmp_path: Path) -> None:
     _write_cache(path, project, row_start="tower-2")
     assert not workflow._prediction_export_cache_matches_final(path, result)
 
+
+def test_export_cache_requires_exact_final_generation(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    workflow = _workflow(tmp_path, project)
+    result = _result(project, generation_id="final-current")
+    path = tmp_path / "exports" / "Prediction_Input.xlsx"
+
+    _write_cache(path, project, generation_id="final-current")
+    assert workflow._prediction_export_cache_matches_final(path, result)
+
+    _write_cache(path, project, generation_id="final-stale")
+    assert not workflow._prediction_export_cache_matches_final(path, result)
+
+    _write_cache(path, project)
+    assert not workflow._prediction_export_cache_matches_final(path, result)
 
 def test_export_cache_rejects_empty_tree_sheet_and_corrupt_workbook(tmp_path: Path) -> None:
     project = _project(tmp_path)

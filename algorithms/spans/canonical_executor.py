@@ -275,6 +275,7 @@ def run_tracked_canonical_span_science(
     cancellation_requested: Callable[[], bool] | None = None,
     config: FastBaselineConfig | None = None,
     acceleration_mode: str = "AUTO",
+    progress: Callable[[str, str, str], None] | None = None,
 ) -> SpanScienceResult:
     """Run one project Span through the existing tracked science modules."""
 
@@ -287,6 +288,11 @@ def run_tracked_canonical_span_science(
     if not isinstance(origin_value, (list, tuple)) or len(origin_value) != 3:
         raise ScienceAdapterError("SOURCE_SHARED_PREPARATION_NOT_READY")
 
+    def stage(name: str, backend: str, status: str) -> None:
+        if progress is not None:
+            progress(name, backend, status)
+
+    stage("CACHE_BUILD", "IO", "RUNNING")
     role_index_started = time.perf_counter()
     wire_tile_cache = _tile_cache_from_preparation(project_root, payload, input_data, "wire")
     # Vegetation is HIGH RECALL: the source-shared vegetation role index is
@@ -304,6 +310,7 @@ def run_tracked_canonical_span_science(
     if wire_tile_cache is None or vegetation_tile_cache is None:
         raise ScienceAdapterError("SPAN_LOCAL_ROLE_TILE_INDEX_NOT_BOUND")
     role_index_runtime = time.perf_counter() - role_index_started
+    stage("CACHE_BUILD", "IO", "CACHED")
     ground_path = _resolve_reference(project_root, ground_reference)
     try:
         coarse_ground = np.asarray(np.load(ground_path, allow_pickle=False), dtype=np.float64)
@@ -339,6 +346,7 @@ def run_tracked_canonical_span_science(
         wire_tile_cache, frame, wire_spec, output_root / "regions" / "wire"
     )
     wire_query_runtime = time.perf_counter() - wire_query_started
+    stage("VEGETATION", "IO", "RUNNING")
     vegetation_query_started = time.perf_counter()
     vegetation_query = subset_raw_tile_cache_oriented(
         vegetation_tile_cache,
@@ -347,9 +355,11 @@ def run_tracked_canonical_span_science(
         output_root / "regions" / "vegetation",
     )
     vegetation_query_runtime = time.perf_counter() - vegetation_query_started
+    stage("VEGETATION", "IO", "DONE")
     # HIGH-RECALL vegetation: the role index carries no wire exclusion, so the
     # Span-local vegetation query may include points adjacent to the conductor.
     vegetation_before_confirmed_wire_exclusion = int(vegetation_query.region.count)
+    stage("WIRE", "CPU", "RUNNING")
     wire_started = time.perf_counter()
     wire_result = run_span_wire_pipeline(
         span,
@@ -360,6 +370,7 @@ def run_tracked_canonical_span_science(
         authoritative_source_point_count=input_data.source_point_count,
     )
     wire_runtime = time.perf_counter() - wire_started
+    stage("WIRE", "CPU", "DONE")
     # Subtract ONLY the exact FINAL confirmed conductor member source indices
     # from the Span-local vegetation tree input.  Broad wire candidate / search
     # points that are not exact confirmed conductor members stay in vegetation.
@@ -433,6 +444,7 @@ def run_tracked_canonical_span_science(
         raise ScienceAdapterError("TREE_INPUT_SOURCE_ACCOUNTING_MISMATCH")
     if wire_vegetation_source_overlap_in_tree_input:
         raise ScienceAdapterError("CONFIRMED_CONDUCTOR_REACHED_TREE_INPUT")
+    stage("TREE_SEGMENTATION", "CPU", "RUNNING")
     tree_started = time.perf_counter()
     tree_outcome = run_span_tree_pipeline(
         span,
@@ -456,7 +468,9 @@ def run_tracked_canonical_span_science(
         run_id=output_root.name,
     )
     tree_runtime = time.perf_counter() - tree_started
+    stage("TREE_SEGMENTATION", "CPU", "DONE")
 
+    stage("CLEARANCE", "MIXED", "RUNNING")
     clearance_started = time.perf_counter()
     clearance = run_span_tree_wire_clearance(
         reconciled,
@@ -467,6 +481,13 @@ def run_tracked_canonical_span_science(
         acceleration_mode=acceleration_mode,
     )
     clearance_runtime = time.perf_counter() - clearance_started
+    clearance_backend = str(clearance.diagnostics.get("backend", "CPU"))
+    stage(
+        "CLEARANCE",
+        "MIXED" if clearance_backend == "GPU_CERTIFIED_CPU_EXACT" else "CPU",
+        "DONE",
+    )
+    stage("RISK", "CPU", "DONE")
 
     def _publish_identity_terminal(assigned):
         terminal_clearance = run_span_tree_wire_clearance(

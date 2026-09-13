@@ -288,6 +288,19 @@ def export_batch_prediction(
         "prediction_source": "FINAL_GLOBAL_RECONCILED_POST_EDITOR",
         "tree_metrics_source": "CANONICAL_FULLRES_POST_EDITOR",
         "tree_display_id_schema": "treeline-tree-display-id-v1",
+        "final_generation_id": (
+            getattr(reconciled, "diagnostics", {}) or {}
+        ).get("final_generation_id"),
+        "result_generation_id": (
+            (getattr(result, "batch_diagnostics", {}) or {})
+            .get("derived_generations", {})
+            .get("result_generation_id")
+        ),
+        "risk_generation_id": (
+            (getattr(result, "batch_diagnostics", {}) or {})
+            .get("derived_generations", {})
+            .get("risk_generation_id")
+        ),
     }
     if progress is not None:
         progress("GENERATING_EXCEL")
