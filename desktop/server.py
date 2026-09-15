@@ -343,14 +343,15 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 requested_budget = 8_000
             requested_span = query.get("span_id", [None])[0]
-            self._send_json(
-                {
-                    "ok": True,
-                    **self.workflow.editor_data(
-                        display_budget=requested_budget, span_id=requested_span
-                    ),
-                }
-            )
+            # The first review read after process restart can hydrate the
+            # persisted final membership and display basis.  Serialize that
+            # process-local cache fill so a manual iframe refresh cannot race a
+            # still-finishing request and turn a valid read into HTTP 409.
+            with self.workflow._lock:
+                display = self.workflow.editor_data(
+                    display_budget=requested_budget, span_id=requested_span
+                )
+            self._send_json({"ok": True, **display})
             return
         if path == "/state":
             self._send_json(self.workflow.editor_state())

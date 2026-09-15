@@ -234,6 +234,15 @@ def test_viewer_initialization_failure_is_never_a_silent_blank_canvas() -> None:
     assert "error.details || error.stack || error.message" in app
 
 
+def test_slow_editor_display_read_does_not_use_mutation_timeout() -> None:
+    app = _app_js()
+    assert "const MUTATION_REQUEST_TIMEOUT_MS = 15000;" in app
+    assert "const DISPLAY_REQUEST_TIMEOUT_MS = 180000;" in app
+    assert "DISPLAY_REQUEST_TIMEOUT_MS," in app
+    assert "首次加载可能需要几十秒" in app
+    assert "单木复核数据加载失败，请刷新视图重试。" in app
+
+
 def test_interaction_timings_are_exposed_for_release_acceptance() -> None:
     app = _app_js()
     assert "dataset.lastTreeClickMs = elapsed.toFixed(3)" in app

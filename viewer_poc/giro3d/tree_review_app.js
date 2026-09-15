@@ -105,7 +105,10 @@
     const message = error && error.message ? error.message : String(error);
     const editMessage = byId('editmsg');
     if (editMessage) editMessage.textContent = prefix + message;
-    if (!state.viewer || !state.editorDisplay) {
+    if (error && error.dataLoad) {
+      const rendererStatus = byId('viewer-renderer-status');
+      if (rendererStatus) rendererStatus.textContent = '单木复核数据加载失败，请刷新视图重试。';
+    } else if (!state.viewer || !state.editorDisplay) {
       const rendererStatus = byId('viewer-renderer-status');
       if (rendererStatus) rendererStatus.textContent = '3D复核视图初始化失败，请查看详情。';
     }
@@ -218,6 +221,12 @@
   const MUTATION_POLL_MS = 500;
   const MUTATION_RECOVERY_MS = 60000;
   const MUTATION_REQUEST_TIMEOUT_MS = 15000;
+  // A first read after reopening a real project may need to hydrate the
+  // persisted final membership and build the bounded 3D display cache.  That
+  // is a read-only operation and has legitimately taken about 30 seconds on a
+  // 105-million-point survey.  Do not abort it with the edit-mutation deadline.
+  const DISPLAY_REQUEST_TIMEOUT_MS = 180000;
+  const DISPLAY_SLOW_NOTICE_MS = 15000;
 
   function newRequestId() {
     const sequence = (++state.mutationRequestSequence).toString(36);
@@ -282,16 +291,20 @@
     return error;
   }
 
-  function mutationRequestTimeout(path) {
-    const error = new Error('网络请求超时，操作结果未确认，正在查询编辑状态。');
+  function requestTimeout(path, timeoutMs) {
+    const displayRead = path.startsWith('/api/editor_data') || path.startsWith('/api/desktop/review');
+    const error = new Error(displayRead
+      ? '单木复核数据准备超时，请刷新复核视图重试。'
+      : '网络请求超时，操作结果未确认，正在查询编辑状态。');
     error.recoverable = true;
     error.network = true;
     error.timeout = true;
-    error.details = `${path} 请求超过 ${MUTATION_REQUEST_TIMEOUT_MS} 毫秒未完成`;
+    error.dataLoad = displayRead;
+    error.details = `${path} 请求超过 ${timeoutMs} 毫秒未完成`;
     return error;
   }
 
-  async function fetchJsonWithDeadline(path, init = {}) {
+  async function fetchJsonWithDeadline(path, init = {}, timeoutMs = MUTATION_REQUEST_TIMEOUT_MS) {
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     const requestInit = {...init};
     if (controller) requestInit.signal = controller.signal;
@@ -311,8 +324,8 @@
         if (controller) {
           try { controller.abort(); } catch (_) {}
         }
-        reject(mutationRequestTimeout(path));
-      }, MUTATION_REQUEST_TIMEOUT_MS);
+        reject(requestTimeout(path, timeoutMs));
+      }, timeoutMs);
     });
     try {
       return await Promise.race([request, deadline]);
@@ -857,14 +870,33 @@
       const spanQuery = reviewSpanId ? `&span_id=${encodeURIComponent(reviewSpanId)}` : '';
       const path = `/api/editor_data?display_budget=${displayBudget()}${spanQuery}`;
       let outcome;
+      const slowNotice = setTimeout(() => {
+        if (state.editorDisplay) return;
+        const message = byId('editmsg');
+        if (message) message.textContent = '正在准备真实点云复核数据，首次加载可能需要几十秒，请稍候…';
+      }, DISPLAY_SLOW_NOTICE_MS);
       try {
-        outcome = await fetchJsonWithDeadline(path, {headers: {Accept: 'application/json'}, cache: 'no-store'});
+        outcome = await fetchJsonWithDeadline(
+          path,
+          {headers: {Accept: 'application/json'}, cache: 'no-store'},
+          DISPLAY_REQUEST_TIMEOUT_MS,
+        );
       } catch (cause) {
         if (cause && cause.responseParse) throw cause;
-        throw networkError(path, cause);
-      }
+        const error = cause && cause.timeout ? cause : networkError(path, cause);
+        error.dataLoad = true;
+        throw error;
+      } finally { clearTimeout(slowNotice); }
       const {response, result: data} = outcome;
-      if (!response.ok) throw new Error('单木显示数据加载失败');
+      if (!response.ok) {
+        const error = new Error(
+          data && data.error && data.error.message
+            ? data.error.message : '单木显示数据加载失败'
+        );
+        error.dataLoad = true;
+        error.statusCode = response.status;
+        throw error;
+      }
       // Keep the latest display payload available for a Viewer-only retry. It
       // is visualization data already returned by the display endpoint; retry
       // never starts or repeats an editor/science operation.
