@@ -18,6 +18,9 @@ DATABASE_PATH_ENV = "TREELINE_WARNING_DATABASE_PATH"
 EXTENDED_INPUT_FIELDS = (
     "line_name",
     "tower_section",
+    "province",
+    "city",
+    "district",
     "gps_longitude",
     "gps_latitude",
     "tree_code",
@@ -30,6 +33,8 @@ EXTENDED_INPUT_FIELDS = (
     "conductor_height",
     "line_direction",
     "wind_direction",
+    "weather_source",
+    "weather_observed_at",
     "season_stage",
 )
 
@@ -114,6 +119,12 @@ def _decoded_prediction_row(row: sqlite3.Row) -> dict[str, Any]:
         elif not isinstance(value, dict):
             item[field] = {}
     item["risk_snapshot"] = _decode_risk_snapshot(item.get("risk_snapshot_json"))
+    raw_report = item.get("full_report_json")
+    try:
+        full_report = json.loads(raw_report) if isinstance(raw_report, str) and raw_report else None
+    except json.JSONDecodeError:
+        full_report = None
+    item["full_report"] = full_report if isinstance(full_report, dict) else None
     raw_features = item.get("input_features_json")
     try:
         features = json.loads(raw_features) if isinstance(raw_features, str) else {}
@@ -175,6 +186,7 @@ class Database:
                     standard_analysis TEXT,
                     input_features_json TEXT,
                     risk_snapshot_json TEXT,
+                    full_report_json TEXT,
                     risk_level TEXT,
                     prediction TEXT,
                     created_at TEXT
@@ -201,6 +213,7 @@ class Database:
                 "standard_analysis": "TEXT DEFAULT ''",
                 "input_features_json": "TEXT DEFAULT ''",
                 "risk_snapshot_json": "TEXT DEFAULT ''",
+                "full_report_json": "TEXT DEFAULT ''",
             }
             for name, definition in migrations.items():
                 if name not in columns:
@@ -291,6 +304,17 @@ class Database:
         if not isinstance(standard_analysis, dict):
             standard_analysis = {}
         risk_snapshot = _serialize_risk_snapshot(prediction.get("risk_snapshot"))
+        full_report = prediction.get("full_report")
+        if full_report is not None and not isinstance(full_report, dict):
+            raise ValueError("full_report 必须是对象")
+        try:
+            full_report_json = (
+                json.dumps(full_report, ensure_ascii=False, allow_nan=False)
+                if full_report
+                else None
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("full_report 必须可 JSON 序列化") from exc
         input_features = {
             field: prediction[field]
             for field in EXTENDED_INPUT_FIELDS
@@ -324,6 +348,7 @@ class Database:
             json.dumps(standard_analysis, ensure_ascii=False),
             json.dumps(input_features, ensure_ascii=False, allow_nan=False),
             risk_snapshot,
+            full_report_json,
             risk_level,
             suggestion,
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -341,10 +366,11 @@ class Database:
                     observation_date, observation_year, observation_month,
                     standard_profile, standard_analysis, input_features_json,
                     risk_snapshot_json,
+                    full_report_json,
                     risk_level, prediction, created_at
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 values,
@@ -372,6 +398,21 @@ class Database:
                 (int(prediction_id),),
             ).fetchone()
         return _decoded_prediction_row(row) if row is not None else None
+
+    def delete_prediction(self, prediction_id: int) -> dict[str, Any] | None:
+        """Permanently erase one prediction, including its saved full report."""
+        self._ensure_open()
+        normalized_id = int(prediction_id)
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT id, tree_id, species, created_at FROM prediction_history WHERE id = ?",
+                (normalized_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            self.conn.execute("DELETE FROM prediction_history WHERE id = ?", (normalized_id,))
+            self.conn.commit()
+        return dict(row)
 
     def get_predictions_by_tree(self, tree_id: int, limit: int = 36) -> list[dict[str, Any]]:
         """Return one tree's observations in chronological order for LSTM input."""
@@ -524,6 +565,9 @@ class Database:
             ).fetchone()
             if row is None:
                 return None
+            runs = self.conn.execute(
+                "SELECT id, metrics_json FROM training_runs WHERE dataset_id = ?", (normalized_id,)
+            ).fetchall()
             try:
                 self.conn.execute(
                     "DELETE FROM training_runs WHERE dataset_id = ?",
@@ -537,7 +581,11 @@ class Database:
             except sqlite3.Error:
                 self.conn.rollback()
                 raise
-        return dict(row)
+        result = dict(row)
+        result["runs"] = [
+            {"id": int(run["id"]), "metrics": json.loads(run["metrics_json"])} for run in runs
+        ]
+        return result
 
     def save_training_run(self, dataset_id: int, metrics: dict[str, Any]) -> int:
         self._ensure_open()
@@ -576,6 +624,23 @@ class Database:
             item["metrics"] = json.loads(item.pop("metrics_json"))
             result.append(item)
         return result
+
+    def delete_training_run(self, run_id: int) -> dict[str, Any] | None:
+        """Erase one incremental-training audit row and return its model path metadata."""
+        self._ensure_open()
+        normalized_id = int(run_id)
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT id, dataset_id, metrics_json FROM training_runs WHERE id = ?",
+                (normalized_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            self.conn.execute("DELETE FROM training_runs WHERE id = ?", (normalized_id,))
+            self.conn.commit()
+        item = dict(row)
+        item["metrics"] = json.loads(item.pop("metrics_json"))
+        return item
 
     def close(self) -> None:
         with self._lock:

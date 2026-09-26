@@ -485,6 +485,49 @@ def test_selected_month_is_separate_from_full_risk_scan(growth_model):
     assert result["calendar_context"]["risk_scan_months"] == 12
     assert len(result["long_term_forecast"]) == 12
     assert result["risk_timeline_analysis"]["peak_risk"]["horizon_months"] <= 12
+    timing = result["threshold_timing"]
+    assert timing["scan_days"] == 365
+    assert timing["next_level"]["threshold_index"] is not None
+    assert timing["pruning_trigger"]["threshold_index"] == 0.4
+    assert timing["danger_clearance"]["threshold_clearance_distance"] == 5.0
+    assert timing["danger_clearance"]["current_effective_clearance"] == 5.5
+
+
+def test_danger_clearance_timing_marks_current_threshold_as_reached(growth_model):
+    service = ForecastService(FakeTemporalPredictor(), growth_model)
+    snapshot = {
+        "tree_id": 21,
+        "species": "杨树",
+        "height": 15,
+        "age": 18,
+        "diameter": 30,
+        "crown_width": 4,
+        "slope": 5,
+        "observation_date": "2026-01-15",
+        "voltage_level_kv": 110,
+        "maximum_sag_winter": 3.5,
+        "maximum_sag_summer": 5,
+        "vertical_distance": 8,
+        "horizontal_distance": 8,
+        "clearance_distance": 7,
+        "wind_offset_distance": 0.5,
+        "wind_speed": 5,
+        "rainfall": 15,
+        "humidity": 55,
+        "temperature": 5,
+        "sunlight_hours": 5,
+    }
+    result = service.forecast(
+        snapshot,
+        PredictionStandards(danger_clearance_distance=5.5).to_dict(),
+        short_horizons_days=[1],
+        long_horizons_months=[1],
+    )
+
+    timing = result["threshold_timing"]["danger_clearance"]
+    assert timing["days"] == 0
+    assert timing["target_date"] == "2026-01-15"
+    assert timing["within_scan_window"] is True
 
 
 def test_risk_timeline_gives_risk_month_and_trim_deadline():

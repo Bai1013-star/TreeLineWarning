@@ -12,6 +12,7 @@ dependencies = [
     "laspy>=2.5,<3",
     "numpy>=1.26,<3",
     "openpyxl>=3.1,<4",
+    "Pillow>=10,<12",
     "plotly>=5.20,<7",
     "psutil>=5.9,<8",
     "python-multipart>=0.0.9,<1",
@@ -28,6 +29,7 @@ dev = [
 ]
 desktop = [
     "pyinstaller>=6.10,<7",
+    "pywebview>=5,<7",
 ]
 
 [tool.pytest.ini_options]

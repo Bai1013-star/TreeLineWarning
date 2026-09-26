@@ -44,6 +44,23 @@ def test_defaults_cover_220v_all_months_and_voltage_wind_clearance():
     assert "min_wind_offset_distance" in standard.rules_for_voltage(220)
 
 
+def test_actual_zero_clearance_can_be_explicitly_selected():
+    standard = PredictionStandards(
+        use_actual_clearance_standard=True,
+        actual_min_clearance_distance=0,
+    )
+    result = classify_clearance_defect(
+        horizontal_distance=0,
+        vertical_distance=0,
+        clearance_distance=0,
+        standards=standard,
+        voltage_level_kv=10,
+    )
+
+    assert standard.rules_for_voltage(10)["min_clearance_distance"] == 0
+    assert result["code"] == "safe"
+
+
 def test_voltage_wind_clearance_is_checked_after_offset():
     analysis = analyze_distances(
         vertical_distance=2,

@@ -170,11 +170,13 @@ def test_homepage_disables_cache_and_links_observation_month():
     assert "预测模型完整输入特征清单" not in html
     assert 'accept=".xlsx,.xlsm,.csv,.tsv,.txt,.json' in html
     assert "/batch/import/file" in html
-    assert 'id="formulaMethod"' in html
-    assert 'id="aiMethod"' in html
+    assert 'id="predictionEngineBadge"' in html
+    assert 'id="useTrainedModel"' in html
+    assert 'id="aiMethod"' not in html
     assert 'id="generateReport"' in html
     assert "公式预测树木" in html
-    assert "模型预测树木" in html
+    assert "模型预测（与增量训练合并）" not in html
+    assert 'id="addForecastToTraining"' in html
     assert "runForecast(selectedPredictionMode)" in html
     assert "prediction_mode:predictionMode" in html
     assert 'id="inputPageTab"' in html
@@ -185,7 +187,13 @@ def test_homepage_disables_cache_and_links_observation_month():
     assert "220 V（0.22 kV）" in html
     assert "最小风偏距离" in html
     assert "Array.from({length:12}" in html
-    assert "归一化四级综合风险（0–1）" in html
+    assert "风险等级与修剪预警阈值（优先设置）" in html
+    assert 'id="s_danger_clearance_distance"' in html
+    assert 'id="s_general_risk_clearance_distance"' in html
+    assert 'id="s_safe_clearance_distance"' in html
+    assert "树枝穿过线路" in html
+    assert "危险区域净空到达预警" in html
+    assert "综合风险权重" in html
     assert "一、树木生长预测" in html
     assert "二、树线距离预测" in html
     assert "三、风险等级预测" in html
@@ -199,7 +207,11 @@ def test_homepage_disables_cache_and_links_observation_month():
     assert 'id="trainingPage"' in html
     assert 'class="module-rail"' not in html
     assert 'data-page-nav=' not in html
-    assert 'id="importCurrentTrainingRecord"' in html
+    assert 'id="importCurrentTrainingRecord"' not in html
+    assert 'id="inputRecognitionPhotos"' in html
+    assert 'id="inputRecognitionVideos"' in html
+    assert 'id="selectAllHistory"' in html
+    assert 'id="deleteSelectedHistory"' in html
     assert "/training/pool" in html
     assert "/training/train-pool" in html
     assert "先查看树高、胸径、冠幅和净空变化" not in html
@@ -214,7 +226,20 @@ def test_homepage_disables_cache_and_links_observation_month():
     assert 'id="historyDetailDialog"' in html
     assert "data-history-id" in html
     assert "loadHistoryRecordIntoForm" in html
-    assert "点击查看完整数据" in html
+    assert "点击直接打开完整报告" in html
+    assert 'data-history-manage-id' in html
+    assert 'id="deleteHistoryRecord"' in html
+    assert "/weather/regional" in html
+    assert "/location/reverse" in html
+    assert 'id="province"' in html
+    assert 'id="city"' in html
+    assert 'id="district"' in html
+    assert "/static/china_regions.json" in html
+    assert 'id="contactProvince"' in html
+    assert 'id="contactCity"' in html
+    assert 'id="contactDistrict"' in html
+    assert 'id="contactLocationMap"' in html
+    assert html.count('class="input-section" id="unifiedContactFormulaWorkspace"') == 1
     assert 'href="/help"' in html
     assert "field-help-button" in html
     assert 'id="fieldHelpDialog"' in html
@@ -529,10 +554,44 @@ def test_training_dataset_delete_removes_records_and_linked_runs(tmp_path: Path)
 
     assert deleted is not None
     assert deleted["source_name"] == "biased.csv"
+    assert deleted["runs"][0]["metrics"]["status"] == "not_deployed"
     assert db.get_training_dataset(dataset_id) is None
     assert db.list_training_records() == []
     assert db.list_training_runs() == []
     assert db.delete_training_dataset(dataset_id) is None
+    db.close()
+
+
+def test_training_run_delete_removes_one_audit_entry(tmp_path: Path):
+    db = Database(tmp_path / "training-run-delete.db")
+    dataset_id = db.save_training_dataset(
+        {
+            "source_name": "sample.csv",
+            "source_format": "csv",
+            "sheet_name": None,
+            "row_count": 0,
+            "valid_row_count": 0,
+            "invalid_row_count": 0,
+            "tree_count": 0,
+            "eligible_tree_count": 0,
+            "trainable_sequence_count": 0,
+            "records": [],
+            "preview": [],
+            "errors": [],
+            "trainable": False,
+            "requirements": [],
+        }
+    )
+    run_id = db.save_training_run(
+        dataset_id,
+        {"status": "deployed", "deployed": True, "output_path": "candidate.npz"},
+    )
+
+    deleted = db.delete_training_run(run_id)
+
+    assert deleted is not None
+    assert deleted["metrics"]["output_path"] == "candidate.npz"
+    assert db.list_training_runs() == []
     db.close()
 
 
@@ -894,6 +953,59 @@ def test_history_detail_returns_one_decoded_record_and_missing_is_404(tmp_path: 
     assert response.json()["standard_profile"]["profile_name"] == "测试标准"
     assert db.get_prediction(prediction_id)["species"] == "松树"
     assert client.get("/history/999999").status_code == 404
+    db.close()
+
+
+def test_history_delete_erases_saved_full_report_and_regional_weather_endpoint(
+    tmp_path: Path, monkeypatch
+):
+    db = Database(tmp_path / "history-delete.db")
+    prediction_id = db.save_prediction(
+        {
+            "tree_id": 8,
+            "species": "国槐",
+            "risk_level": "低风险",
+            "suggestion": "常规巡检",
+            "full_report": {"prediction_mode": "formula", "current_assessment": {}},
+        }
+    )
+    client = TestClient(prediction_api.create_app(database=db))
+
+    saved = client.get(f"/history/{prediction_id}").json()
+    assert saved["full_report"]["prediction_mode"] == "formula"
+    deleted = client.delete(f"/history/{prediction_id}")
+    assert deleted.status_code == 200
+    assert db.get_prediction(prediction_id) is None
+
+    monkeypatch.setattr(
+        prediction_api,
+        "regional_weather",
+        lambda province, city, district: {
+            "location": {"requested": f"{province}·{city}·{district}", "latitude": 39.8},
+            "weather": {"wind_speed": 3.0, "rainfall": 2.5},
+            "cached": False,
+        },
+    )
+    weather = client.post(
+        "/weather/regional",
+        json={"province": "北京市", "city": "北京市", "district": "丰台区"},
+    )
+    assert weather.status_code == 200
+    assert weather.json()["weather"]["rainfall"] == 2.5
+    monkeypatch.setattr(
+        prediction_api,
+        "reverse_geocode",
+        lambda latitude, longitude: {
+            "coordinates": {"latitude": latitude, "longitude": longitude},
+            "location": {"province": "北京市", "city": "市辖区", "district": "丰台区"},
+        },
+    )
+    location = client.post("/location/reverse", json={"latitude": 39.858, "longitude": 116.287})
+    assert location.status_code == 200
+    assert location.json()["location"]["district"] == "丰台区"
+    regions = client.get("/static/china_regions.json")
+    assert regions.status_code == 200
+    assert "北京市" in regions.text
     db.close()
 
 

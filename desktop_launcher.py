@@ -11,11 +11,13 @@ import threading
 import time
 import urllib.error
 import urllib.request
-import webbrowser
+from base64 import b64decode
+from binascii import Error as Base64Error
 from pathlib import Path
 from typing import Any
 
 import uvicorn
+import webview
 from api.prediction_api import create_app
 
 # PyInstaller windowed applications do not have console streams. Uvicorn's
@@ -31,6 +33,38 @@ if sys.stderr is None:
 
 APP_NAME = "TreeLineWarning"
 PREFERRED_PORT = 8010
+
+
+class DesktopCsvTemplateBridge:
+    """Expose a native Save dialog for template downloads in the desktop app."""
+
+    def __init__(self, window: Any | None = None) -> None:
+        self.window = window
+
+    def save_csv_template(self, content_base64: str) -> dict[str, Any]:
+        """Save a browser-generated CSV through the Windows Save dialog."""
+        if self.window is None:
+            raise RuntimeError("保存窗口尚未准备完成，请稍后重试。")
+        try:
+            content = b64decode(content_base64, validate=True)
+        except (Base64Error, TypeError, ValueError) as exc:
+            raise ValueError("CSV 示例模板内容无效。") from exc
+
+        selected = self.window.create_file_dialog(
+            webview.FileDialog.SAVE,
+            save_filename="treeline_history_training_template.csv",
+            file_types=("CSV 文件 (*.csv)",),
+        )
+        if not selected:
+            return {"saved": False, "cancelled": True}
+        destination = Path(selected[0] if isinstance(selected, (list, tuple)) else selected)
+        if destination.suffix.lower() != ".csv":
+            destination = destination.with_suffix(".csv")
+        try:
+            destination.write_bytes(content)
+        except OSError as exc:
+            raise RuntimeError(f"无法保存 CSV 示例模板：{exc}") from exc
+        return {"saved": True, "path": str(destination)}
 
 
 def bundled_path(*parts: str) -> Path:
@@ -123,18 +157,44 @@ def build_desktop_app(runtime: dict[str, Path], server_holder: dict[str, Any]):
     return application
 
 
-def open_browser_when_ready(url: str, server: uvicorn.Server) -> None:
-    """Open the desktop UI only after its local health endpoint responds."""
+def wait_for_server(url: str, server: uvicorn.Server) -> bool:
+    """Wait until the local API is ready before creating the native window."""
     for _ in range(100):
         if server.should_exit:
-            return
+            return False
         try:
             with urllib.request.urlopen(f"{url}health", timeout=0.5) as response:
                 if response.status == 200:
-                    webbrowser.open(url, new=2)
-                    return
+                    return True
         except (OSError, urllib.error.URLError):
             time.sleep(0.1)
+    return False
+
+
+def open_native_window(url: str, server: uvicorn.Server) -> None:
+    """Show the local interface inside a native Edge WebView window."""
+    if not wait_for_server(url, server):
+        raise RuntimeError("本地服务未能在 10 秒内启动。")
+
+    csv_template_bridge = DesktopCsvTemplateBridge()
+    window = webview.create_window(
+        APP_NAME,
+        url,
+        width=1440,
+        height=920,
+        min_size=(1120, 720),
+        confirm_close=True,
+        js_api=csv_template_bridge,
+    )
+    csv_template_bridge.window = window
+
+    def stop_server() -> None:
+        server.should_exit = True
+
+    window.events.closed += stop_server
+    # On supported Windows systems pywebview uses the installed Edge WebView2
+    # runtime. No external browser process is launched.
+    webview.start(gui="edgechromium", debug=False)
 
 
 def show_error(message: str) -> None:
@@ -162,13 +222,10 @@ def main() -> int:
             )
         )
         server_holder["server"] = server
-        if os.getenv("TREELINE_WARNING_DESKTOP_NO_BROWSER") != "1":
-            threading.Thread(
-                target=open_browser_when_ready,
-                args=(url, server),
-                daemon=True,
-            ).start()
-        server.run()
+        server_thread = threading.Thread(target=server.run, daemon=True)
+        server_thread.start()
+        open_native_window(url, server)
+        server_thread.join(timeout=5)
     except Exception as exc:  # noqa: BLE001 - desktop boundary must show friendly errors.
         show_error(f"软件无法启动：\n{exc}")
         return 1

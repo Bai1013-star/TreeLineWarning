@@ -10,6 +10,8 @@ from typing import Any
 
 import numpy as np
 
+from algorithms.prediction.species import SPECIES_ANNUAL_HEIGHT_GROWTH
+
 _UNCONFIGURED_MODEL_PATH = Path("__treeline_species_growth_model_not_configured__")
 # Deprecated compatibility sentinel for callers that imported this name.  It is
 # deliberately not a repository-relative default and is treated as unconfigured.
@@ -113,6 +115,14 @@ class SpeciesGrowthModel:
         )
         height = float(features @ np.asarray(model["height_coefficients"]))
         diameter = float(features @ np.asarray(model["diameter_coefficients"]))
+        local_reference = SPECIES_ANNUAL_HEIGHT_GROWTH.get(species)
+        if local_reference is not None:
+            # Keep the user-provided FengTai annual growth rate authoritative
+            # for these species, while retaining a smooth dormant/growing
+            # season pattern in monthly forecasts.
+            angle = 2 * math.pi * (int(month) - 4) / 12
+            seasonal_factor = 1.0 + 0.35 * math.sin(angle)
+            height = float(local_reference["reference"]) / 12 * seasonal_factor
         # Simulated training data cannot justify extrapolating extreme values.
         return (
             float(np.clip(height, 0.0, 0.30)),

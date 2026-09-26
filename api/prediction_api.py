@@ -13,6 +13,13 @@ from threading import Lock
 from typing import Any
 from uuid import uuid4
 
+from algorithms.prediction.allometry import (
+    calculate_species_parameters,
+    estimate_tree_age,
+    formula_catalog_summary,
+)
+from algorithms.prediction.beijing_species import catalog_payload
+from algorithms.prediction.contact_risk import contact_risk
 from algorithms.prediction.forecast import ALL_INPUT_FIELDS, PREDICTION_MODES, ForecastService
 from algorithms.prediction.historical_training import (
     MAX_UPLOAD_BYTES,
@@ -25,7 +32,28 @@ from algorithms.prediction.historical_training import (
 )
 from algorithms.prediction.history_report import generate_history_report
 from algorithms.prediction.i1_pipeline import I1PredictionPipeline
+from algorithms.prediction.regional_weather import regional_weather, reverse_geocode
+from algorithms.prediction.species import annual_height_growth
 from algorithms.prediction.species_growth import SpeciesGrowthModel
+from algorithms.prediction.species_recognition import (
+    MAX_IMAGE_BYTES,
+    MAX_POINT_CLOUD_BYTES,
+)
+from algorithms.prediction.species_recognition import (
+    delete_sample as delete_species_sample,
+)
+from algorithms.prediction.species_recognition import (
+    predict as predict_species_from_files,
+)
+from algorithms.prediction.species_recognition import (
+    save_sample as save_species_sample,
+)
+from algorithms.prediction.species_recognition import (
+    status as species_recognition_status,
+)
+from algorithms.prediction.species_recognition import (
+    train as train_species_recognition,
+)
 from algorithms.prediction.standards import (
     PredictionStandards,
     analyze_distances,
@@ -37,8 +65,9 @@ from algorithms.prediction.temporal_attention import (
     validate_sequence,
 )
 from core.database import DATABASE_PATH_ENV, Database, create_database
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 TEMPORAL_MODEL_PATH_ENV = "TREELINE_WARNING_TEMPORAL_MODEL_PATH"
@@ -51,13 +80,13 @@ DEFAULT_ACCESS_USERNAME = "treeline"
 EXPERIMENTAL_MODEL_STATUS = "experimental"
 EXPERIMENTAL_PARAMETER_SOURCE = "project_default_unverified"
 UPLOAD_FILE = File(...)
+OPTIONAL_UPLOAD_FILES = File(default=[])
+OPTIONAL_POINT_CLOUD_FILE = File(default=None)
 MAX_BATCH_UPLOAD_BYTES = 10 * 1024 * 1024
-MAX_BATCH_ROWS = 200
+MAX_BATCH_ROWS = 2000
 
 
-def _access_credentials(
-    username: str | None, password: str | None
-) -> tuple[str, str | None]:
+def _access_credentials(username: str | None, password: str | None) -> tuple[str, str | None]:
     configured_username = username
     if configured_username is None:
         configured_username = os.getenv(ACCESS_USERNAME_ENV, DEFAULT_ACCESS_USERNAME)
@@ -286,6 +315,47 @@ def _web_index_for(request: Request) -> Path:
             detail="Web 模板未配置或不可用；请由部署人员配置模板路径。",
         )
     return Path(template_path)
+
+
+def _species_recognition_root(request: Request) -> Path:
+    output_dir = request.app.state.training_output_dir
+    if output_dir is None:
+        raise HTTPException(status_code=503, detail="树种识别数据目录未配置。")
+    return Path(output_dir) / "species_recognition"
+
+
+async def _read_species_uploads(
+    photos: list[UploadFile],
+    point_cloud: UploadFile | None,
+    video_count: int = 0,
+    video_frame_count: int = 0,
+) -> tuple[list[tuple[str, bytes]], tuple[str, bytes] | None]:
+    if not 0 <= video_count <= 2:
+        raise HTTPException(status_code=422, detail="一次最多选择 2 个视频。")
+    if not 0 <= video_frame_count <= video_count * 5:
+        raise HTTPException(status_code=422, detail="视频代表画面数量与所选视频不匹配。")
+    photo_count = len(photos) - video_frame_count
+    if photo_count < 0:
+        raise HTTPException(status_code=422, detail="视频代表画面数量与上传文件不匹配。")
+    photo_payloads: list[tuple[str, bytes]] = []
+    if photo_count > 3:
+        raise HTTPException(status_code=422, detail="一次最多选择 3 张照片。")
+    for photo in photos:
+        name = photo.filename or "未命名照片"
+        content = await photo.read(MAX_IMAGE_BYTES + 1)
+        await photo.close()
+        if len(content) > MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=422, detail=f"照片 {name} 超过 10 MB。")
+        photo_payloads.append((name, content))
+    cloud_payload: tuple[str, bytes] | None = None
+    if point_cloud is not None:
+        name = point_cloud.filename or "未命名点云"
+        content = await point_cloud.read(MAX_POINT_CLOUD_BYTES + 1)
+        await point_cloud.close()
+        if len(content) > MAX_POINT_CLOUD_BYTES:
+            raise HTTPException(status_code=422, detail=f"点云 {name} 超过 80 MB。")
+        cloud_payload = (name, content)
+    return photo_payloads, cloud_payload
 
 
 def root(request: Request) -> FileResponse:
@@ -537,7 +607,7 @@ def training_history(request: Request) -> dict[str, Any]:
     database = _database_for(request)
     datasets = database.list_training_datasets(limit=50)
     for dataset in datasets:
-        dataset["deletable"] = dataset.get("source_format") != "pool_snapshot"
+        dataset["deletable"] = True
     return {
         "datasets": datasets,
         "runs": database.list_training_runs(limit=20),
@@ -545,28 +615,58 @@ def training_history(request: Request) -> dict[str, Any]:
 
 
 def delete_training_dataset(request: Request, dataset_id: int) -> dict[str, Any]:
-    """Remove one user-imported incremental dataset from the future training pool."""
+    """Permanently remove one incremental dataset and its linked audit/model files."""
 
     database = _database_for(request)
     dataset = database.get_training_dataset(dataset_id)
     if dataset is None:
         raise HTTPException(status_code=404, detail="训练数据集不存在")
-    if dataset.get("source_format") == "pool_snapshot":
-        raise HTTPException(
-            status_code=409,
-            detail="训练池快照属于训练审计记录，不能作为原始增量数据删除。",
-        )
     deleted = database.delete_training_dataset(dataset_id)
     if deleted is None:
         raise HTTPException(status_code=404, detail="训练数据集不存在")
+    removed_files = _delete_training_artifacts(request, deleted.get("runs", []))
     pool = training_pool(request)
     return {
         "deleted_dataset": deleted,
         "training_pool": pool,
-        "message": (
-            "历史增量数据已删除；后续训练不再使用这些观测。"
-            "已经发布的模型不会自动回滚。"
-        ),
+        "removed_model_files": removed_files,
+        "message": "历史增量数据、关联训练记录及候选模型已删除；后续训练不会再使用这些观测。",
+    }
+
+
+def _delete_training_artifacts(request: Request, runs: list[dict[str, Any]]) -> list[str]:
+    """Erase candidate model files only when they are inside the configured output directory."""
+    output_dir = request.app.state.training_output_dir
+    if output_dir is None:
+        return []
+    root = Path(output_dir).resolve()
+    removed: list[str] = []
+    for run in runs:
+        metrics = run.get("metrics") if isinstance(run, dict) else None
+        raw_path = metrics.get("output_path") if isinstance(metrics, dict) else None
+        if not raw_path:
+            continue
+        candidate = Path(str(raw_path)).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if candidate.is_file():
+            candidate.unlink()
+            removed.append(candidate.name)
+    return removed
+
+
+def delete_training_run(request: Request, run_id: int) -> dict[str, Any]:
+    """Permanently delete one incremental-training history entry and its candidate model."""
+    deleted = _database_for(request).delete_training_run(run_id)
+    if deleted is None:
+        raise HTTPException(status_code=404, detail="训练历史记录不存在")
+    removed_files = _delete_training_artifacts(request, [deleted])
+    return {
+        "deleted_run": deleted,
+        "removed_model_files": removed_files,
+        "message": "训练历史记录及关联候选模型已删除。",
     }
 
 
@@ -643,9 +743,7 @@ def predict_forecast(request: Request, payload: dict[str, Any]) -> dict[str, Any
     prediction_mode = str(payload.get("prediction_mode", "ai")).strip().lower()
     if prediction_mode not in PREDICTION_MODES:
         raise HTTPException(status_code=422, detail="prediction_mode 必须是 formula 或 ai")
-    temporal_predictor = (
-        None if prediction_mode == "formula" else _temporal_predictor_for(request)
-    )
+    temporal_predictor = None if prediction_mode == "formula" else _temporal_predictor_for(request)
     species_growth_model = _species_growth_model_for(request)
     database = _database_for(request)
     try:
@@ -674,13 +772,189 @@ def predict_forecast(request: Request, payload: dict[str, Any]) -> dict[str, Any
             **forecast_result["observed_input_snapshot"],
             **current,
             "risk_snapshot": _risk_snapshot(forecast_result),
+            "full_report": forecast_result,
         }
     )
     return forecast_result
 
 
+def predict_contact_risk(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the standalone field-contact decision without running the LSTM."""
+    try:
+        species = str(payload.get("species", "")).strip()
+        if not species:
+            raise ValueError("树种不能为空")
+        height = float(payload["height"])
+        conductor_height = float(payload.get("conductor_height", 0))
+        if height <= 0:
+            raise ValueError("树高必须大于 0")
+        if conductor_height < 0:
+            raise ValueError("导线高度不能小于 0")
+        growth = annual_height_growth(species)
+        raw_growth = payload.get("annual_height_growth_m")
+        annual_growth = None if raw_growth in (None, "") else float(raw_growth)
+        if annual_growth is not None and not 0 <= annual_growth <= 6:
+            raise ValueError("年生长量必须在 0—6 m 之间")
+        result = contact_risk(
+            contact_target=payload.get("contact_target", "未碰到"),
+            tree_height=height,
+            conductor_height=conductor_height,
+            clearance_distance=(
+                None
+                if payload.get("clearance_distance") in (None, "")
+                else float(payload["clearance_distance"])
+            ),
+            general_risk_distance=float(payload.get("general_risk_distance", 1.0)),
+            safe_distance=float(payload.get("safe_distance", 5.0)),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    one_year_height = round(height + annual_growth, 2) if annual_growth is not None else None
+    one_year_over_line = bool(
+        annual_growth is not None and conductor_height > 0 and one_year_height > conductor_height
+    )
+    future_action = None
+    if result["requires_immediate_pruning"]:
+        future_action = result["action"]
+    elif one_year_over_line:
+        future_action = "预计一年内可能超过导线高度，建议在生长季前安排预防性修剪"
+    return {
+        "species": species,
+        "tree_height_m": height,
+        "conductor_height_m": conductor_height,
+        "annual_height_growth_m": annual_growth,
+        "growth_reference": growth,
+        "projected_height_one_year_m": one_year_height,
+        "one_year_over_line": one_year_over_line,
+        "project_location": str(payload.get("project_location", "")).strip(),
+        "latitude": payload.get("latitude"),
+        "longitude": payload.get("longitude"),
+        "risk_level": result["level"],
+        "risk_code": result["code"],
+        "clearance_distance_m": result["clearance_distance"],
+        "distance_thresholds": result["thresholds"],
+        "requires_immediate_pruning": result["requires_immediate_pruning"],
+        "basis": result["basis"],
+        "action": future_action or result["action"],
+    }
+
+
+def species_formula_catalog() -> dict[str, Any]:
+    """Expose the source-traceable domestic species formula catalog."""
+    return formula_catalog_summary()
+
+
+def beijing_species_catalog() -> dict[str, Any]:
+    """Return the shared Beijing warning/recognition tree catalog."""
+    return catalog_payload()
+
+
+def predict_species_parameters(payload: dict[str, Any]) -> dict[str, Any]:
+    """Calculate applicable age, biomass and allometric formula results."""
+    try:
+
+        def optional_number(field: str) -> float | None:
+            value = payload.get(field)
+            if value in (None, ""):
+                return None
+            return float(value)
+
+        return calculate_species_parameters(
+            species=str(payload.get("species", "")).strip(),
+            diameter_cm=optional_number("diameter_cm"),
+            height_m=optional_number("height_m"),
+            age_years=optional_number("age_years"),
+            region=str(payload.get("region", "北京丰台")).strip() or "北京丰台",
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def predict_tree_age(payload: dict[str, Any]) -> dict[str, Any]:
+    """Estimate age from a supported species' traceable DBH-age curve."""
+    try:
+        diameter = payload.get("diameter_cm")
+        if diameter in (None, ""):
+            raise ValueError("胸径不能为空")
+        height = payload.get("height_m")
+        return estimate_tree_age(
+            species=str(payload.get("species", "")).strip(),
+            diameter_cm=float(diameter),
+            height_m=None if height in (None, "") else float(height),
+            region=str(payload.get("region", "北京丰台")).strip() or "北京丰台",
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def species_recognition_overview(request: Request) -> dict[str, Any]:
+    """Return local labelled-sample and model availability information."""
+    return species_recognition_status(_species_recognition_root(request))
+
+
+async def save_species_recognition_sample(
+    request: Request,
+    species: str = Form(...),
+    photos: list[UploadFile] = OPTIONAL_UPLOAD_FILES,
+    video_count: int = Form(0),
+    video_frame_count: int = Form(0),
+    point_cloud: UploadFile | None = OPTIONAL_POINT_CLOUD_FILE,
+) -> dict[str, Any]:
+    try:
+        photo_payloads, cloud_payload = await _read_species_uploads(
+            photos, point_cloud, video_count, video_frame_count
+        )
+        return save_species_sample(
+            _species_recognition_root(request),
+            species,
+            photo_payloads,
+            video_count,
+            video_frame_count,
+            cloud_payload,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def train_species_recognition_model(request: Request) -> dict[str, Any]:
+    try:
+        return train_species_recognition(_species_recognition_root(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def delete_species_recognition_sample(request: Request, sample_id: str) -> dict[str, Any]:
+    try:
+        return delete_species_sample(_species_recognition_root(request), sample_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+async def predict_species_recognition(
+    request: Request,
+    photos: list[UploadFile] = OPTIONAL_UPLOAD_FILES,
+    video_count: int = Form(0),
+    video_frame_count: int = Form(0),
+    point_cloud: UploadFile | None = OPTIONAL_POINT_CLOUD_FILE,
+) -> dict[str, Any]:
+    try:
+        photo_payloads, cloud_payload = await _read_species_uploads(
+            photos, point_cloud, video_count, video_frame_count
+        )
+        return predict_species_from_files(
+            _species_recognition_root(request),
+            photo_payloads,
+            video_count,
+            video_frame_count,
+            cloud_payload,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def history(request: Request) -> dict[str, Any]:
-    rows = _database_for(request).get_predictions()
+    rows = _database_for(request).get_predictions(limit=100)
     return {"count": len(rows), "history": rows}
 
 
@@ -689,6 +963,34 @@ def history_detail(request: Request, prediction_id: int) -> dict[str, Any]:
     if row is None:
         raise HTTPException(status_code=404, detail="未找到这条历史预测记录。")
     return row
+
+
+def delete_history(request: Request, prediction_id: int) -> dict[str, Any]:
+    deleted = _database_for(request).delete_prediction(prediction_id)
+    if deleted is None:
+        raise HTTPException(status_code=404, detail="未找到这条历史预测记录。")
+    return {"deleted": deleted, "message": "该历史预测及其完整报告已永久删除。"}
+
+
+def regional_weather_lookup(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return regional_weather(
+            province=str(payload.get("province", "")),
+            city=str(payload.get("city", "")),
+            district=str(payload.get("district", "")),
+        )
+    except (OSError, TimeoutError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=f"在线气象查询失败：{exc}") from exc
+
+
+def map_reverse_geocode(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return reverse_geocode(
+            latitude=float(payload.get("latitude")),
+            longitude=float(payload.get("longitude")),
+        )
+    except (OSError, TimeoutError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=f"地图定位失败：{exc}") from exc
 
 
 def get_standards(request: Request) -> dict[str, Any]:
@@ -751,9 +1053,7 @@ def create_app(
     if template_path is None:
         template_path = _source_layout_template_path()
         template_source = "source_layout" if template_path is not None else "unconfigured"
-    configured_username, configured_password = _access_credentials(
-        access_username, access_password
-    )
+    configured_username, configured_password = _access_credentials(access_username, access_password)
     application = FastAPI(title="TreeLineWarning Prediction API", lifespan=_lifespan)
     application.state.access_auth_enabled = configured_password is not None
     application.state.access_username = configured_username
@@ -791,6 +1091,9 @@ def create_app(
     application.state.training_lock = Lock()
     application.state.web_index_path = template_path
     application.state.web_index_source = template_source
+    static_path = template_path.parent.parent / "static"
+    if static_path.is_dir():
+        application.mount("/static", StaticFiles(directory=static_path), name="static")
     application.add_api_route("/", root, methods=["GET"], response_class=FileResponse)
     application.add_api_route("/help", help_page, methods=["GET"], response_class=FileResponse)
     application.add_api_route("/health", health, methods=["GET"])
@@ -810,11 +1113,39 @@ def create_app(
         delete_training_dataset,
         methods=["DELETE"],
     )
+    application.add_api_route("/training/runs/{run_id}", delete_training_run, methods=["DELETE"])
     application.add_api_route("/training/template.csv", training_template, methods=["GET"])
     application.add_api_route("/predict/temporal", predict_temporal, methods=["POST"])
     application.add_api_route("/predict/forecast", predict_forecast, methods=["POST"])
+    application.add_api_route("/predict/contact-risk", predict_contact_risk, methods=["POST"])
+    application.add_api_route("/species/formulas", species_formula_catalog, methods=["GET"])
+    application.add_api_route("/species/catalog", beijing_species_catalog, methods=["GET"])
+    application.add_api_route(
+        "/predict/species-parameters", predict_species_parameters, methods=["POST"]
+    )
+    application.add_api_route("/predict/tree-age", predict_tree_age, methods=["POST"])
+    application.add_api_route(
+        "/species-recognition/status", species_recognition_overview, methods=["GET"]
+    )
+    application.add_api_route(
+        "/species-recognition/samples", save_species_recognition_sample, methods=["POST"]
+    )
+    application.add_api_route(
+        "/species-recognition/train", train_species_recognition_model, methods=["POST"]
+    )
+    application.add_api_route(
+        "/species-recognition/samples/{sample_id}",
+        delete_species_recognition_sample,
+        methods=["DELETE"],
+    )
+    application.add_api_route(
+        "/species-recognition/predict", predict_species_recognition, methods=["POST"]
+    )
     application.add_api_route("/history", history, methods=["GET"])
     application.add_api_route("/history/{prediction_id}", history_detail, methods=["GET"])
+    application.add_api_route("/history/{prediction_id}", delete_history, methods=["DELETE"])
+    application.add_api_route("/weather/regional", regional_weather_lookup, methods=["POST"])
+    application.add_api_route("/location/reverse", map_reverse_geocode, methods=["POST"])
     application.add_api_route("/settings/standards", get_standards, methods=["GET"])
     application.add_api_route("/settings/standards", update_standards, methods=["PUT"])
     application.add_api_route("/report", report, methods=["GET"])

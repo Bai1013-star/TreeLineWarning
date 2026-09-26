@@ -25,7 +25,11 @@ LOGGER = logging.getLogger(__name__)
 SPECIES_PROFILES = {
     "松树": {"growth": 0.90, "opt_temp": 20.0, "light": 0.75, "risk": 1.08},
     "杉树": {"growth": 0.82, "opt_temp": 19.0, "light": 0.68, "risk": 0.96},
-    "杨树": {"growth": 1.28, "opt_temp": 23.0, "light": 1.00, "risk": 1.18},
+    "法国梧桐": {"growth": 2.90, "opt_temp": 23.0, "light": 0.96, "risk": 1.20},
+    "杨树": {"growth": 2.90, "opt_temp": 23.0, "light": 1.00, "risk": 1.18},
+    "榆树": {"growth": 1.50, "opt_temp": 21.0, "light": 0.82, "risk": 1.05},
+    "国槐": {"growth": 0.80, "opt_temp": 24.0, "light": 0.78, "risk": 0.96},
+    "白蜡": {"growth": 1.00, "opt_temp": 22.0, "light": 0.84, "risk": 1.04},
     "柳树": {"growth": 1.18, "opt_temp": 22.0, "light": 0.93, "risk": 1.12},
     "柏树": {"growth": 0.66, "opt_temp": 21.0, "light": 0.62, "risk": 0.90},
     "樟树": {"growth": 1.02, "opt_temp": 25.0, "light": 0.86, "risk": 1.02},
@@ -79,7 +83,7 @@ def _risk_target(sequence: np.ndarray, profile: dict[str, float], rng) -> float:
 
 
 def generate_synthetic_dataset(
-    sample_count: int = 5000,
+    sample_count: int = 2000,
     sequence_length: int = 18,
     seed: int = 20260728,
 ) -> dict[str, np.ndarray]:
@@ -213,7 +217,7 @@ def _risk_class(values: np.ndarray) -> np.ndarray:
 
 def train(
     output_path: str | Path | None = None,
-    sample_count: int = 5000,
+    sample_count: int = 2000,
     sequence_length: int = 18,
     epochs: int = 30,
     seed: int = 20260728,
@@ -419,7 +423,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="训练 TreeLineWarning LSTM 注意力模型")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--report", type=Path)
-    parser.add_argument("--samples", type=int, default=5000)
+    parser.add_argument("--samples", type=int, default=2000)
     parser.add_argument("--sequence-length", type=int, default=18)
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--seed", type=int, default=20260728)

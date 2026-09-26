@@ -35,6 +35,13 @@ prediction_results*.json
 /build/
 /dist/
 /.deliverable_*/
+/.build_*/
+/.chart-data-*/
+/.source_*/
+/.ppt_source_extract/
+/.test_tmp_*/
+/.codex-temp/
+/.codex-test-run-*/
 /.ppt_build_*/
 /.pytest-*/
 /.pytest_tmp/
