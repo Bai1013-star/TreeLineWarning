@@ -7,6 +7,7 @@ import laspy
 import numpy as np
 import pytest
 from algorithms.io import LasIoError
+from algorithms.preprocessing import preview
 from algorithms.preprocessing.preview import build_pointcloud_preview
 from core.contracts import CancellationToken, PipelineProgress
 
@@ -90,6 +91,37 @@ def test_preview_streams_multiple_chunks_and_limits_output(tmp_path: Path) -> No
     assert len(data["xyz"]) == 4
     assert data["original_index"].tolist() == [0, 3, 6, 9]
     assert result.metadata["downsampling"]["stride"] == 3
+
+
+def test_preview_degrades_when_rss_metrics_are_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.las"
+    output_dir = tmp_path / "previews"
+    write_las(source, point_count=6)
+    monkeypatch.setattr(preview, "_rss_bytes", lambda _process: None)
+
+    result = build_pointcloud_preview(
+        source,
+        output_dir,
+        source_id="source",
+        target_preview_points=4,
+        max_preview_points=4,
+        chunk_size=2,
+        generate_html=False,
+    )
+    data = load_npz(result.npz_path)
+
+    assert isinstance(result, preview.PreviewResult)
+    assert result.npz_path.is_file()
+    assert result.json_path.is_file()
+    assert data["original_index"].tolist() == [0, 2, 4]
+    assert result.metadata["memory"]["rss_peak_bytes"] is None
+    assert result.metadata["source_id"] == "source"
+    assert result.metadata["original_point_count"] == 6
+    assert result.metadata["preview_point_count"] == len(data["xyz"])
+    assert result.metadata["downsampling"]["stride"] == 2
 
 
 def test_preview_deterministic_for_same_parameters(tmp_path: Path) -> None:

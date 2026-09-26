@@ -110,7 +110,13 @@ def build_pointcloud_preview(
                     if value is not None:
                         arrays.add_attribute(name, np.asarray(value)[selected])
 
-            peak_memory = max(peak_memory, _rss_bytes(process))
+            current_memory = _rss_bytes(process)
+            if current_memory is not None:
+                peak_memory = (
+                    current_memory
+                    if peak_memory is None
+                    else max(peak_memory, current_memory)
+                )
             _report(
                 reporter,
                 source_id,
