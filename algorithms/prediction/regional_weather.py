@@ -140,6 +140,9 @@ def regional_weather(province: str, city: str, district: str = "") -> dict[str, 
             "latitude": latitude,
             "longitude": longitude,
             "timezone": "Asia/Shanghai",
+            # Open-Meteo defaults to km/h.  Prediction thresholds and the
+            # browser form use m/s, so the unit must be explicit.
+            "wind_speed_unit": "ms",
             "current": (
                 "temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,wind_gusts_10m"
             ),
@@ -183,6 +186,13 @@ def regional_weather(province: str, city: str, district: str = "") -> dict[str, 
             "forecast_date": str((daily.get("time") or [""])[0]),
             "source": PROVIDER_NAME,
             "source_url": "https://open-meteo.com/en/docs",
+            "units": {
+                "temperature": "°C",
+                "humidity": "%",
+                "rainfall": "mm",
+                "wind_speed": "m/s",
+                "sunlight_hours": "h",
+            },
         },
         "cached": False,
         "notice": "在线气象快照仅用于本次风险计算；现场实测和属地气象预警优先。",

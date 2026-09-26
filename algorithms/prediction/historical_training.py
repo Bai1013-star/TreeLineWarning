@@ -6,6 +6,7 @@ import csv
 import io
 import json
 import logging
+import math
 import re
 from collections import defaultdict
 from collections.abc import Iterable
@@ -288,6 +289,7 @@ def normalize_history_rows(
     valid: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     detected_columns: set[str] = set()
+    seen_observations: set[tuple[str, str]] = set()
     for row_number, raw in enumerate(rows, start=2):
         mapped: dict[str, Any] = {}
         for header, value in raw.items():
@@ -296,7 +298,15 @@ def normalize_history_rows(
                 mapped[canonical] = value
                 detected_columns.add(canonical)
         try:
-            valid.append(_normalize_row(mapped, row_number))
+            normalized = _normalize_row(mapped, row_number)
+            observation_key = (
+                str(normalized["tree_id"]),
+                str(normalized["observation_date"]),
+            )
+            if observation_key in seen_observations:
+                raise ValueError("同一树木编号和观测日期重复；每棵树每天只能保留一条记录")
+            seen_observations.add(observation_key)
+            valid.append(normalized)
         except (TypeError, ValueError) as exc:
             if len(errors) < 200:
                 errors.append({"row": row_number, "message": str(exc)})
@@ -323,9 +333,12 @@ def normalize_history_rows(
         "records": valid,
         "preview": preview,
         "errors": errors,
-        "trainable": trainable_sequences >= 2,
+        "trainable": trainable_sequences >= 2 and eligible_trees >= 2,
+        "deployment_ready": trainable_sequences >= 6 and eligible_trees >= 3,
         "requirements": [
             "同一树木编号至少需要两个按日期排序的观测点",
+            "试训至少需要两棵树；候选模型发布至少需要三棵树和六个时序样本",
+            "同一树木编号在同一天只能保留一条观测记录",
             "每行必须提供风险分，或提供可映射的风险等级",
             "树高、胸径、四类距离、风雨湿温和日照必须完整",
         ],
@@ -355,9 +368,12 @@ def _normalize_row(row: dict[str, Any], row_number: int) -> dict[str, Any]:
         if value is None or str(value).strip() == "":
             continue
         try:
-            result[field] = float(value)
+            number = float(value)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{field} 必须是数值") from exc
+        if not math.isfinite(number):
+            raise ValueError(f"{field} 必须是有限数值")
+        result[field] = number
 
     result.setdefault("age", 0.0)
     result.setdefault("wind_offset_distance", 0.0)
@@ -380,6 +396,18 @@ def _normalize_row(row: dict[str, Any], row_number: int) -> dict[str, Any]:
     ):
         if result[field] <= 0:
             raise ValueError(f"{field} 必须大于 0")
+    for field in (
+        "age",
+        "wind_offset_distance",
+        "maximum_sag_winter",
+        "maximum_sag_summer",
+        "wind_speed",
+        "rainfall",
+    ):
+        if result[field] < 0:
+            raise ValueError(f"{field} 不能小于 0")
+    if result["voltage_level_kv"] <= 0:
+        raise ValueError("voltage_level_kv 必须大于 0")
     if not 0 <= result["humidity"] <= 100:
         raise ValueError("湿度必须在 0–100% 之间")
     if not -60 <= result["temperature"] <= 60:
@@ -446,12 +474,8 @@ def fine_tune_with_history(
         if len(samples) < 2:
             raise ValueError("至少需要两个可训练时序样本")
         rng = np.random.default_rng(seed)
-        order = rng.permutation(len(samples))
-        validation_count = max(1, int(round(len(samples) * 0.2)))
-        validation_idx = order[-validation_count:]
-        training_idx = order[:-validation_count]
-        if not len(training_idx):
-            raise ValueError("有效训练样本不足")
+        tree_ids = np.asarray([sample[4] for sample in samples], dtype=object)
+        training_idx, validation_idx = _tree_holdout_indices(tree_ids, rng)
 
         features = np.stack([sample[0] for sample in samples]).astype(np.float32)
         species_ids = np.asarray([sample[1] for sample in samples], dtype=np.int64)
@@ -500,7 +524,16 @@ def fine_tune_with_history(
                 best_params = deepcopy(model.params)
 
         model.params = best_params
-        deployed = best_mae < before_mae
+        improvement = before_mae - best_mae
+        training_tree_count = len(set(tree_ids[training_idx]))
+        validation_tree_count = len(set(tree_ids[validation_idx]))
+        deployment_eligible = (
+            len(training_idx) >= 4
+            and len(validation_idx) >= 2
+            and training_tree_count >= 2
+            and validation_tree_count >= 1
+        )
+        deployed = deployment_eligible and improvement >= 0.1
         trained_at = datetime.now().isoformat(timespec="seconds")
         if deployed:
             metadata = deepcopy(metadata)
@@ -510,6 +543,8 @@ def fine_tune_with_history(
                     "trained_at": trained_at,
                     "training_samples": int(len(training_idx)),
                     "validation_samples": int(len(validation_idx)),
+                    "training_tree_count": int(training_tree_count),
+                    "validation_tree_count": int(validation_tree_count),
                     "before_validation_mae": round(before_mae, 4),
                     "after_validation_mae": round(best_mae, 4),
                 }
@@ -527,27 +562,68 @@ def fine_tune_with_history(
             "status": "deployed" if deployed else "not_deployed",
             "deployed": deployed,
             "message": (
-                "验证误差下降，增量训练模型已发布"
+                "独立树木验证误差明显下降，增量训练模型已发布"
                 if deployed
-                else "验证误差未改善，已保留原线上模型"
+                else (
+                    "独立验证样本不足，已完成试训但不发布模型"
+                    if not deployment_eligible
+                    else "独立树木验证误差未明显改善，已保留原线上模型"
+                )
             ),
             "trained_at": trained_at,
             "sequence_samples": len(samples),
             "training_samples": int(len(training_idx)),
             "validation_samples": int(len(validation_idx)),
+            "training_tree_count": int(training_tree_count),
+            "validation_tree_count": int(validation_tree_count),
+            "validation_split": "group_holdout_by_tree_id",
+            "deployment_eligible": deployment_eligible,
             "epochs": int(epochs),
             "learning_rate": float(learning_rate),
             "before_validation_mae": round(before_mae, 4),
             "after_validation_mae": round(best_mae, 4),
-            "improvement": round(before_mae - best_mae, 4),
+            "improvement": round(improvement, 4),
             "output_path": str(output_path) if deployed else None,
             "epoch_history": epoch_history,
         }
 
 
+def _tree_holdout_indices(
+    tree_ids: np.ndarray,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Split by tree identity so overlapping sequences cannot leak into validation."""
+    unique_tree_ids = np.unique(tree_ids.astype(str))
+    if len(unique_tree_ids) < 2:
+        raise ValueError("增量训练至少需要两棵树，以形成独立的训练集和验证集")
+    shuffled_trees = rng.permutation(unique_tree_ids)
+    validation_tree_count = max(1, int(round(len(shuffled_trees) * 0.2)))
+    validation_trees = set(shuffled_trees[-validation_tree_count:])
+    normalized_tree_ids = tree_ids.astype(str)
+    validation_idx = np.asarray(
+        [
+            index
+            for index, tree_id in enumerate(normalized_tree_ids)
+            if tree_id in validation_trees
+        ],
+        dtype=np.int64,
+    )
+    training_idx = np.asarray(
+        [
+            index
+            for index, tree_id in enumerate(normalized_tree_ids)
+            if tree_id not in validation_trees
+        ],
+        dtype=np.int64,
+    )
+    if not len(training_idx) or not len(validation_idx):
+        raise ValueError("无法形成独立的训练集和验证集")
+    return training_idx, validation_idx
+
+
 def _build_training_samples(
     records: list[dict[str, Any]], metadata: dict[str, Any]
-) -> list[tuple[np.ndarray, int, float, float]]:
+) -> list[tuple[np.ndarray, int, float, float, str]]:
     sequence_length = int(metadata["sequence_length"])
     mean = np.asarray(metadata["normalization"]["mean"], dtype=np.float32)
     std = np.asarray(metadata["normalization"]["std"], dtype=np.float32)
@@ -576,6 +652,7 @@ def _build_training_samples(
                     int(species_id),
                     float(latest["observation_month"]),
                     float(latest["risk_score"]),
+                    str(latest["tree_id"]),
                 )
             )
     return samples
@@ -681,6 +758,138 @@ def training_template_csv() -> str:
             7,
             43,
             "中风险",
+        ],
+        [
+            2,
+            "国槐",
+            "2026-01-20",
+            11.8,
+            16,
+            25.0,
+            7.2,
+            7.0,
+            6.5,
+            0.4,
+            110,
+            3.5,
+            5,
+            5,
+            12,
+            55,
+            3,
+            4,
+            24,
+            "低风险",
+        ],
+        [
+            2,
+            "国槐",
+            "2026-02-20",
+            11.82,
+            16.1,
+            25.04,
+            7.18,
+            6.98,
+            6.48,
+            0.5,
+            110,
+            3.5,
+            5,
+            6,
+            18,
+            58,
+            7,
+            5,
+            28,
+            "低风险",
+        ],
+        [
+            2,
+            "国槐",
+            "2026-03-20",
+            11.85,
+            16.2,
+            25.09,
+            7.15,
+            6.95,
+            6.45,
+            0.5,
+            110,
+            3.5,
+            5,
+            8,
+            30,
+            63,
+            13,
+            7,
+            36,
+            "低风险",
+        ],
+        [
+            3,
+            "油松",
+            "2026-01-25",
+            9.6,
+            18,
+            21.0,
+            8.0,
+            7.8,
+            7.2,
+            0.3,
+            110,
+            3.5,
+            5,
+            4,
+            8,
+            48,
+            1,
+            4,
+            18,
+            "低风险",
+        ],
+        [
+            3,
+            "油松",
+            "2026-02-25",
+            9.61,
+            18.1,
+            21.02,
+            7.98,
+            7.78,
+            7.18,
+            0.3,
+            110,
+            3.5,
+            5,
+            5,
+            15,
+            52,
+            5,
+            5,
+            21,
+            "低风险",
+        ],
+        [
+            3,
+            "油松",
+            "2026-03-25",
+            9.63,
+            18.2,
+            21.05,
+            7.95,
+            7.75,
+            7.15,
+            0.4,
+            110,
+            3.5,
+            5,
+            7,
+            25,
+            57,
+            11,
+            7,
+            27,
+            "低风险",
         ],
     ]
     stream = io.StringIO()

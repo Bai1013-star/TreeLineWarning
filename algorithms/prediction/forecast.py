@@ -602,7 +602,9 @@ class ForecastService:
             "maximum_sag_summer": float(selected_value("maximum_sag_summer")),
             "span_length": float(selected_value("span_length")),
             "conductor_height": float(selected_value("conductor_height")),
-            "contact_target": normalize_contact_target(selected_value("contact_target")),
+            "contact_target": normalize_contact_target(
+                selected_value("contact_target"), strict=True
+            ),
             "line_direction": str(selected_value("line_direction")),
             "observation_date": observed_on.isoformat(),
             "observation_year": observed_on.year,
@@ -691,6 +693,9 @@ class ForecastService:
 
     @staticmethod
     def _validate_snapshot(value: dict[str, Any]) -> None:
+        for field, field_value in value.items():
+            if isinstance(field_value, (int, float)) and not math.isfinite(float(field_value)):
+                raise ValueError(f"{field} 必须是有限数值")
         if value["height"] <= 0:
             raise ValueError("树高必须大于 0")
         if value["diameter"] <= 0:

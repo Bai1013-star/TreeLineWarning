@@ -55,6 +55,7 @@ def test_local_photo_samples_train_and_rank_candidates(tmp_path):
     trained = client.post("/species-recognition/train")
     assert trained.status_code == 200
     assert trained.json()["status"]["trained"] is True
+    assert trained.json()["status"]["field_validated"] is False
 
     prediction = client.post(
         "/species-recognition/predict",
@@ -64,11 +65,38 @@ def test_local_photo_samples_train_and_rank_candidates(tmp_path):
     assert prediction.json()["top_species"] == "杨树"
     assert prediction.json()["candidates"][0]["scientific_name"]
     assert prediction.json()["candidates"][0]["identification_features"]
+    assert prediction.json()["score_type"] == "heuristic_similarity_unvalidated"
 
     sample_id = first.json()["record"]["id"]
     deleted = client.delete(f"/species-recognition/samples/{sample_id}")
     assert deleted.status_code == 200
     assert deleted.json()["trained"] is False
+
+
+def test_adding_a_sample_invalidates_the_previous_centroid_model(tmp_path):
+    client = TestClient(create_app(training_output_dir=tmp_path))
+    for species, color in (("杨树", (30, 160, 40)), ("榆树", (170, 80, 30))):
+        response = client.post(
+            "/species-recognition/samples",
+            data={"species": species},
+            files=[("photos", (f"{species}.jpg", _image_bytes(color), "image/jpeg"))],
+        )
+        assert response.status_code == 200
+    assert client.post("/species-recognition/train").json()["status"]["trained"] is True
+
+    saved = client.post(
+        "/species-recognition/samples",
+        data={"species": "国槐"},
+        files=[("photos", ("locust.jpg", _image_bytes((60, 130, 55)), "image/jpeg"))],
+    )
+
+    assert saved.status_code == 200
+    assert saved.json()["status"]["trained"] is False
+    prediction = client.post(
+        "/species-recognition/predict",
+        files=[("photos", ("unknown.jpg", _image_bytes((60, 130, 55)), "image/jpeg"))],
+    )
+    assert prediction.status_code == 422
 
 
 def test_video_frame_metadata_is_saved_and_used_with_extracted_frames(tmp_path):

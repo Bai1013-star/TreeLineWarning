@@ -162,6 +162,24 @@ def test_standard_validation_rejects_invalid_threshold_order():
         PredictionStandards.from_mapping({"wind_warning_speed": 20, "wind_high_speed": 10})
 
 
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
+def test_rule_predictor_rejects_nonfinite_inputs(bad_value):
+    predictor = TreeRiskPredictor()
+    with pytest.raises(ValueError, match="有限数值"):
+        predictor.predict(
+            TreeInput(
+                species="杨树",
+                height=bad_value,
+                age=20,
+                diameter=30,
+                wind_speed=5,
+                rainfall=10,
+                humidity=60,
+                slope=5,
+            )
+        )
+
+
 def test_voltage_rules_and_seasonal_sag():
     standard = PredictionStandards()
     summer = analyze_wire(

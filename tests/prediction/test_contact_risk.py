@@ -172,3 +172,24 @@ def test_standalone_contact_risk_allows_omitting_annual_growth():
     assert result["annual_height_growth_m"] is None
     assert result["projected_height_one_year_m"] is None
     assert result["one_year_over_line"] is False
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
+def test_contact_risk_rejects_nonfinite_measurements(bad_value):
+    with pytest.raises(ValueError, match="有限数值"):
+        contact_risk(
+            contact_target="未碰到",
+            tree_height=bad_value,
+            conductor_height=12,
+            clearance_distance=4,
+        )
+
+
+def test_contact_risk_rejects_unknown_relation_instead_of_treating_it_as_safe():
+    with pytest.raises(ValueError, match="关系选项无效"):
+        contact_risk(
+            contact_target="手工录入的未知状态",
+            tree_height=10,
+            conductor_height=12,
+            clearance_distance=4,
+        )

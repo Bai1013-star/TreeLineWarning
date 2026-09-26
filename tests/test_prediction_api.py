@@ -3,6 +3,7 @@ import json
 import threading
 from pathlib import Path
 
+import algorithms.prediction.regional_weather as regional_weather_module
 import api.prediction_api as prediction_api
 import pytest
 from algorithms.prediction.species_growth import SpeciesGrowthModel
@@ -614,6 +615,9 @@ def test_history_upload_and_training_api(tmp_path: Path, monkeypatch):
         "1,杨树,2026-01-15,17.2,33.2,6.4,6.2,5.4,0.8,110,3.5,5,6,20,60,5,5,32\n"
         "1,杨树,2026-02-15,17.22,33.24,6.39,6.19,5.39,0.8,110,3.5,5,7,28,62,8,6,35\n"
         "1,杨树,2026-03-15,17.26,33.31,6.37,6.18,5.37,0.9,110,3.5,5,9,42,66,14,7,43"
+        "\n2,国槐,2026-01-20,11.8,25,7.2,7,6.5,0.4,110,3.5,5,5,12,55,3,4,24"
+        "\n2,国槐,2026-02-20,11.82,25.04,7.18,6.98,6.48,0.5,110,3.5,5,6,18,58,7,5,28"
+        "\n2,国槐,2026-03-20,11.85,25.09,7.15,6.95,6.45,0.5,110,3.5,5,8,30,63,13,7,36"
     )
     imported = client.post(
         "/training/import/file",
@@ -625,7 +629,7 @@ def test_history_upload_and_training_api(tmp_path: Path, monkeypatch):
     assert "records" not in imported.json()
 
     def fake_fine_tune(records, *, model_path, output_path, epochs, learning_rate, allow_replace):
-        assert len(records) == 3
+        assert len(records) == 6
         assert model_path == source_model
         assert output_path.parent == output_dir
         assert epochs == 5
@@ -665,9 +669,11 @@ def test_history_upload_and_training_api(tmp_path: Path, monkeypatch):
     db.close()
 
 
-def _single_training_record(day: int, *, height: float, risk_score: float) -> dict:
+def _single_training_record(
+    day: int, *, height: float, risk_score: float, tree_id: str = "single-1"
+) -> dict:
     return {
-        "tree_id": "single-1",
+        "tree_id": tree_id,
         "species": "杨树",
         "observation_date": f"2026-0{day}-15",
         "height": height,
@@ -708,7 +714,7 @@ def test_single_imports_are_merged_and_deduplicated_in_training_pool(tmp_path: P
     assert pool.json()["valid_row_count"] == 3
     assert pool.json()["tree_count"] == 1
     assert pool.json()["trainable_sequence_count"] == 2
-    assert pool.json()["trainable"] is True
+    assert pool.json()["trainable"] is False
     assert len(db.list_training_records()) == 4
     db.close()
 
@@ -724,25 +730,34 @@ def test_training_pool_trains_merged_single_imports(tmp_path: Path, monkeypatch)
             training_output_dir=output_dir,
         )
     )
-    for day in (1, 2, 3):
+    records = [
+        _single_training_record(day, height=17 + day / 10, risk_score=30 + day)
+        for day in (1, 2, 3)
+    ] + [
+        _single_training_record(
+            day,
+            height=12 + day / 10,
+            risk_score=24 + day,
+            tree_id="single-2",
+        )
+        for day in (1, 2, 3)
+    ]
+    for record in records:
         response = client.post(
             "/training/import/text",
             json={
-                "text": json.dumps(
-                    [_single_training_record(day, height=17 + day / 10, risk_score=30 + day)],
-                    ensure_ascii=False,
-                ),
+                "text": json.dumps([record], ensure_ascii=False),
                 "format": "json",
             },
         )
         assert response.status_code == 200
 
     def fake_fine_tune(records, **kwargs):
-        assert len(records) == 3
+        assert len(records) == 6
         return {
             "status": "not_deployed",
             "deployed": False,
-            "sequence_samples": 2,
+            "sequence_samples": 4,
             "before_validation_mae": 3.2,
             "after_validation_mae": 3.3,
             "improvement": -0.1,
@@ -753,9 +768,9 @@ def test_training_pool_trains_merged_single_imports(tmp_path: Path, monkeypatch)
         "/training/train-pool", json={"epochs": 5, "learning_rate": 0.001}
     )
     assert trained.status_code == 200
-    assert trained.json()["metrics"]["sequence_samples"] == 2
+    assert trained.json()["metrics"]["sequence_samples"] == 4
     assert db.list_training_datasets()[0]["source_format"] == "pool_snapshot"
-    assert len(db.list_training_records()) == 3
+    assert len(db.list_training_records()) == 6
     db.close()
 
 
@@ -1007,6 +1022,45 @@ def test_history_delete_erases_saved_full_report_and_regional_weather_endpoint(
     assert regions.status_code == 200
     assert "北京市" in regions.text
     db.close()
+
+
+def test_regional_weather_requests_wind_speed_in_meters_per_second(monkeypatch):
+    calls = []
+
+    def fake_get_json(url, params):
+        calls.append((url, params))
+        if url == regional_weather_module.GEOCODING_URL:
+            return {
+                "results": [
+                    {"name": "丰台区", "latitude": 39.85, "longitude": 116.28}
+                ]
+            }
+        return {
+            "current": {
+                "time": "2026-09-26T12:00",
+                "temperature_2m": 20,
+                "relative_humidity_2m": 50,
+                "precipitation": 0,
+                "wind_speed_10m": 3,
+                "wind_gusts_10m": 5,
+            },
+            "daily": {
+                "time": ["2026-09-26"],
+                "precipitation_sum": [0],
+                "sunshine_duration": [21600],
+            },
+        }
+
+    regional_weather_module._CACHE.clear()
+    monkeypatch.setattr(regional_weather_module, "_get_json", fake_get_json)
+    result = regional_weather_module.regional_weather("北京市", "北京市", "丰台区")
+
+    forecast_params = next(
+        params for url, params in calls if url == regional_weather_module.FORECAST_URL
+    )
+    assert forecast_params["wind_speed_unit"] == "ms"
+    assert result["weather"]["wind_speed"] == 3
+    assert result["weather"]["units"]["wind_speed"] == "m/s"
 
 
 def test_forecast_endpoint_returns_selectable_horizons(tmp_path: Path):
@@ -1324,6 +1378,9 @@ def test_app_model_configuration_is_isolated_and_injected_models_win(tmp_path: P
     status = TestClient(first).get("/model/status").json()
     assert status["temporal_model"]["source"] == "injected"
     assert status["species_growth_model"]["source"] == "injected"
+    assert status["temporal_model"]["field_validated"] is False
+    assert status["temporal_model"]["validation_scope"] == "synthetic_data_only"
+    assert "现场数据验证" in status["temporal_model"]["warning"]
     assert str(tmp_path) not in str(status)
 
 
@@ -1348,6 +1405,24 @@ def test_predict_rejects_invalid_pipeline_result(tmp_path: Path):
         prediction_api.create_app(database=db, prediction_pipeline=InvalidPipeline())
     ).post("/predict", json={"tree_id": 1})
     assert response.status_code == 422
+    db.close()
+
+
+def test_predict_rejects_nonfinite_pipeline_score(tmp_path: Path):
+    class InvalidScorePipeline:
+        def predict(self, _):
+            return {
+                "risk_level": "低风险",
+                "risk_score": float("nan"),
+                "suggestion": "继续巡检",
+            }
+
+    db = Database(tmp_path / "invalid-score.db")
+    response = TestClient(
+        prediction_api.create_app(database=db, prediction_pipeline=InvalidScorePipeline())
+    ).post("/predict", json={"tree_id": 1})
+    assert response.status_code == 422
+    assert db.get_predictions() == []
     db.close()
 
 

@@ -7,6 +7,7 @@ observable field condition and must not be downgraded by a model score.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 CONTACT_TARGETS = {
@@ -44,9 +45,11 @@ CONTACT_TARGETS = {
 }
 
 
-def normalize_contact_target(value: Any) -> str:
+def normalize_contact_target(value: Any, *, strict: bool = False) -> str:
     """Return the stable contact target code used in forecast records."""
     key = str(value or "").strip().lower()
+    if strict and key and key not in CONTACT_TARGETS:
+        raise ValueError("树枝与线路关系选项无效，请重新选择")
     return CONTACT_TARGETS.get(key, "none")
 
 
@@ -64,12 +67,26 @@ def contact_risk(
     ``conductor_height`` is optional in older data.  It only activates the
     over-line rule when it is a positive measured/design height.
     """
-    target = normalize_contact_target(contact_target)
+    target = normalize_contact_target(contact_target, strict=True)
     height = float(tree_height)
     line_height = float(conductor_height)
     general_limit = float(general_risk_distance)
     safe_limit = float(safe_distance)
-    clearance = None if clearance_distance is None else max(0.0, float(clearance_distance))
+    clearance = None if clearance_distance is None else float(clearance_distance)
+    for name, number in (
+        ("树高", height),
+        ("导线高度", line_height),
+        ("一般风险距离", general_limit),
+        ("安全距离", safe_limit),
+    ):
+        if not math.isfinite(number):
+            raise ValueError(f"{name}必须是有限数值")
+    if clearance is not None and not math.isfinite(clearance):
+        raise ValueError("净空距离必须是有限数值")
+    if height <= 0:
+        raise ValueError("树高必须大于 0")
+    if line_height < 0 or (clearance is not None and clearance < 0):
+        raise ValueError("导线高度和净空距离不能小于 0")
     if general_limit < 0 or safe_limit < 0:
         raise ValueError("树线距离阈值不能小于 0")
     if safe_limit <= general_limit:

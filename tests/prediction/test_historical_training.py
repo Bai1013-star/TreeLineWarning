@@ -1,7 +1,9 @@
 from io import BytesIO
 
+import numpy as np
 import pytest
 from algorithms.prediction.historical_training import (
+    _tree_holdout_indices,
     fine_tune_with_history,
     parse_history_file,
     parse_history_text,
@@ -34,7 +36,7 @@ def test_pasted_excel_table_is_normalized_and_trainable():
     assert parsed["invalid_row_count"] == 0
     assert parsed["tree_count"] == 1
     assert parsed["trainable_sequence_count"] == 2
-    assert parsed["trainable"] is True
+    assert parsed["trainable"] is False
     assert parsed["records"][0]["species"] == "杨树"
     assert parsed["records"][0]["observation_month"] == 1
     assert parsed["records"][2]["risk_score"] == 43
@@ -68,7 +70,7 @@ def test_xlsx_file_upload_uses_first_sheet_with_data():
     assert parsed["source_format"] == "xlsx"
     assert parsed["sheet_name"] == "月度巡检"
     assert parsed["valid_row_count"] == 3
-    assert parsed["trainable"] is True
+    assert parsed["trainable"] is False
 
 
 def test_invalid_rows_are_reported_without_hiding_valid_rows():
@@ -91,8 +93,31 @@ def test_template_can_be_reimported():
         "treeline_history_training_template.csv",
         training_template_csv().encode("utf-8"),
     )
-    assert parsed["valid_row_count"] == 3
-    assert parsed["trainable_sequence_count"] == 2
+    assert parsed["valid_row_count"] == 9
+    assert parsed["tree_count"] == 3
+    assert parsed["trainable_sequence_count"] == 6
+    assert parsed["trainable"] is True
+    assert parsed["deployment_ready"] is True
+
+
+def test_duplicate_tree_date_and_nonfinite_values_are_rejected():
+    duplicate = ROWS.splitlines()[0]
+    nonfinite = ROWS.splitlines()[1].replace("17.22", "NaN")
+    parsed = parse_history_text(
+        f"{HEADERS}\n{duplicate}\n{duplicate}\n{nonfinite}", "tsv"
+    )
+
+    assert parsed["valid_row_count"] == 1
+    assert parsed["invalid_row_count"] == 2
+    assert any("重复" in error["message"] for error in parsed["errors"])
+    assert any("有限数值" in error["message"] for error in parsed["errors"])
+
+
+def test_training_validation_split_never_shares_tree_ids():
+    tree_ids = np.asarray(["a", "a", "b", "b", "c", "c"], dtype=object)
+    training, validation = _tree_holdout_indices(tree_ids, np.random.default_rng(7))
+
+    assert set(tree_ids[training]).isdisjoint(set(tree_ids[validation]))
 
 
 @pytest.mark.parametrize("filename", ["history.xls", "history.xlsx.zip", "history.exe"])

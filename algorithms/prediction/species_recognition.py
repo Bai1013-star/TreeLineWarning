@@ -111,10 +111,30 @@ def _mean_feature(features: list[list[float]]) -> list[float] | None:
     return np.mean(np.asarray(features, dtype=np.float64), axis=0).round(8).tolist()
 
 
-def _normalized_distance(feature: list[float], centroid: list[float]) -> float:
+def _feature_scale(features: list[list[float]]) -> list[float] | None:
+    if not features:
+        return None
+    values = np.asarray(features, dtype=np.float64)
+    scale = np.std(values, axis=0)
+    # Avoid a zero-variance feature dominating after a tiny numerical change.
+    scale = np.where(scale < 1e-6, 1.0, scale)
+    return scale.round(8).tolist()
+
+
+def _normalized_distance(
+    feature: list[float], centroid: list[float], scale: list[float] | None = None
+) -> float:
     current = np.asarray(feature, dtype=np.float64)
     target = np.asarray(centroid, dtype=np.float64)
-    return float(np.linalg.norm(current - target) / max(np.sqrt(len(current)), 1.0))
+    if current.shape != target.shape:
+        raise ValueError("识别模型特征维度与输入不一致，请重新训练模型")
+    divisor = np.ones_like(current) if scale is None else np.asarray(scale, dtype=np.float64)
+    if divisor.shape != current.shape or not np.all(np.isfinite(divisor)):
+        raise ValueError("识别模型特征缩放参数无效，请重新训练模型")
+    divisor = np.where(divisor < 1e-6, 1.0, divisor)
+    return float(
+        np.linalg.norm((current - target) / divisor) / max(np.sqrt(len(current)), 1.0)
+    )
 
 
 def status(root: Path) -> dict:
@@ -133,6 +153,9 @@ def status(root: Path) -> dict:
         "sample_count": len(samples),
         "trained": bool(model.get("species")),
         "trained_species": sorted(model.get("species", {}).keys()),
+        "model_status": "experimental",
+        "field_validated": False,
+        "score_type": "heuristic_similarity_unvalidated",
         "samples": [
             {
                 "id": sample.get("id"),
@@ -145,7 +168,7 @@ def status(root: Path) -> dict:
             }
             for sample in samples
         ],
-        "message": "先保存已知树种样本，再训练；识别结果仅为辅助候选，低置信度必须现场复核。",
+        "message": "先保存已知树种样本，再训练；相似度未经现场独立验证，所有结果都必须人工复核。",
     }
 
 
@@ -163,7 +186,7 @@ def save_sample(
     cloud_feature = point_cloud_feature(point_cloud[1], point_cloud[0]) if point_cloud else None
     if not photo_features and cloud_feature is None:
         raise ValueError("至少选择照片、视频或一个 LAS/LAZ 点云")
-    samples_path, _ = _paths(root)
+    samples_path, model_path = _paths(root)
     data = _read_json(samples_path, {"samples": []})
     record = {
         "id": uuid4().hex,
@@ -178,6 +201,10 @@ def save_sample(
     }
     data.setdefault("samples", []).append(record)
     _write_json(samples_path, data)
+    # A centroid model is a snapshot of the labelled sample set.  Any sample
+    # change invalidates it; continuing to serve the old file would silently
+    # ignore the newly added observation.
+    model_path.unlink(missing_ok=True)
     return {"record": record, "status": status(root)}
 
 
@@ -185,6 +212,18 @@ def train(root: Path) -> dict:
     samples_path, model_path = _paths(root)
     samples = _read_json(samples_path, {"samples": []}).get("samples", [])
     model_species: dict[str, dict] = {}
+    all_photo_features = [
+        sample["photo_feature"] for sample in samples if sample.get("photo_feature")
+    ]
+    all_cloud_features = [
+        sample["point_cloud_feature"]
+        for sample in samples
+        if sample.get("point_cloud_feature")
+    ]
+    feature_scales = {
+        "photo": _feature_scale(all_photo_features),
+        "point_cloud": _feature_scale(all_cloud_features),
+    }
     for species in SUPPORTED_SPECIES:
         species_samples = [sample for sample in samples if sample.get("species") == species]
         photo = [
@@ -203,7 +242,14 @@ def train(root: Path) -> dict:
             }
     if len(model_species) < 2:
         raise ValueError("至少要有两个树种的已标注样本，才能训练候选分类器")
-    payload = {"method": "local_nearest_centroid_auxiliary", "species": model_species}
+    payload = {
+        "method": "local_nearest_centroid_auxiliary",
+        "model_status": "experimental",
+        "field_validated": False,
+        "score_type": "heuristic_similarity_unvalidated",
+        "feature_scales": feature_scales,
+        "species": model_species,
+    }
     _write_json(model_path, payload)
     return {"status": status(root), "method": payload["method"]}
 
@@ -240,43 +286,72 @@ def predict(
     if photo_feature is None and cloud_feature is None:
         raise ValueError("至少选择照片、视频或一个 LAS/LAZ 点云")
     candidates = []
+    feature_scales = model.get("feature_scales", {})
     for species, entry in species_model.items():
         distances = []
         if photo_feature is not None and entry.get("photo_centroid"):
-            distances.append(_normalized_distance(photo_feature, entry["photo_centroid"]))
+            distances.append(
+                _normalized_distance(
+                    photo_feature,
+                    entry["photo_centroid"],
+                    feature_scales.get("photo"),
+                )
+            )
         if cloud_feature is not None and entry.get("point_cloud_centroid"):
-            distances.append(_normalized_distance(cloud_feature, entry["point_cloud_centroid"]))
+            distances.append(
+                _normalized_distance(
+                    cloud_feature,
+                    entry["point_cloud_centroid"],
+                    feature_scales.get("point_cloud"),
+                )
+            )
         if distances:
             candidates.append((species, float(np.mean(distances)), entry["sample_count"]))
     if not candidates:
         raise ValueError("当前模型没有与所选文件类型相匹配的训练样本")
     candidates.sort(key=lambda item: item[1])
-    scale = max(candidates[0][1], 0.05)
+    best_distance = candidates[0][1]
+    second_distance = candidates[1][1] if len(candidates) > 1 else None
+    margin = (
+        max(0.0, 1.0 - best_distance / max(second_distance, 1e-9))
+        if second_distance is not None
+        else 0.0
+    )
     ranked = [
         {
             "species": species,
             "scientific_name": species_profile(species)["scientific_name"],
             "identification_features": species_profile(species)["identification_features"],
             "distance": round(distance, 4),
-            "confidence": round(100 * np.exp(-distance / scale), 1),
+            "confidence": float(
+                round(
+                    max(
+                        0.0,
+                        min(100.0, 70 * np.exp(-distance) + (30 * margin if rank == 0 else 0)),
+                    ),
+                    1,
+                )
+            ),
             "sample_count": count,
         }
-        for species, distance, count in candidates[:3]
+        for rank, (species, distance, count) in enumerate(candidates[:3])
     ]
     top = ranked[0]
     return {
         "candidates": ranked,
         "top_species": top["species"],
         "confidence": top["confidence"],
+        "score_type": "heuristic_similarity_unvalidated",
+        "field_validated": False,
         "input_summary": {
             "photo_count": max(0, len(photo_features) - video_frame_count),
             "video_count": video_count,
             "video_frame_count": video_frame_count,
             "has_point_cloud": cloud_feature is not None,
         },
-        "review_required": top["confidence"] < 80 or top["sample_count"] < 3,
+        "review_required": bool(top["confidence"] < 80 or top["sample_count"] < 3),
         "message": (
-            "结果由所选照片、视频代表画面和/或点云与本地样本比对得到，仅为辅助候选；"
-            "请用叶、树皮、花果和现场档案复核。"
+            "结果由所选照片、视频代表画面和/或点云与本地样本比对得到；"
+            "百分比是未校准的辅助相似度，不是现场准确率，请用叶、树皮、花果和现场档案复核。"
         ),
     }

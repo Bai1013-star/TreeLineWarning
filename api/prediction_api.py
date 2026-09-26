@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import secrets
 from base64 import b64decode
@@ -227,6 +228,24 @@ def _model_status_entry(
     }
     if path is not None:
         entry["file_name"] = Path(path).name
+    metadata = getattr(model, "metadata", {}) if model is not None else {}
+    fine_tuning_history = (
+        metadata.get("fine_tuning_history", []) if isinstance(metadata, dict) else []
+    )
+    entry.update(
+        {
+            "model_status": EXPERIMENTAL_MODEL_STATUS,
+            "field_validated": False,
+            "validation_scope": (
+                "synthetic_plus_incremental_holdout"
+                if fine_tuning_history
+                else "synthetic_data_only"
+            ),
+            "warning": (
+                "模型尚未完成独立现场数据验证；输出只能用于辅助筛查，不能替代现场测距和安全处置。"
+            ),
+        }
+    )
     return entry
 
 
@@ -260,6 +279,8 @@ def normalize_prediction(raw: Any) -> dict[str, Any]:
     if not all(key in candidate for key in required):
         raise ValueError("预测流水线返回结构缺少 risk_level/risk_score/suggestion")
     score = float(candidate["risk_score"])
+    if not math.isfinite(score) or not 0 <= score <= 100:
+        raise ValueError("预测流水线返回的 risk_score 必须是 0–100 的有限数值")
     if score.is_integer():
         score = int(score)
     result = {
@@ -441,6 +462,7 @@ def _empty_training_pool() -> dict[str, Any]:
         "preview": [],
         "errors": [],
         "trainable": False,
+        "deployment_ready": False,
     }
 
 
@@ -567,6 +589,10 @@ async def train_history_dataset(
             "sequence_samples",
             "training_samples",
             "validation_samples",
+            "training_tree_count",
+            "validation_tree_count",
+            "validation_split",
+            "deployment_eligible",
             "epochs",
             "learning_rate",
             "before_validation_mae",
@@ -793,8 +819,11 @@ def predict_contact_risk(payload: dict[str, Any]) -> dict[str, Any]:
         growth = annual_height_growth(species)
         raw_growth = payload.get("annual_height_growth_m")
         annual_growth = None if raw_growth in (None, "") else float(raw_growth)
-        if annual_growth is not None and not 0 <= annual_growth <= 6:
-            raise ValueError("年生长量必须在 0—6 m 之间")
+        if annual_growth is not None:
+            if not math.isfinite(annual_growth):
+                raise ValueError("年生长量必须是有限数值")
+            if not 0 <= annual_growth <= 6:
+                raise ValueError("年生长量必须在 0—6 m 之间")
         result = contact_risk(
             contact_target=payload.get("contact_target", "未碰到"),
             tree_height=height,
