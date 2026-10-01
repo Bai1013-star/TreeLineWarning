@@ -9,6 +9,7 @@ import pytest
 from algorithms.manual_span.dbh_recovery import (
     ALLOMETRIC_ESTIMATE,
     DIRECT_STEM,
+    ESTIMATE,
     HIGH,
     PASS,
     RECOVERED_STEM,
@@ -72,6 +73,24 @@ def test_known_circle_is_high_quality_and_counts_original_rows() -> None:
     assert result["dbh_uncertainty_cm"] is not None
     assert all(section["status"] == PASS for section in result["slices"])
     json.dumps(result)
+
+
+def test_occluded_breast_height_uses_vertical_profile_with_estimate_quality() -> None:
+    angles = np.linspace(0, 2 * np.pi, 48, endpoint=False)
+    rings = []
+    for index in (0, 1, 4, 5):
+        height = 0.85 + index * 0.15 + 0.075
+        diameter = 0.40 - 0.05 * (height - 1.30)
+        rings.append(np.column_stack((
+            diameter / 2 * np.cos(angles), diameter / 2 * np.sin(angles),
+            np.full(len(angles), height),
+        )))
+    xyz = np.vstack(rings)
+    result = fit_stem_dbh(xyz, xyz[:, 2])
+    assert result["dbh_fit_status"] == PASS
+    assert result["dbh_quality"] == ESTIMATE
+    assert result["diagnostics"]["breast_height_occluded"] is True
+    assert result["dbh_cm"] == pytest.approx(40.0, abs=0.1)
 
 
 def test_continuity_prefilter_keeps_vertical_stem_and_drops_spatial_clutter() -> None:

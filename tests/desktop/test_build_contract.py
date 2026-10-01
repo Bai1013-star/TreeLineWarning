@@ -45,7 +45,12 @@ def test_lazrs_runtime_build_contract_detects_the_pinned_backend() -> None:
 
 
 def test_native_proj_data_build_contract_matches_staged_database() -> None:
-    snapshot = REPO_ROOT / ".build-pdal-proj-data-final-20260830-02"
+    import os
+
+    snapshot = Path(os.environ.get(
+        "TREELINE_TEST_PDAL_PROJ_DATA_ROOT",
+        REPO_ROOT / ".build-pdal-proj-data-final-20260830-02",
+    ))
     if not snapshot.is_dir():
         pytest.skip("materialized native PROJ data snapshot is not present")
     data_dir = validate_native_proj_data(snapshot)
@@ -84,3 +89,13 @@ def test_release_spec_bundles_pinned_optional_gpu_runtime() -> None:
     assert '"cupy_backends.cuda.libs.cutensor"' in spec
     assert "cupy-cuda13x==14.2.0" in requirements
     assert "nvidia-cuda-runtime==13.3.29" in requirements
+
+
+def test_packaged_readme_names_the_user_delivery_workbook() -> None:
+    release_builder = (REPO_ROOT / "scripts" / "build_desktop_release.py").read_text(
+        encoding="utf-8"
+    )
+    assert "导出树木风险结果" in release_builder
+    assert "树木风险结果.xlsx" in release_builder
+    assert "23 列，每棵当前保留树一行" in release_builder
+    assert "导出预测输入" not in release_builder

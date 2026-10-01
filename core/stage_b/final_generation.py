@@ -16,6 +16,24 @@ from core.config.fast_baseline import canonical_digest
 FINAL_GENERATION_SCHEMA = "treeline-final-generation-v1"
 
 
+def editor_journal_digest(operations: Iterable[Mapping[str, Any]]) -> str:
+    """Identify exact editor actions, including the removed point membership."""
+
+    semantic = []
+    for operation in operations:
+        kind = str(operation.get("type", ""))
+        item: dict[str, Any] = {
+            "type": kind,
+            "tree_ids": [int(value) for value in operation.get("tree_ids", ())],
+        }
+        if kind == "MERGE":
+            item["merged_id"] = int(operation["merged_id"])
+        elif kind == "REMOVE_POINTS":
+            item["removed_indices_b64"] = str(operation["removed_indices_b64"])
+        semantic.append(item)
+    return "journal-" + canonical_digest(semantic)[:32]
+
+
 def final_generation_id(
     analysis_run_id: str,
     records: Iterable[Any],
@@ -25,7 +43,11 @@ def final_generation_id(
 
     trees = []
     for record in records:
-        getter = record.get if isinstance(record, Mapping) else lambda key, default=None: getattr(record, key, default)
+        getter = (
+            record.get
+            if isinstance(record, Mapping)
+            else lambda key, default=None, record=record: getattr(record, key, default)
+        )
         trees.append(
             {
                 "global_tree_id": int(getter("global_tree_id")),
@@ -61,5 +83,6 @@ def derived_generation_map(value: Any) -> dict[str, str]:
 __all__ = [
     "FINAL_GENERATION_SCHEMA",
     "derived_generation_map",
+    "editor_journal_digest",
     "final_generation_id",
 ]

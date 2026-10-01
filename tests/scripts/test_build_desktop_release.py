@@ -175,6 +175,51 @@ def test_tracked_source_digest_uses_framed_path_and_bytes(
     assert first["head"] == "fixture-head"
     assert first["tracked_file_count"] == 2
     assert len(first["tracked_source_sha256"]) == 64
+    assert first["untracked_build_input_count"] == 0
+    assert first["build_input_sha256"] == first["tracked_source_sha256"]
+
+
+def test_source_digest_catches_new_packaged_module_and_viewer_asset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "tracked.txt").write_bytes(b"same")
+    module = tmp_path / "algorithms" / "spans" / "new_module.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("VALUE = 1\n", encoding="utf-8")
+    asset = tmp_path / "viewer_poc" / "giro3d" / "settings.json"
+    asset.parent.mkdir(parents=True)
+    asset.write_bytes(b'{"value":1}')
+    ignored = tmp_path / "artifacts" / "huge.py"
+    ignored.parent.mkdir()
+    ignored.write_bytes(b"outside build source roots")
+    cache = module.parent / "__pycache__" / "new_module.py"
+    cache.parent.mkdir()
+    cache.write_bytes(b"generated cache")
+
+    def fake_git(args: list[str], *, binary: bool = False) -> str | bytes:
+        if args[0] == "rev-parse":
+            return "fixture-head\n"
+        assert binary
+        return b"tracked.txt\0"
+
+    monkeypatch.setattr(release, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(release, "_git_capture", fake_git)
+    first = release.tracked_source_digest()
+    assert first["untracked_build_input_count"] == 2
+    assert first["build_input_sha256"] != first["tracked_source_sha256"]
+
+    module.write_text("VALUE = 2\n", encoding="utf-8")
+    second = release.tracked_source_digest()
+    assert second["tracked_source_sha256"] == first["tracked_source_sha256"]
+    assert second["build_input_sha256"] != first["build_input_sha256"]
+    assert second != first  # the release receipt flags source_changed_during_run
+
+    asset.write_bytes(b'{"value":2}')
+    third = release.tracked_source_digest()
+    assert third["build_input_sha256"] != second["build_input_sha256"]
+    ignored.write_bytes(b"changed outside build source roots")
+    cache.write_bytes(b"changed generated cache")
+    assert release.tracked_source_digest() == third
 
 
 def test_proj_validator_requires_source_bound_provenance(tmp_path: Path) -> None:

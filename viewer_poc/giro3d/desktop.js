@@ -21,6 +21,8 @@
     executionMode: 'AUTO',
   };
   const browserAcceptance = new URLSearchParams(window.location.search).has('browser-test');
+  let workspaceRefreshPromise = null;
+  let workspaceRefreshPending = false;
   const $ = id => document.getElementById(id);
   const esc = value => String(value ?? '—').replace(/[&<>"']/g, ch => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -308,12 +310,14 @@
       loadViewer();
     } else if (uiState === 'FINALIZED') {
       show('resultSection'); show('objectSection'); show('analysisOverview');
+      show('viewerWrap', state.viewerLoaded);
+      if (state.viewerLoaded) $('center').classList.add('review-mode');
       $('pipelineStages').innerHTML = pipelineMarkup('done');
       const completed = (state.batch.spans || []).filter(span => span.status === 'FINALIZED').length;
       const futureAction = state.canPredict
         ? '<button data-action="open-future-preview">预测与模拟</button>'
         : '<button data-action="open-future-preview" disabled>预测与模拟 🔒</button>';
-      $('stageHost').innerHTML = stageCard('步骤 6 / 6', '结果已完成', '单木复核和档距结果已定稿。现在可以查看当前最终报告、实验性场景预览或导出预测输入。', `<button data-action="open-viewer">打开复核视图</button><button data-action="open-current-report">打开当前最终报告</button>${futureAction}<button class="primary" data-action="export-prediction">导出预测输入</button><button data-action="export-html">导出 HTML 报告</button>`, `<div class="result-summary"><div class="summary-tile"><span>已定稿档距</span><b>${completed}</b></div><div class="summary-tile"><span>风险阈值</span><b>${esc(state.batch.risk_policy?.warning_clearance_threshold_m)} m</b></div><div class="summary-tile"><span>结果状态</span><b class="status-good">已完成</b></div></div>`);
+      $('stageHost').innerHTML = stageCard('步骤 6 / 6', '结果已完成', '单木复核和档距结果已定稿。现在可以查看当前最终报告、实验性场景预览或导出树木风险结果。', `<button data-action="open-viewer">打开复核视图</button><button data-action="open-current-report">打开当前最终报告</button>${futureAction}<button class="primary" data-action="export-prediction">导出树木风险结果</button><button data-action="export-html">导出 HTML 报告</button>`, `<div class="result-summary"><div class="summary-tile"><span>已定稿档距</span><b>${completed}</b></div><div class="summary-tile"><span>风险阈值</span><b>${esc(state.batch.risk_policy?.warning_clearance_threshold_m)} m</b></div><div class="summary-tile"><span>结果状态</span><b class="status-good">已完成</b></div></div>`);
     }
   }
 
@@ -334,6 +338,20 @@
       setStatus(userError(error, '本地服务暂时不可用，请重新启动软件。'), 'bad');
       $('stageHost').innerHTML = stageCard('连接失败', '无法连接本地服务', '请关闭软件后重新打开；详细信息已写入项目日志。');
     }
+  }
+
+  function requestWorkspaceRefresh() {
+    if (workspaceRefreshPromise) {
+      workspaceRefreshPending = true;
+      return workspaceRefreshPromise;
+    }
+    workspaceRefreshPromise = (async () => {
+      do {
+        workspaceRefreshPending = false;
+        await loadWorkspace();
+      } while (workspaceRefreshPending);
+    })().finally(() => { workspaceRefreshPromise = null; });
+    return workspaceRefreshPromise;
   }
 
   async function createProject() {
@@ -587,7 +605,7 @@
       const bridge = nativeApi();
       const result = bridge?.export_excel
         ? await bridge.export_excel()
-        : await browserDownload('/download_prediction', 'Prediction_Input.xlsx');
+        : await browserDownload('/download_prediction', '树木风险结果.xlsx');
       if (result?.cancelled) { setStatus('已取消 Excel 导出', 'warn'); return; }
       await loadWorkspace();
       setStatus(`Excel 已保存${result?.path ? `：${result.path}` : ''}`, 'good');
@@ -647,6 +665,19 @@
   $('openFuturePreview').addEventListener('click', openFuturePreview);
   $('refreshViewer').addEventListener('click', () => loadViewer(true));
   $('viewer').addEventListener('load', localizeViewerFrame);
+  $('viewer').addEventListener('load', requestWorkspaceRefresh);
+  window.addEventListener('message', event => {
+    if (event.origin !== window.location.origin || event.source !== $('viewer').contentWindow) return;
+    if (event.data?.type === 'treeline:tree-review-changed') void requestWorkspaceRefresh();
+  });
+  window.addEventListener('focus', () => {
+    if (state.viewerLoaded) void requestWorkspaceRefresh();
+  });
+  window.setInterval(() => {
+    if (state.viewerLoaded && !$('viewerWrap').classList.contains('hidden') && !document.hidden) {
+      void requestWorkspaceRefresh();
+    }
+  }, 5000);
   $('finalizeBatch').addEventListener('click', finalizeBatch);
   $('exportPrediction').addEventListener('click', exportPrediction);
   $('exportWorkOrder').addEventListener('click', exportPrediction);

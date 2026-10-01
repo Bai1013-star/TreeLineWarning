@@ -51,7 +51,20 @@ _CURRENT_TREE_FIELDS = (
     "current_risk",
     "quality_state",
     "human_edited",
-) + DBH_FIELDS + CLEARANCE_FIELDS
+) + DBH_FIELDS + (
+    "dbh_pre_reference_failure_reason",
+    "dbh_reference_basis",
+    "dbh_reference_estimator",
+    "dbh_reference_value_cm",
+    "dbh_reference_count",
+    "dbh_reference_mean_cm",
+    "dbh_reference_median_cm",
+    "dbh_reference_min_cm",
+    "dbh_reference_max_cm",
+    "dbh_reference_std_cm",
+    "dbh_reference_tree_ids",
+    "dbh_reference_tree_persistent_ids",
+) + CLEARANCE_FIELDS
 
 
 def _status_text(value: Any) -> str:
@@ -159,7 +172,21 @@ def _revision_from_disk(
         # Legacy accepted runs had no post-editor marker.  They are safe only
         # when their journal is still empty; a nonempty journal is unverified.
         return operation_count == 0, published_count, operation_count
-    return operation_count == published_count, published_count, operation_count
+    if operation_count != published_count:
+        return False, published_count, operation_count
+    published_digest = diagnostics.get("editor_journal_digest")
+    if published_digest is not None:
+        from core.stage_b.final_generation import editor_journal_digest
+
+        try:
+            return (
+                published_digest == editor_journal_digest(operations),
+                published_count,
+                operation_count,
+            )
+        except (KeyError, TypeError, ValueError):
+            return False, published_count, operation_count
+    return True, published_count, operation_count
 
 
 def current_finalized_gate(workflow: Any, *, hydrate_editor: bool = True) -> dict[str, Any]:
@@ -434,6 +461,14 @@ def current_finalized_gate(workflow: Any, *, hydrate_editor: bool = True) -> dic
                     # clearance identity validation above.
                     generation_status = "INFERRED_VALIDATED_LEGACY"
 
+    prediction_path = _project_root(workflow) / "artifacts" / "Prediction_Input.xlsx"
+    if not prediction_path.is_file():
+        prediction_path = _project_root(workflow) / "exports" / "Prediction_Input.xlsx"
+    try:
+        prediction_mtime_ns = prediction_path.stat().st_mtime_ns
+    except OSError:
+        prediction_mtime_ns = None
+
     return {
         "status": "PASS" if not reasons else "LOCKED",
         "run_id": run_id,
@@ -448,6 +483,7 @@ def current_finalized_gate(workflow: Any, *, hydrate_editor: bool = True) -> dic
         "editor_operation_count": operation_count,
         "journal_mtime_ns": journal_mtime_ns,
         "batch_mtime_ns": batch_mtime_ns,
+        "prediction_mtime_ns": prediction_mtime_ns,
         "generation_status": generation_status,
         "final_generation_id": final_generation_id,
         "result_generation_id": result_generation_id or final_generation_id,
@@ -623,8 +659,17 @@ def _bounded_tree_display(display: Any, *, max_points: int) -> dict[str, Any]:
     colors = list(trees3d.get("color", []))
     if len(ids) not in {0, count} or len(colors) not in {0, count}:
         raise ValueError("final display tree IDs/colors are not aligned with XYZ")
+    visible = trees3d.get("visible_by_index")
+    if visible is None:
+        visible_indices = np.arange(count, dtype=np.int64)
+    else:
+        visible = np.asarray(visible, dtype=bool)
+        if visible.shape != (count,):
+            raise ValueError("final display visibility is not aligned with XYZ")
+        visible_indices = np.flatnonzero(visible)
+    count = len(visible_indices)
     keep = (
-        np.linspace(0, count - 1, min(count, max_points), dtype=np.int64)
+        visible_indices[np.linspace(0, count - 1, min(count, max_points), dtype=np.int64)]
         if count
         else np.empty(0, dtype=np.int64)
     )
@@ -651,6 +696,18 @@ def _current_row(row: Any) -> dict[str, Any]:
         if isinstance(value, float) and not math.isfinite(value):
             value = None
         output[field] = value
+    if output.get("dbh_method") == "REFERENCE_ESTIMATE" or output.get(
+        "diameter_source"
+    ) == "REFERENCE_ESTIMATE":
+        output["dbh_cm"] = None
+        output["diameter_cm"] = None
+        output["dbh_method"] = "UNAVAILABLE"
+        output["dbh_fit_status"] = "STALE_REFERENCE_ESTIMATE"
+    elif output.get("dbh_cm") is None and output.get("dbh_method") is None and output.get(
+        "diameter_source"
+    ) in {"DIRECT_STEM", "RECOVERED_STEM", "REVIEW_CONFIRMED_STEM", "FOLDER_BH_WIDTH_MEASUREMENT"}:
+        output["dbh_cm"] = output.get("diameter_cm")
+        output["dbh_method"] = output["diameter_source"]
     if output["persistent_tree_id"] is not None:
         output["persistent_tree_id"] = str(output["persistent_tree_id"])
     return output
@@ -665,7 +722,11 @@ def _cached_export_rows(workflow: Any, result: Any) -> list[dict[str, Any]] | No
     (for current publications) the final generation before these rows are used.
     """
 
-    path = _project_root(workflow) / "exports" / "Prediction_Input.xlsx"
+    root = _project_root(workflow)
+    path = root / "artifacts" / "Prediction_Input.xlsx"
+    if not path.is_file():
+        # Existing projects may not have been migrated by an export yet.
+        path = root / "exports" / "Prediction_Input.xlsx"
     validator = getattr(workflow, "_prediction_export_cache_matches_final", None)
     if not path.is_file() or not callable(validator):
         return None
@@ -694,6 +755,57 @@ def _cached_export_rows(workflow: Any, result: Any) -> list[dict[str, Any]] | No
             workbook.close()
     except (ImportError, KeyError, OSError, StopIteration, TypeError, ValueError):
         return None
+
+
+def _tower_exclusion_warnings(result: Any, project_root: Path) -> list[dict[str, str]]:
+    """Expose incomplete registered-tower exclusions without changing membership."""
+
+    tower_rows: list[tuple[str, Mapping[str, Any]]] = []
+    spans = getattr(result, "span_results", None)
+    if isinstance(spans, Mapping):
+        for span_id, span in spans.items():
+            diagnostics = _mapping_value(span, "diagnostics", {}) or {}
+            audit = _mapping_value(diagnostics, "tower_exclusion", {}) or {}
+            for tower in _mapping_value(audit, "towers", ()) or ():
+                if isinstance(tower, Mapping):
+                    tower_rows.append((str(span_id), tower))
+    if not tower_rows:
+        batch = getattr(result, "batch_diagnostics", {}) or {}
+        final = _mapping_value(batch, "tower_exclusion_final", {}) or {}
+        for relative in _mapping_value(final, "span_membership_manifests", ()) or ():
+            target = (project_root / str(relative)).resolve()
+            if not target.is_relative_to(project_root.resolve()):
+                continue
+            try:
+                audit = json.loads(target.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                tower_rows.append((target.parent.name, {
+                    "tower_id": "?", "coverage": "UNAVAILABLE", "reason": "AUDIT_UNREADABLE",
+                }))
+                continue
+            for tower in _mapping_value(audit, "towers", ()) or ():
+                if isinstance(tower, Mapping):
+                    tower_rows.append((target.parent.name, tower))
+    warnings = []
+    for span_id, tower in tower_rows:
+        coverage = str(tower.get("coverage") or "UNAVAILABLE")
+        if coverage not in {"UNAVAILABLE", "PARTIAL_CONNECTED_STRUCTURE"}:
+            continue
+        reason = str(tower.get("reason") or "")
+        label = f"档距 {span_id} 杆塔 {tower.get('tower_id', '?')}"
+        explanation = (
+            "未能以点云几何确认，不能视为已从树木成员中剔除"
+            if coverage == "UNAVAILABLE"
+            else "仅已确认的连通杆塔结构从树木成员中剔除，覆盖不保证完整"
+        )
+        warnings.append({
+            "span_id": span_id,
+            "tower_id": str(tower.get("tower_id", "?")),
+            "coverage": coverage,
+            "reason": reason,
+            "message": f"{label}：{explanation}" + (f"（{reason}）" if reason else ""),
+        })
+    return warnings
 
 
 def _kpis(rows: list[dict[str, Any]], result: Any) -> dict[str, Any]:
@@ -737,6 +849,12 @@ def build_current_report(workflow: Any) -> dict[str, Any]:
         "mode": CURRENT_REPORT_MODE,
         "current_only": True,
         "gate": gate,
+        "dbh_delivery_status": getattr(workflow, "_workflow", {}).get(
+            "dbh_delivery_status"
+        ),
+        "dbh_delivery_message": getattr(workflow, "_workflow", {}).get(
+            "dbh_delivery_message"
+        ),
     }
     if gate["status"] != "PASS":
         return {
@@ -761,11 +879,11 @@ def build_current_report(workflow: Any) -> dict[str, Any]:
             "message": "当前最终结果暂时不可用，请重新打开项目。",
         }
     try:
-        setattr(workflow, "_skip_final_projection_metrics", True)
+        workflow._skip_final_projection_metrics = True
         try:
             projection = workflow.final_projection(persist_display_evidence=False)
         finally:
-            setattr(workflow, "_skip_final_projection_metrics", False)
+            workflow._skip_final_projection_metrics = False
         rows = _cached_export_rows(workflow, result)
         row_source = "GENERATION_BOUND_PREDICTION_XLSX"
         if rows is None:
@@ -777,6 +895,21 @@ def build_current_report(workflow: Any) -> dict[str, Any]:
             )
         }
         wires = current_wire_curves(result)
+        after = current_finalized_gate(workflow, hydrate_editor=True)
+        revision_fields = (
+            "run_id", "batch_mtime_ns", "journal_mtime_ns", "prediction_mtime_ns",
+            "editor_operation_count", "published_editor_operation_count",
+            "final_generation_id", "result_generation_id", "risk_generation_id",
+        )
+        if after["status"] != "PASS" or workflow._current_result() is not result or any(
+            after.get(field) != gate.get(field) for field in revision_fields
+        ):
+            return {
+                **base,
+                "gate": after,
+                "status": "LOCKED",
+                "message": "当前结果在读取时发生变化，请重新完成复核后打开报告。",
+            }
     except (AttributeError, KeyError, TypeError, ValueError, OSError) as exc:
         return {
             **base,
@@ -791,6 +924,7 @@ def build_current_report(workflow: Any) -> dict[str, Any]:
         "trees": rows,
         "display": display,
         "wires": wires,
+        "tower_exclusion_warnings": _tower_exclusion_warnings(result, _project_root(workflow)),
         "metadata": {
             "tree_metrics_source": projection.get("metadata", {}).get("tree_metrics_source"),
             "row_source": row_source,

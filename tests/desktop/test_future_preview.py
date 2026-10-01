@@ -47,6 +47,9 @@ def _preview_workflow(tmp_path: Path) -> SimpleNamespace:
     reconciled.final_xyz_local_m = np.concatenate(points)
     reconciled.final_tree_id = np.asarray(ids, dtype=np.int64)
     reconciled.final_original_index = np.arange(len(ids), dtype=np.int64)
+    # This synthetic preview fixture replaces the final tree membership, so
+    # the unrelated clearance stub no longer describes the new exact trees.
+    result.final_clearance = None
     workflow.projection_calls = []
 
     def projection(**kwargs):
@@ -164,6 +167,40 @@ def test_cached_snapshot_does_not_bypass_same_run_edit_guard(tmp_path):
     assert build_future_preview(workflow)["status"] == "PASS"
     workflow._ensure_editor().session.operations.append({"type": "DELETE", "tree_id": 8})
     assert build_future_preview(workflow, horizon_years=3)["status"] == "LOCKED"
+
+
+def test_preview_does_not_restore_stale_reference_diameter(tmp_path):
+    workflow = _preview_workflow(tmp_path)
+    def projection(**kwargs):
+        rows = _final_projection()
+        for row in rows["trees"]:
+            row["diameter_cm"] = 23.1
+            row["dbh_cm"] = None
+            row["dbh_method"] = "UNAVAILABLE"
+        return rows
+    workflow.final_projection = projection
+    preview = build_future_preview(workflow)
+    assert preview["status"] == "PASS", preview
+    assert all(tree["current_dbh_cm"] is None for tree in preview["trees"])
+    assert all(tree["predicted_dbh_cm"] is None for tree in preview["trees"])
+
+
+def test_all_deleted_final_membership_never_shows_old_preview_points(tmp_path):
+    workflow = _preview_workflow(tmp_path)
+    result = workflow._current_result()
+    reconciled = result.global_reconciled
+    reconciled.global_tree_records = ()
+    reconciled.final_original_index = np.empty(0, dtype=np.int64)
+    reconciled.final_tree_id = np.empty(0, dtype=np.int32)
+    reconciled.final_xyz_local_m = np.empty((0, 3), dtype=np.float64)
+    workflow.final_projection = lambda **_kwargs: {
+        "trees": [], "display": {"trees3d": {"xyz": []}},
+        "metadata": {"tree_metrics_source": "CANONICAL_FULLRES_POST_EDITOR"},
+    }
+    for horizon in (1, 3, 5):
+        preview = build_future_preview(workflow, horizon_years=horizon)
+        assert preview["trees"] == []
+        assert preview["status"] == "LOCKED"
 
 
 @pytest.mark.parametrize("horizon", [0, 2, 4, 6, -1, True, 1.0, "1"])

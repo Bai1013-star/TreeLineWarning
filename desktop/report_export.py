@@ -18,6 +18,19 @@ def _text(value: Any, *, digits: int | None = None) -> str:
     return html.escape(str(value))
 
 
+def _current_dbh_cm(row: Mapping[str, Any]) -> Any:
+    if row.get("dbh_method") in {"REFERENCE_ESTIMATE", "UNAVAILABLE"} or row.get(
+        "diameter_source"
+    ) == "REFERENCE_ESTIMATE":
+        return None
+    value = row.get("dbh_cm")
+    if value is None and row.get("dbh_method") is None and row.get("diameter_source") in {
+        "DIRECT_STEM", "RECOVERED_STEM", "REVIEW_CONFIRMED_STEM", "FOLDER_BH_WIDTH_MEASUREMENT",
+    }:
+        return row.get("diameter_cm")
+    return value
+
+
 def render_current_report_html(report: Mapping[str, Any]) -> str:
     """Render one immutable, offline-readable FINALIZED report."""
 
@@ -25,6 +38,10 @@ def render_current_report_html(report: Mapping[str, Any]) -> str:
         raise ValueError("HTML_EXPORT_REQUIRES_CURRENT_FINALIZED_RESULT")
     kpis = report.get("kpis") if isinstance(report.get("kpis"), Mapping) else {}
     rows = report.get("trees") if isinstance(report.get("trees"), list) else []
+    tower_warnings = report.get("tower_exclusion_warnings") or []
+    tower_notice = "；".join(
+        str(item.get("message", "")) for item in tower_warnings if isinstance(item, Mapping)
+    )
     body = []
     for row in rows:
         source = row if isinstance(row, Mapping) else {}
@@ -37,7 +54,7 @@ def render_current_report_html(report: Mapping[str, Any]) -> str:
                     _text(source.get("persistent_tree_id")),
                     _text(source.get("height_m"), digits=2),
                     _text(source.get("crown_width_m"), digits=2),
-                    _text(source.get("dbh_cm") or source.get("diameter_cm"), digits=2),
+                    _text(_current_dbh_cm(source), digits=2),
                     _text(source.get("minimum_clearance_m"), digits=3),
                     _text(source.get("horizontal_clearance_m"), digits=3),
                     _text(source.get("vertical_clearance_m"), digits=3),
@@ -59,9 +76,11 @@ background:#f5f7fa}}h1{{margin-bottom:4px}}
 .kpi b{{display:block;font-size:24px}}table{{border-collapse:collapse;width:100%;
 background:white}}th,td{{border:1px solid #d9e2ec;padding:8px;text-align:left}}
 th{{background:#e9f2f9}}small{{color:#52606d}}
+.warning{{border:1px solid #b7791f;background:#fff8df;padding:12px 16px;margin:16px 0}}
 @media print{{body{{margin:10mm;background:white}}.kpi{{break-inside:avoid}}}}
 </style></head><body><h1>TreeLineWarning 当前最终报告</h1>
 <p class="meta">FINALIZED · 数据源：EDITOR_FINAL_PROJECTION · 本文件可离线打开</p>
+{f'<p class="warning">{html.escape(tower_notice)}</p>' if tower_notice else ''}
 <div class="kpis"><div class="kpi">最终全局单木
 <b>{_text(kpis.get('tree_count'), digits=0)}</b></div>
 <div class="kpi">全局最小净空 (m)<b>{_text(kpis.get('minimum_clearance_m'), digits=3)}</b></div>

@@ -16,6 +16,11 @@ from uuid import uuid4
 
 import numpy as np
 from algorithms.manual_span import dbh_raw_stem as fitting
+from algorithms.manual_span.partial_arc_identity import (
+    elevated_local_base_probe,
+    recover_ground_anchored_bh,
+    recover_local_bh_series,
+)
 from algorithms.manual_span.metrics import _hag_chunked
 from scipy.spatial import cKDTree
 
@@ -30,8 +35,9 @@ from core.stage_b.dbh_evidence import (
     read_json,
     sha256,
 )
+from core.stage_b.dbh_wide_search import current_crown_wide_seeds
 
-VERSION = "DBH_RECOVERY_V4_HUMAN_REVIEW"
+VERSION = "DBH_RECOVERY_V4_HUMAN_REVIEW_V2"
 METHOD = "REVIEW_CONFIRMED_STEM"
 DISPLAY_LIMIT = 80_000
 _LOCK = threading.RLock()
@@ -42,11 +48,12 @@ def _write(path, value):
         json.dump(value, stream, ensure_ascii=False, indent=2, allow_nan=False)
 
 
-def _row(base, persistent_id):
+def _row(base, persistent_id, *, allow_accepted=False):
     rows = [r for r in base["trees"] if r["persistent_tree_id"] == persistent_id]
     if len(rows) != 1:
         raise ValueError("DBH_REVIEW_TREE_NOT_CURRENT")
-    if rows[0]["dbh_cm"] is not None:
+    if (not allow_accepted and rows[0]["dbh_cm"] is not None
+            and rows[0].get("dbh_method") != "REFERENCE_ESTIMATE"):
         raise ValueError("DBH_REVIEW_ACCEPTED_VALUE_LOCKED")
     return rows[0]
 
@@ -95,7 +102,7 @@ def prepare_review(
     """Prepare artifacts only. No human choice, fit or DBH pointer write occurs."""
     root = Path(root).resolve()
     base, arrays = v2._load_base(root, result, members)
-    row = _row(base, persistent_id)
+    row = _row(base, persistent_id, allow_accepted=True)
     gid = row["global_tree_id"]
     removed = _exclusions(root, result)
     _, prep, ground, origin = v1._context(root, result)
@@ -107,16 +114,35 @@ def prepare_review(
     if not seeds:
         hag = _hag_chunked(crown, ground_tree, ground, origin, 250_000)
         seeds, _ = v2.current_seeds(crown, hag)
-    if not seeds or len(seeds) > v2.MAX_SEEDS:
-        raise ValueError("DBH_REVIEW_NO_BOUNDED_CURRENT_ROI")
     query = query_provider or local_raw_query
     source = prep["ground_preparation"]["source_identity"]
     cache = confined(root, prep["vegetation_role_tile_index_reference"])
+    wide_proof = None
+    if query_provider is None and (
+        row.get("dbh_cm") is None or row.get("dbh_method") == "REFERENCE_ESTIMATE"
+    ):
+        wide, wide_proof = current_crown_wide_seeds(
+            cache, source, crown, ground, ground_tree, origin,
+            excluded_indices=removed, existing_seeds=seeds,
+            limit=max(0, v3.MAX_V3_SEEDS - len(seeds)),
+        )
+        seeds.extend(wide)
+    if not seeds or len(seeds) > v3.MAX_V3_SEEDS:
+        raise ValueError("DBH_REVIEW_NO_BOUNDED_CURRENT_ROI")
     blocks, proofs = [], []
+    candidate_radii = [float(c.get("candidate_axis", {}).get("radius_m") or
+                             c.get("axis", {}).get("radius_m") or 0)
+                       for c in row.get("v3_candidates", [])]
+    review_radius = min(1.20, max([0.60, *(r + 0.43 for r in candidate_radii)]))
     for seed in seeds:
         center = np.asarray(seed["xy"]) + origin[:2]
         z = float(np.median(ground[ground_tree.query(center, k=min(8, len(ground)))[1], 2]))
-        raw, idx, proof = query(cache, source, center, (z - 1, z + 7))
+        if query_provider is None:
+            raw, idx, proof = query(
+                cache, source, center, (z - 1, z + 7), radius_m=review_radius
+            )
+        else:
+            raw, idx, proof = query(cache, source, center, (z - 1, z + 7))
         raw, idx = np.asarray(raw), np.asarray(idx)
         if (
             idx.ndim != 1
@@ -134,7 +160,7 @@ def prepare_review(
         deleted_count = int((~keep).sum())
         raw, idx = raw[keep] - origin, idx[keep]
         hag = _hag_chunked(raw, ground_tree, ground, origin, 250_000)
-        keep = (hag >= 0.5) & (hag <= 5.5)
+        keep = (hag >= -0.25) & (hag <= 5.5)
         blocks.append((raw[keep], idx[keep], hag[keep]))
         proofs.append({"seed": seed, "query": proof, "deleted_count": deleted_count})
     xyz = np.concatenate([b[0] for b in blocks])
@@ -173,17 +199,35 @@ def prepare_review(
         "mode": "CANDIDATE_OR_SEED",
         "editor_revision": base["binding"]["editor_revision"],
         "candidates": candidates,
+        "wide_raw_stem_search": wide_proof,
+        "published_measurement": {
+            "dbh_cm": None if row.get("dbh_method") == "REFERENCE_ESTIMATE" else row.get("dbh_cm"),
+            "dbh_method": "UNAVAILABLE" if row.get("dbh_method") == "REFERENCE_ESTIMATE" else row.get("dbh_method"),
+            "dbh_quality": row.get("dbh_quality"),
+            "dbh_fit_status": row.get("dbh_pre_reference_failure_reason", row.get("dbh_fit_status"))
+            if row.get("dbh_method") == "REFERENCE_ESTIMATE" else row.get("dbh_fit_status"),
+            "dbh_uncertainty_cm": row.get("dbh_uncertainty_cm"),
+            "evidence_xyz": arrays["xyz_local_m"][arrays["global_tree_id"] == gid][
+                _sample(int(np.count_nonzero(arrays["global_tree_id"] == gid)), 5000)
+            ].tolist(),
+            "evidence_hag_m": arrays["hag_m"][arrays["global_tree_id"] == gid][
+                _sample(int(np.count_nonzero(arrays["global_tree_id"] == gid)), 5000)
+            ].tolist(),
+        },
         "display": {
             "xyz": xyz[selected].tolist(),
             "original_index": idx[selected].tolist(),
             "hag_m": hag[selected].tolist(),
             "selectable": (~blocked[selected]).tolist(),
+            "ground_selectable": ((~blocked[selected]) & (hag[selected] >= -0.25)
+                                  & (hag[selected] <= 2.0)).tolist(),
         },
         "current_crown": {
             "xyz": crown[_sample(len(crown), 5000)].tolist(),
             "label": display_tree_id or persistent_id,
         },
         "human_can_type_dbh": False,
+        "confirmation_allowed": row.get("dbh_cm") is None or row.get("dbh_method") == "REFERENCE_ESTIMATE",
         "human_selection": None,
         "message": "仅确认树干身份；胸径由点云计算。原始点抽样仅用于显示，拟合使用完整局部证据。",
     }
@@ -209,7 +253,8 @@ def prepare_review(
     return review
 
 
-def fit_review_stem(xyz, hag, *, candidate_axis=None, seed_position=None):
+def fit_review_stem(xyz, hag, *, candidate_axis=None, seed_position=None,
+                    local_ground=False):
     """Human identity narrows the existing ROI; unchanged V2 axis/V1 circle guards."""
     if (candidate_axis is None) == (seed_position is None):
         raise ValueError("DBH_REVIEW_ONE_IDENTITY_REQUIRED")
@@ -240,10 +285,34 @@ def fit_review_stem(xyz, hag, *, candidate_axis=None, seed_position=None):
     positions = np.flatnonzero(keep)
     fit = fitting.fit_axis_normal_dbh(xyz[keep], hag[keep], expected_xy=expected)
     chosen = positions[np.asarray(fit.pop("selected_input_indices", []), dtype=np.int64)]
+    local_series = False
+    if local_ground:
+        recovered, proof = recover_ground_anchored_bh(
+            xyz[keep], hag[keep], np.arange(len(positions), dtype=np.int64)
+        )
+        if recovered is None:
+            fit.update(v1.unavailable(proof["status"]))
+        else:
+            local_series = True
+            fit = recovered["fit"]
+            chosen = positions[np.asarray(fit.pop("selected_input_indices"), dtype=np.int64)]
+            fit["breast_height_origin_xyz"] = recovered["axis"]["bh_reference_xyz"]
+            fit["unit_direction_xyz"] = recovered["axis"]["direction_xyz"]
+            fit["local_ground_window_proof"] = proof
+    if fit["dbh_cm"] is None and candidate_axis is not None and not local_ground:
+        recovered, _ = recover_local_bh_series(
+            xyz, hag, np.arange(len(xyz), dtype=np.int64), candidate_axis
+        )
+        if recovered is not None:
+            local_series = True
+            fit = recovered["fit"]
+            chosen = np.asarray(fit.pop("selected_input_indices"), dtype=np.int64)
+            fit["breast_height_origin_xyz"] = recovered["axis"]["bh_reference_xyz"]
+            fit["unit_direction_xyz"] = recovered["axis"]["direction_xyz"]
     # Human identity cannot bridge a geometry gap at BH. Retain the unchanged
     # circle decisions and require the adjacent normal-plane slices on both
     # sides of the measured true-HAG 1.30 anchor to pass.
-    if fit["dbh_cm"] is not None:
+    if fit["dbh_cm"] is not None and not local_series:
         slices = {s["index"]: s for s in fit.get("slices", [])}
         if not all(slices.get(i, {}).get("accepted") is True for i in (2, 3)):
             fit.update(v1.unavailable("DBH_REVIEW_BREAST_HEIGHT_CONTINUITY_GAP"))
@@ -260,6 +329,14 @@ def fit_review_stem(xyz, hag, *, candidate_axis=None, seed_position=None):
         radial = np.linalg.norm(delta - np.dot(delta, direction) * direction)
         if abs(radial - fit["dbh_cm"] / 200) > 0.08:
             fit.update(v1.unavailable("DBH_REVIEW_SEED_NOT_ON_FITTED_STEM"))
+    if fit["dbh_cm"] is not None and not local_ground:
+        axis = {"bh_reference_xyz": fit["breast_height_origin_xyz"],
+                "direction_xyz": fit["unit_direction_xyz"],
+                "radius_m": fit["dbh_cm"] / 200}
+        probe = elevated_local_base_probe(xyz, hag, axis)
+        fit["local_base_probe"] = probe
+        if probe["status"] in {"LOCAL_BASE_HEIGHT_AMBIGUOUS", "LOCAL_BASE_HEIGHT_UNVERIFIED"}:
+            fit.update(v1.unavailable(probe["status"]))
     return fit, chosen
 
 
@@ -272,7 +349,8 @@ def confirm_review(root, result, members, request):
 def _confirm(root, result, members, request):
     if (
         not isinstance(request, dict)
-        or set(request) - {"review_id", "identity_confirmed", "candidate_id", "seed_original_index"}
+        or set(request) - {"review_id", "identity_confirmed", "candidate_id",
+                           "seed_original_index", "ground_original_index"}
         or request.get("identity_confirmed") is not True
     ):
         raise ValueError("DBH_REVIEW_IDENTITY_ONLY_NO_TYPED_DIAMETER")
@@ -283,6 +361,8 @@ def _confirm(root, result, members, request):
     root = Path(root).resolve()
     folder = _session_root(root, result, request.get("review_id"))
     manifest = read_json(folder / "session.json")
+    if manifest.get("schema") != VERSION or manifest.get("review", {}).get("schema") != VERSION:
+        raise ValueError("DBH_REVIEW_STALE_SESSION_SCHEMA")
     if sha256(folder / "session.json") != read_json(folder / "proof.json")["session_sha256"] or (
         sha256(folder / "raw.npz") != manifest["raw_sha256"]
     ):
@@ -295,6 +375,7 @@ def _confirm(root, result, members, request):
     if (folder / "decision.json").exists():
         raise ValueError("DBH_REVIEW_ALREADY_SUBMITTED_REOPEN")
     review = manifest["review"]
+    source = manifest["queries"][0]["query"]["source_identity"]
     row = _row(base, review["persistent_tree_id"])
     gid = row["global_tree_id"]
     with np.load(folder / "raw.npz", allow_pickle=False) as archive:
@@ -320,7 +401,64 @@ def _confirm(root, result, members, request):
         seed_pos = int(np.searchsorted(idx, seed))
         if seed_pos >= len(idx) or idx[seed_pos] != seed:
             raise ValueError("DBH_REVIEW_SEED_SOURCE_MISMATCH")
-    fit, selected = fit_review_stem(xyz, hag, candidate_axis=axis, seed_position=seed_pos)
+    ground_source = request.get("ground_original_index")
+    fit_hag = hag
+    ground_anchor = None
+    if ground_source is not None:
+        visible = review["display"]
+        if type(ground_source) is not int or ground_source not in visible["original_index"]:
+            raise ValueError("DBH_REVIEW_GROUND_NOT_EXACT_DISPLAYED_RAW_POINT")
+        display_pos = visible["original_index"].index(ground_source)
+        if not visible["ground_selectable"][display_pos]:
+            raise ValueError("DBH_REVIEW_GROUND_POINT_NOT_SELECTABLE")
+        ground_pos = int(np.searchsorted(idx, ground_source))
+        if ground_pos >= len(idx) or idx[ground_pos] != ground_source:
+            raise ValueError("DBH_REVIEW_GROUND_SOURCE_MISMATCH")
+        if axis is not None:
+            anchor_xy = np.asarray(axis["bh_reference_xyz"][:2])
+            direction = np.asarray(axis["direction_xyz"])
+            stem_xy = anchor_xy + (
+                (xyz[:, 2, None] - axis["bh_reference_xyz"][2])
+                * direction[:2] / direction[2]
+            )
+            stem_radius = float(axis["radius_m"])
+        else:
+            stem_xy = np.broadcast_to(xyz[seed_pos, :2], (len(xyz), 2))
+            stem_radius = None
+        radial = np.linalg.norm(xyz[:, :2] - stem_xy, axis=1)
+        ground_distance = float(radial[ground_pos])
+        ground_inner = stem_radius + max(.08, .20 * stem_radius) if stem_radius else .18
+        ground_outer = stem_radius + .43 if stem_radius else .90
+        if not ground_inner <= ground_distance <= ground_outer:
+            raise ValueError("DBH_REVIEW_GROUND_NOT_ADJACENT_TO_STEM")
+        local_level = float(hag[ground_pos])
+        ground_z = float(xyz[ground_pos, 2])
+        nearby_surface = (np.linalg.norm(xyz[:, :2] - xyz[ground_pos, :2], axis=1) <= 0.15
+                          ) & (np.abs(xyz[:, 2] - ground_z) <= 0.10)
+        bark = (np.abs(radial - stem_radius) <= max(.05, .25 * stem_radius)
+                if stem_radius else radial <= .22)
+        contact = bark & (xyz[:, 2] >= ground_z) & (xyz[:, 2] <= ground_z + 0.30)
+        if np.count_nonzero(nearby_surface) < 20 or np.count_nonzero(contact) < 50:
+            raise ValueError("DBH_REVIEW_GROUND_SURFACE_OR_STEM_CONTACT_UNPROVEN")
+        # The selected root point fixes a physical elevation. Subtracting its
+        # coarse HAG from every point leaves the coarse DTM's XY slope in the
+        # 1.3 m slices and shifts the fitted diameter on sloping ground.
+        fit_hag = xyz[:, 2] - ground_z
+        ground_anchor = {
+            "original_index": ground_source,
+            "xyz_local_m": xyz[ground_pos].tolist(),
+            "coarse_hag_m": local_level,
+            "ground_z_local_m": ground_z,
+            "height_reference": "RAW_Z_MINUS_SELECTED_GROUND_Z",
+            "source_sha256": source["sha256"],
+            "distance_to_stem_axis_m": ground_distance,
+            "surface_support_count": int(np.count_nonzero(nearby_surface)),
+            "stem_contact_count": int(np.count_nonzero(contact)),
+        }
+    fit, selected = fit_review_stem(
+        xyz, fit_hag, candidate_axis=axis, seed_position=seed_pos,
+        local_ground=ground_anchor is not None,
+    )
     if fit["dbh_cm"] is not None:
         origin = np.asarray(fit["breast_height_origin_xyz"])
         direction = np.asarray(fit["unit_direction_xyz"])
@@ -331,7 +469,9 @@ def _confirm(root, result, members, request):
             fit.update(v1.unavailable("DBH_REVIEW_NEIGHBOR_EVIDENCE_CONFLICT"))
         measured = {"bh_reference_xyz": origin.tolist(), "direction_xyz": direction.tolist()}
         for old in base["trees"]:
-            if old["dbh_cm"] is None or old["dbh_method"] == "ALLOMETRIC_ESTIMATE":
+            if old["dbh_cm"] is None or old["dbh_method"] not in {
+                "DIRECT_STEM", "RECOVERED_STEM", "REVIEW_CONFIRMED_STEM"
+            }:
                 continue
             fixed = v3._fixed_claim(old, arrays)
             if fitting._line_candidates_are_equivalent(
@@ -358,9 +498,19 @@ def _confirm(root, result, members, request):
         "selected_original_index": idx[selected].tolist(),
         "selected_original_index_sha256": array_digest(idx[selected]),
         "fit": fit,
+        "ground_anchor": ground_anchor,
     }
     _write(folder / "decision.json", evidence)
     if fit["dbh_cm"] is not None:
+        if row.get("dbh_method") == "REFERENCE_ESTIMATE":
+            row["dbh_stale_reference_estimate"] = {
+                "value_cm": row["dbh_cm"],
+                "source": row.get("dbh_source"),
+                "reference": row.get("dbh_reference_estimate"),
+                "status": "SUPERSEDED_BY_TREE_MEASUREMENT",
+            }
+        row.pop("dbh_reference_estimate", None)
+        row.pop("dbh_pre_reference_failure_reason", None)
         row.update({key: fit.get(key) for key in v1.DBH_FIELDS})
         row.update(
             dbh_method=METHOD,
@@ -370,6 +520,8 @@ def _confirm(root, result, members, request):
             dbh_review=evidence,
             stem_association_status="HUMAN_CONFIRMED_CURRENT_STEM_IDENTITY",
         )
+        if ground_anchor is not None:
+            row["dbh_ground_anchor"] = ground_anchor
         row["dbh_review_decision_reference"] = (
             (folder / "decision.json").relative_to(root).as_posix()
         )
@@ -377,7 +529,7 @@ def _confirm(root, result, members, request):
         keep = arrays["global_tree_id"] != gid
         fresh = {
             "xyz_local_m": xyz[selected],
-            "hag_m": hag[selected],
+            "hag_m": fit_hag[selected],
             "original_index": idx[selected],
             "global_tree_id": np.full(len(selected), gid, np.int32),
         }
@@ -405,4 +557,5 @@ def _confirm(root, result, members, request):
         if fit["dbh_cm"] is not None
         else "该树干点云不足，无法可靠计算胸径",
         "review_id": review["review_id"],
+        "ground_anchor_hag_m": ground_anchor["coarse_hag_m"] if ground_anchor else None,
     }

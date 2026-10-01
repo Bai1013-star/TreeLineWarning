@@ -190,7 +190,16 @@ def track_downward(xyz, hag, original_index, axis):
                 predicted_center = center
         layers.append(layer)
     required = [r for r in layers if r["hag_target_m"] <= 2.8]
-    complete = all(r["status"] == "PASS" for r in required)
+    gaps = [i for i, layer in enumerate(required) if layer["status"] != "PASS"]
+    # A single interior occlusion can be bridged only when independently fitted
+    # sections on both sides still establish the same straight trunk axis.
+    bridged_occlusion = bool(
+        len(gaps) == 1
+        and 0 < gaps[0] < len(required) - 1
+        and required[gaps[0] - 1]["status"] == "PASS"
+        and required[gaps[0] + 1]["status"] == "PASS"
+    )
+    complete = not gaps or bridged_occlusion
     refined = None
     direction_links = []
     if len(centers) >= 3:
@@ -226,6 +235,9 @@ def track_downward(xyz, hag, original_index, axis):
     cylindrical = float(np.mean([r["circle"]["inlier_fraction"] for r in good])) if good else 0
     return {
         "status": "PASS" if refined is not None else "CROWN_TO_BH_TRACK_INCOMPLETE",
+        "bridged_occlusion_hag_m": (
+            required[gaps[0]]["hag_target_m"] if bridged_occlusion else None
+        ),
         "layers": layers,
         "coverage": len(good) / len(layers),
         "center_consistency": max(0, consistency),

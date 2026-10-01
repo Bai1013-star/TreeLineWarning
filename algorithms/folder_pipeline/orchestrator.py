@@ -197,6 +197,7 @@ class FolderOrchestrator:
         *,
         state: FolderWorkflowState | None = None,
         threshold_m: float | None = None,
+        reference_dbh_cm: float | None = None,
         ground_reuse_dir: Path | None = None,
     ) -> None:
         self.workspace = workspace
@@ -208,6 +209,12 @@ class FolderOrchestrator:
             if threshold_m is None
             else float(threshold_m)
         )
+        if reference_dbh_cm is not None:
+            raise ValueError(
+                "参考胸径参数已停用：胸径须依据本树点云测量或复核；"
+                "无法测得的树会在 Excel 中留空并注明原因。"
+            )
+        self.reference_dbh_cm = None
         self.ground_reuse_dir = ground_reuse_dir
         self.run: Any = None  # ManualSingleSpanRun (set by initialize())
         self.edit_session: TreeEditSession | None = None
@@ -864,6 +871,13 @@ class FolderOrchestrator:
             edited_reconciled, risk, metrics_by_tree,
             self.workspace, self.threshold_m, run.origin_xyz,
         )
+        from core.stage_b.dbh_recovery import publication_fields
+        from core.stage_b.dbh_reference_estimation import apply_reference_estimates
+
+        reference_result = apply_reference_estimates(self.final_rows)
+        for row in self.final_rows:
+            row.update(publication_fields(row))
+        self.run_metadata["dbh_reference_estimation"] = reference_result
         self.run_metadata.update(_final_run_metadata(self, edited_reconciled, risk))
 
         # 7. persist final tree membership + metadata
@@ -878,12 +892,32 @@ class FolderOrchestrator:
         # 8. Excel export
         report(3, "正在生成 Excel...", False, None)
         from algorithms.folder_pipeline.export_excel import write_prediction_input_excel
+        from algorithms.folder_pipeline.user_delivery_excel import (
+            DELIVERY_FILENAME,
+            archive_internal_prediction,
+            migrate_legacy_prediction,
+            write_delivery_from_prediction,
+        )
 
+        migrate_legacy_prediction(
+            self.workspace.export_dir / "Prediction_Input.xlsx",
+            self.workspace.excel_path,
+            replacing=True,
+        )
+        if self.workspace.excel_path.is_file():
+            archive_internal_prediction(self.workspace.excel_path)
         excel_path = write_prediction_input_excel(
             self.workspace.excel_path,
             self.final_rows,
             self.run_metadata,
         )
+        delivery_target = self.workspace.export_dir / DELIVERY_FILENAME
+        if delivery_target.is_file():
+            delivery_target.replace(
+                self.workspace.tree_analysis_dir
+                / f"树木风险结果.legacy-{time.time_ns()}.xlsx"
+            )
+        delivery_path = write_delivery_from_prediction(excel_path, delivery_target)
         self.run_metadata["excel_path"] = str(excel_path)
 
         # 9. persist the STEP 3 final result page (offline copy of /step3).
@@ -895,7 +929,9 @@ class FolderOrchestrator:
         summary = {
             "RUN_STATUS": "PASS",
             "OUTPUT_DIRECTORY": str(self.workspace.export_dir),
-            "EXCEL_REPORT": str(excel_path),
+            "EXCEL_REPORT": str(delivery_path),
+            "DBH_REFERENCE_REQUIRED": False,
+            "DBH_REFERENCE_MESSAGE": None,
             "FINAL_TREE_COUNT": len(edited_reconciled.global_tree_records),
             "DANGEROUS_TREE_COUNT": risk.dangerous_tree_count,
             "DANGER_POINT_COUNT": int(risk.danger_point_count),
@@ -1370,6 +1406,32 @@ def _assemble_final_rows(
                     if (metric is None or metric.dbh.dbh_quality == "UNAVAILABLE")
                     else metric.dbh.dbh_quality
                 ),
+                "global_tree_id": record.global_tree_id,
+                "dbh_cm": (
+                    None
+                    if metric is None or metric.dbh.dbh_m is None
+                    else round(float(metric.dbh.dbh_m) * 100.0, 2)
+                ),
+                "dbh_method": (
+                    "FOLDER_BH_WIDTH_MEASUREMENT"
+                    if metric is not None and metric.dbh.dbh_m is not None
+                    and metric.dbh.dbh_quality == "MEASURED"
+                    else "FOLDER_BH_WIDTH_ESTIMATE"
+                    if metric is not None and metric.dbh.dbh_m is not None
+                    else "UNAVAILABLE"
+                ),
+                "dbh_quality": (
+                    metric.dbh.dbh_quality
+                    if metric is not None and metric.dbh.dbh_m is not None
+                    else "UNAVAILABLE"
+                ),
+                "dbh_fit_status": (
+                    "PASS"
+                    if metric is not None and metric.dbh.dbh_m is not None
+                    else "FOLDER_BH_GEOMETRY_UNAVAILABLE"
+                ),
+                "dbh_point_count": metric.dbh.stem_point_count if metric else 0,
+                "dbh_source": "FOLDER_BH_WIDTH_FROM_POINT_CLOUD",
                 "tree_x_m": (
                     None
                     if centroid_local is None

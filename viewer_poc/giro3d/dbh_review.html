@@ -11,7 +11,7 @@
     <div>
       <p class="eyebrow">TREELINEWARNING · HUMAN DBH REVIEW</p>
       <h1>胸径复核 <span>/ DBH Review</span></h1>
-      <p class="subtitle">只复核已定稿且当前胸径不可用的单木。胸径由后台点云几何计算，页面不接受手工输入。</p>
+      <p class="subtitle">逐树复核已定稿单木的树干身份。胸径由当前点云几何计算；证据不足时显示原因并保留为空。</p>
     </div>
     <a class="back-link" href="/step2">返回树木复核</a>
   </header>
@@ -20,19 +20,21 @@
     <aside class="panel tree-panel">
       <div class="panel-heading">
         <div>
-          <p class="eyebrow">UNAVAILABLE TREES</p>
+          <p class="eyebrow">REVIEWABLE TREES</p>
           <h2>待复核单木</h2>
         </div>
         <span id="tree-count" class="pill">读取中</span>
       </div>
-      <p id="tree-list-note" class="hint" aria-live="polite">仅显示当前胸径不可用的单木。</p>
+      <p id="tree-list-note" class="hint" aria-live="polite">胸径缺失或旧参考估算的单木可继续用本树点云复核。</p>
+      <button id="btn-recompute" class="secondary" type="button">重新计算胸径</button>
+      <p id="recompute-status" class="hint" role="status">使用当前已定稿的单木和原始点云重新计算，人工确认的胸径会保留。</p>
       <div id="tree-list" class="tree-list" role="list"></div>
     </aside>
 
     <section class="panel review-panel" aria-live="polite">
       <div id="review-empty" class="empty-state">
         <h2>请选择一棵待复核单木</h2>
-        <p>选择左侧单木后，先准备当前编辑版本的原始点云证据。</p>
+        <p>选择左侧胸径缺失的单木后，准备当前编辑版本的原始点云证据。</p>
       </div>
 
       <div id="review-content" class="hidden">
@@ -67,6 +69,7 @@
               <span><i class="legend-dot raw-dot"></i>当前原始点（显示行保留精确 original_index）</span>
               <span><i class="legend-dot crown-dot"></i>当前树冠上下文</span>
               <span><i class="legend-dot selected-dot"></i>已选复核点</span>
+              <span>青色：可选树根地面点；黄色：已选树干点；红色：已选地面点</span>
             </div>
             <div id="dbh-context-label" class="context-label">当前树冠上下文：—</div>
           </div>
@@ -91,6 +94,14 @@
               <button id="btn-cancel-seed" class="text-button" type="button">取消点选</button>
               <div id="seed-selection" class="selection-readout">尚未选择原始种子点。</div>
               <div id="point-detail" class="point-detail"></div>
+            </section>
+
+            <section class="control-section ground-section">
+              <div class="section-heading"><h3>树根地面点（可选）</h3><span id="ground-mode-label" class="mode-pill">未选择</span></div>
+              <p class="hint">若树根附近地面高程有偏差，可在青色原始点中指定一处树根地面点。后台会验证原始索引、水平地面支持和与树干的距离。</p>
+              <button id="btn-pick-ground" class="secondary" type="button">点击树根地面点</button>
+              <button id="btn-cancel-ground" class="text-button" type="button">清除地面点</button>
+              <div id="ground-selection" class="selection-readout">未指定地面点；使用原始地面高程。</div>
             </section>
 
             <section class="control-section confirm-section">

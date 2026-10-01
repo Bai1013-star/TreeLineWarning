@@ -16,14 +16,16 @@
       </div>
       <div class="report-actions">
         <button id="printReport" type="button">打印</button>
-        <button id="downloadExcel" class="primary" type="button">下载 Prediction_Input.xlsx</button>
+        <button id="downloadExcel" class="primary" type="button">下载 树木风险结果.xlsx</button>
         <button id="downloadHtml" type="button">下载 HTML 报告</button>
+        <a class="button" href="/dbh-review">胸径复核</a>
         <a class="button" href="/">返回项目</a>
       </div>
     </header>
 
     <section id="reportStatus" class="notice" aria-live="polite">正在读取当前最终结果…</section>
     <section id="reportBody" class="hidden">
+      <section id="towerWarning" class="notice locked hidden" aria-live="polite"></section>
       <div id="kpiGrid" class="kpi-grid"></div>
       <section class="panel geometry-panel">
         <div class="panel-heading">

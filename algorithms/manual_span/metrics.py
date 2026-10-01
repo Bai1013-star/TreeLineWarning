@@ -151,11 +151,15 @@ def compute_tree_metrics(
         area = np.pi * (major / 2.0) * (minor / 2.0)
 
         # DBH from the breast-height band.
-        base_z = float(np.quantile(points[:, 2], 0.02))
-        trunk_mask = points[:, 2] <= base_z + 1.0
+        # Keep the stem anchor in the same ground-relative frame as the 1.30 m
+        # band. Raw-Z quantiles shift on sloping ground and can place the 0.60 m
+        # search circle away from an otherwise visible trunk.
+        trunk_mask = (hag >= 0.30) & (hag <= 1.00)
         base_xy = (
             np.median(points[trunk_mask, :2], axis=0)
             if np.count_nonzero(trunk_mask) >= 3
+            else np.median(points[(hag >= 0.85) & (hag <= 1.75), :2], axis=0)
+            if np.any((hag >= 0.85) & (hag <= 1.75))
             else np.median(points[:, :2], axis=0)
         )
         band_mask = (hag >= manual.dbh_band_center_m - manual.dbh_band_half_width_m) & (
@@ -171,6 +175,45 @@ def compute_tree_metrics(
         else:
             stem_xy = None
         dbh = classify_dbh(stem_xy, band_count, manual)
+        if stem_xy is not None and len(stem_xy) >= 12:
+            from algorithms.manual_span.dbh import DBH_MEASURED, DBH_REVIEW, DbhEvidence
+            from algorithms.manual_span.dbh_recovery import (
+                DBH_RECOVERY_CONFIG,
+                _section_circle_fit,
+                fit_stem_dbh,
+            )
+
+            stem_mask = band_mask & (
+                np.linalg.norm(points[:, :2] - base_xy[None, :], axis=1)
+                <= manual.dbh_stem_radius_m
+            )
+            fitted = fit_stem_dbh(points[stem_mask], hag[stem_mask], method="DIRECT_STEM")
+            if fitted["dbh_cm"] is not None:
+                dbh = DbhEvidence(
+                    fitted["dbh_cm"] / 100.0, DBH_MEASURED,
+                    int(np.count_nonzero(stem_mask)), band_count,
+                )
+            else:
+                # A single dense section exactly at breast height is common in
+                # mobile scans. Fit its circle instead of using p90-p10 widths.
+                near = stem_mask & (np.abs(hag - manual.dbh_band_center_m) <= 0.075)
+                if np.count_nonzero(near) >= 12:
+                    circle, _, _ = _section_circle_fit(
+                        np.unique(points[near, :2], axis=0), DBH_RECOVERY_CONFIG
+                    )
+                    if circle.get("accepted"):
+                        dbh = DbhEvidence(
+                            float(circle["diameter_m"]), DBH_MEASURED,
+                            int(np.count_nonzero(near)), band_count,
+                        )
+                    else:
+                        dbh = DbhEvidence(
+                            None, DBH_REVIEW, int(np.count_nonzero(stem_mask)), band_count
+                        )
+                else:
+                    dbh = DbhEvidence(
+                        None, DBH_REVIEW, int(np.count_nonzero(stem_mask)), band_count
+                    )
 
         results.append(
             TreeMetrics(

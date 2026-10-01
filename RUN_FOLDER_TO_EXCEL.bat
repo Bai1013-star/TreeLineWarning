@@ -14,7 +14,7 @@ echo Workspace: %WORKSPACE%
 echo Starting local browser workflow...
 echo   STEP 1 select span
 echo   STEP 2 review trees (delete / merge / undo)
-echo   STEP 3 final result + Prediction_Input.xlsx
+echo   STEP 3 final result + user Excel workbook
 echo.
 
 python scripts\run_folder_to_excel.py --workspace "%WORKSPACE%"
@@ -28,6 +28,6 @@ if errorlevel 1 (
 )
 
 echo.
-echo Done. Final result: %WORKSPACE%\03_export\Prediction_Input.xlsx
+echo Done. Find the final XLSX in %WORKSPACE%\03_export\
 pause
 exit /b 0

@@ -986,11 +986,20 @@
     return wrapped;
   }
 
+  function notifyWorkspaceChanged(kind) {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(
+        {type: 'treeline:tree-review-changed', kind}, window.location.origin,
+      );
+    }
+  }
+
   async function refreshCommittedDisplay(snapshot) {
     // Retain the server-confirmed journal count even when the display fetch fails.
     state.workflowDone = false;
     state.redirectOnDone = false;
     updateJournalCount(snapshot);
+    notifyWorkspaceChanged('EDIT_COMMITTED');
     byId('editmsg').textContent = '编辑已提交，正在刷新3D复核显示...';
     try {
       const delta = snapshot && snapshot.display_delta;
@@ -1039,6 +1048,7 @@
         if (!state.mutation) setEditingBusy(false);
       }
       if (current.step === 'DONE') {
+        if (!state.workflowDone) notifyWorkspaceChanged('FINALIZED');
         state.workflowDone = true;
         clearInterval(state.refreshTimer);
         state.refreshTimer = null;
@@ -1156,6 +1166,7 @@
       byId('progress').textContent = '正在应用人工修改';
       try {
         await post('/api/confirm_trees', {});
+        notifyWorkspaceChanged('FINALIZING');
         state.redirectOnDone = true;
       }
       catch (error) {

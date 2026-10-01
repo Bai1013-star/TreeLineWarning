@@ -1,0 +1,50 @@
+{
+  "title": "TreeLineWarning P3A Potree POC — Dense Span ROI",
+  "description": "Dense real-RGB ROI (982,504 pts) of the protected colorized source around the validated A–B span, derived read-only (raw ROI 16,702,553 pts, deterministic stride 17). PotreeConverter 2.1.3, octree v2.0, RGB preserved. Normal viewer default: 750,000 pts, ADAPTIVE, EDL ON, pixel ratio 1 (conservative cross-device fixed default).",
+  "potreeBase": "potree/",
+  "pointcloudUrl": "pointclouds/p3a_roi/metadata.json",
+  "pointcloudName": "p3a_roi",
+  "viewer": {
+    "fov": 60,
+    "edlEnabled": true,
+    "pointBudget": 750000,
+    "activeAttribute": "rgba",
+    "pointSizeType": "adaptive",
+    "size": 1,
+    "minSize": 2,
+    "maxSize": 5,
+    "useEDL": true,
+    "loadTimeoutMs": 30000
+  },
+  "performance": {
+    "enabled": true,
+    "datasetPointCount": 982504,
+    "frameWindow": 120,
+    "overlayHz": 4,
+    "idleDebounceMs": 200,
+    "baseline": {
+      "pointBudget": 750000,
+      "pointSizeType": "adaptive",
+      "edl": true
+    },
+    "benchmark": {
+      "warmupMs": 5000,
+      "recordMs": 15000
+    },
+    "interactive": {
+      "pointBudget": 750000,
+      "pointSizeType": "adaptive",
+      "edl": true
+    },
+    "idle": {
+      "pointBudget": 750000,
+      "pointSizeType": "adaptive",
+      "edl": true
+    }
+  },
+  "controlHelp": {
+    "left": "左键拖动: 旋转",
+    "right": "右键拖动: 平移",
+    "wheel": "滚轮: 缩放"
+  }
+}

@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,7 +27,12 @@ from tests.folder_pipeline.conftest import (
     make_workspace,
 )
 
-PDAL_AVAILABLE = importlib.util.find_spec("pdal") is not None
+try:
+    import pdal  # noqa: F401 - verify the native DLL loads, not only package metadata
+except (ImportError, OSError):
+    PDAL_AVAILABLE = False
+else:
+    PDAL_AVAILABLE = True
 requires_pdal = pytest.mark.skipif(not PDAL_AVAILABLE, reason="PDAL ground backend unavailable")
 
 
@@ -208,6 +212,14 @@ def test_orchestrator_to_excel_smoke(tmp_path: Path) -> None:
     assert summary["FINAL_TREE_COUNT"] == 2
     excel = ws.excel_path
     assert excel.is_file()
+    delivery = ws.export_dir / "树木风险结果.xlsx"
+    assert summary["EXCEL_REPORT"] == str(delivery)
+    assert delivery.is_file()
+    delivered = load_workbook(delivery, read_only=True)
+    assert delivered.sheetnames == ["树木风险结果"]
+    assert delivered.active.max_row == summary["FINAL_TREE_COUNT"] + 1
+    assert len(next(delivered.active.values)) == 23
+    delivered.close()
 
     workbook = load_workbook(excel)
     assert workbook.sheetnames == ["Trees", "Run_Metadata"]
@@ -233,6 +245,40 @@ def test_orchestrator_to_excel_smoke(tmp_path: Path) -> None:
     assert meta["final_tree_count"] == 2
     # (wire_tree_input_intersection is a science-stage audit key, verified in
     # test_exclusion.py; this resume-path smoke loads persisted trees instead.)
+
+
+def test_folder_finalizes_without_dbh_and_delivers_other_metrics(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path)
+    ws = discover_workspace(workspace)
+    original = build_original_trees_fixture()
+    _persist_selection(workspace)
+    _persist_original_trees(workspace, original)
+    orchestrator = FolderOrchestrator(ws, threshold_m=3.5)
+    orchestrator.run = _fake_run(workspace)
+    session = orchestrator.build_editor()
+    session.select([3])
+    session.delete_selected()
+    session.select([0, 1])
+    session.merge_selected()
+
+    summary = orchestrator.confirm_trees_and_finalize()
+
+    assert summary["RUN_STATUS"] == "PASS"
+    assert summary["DBH_REFERENCE_REQUIRED"] is False
+    assert summary["DBH_REFERENCE_MESSAGE"] is None
+    assert summary["EXCEL_REPORT"] == str(ws.export_dir / "树木风险结果.xlsx")
+    assert ws.excel_path.is_file()
+    assert ws.final_tree_manifest.is_file()
+    delivery = load_workbook(ws.export_dir / "树木风险结果.xlsx")
+    try:
+        assert delivery.active.max_row == len(orchestrator.final_rows) + 1
+        assert all(delivery.active.cell(row=row, column=9).value is None
+                   for row in range(2, delivery.active.max_row + 1))
+        assert all(delivery.active.cell(row=row, column=9).comment is not None
+                   for row in range(2, delivery.active.max_row + 1))
+    finally:
+        delivery.close()
+    assert all(row["dbh_cm"] is None for row in orchestrator.final_rows)
 
 
 def test_editor_persists_edits_and_resumes(tmp_path: Path) -> None:

@@ -87,6 +87,21 @@ _TREE_COLUMNS = [
     "horizontal_clearance_m",
     "vertical_clearance_m",
     "clearance_component_source",
+    # Reference fallback provenance is internal only; the delivered workbook
+    # keeps the exact 23-column user CSV contract.
+    "dbh_pre_reference_failure_reason",
+    "dbh_reference_basis",
+    "dbh_reference_count",
+    "dbh_reference_estimator",
+    "dbh_reference_value_cm",
+    "dbh_reference_mean_cm",
+    "dbh_reference_median_cm",
+    "dbh_reference_min_cm",
+    "dbh_reference_max_cm",
+    "dbh_reference_std_cm",
+    "dbh_reference_tree_ids",
+    "dbh_reference_tree_persistent_ids",
+    "dbh_reference_estimate_json",
     "display_tree_id",
 ]
 
@@ -111,6 +126,13 @@ _NUMERIC_COLUMNS = {
     "dbh_fit_rmse",
     "dbh_slice_count",
     "dbh_uncertainty_cm",
+    "dbh_reference_count",
+    "dbh_reference_value_cm",
+    "dbh_reference_mean_cm",
+    "dbh_reference_median_cm",
+    "dbh_reference_min_cm",
+    "dbh_reference_max_cm",
+    "dbh_reference_std_cm",
 }
 
 _METADATA_ROWS = [

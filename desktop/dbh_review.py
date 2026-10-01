@@ -30,6 +30,8 @@ def list_trees(workflow):
     return {
         "ok": True,
         "human_can_type_dbh": False,
+        "reference_input_allowed": False,
+        "reference_dbh_cm": None,
         "trees": [
             {
                 "persistent_tree_id": row["persistent_tree_id"],
@@ -37,8 +39,30 @@ def list_trees(workflow):
                 "display_tree_id": identities.get(row["global_tree_id"], {}).get(
                     "display_tree_id", row["persistent_tree_id"]
                 ),
-                "dbh_cm": row["dbh_cm"],
-                "dbh_method": row["dbh_method"],
+                "dbh_cm": None if row.get("dbh_method") == "REFERENCE_ESTIMATE" else row["dbh_cm"],
+                "dbh_method": "UNAVAILABLE" if row.get("dbh_method") == "REFERENCE_ESTIMATE" else row["dbh_method"],
+                "dbh_quality": "UNAVAILABLE" if row.get("dbh_method") == "REFERENCE_ESTIMATE" else row.get("dbh_quality"),
+                "dbh_uncertainty_cm": row.get("dbh_uncertainty_cm"),
+                "dbh_fit_status": row.get("dbh_pre_reference_failure_reason", "PER_TREE_STEM_EVIDENCE_REQUIRED")
+                if row.get("dbh_method") == "REFERENCE_ESTIMATE" else row.get("dbh_fit_status"),
+                "dbh_stale_reference_estimate": row.get("dbh_stale_reference_estimate") or (
+                    {"value_cm": row.get("dbh_cm"), "reference": row.get("dbh_reference_estimate"),
+                     "status": "RETIRED_NOT_TREE_MEASUREMENT"}
+                    if row.get("dbh_method") == "REFERENCE_ESTIMATE" else None
+                ),
+                "dbh_pre_reference_failure_reason": row.get(
+                    "dbh_pre_reference_failure_reason"
+                ),
+                "dbh_reference_basis": (row.get("dbh_reference_estimate") or {}).get("basis"),
+                "dbh_reference_count": (row.get("dbh_reference_estimate") or {}).get(
+                    "reference_count"
+                ),
+                "dbh_reference_mean_cm": (row.get("dbh_reference_estimate") or {}).get(
+                    "reference_mean_cm"
+                ),
+                "dbh_reference_tree_ids": (row.get("dbh_reference_estimate") or {}).get(
+                    "reference_tree_persistent_ids"
+                ),
             }
             for row in base["trees"]
         ],
@@ -51,7 +75,7 @@ def prepare(workflow, request):
         raise ValueError("DBH_REVIEW_INVALID_PREPARE_REQUEST")
     root, result, members, editor = _context(workflow)
     base, _ = v2._load_base(root, result, members)
-    review._row(base, request["persistent_tree_id"])
+    review._row(base, request["persistent_tree_id"], allow_accepted=True)
     parent = review.v1._run_root(root, result.analysis_run_id) / "dbh_review_v4"
     data = None
     for path in sorted(
@@ -62,6 +86,9 @@ def prepare(workflow, request):
         try:
             saved = read_json(path)
             if (
+                saved.get("schema") == review.VERSION
+                and saved.get("review", {}).get("schema") == review.VERSION
+                and
                 saved["review"]["persistent_tree_id"] == request["persistent_tree_id"]
                 and saved["binding"] == base["binding"]
                 and saved["baseline_geometry_sha256"] == base["baseline_geometry_sha256"]
@@ -83,4 +110,48 @@ def prepare(workflow, request):
 @editor_action("DBH_REVIEW_CONFIRM")
 def confirm(workflow, request):
     root, result, members, _ = _context(workflow)
-    return review.confirm_review(root, result, members, request)
+    outcome = review.confirm_review(root, result, members, request)
+    if outcome.get("status") == "RECOVERED" and callable(
+        getattr(workflow, "export_prediction", None)
+    ):
+        workflow.export_prediction()
+    if outcome.get("status") == "RECOVERED" and callable(
+        getattr(workflow, "export_delivery", None)
+    ):
+        workflow.export_delivery()
+    return outcome
+
+
+@editor_action("DBH_RECOMPUTE")
+def recompute(workflow, request):
+    """Re-run current DBH geometry over a verified finalized edit generation."""
+
+    if request:
+        raise ValueError("DBH_RECOMPUTE_INVALID_REQUEST")
+    root, result, members, _ = _context(workflow)
+    from core.stage_b.dbh_identity_recovery import finalize_dbh
+
+    outcome = finalize_dbh(root, result, members, force_recompute=True)
+    workbook = workflow.export_prediction()
+    available_count = sum(row.get("dbh_cm") is not None for row in outcome["trees"])
+    review_required_count = len(outcome["trees"]) - available_count
+    if isinstance(getattr(workflow, "_workflow", None), dict):
+        workflow._workflow["dbh_delivery_status"] = (
+            "READY" if review_required_count == 0 else "PER_TREE_REVIEW_REQUIRED"
+        )
+        workflow._workflow["dbh_delivery_message"] = (
+            None if review_required_count == 0
+            else "部分树木缺少本树树干点云证据，请在胸径复核页逐树核对或补测。"
+        )
+        workflow._save_workflow()
+    if callable(getattr(workflow, "export_delivery", None)):
+        workflow.export_delivery()
+    return {
+        "ok": True,
+        "status": "RECOMPUTED",
+        "tree_count": len(outcome["trees"]),
+        "dbh_available_count": available_count,
+        "reference_required_count": 0,
+        "review_required_count": review_required_count,
+        "workbook_updated": workbook.is_file(),
+    }

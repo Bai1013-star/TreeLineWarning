@@ -1,5 +1,8 @@
 (() => {
   const $ = (id) => document.getElementById(id);
+  let displayedGate = null;
+  let gateChecking = false;
+  let reportLoading = false;
   const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[char]));
@@ -9,21 +12,53 @@
     return Number.isFinite(number) ? number.toFixed(digits) : esc(item);
   };
 
+  function dbhReason(status) {
+    const reasons = {
+      NO_CROWN_TO_STEM_IDENTITY: '未找到与树冠可靠对应的树干',
+      NO_ABSOLUTE_CANDIDATE: '树干证据不足，未通过自动确认',
+      TOP_CANDIDATE_CONFLICT: '候选树干归属冲突，需人工复核',
+      EDITOR_REMOVED_BH_EVIDENCE: '胸高处点已由人工剔除',
+      REFERENCE_REQUIRED: '本树点云证据不足，请在胸径复核页检查',
+      STALE_REFERENCE_ESTIMATE: '旧参考估算已失效，请逐树复核',
+      FOREIGN_STEM_CLAIM_NOT_ASSIGNABLE: '树干已被其他树占用，无法自动归属',
+      SELECTED_SOURCE_OWNERSHIP_CONFLICT: '树干来源存在归属冲突',
+      LOCAL_BASE_HEIGHT_AMBIGUOUS: '本树根部有多个可能地面高度，需人工确认树根地面',
+      LOCAL_BASE_HEIGHT_UNVERIFIED: '本树根部地面尚未确认，需指定本树地面点',
+      MULTIPLE_STEM_AXES_REVIEW_REQUIRED: '本树有多根候选树干轴，需选择对应的一根',
+      PER_TREE_STEM_EVIDENCE_REQUIRED: '缺少本树可核验的树干和胸高点证据，需逐树复核',
+      SEARCH_BUDGET_EXHAUSTED: '树干原始点搜索达到预算上限，需缩小范围或指定树干证据',
+      PASS: '几何质量检查通过',
+    };
+    const selected = String(status || '');
+    return reasons[selected] || (selected.startsWith('SEARCH_BUDGET') ? reasons.SEARCH_BUDGET_EXHAUSTED : '证据不足，需人工复核');
+  }
+
   function dbhCell(row) {
-    const number = row.dbh_cm ?? row.diameter_cm;
+    if (row.dbh_method === 'REFERENCE_ESTIMATE') {
+      const reason = row.dbh_fit_status || row.dbh_pre_reference_failure_reason;
+      const detail = reason ? ` · ${esc(dbhReason(reason))}` : '';
+      return `<span>未测得 · 旧参考估算已失效${detail} · <a href="/dbh-review">胸径复核</a></span>`;
+    }
+    const number = Object.prototype.hasOwnProperty.call(row, 'dbh_cm') ? row.dbh_cm : row.diameter_cm;
     if (number === null || number === undefined || number === '') {
       return row.dbh_fit_status
-        ? `<span title="${esc(row.dbh_fit_status)}">未测得 · ${esc(row.dbh_fit_status)}</span>`
+        ? `<span title="${esc(dbhReason(row.dbh_fit_status))}">未测得 · ${esc(dbhReason(row.dbh_fit_status))} · <a href="/dbh-review">胸径复核</a></span>`
         : '—';
     }
     const labels = { DIRECT_STEM: '点云', RECOVERED_STEM: '恢复', REVIEW_CONFIRMED_STEM: '人工确认点云', ALLOMETRIC_ESTIMATE: '估算' };
-    const label = [labels[row.dbh_method] || '',
-      row.dbh_quality === 'ESTIMATED' ? '估计' : '',
+    const estimated = row.dbh_quality === 'ESTIMATE' || row.dbh_method === 'ALLOMETRIC_ESTIMATE';
+    const model = String(row.dbh_model_version || '');
+    const source = model.includes('UPPER_PARTIAL_ARC') ? '本树胸高点云拟合（单侧估算）'
+      : model.includes('UPPER_CIRCULAR') ? '本树上部树干外推估算'
+      : estimated ? '本树点云估算' : (labels[row.dbh_method] || '');
+    const label = [source,
       row.dbh_quality === 'REVIEW' ? '待复核' : ''].filter(Boolean).join(' · ');
+    const uncertainty = row.dbh_uncertainty_cm == null ? '' : ` · ±${value(row.dbh_uncertainty_cm, 1)} cm`;
     const detail = [row.dbh_method, row.dbh_quality,
       row.dbh_point_count == null ? '' : `${row.dbh_point_count} 点`,
-      row.dbh_fit_rmse == null ? '' : `RMSE ${value(row.dbh_fit_rmse, 4)} m`].filter(Boolean).join(' · ');
-    return `<span title="${esc(detail)}">${value(number)}${label ? ` · ${label}` : ''}</span>`;
+      row.dbh_fit_rmse == null ? '' : `RMSE ${value(row.dbh_fit_rmse, 4)} m`,
+      row.dbh_fit_status ? dbhReason(row.dbh_fit_status) : ''].filter(Boolean).join(' · ');
+    return `<span title="${esc(detail)}">${value(number)}${label ? ` · ${label}` : ''}${uncertainty}</span>`;
   }
 
   function showStatus(message, kind = '') {
@@ -57,7 +92,7 @@
         ? await bridge[excel ? 'export_excel' : 'export_html']()
         : await browserDownload(
           excel ? '/download_prediction' : '/download_report_html',
-          excel ? 'Prediction_Input.xlsx' : 'TreeLineWarning_Current_Report.html'
+          excel ? '树木风险结果.xlsx' : 'TreeLineWarning_Current_Report.html'
         );
       if (result?.cancelled) { showStatus('已取消导出。', 'locked'); return; }
       showStatus(`${excel ? 'Excel' : 'HTML 报告'}已保存${result?.path ? `：${result.path}` : ''}`);
@@ -128,27 +163,71 @@
     }, {responsive: true, displaylogo: false});
   }
 
+  function clearDisplayedReport(message, kind) {
+    if (displayedGate && window.Plotly?.purge) window.Plotly.purge('currentPlot');
+    displayedGate = null;
+    $('reportBody').classList.add('hidden');
+    showStatus(message, kind);
+  }
+
   async function load() {
+    if (reportLoading) return;
+    reportLoading = true;
     try {
       const response = await fetch('/api/current-report', {cache: 'no-store'});
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error?.message || '当前报告接口不可用');
       if (data.status !== 'FINALIZED') {
-        showStatus(`${data.message || '当前结果尚未定稿，报告已锁定。'}${(data.gate?.reasons || []).length ? ` 原因：${data.gate.reasons.join('；')}` : ''}`, 'locked');
+        clearDisplayedReport(`${data.message || '当前结果尚未定稿，报告已锁定。'}${(data.gate?.reasons || []).length ? ` 原因：${data.gate.reasons.join('；')}` : ''}`, 'locked');
         return;
       }
-      showStatus(data.message || '当前最终结果（只读）', '');
+      displayedGate = data.gate;
+      showStatus(data.dbh_delivery_message || data.message || '当前最终结果（只读）');
+      const towerWarnings = Array.isArray(data.tower_exclusion_warnings) ? data.tower_exclusion_warnings : [];
+      $('towerWarning').classList.toggle('hidden', towerWarnings.length === 0);
+      $('towerWarning').textContent = towerWarnings.map(item => String(item.message || '')).join('；');
       $('reportBody').classList.remove('hidden');
       renderKpis(data.kpis);
       renderRows(data.trees);
       renderPlot(data.display, data.wires);
     } catch (error) {
-      showStatus(`当前报告读取失败：${error.message || error}`, 'error');
+      clearDisplayedReport(`当前报告读取失败：${error.message || error}`, 'error');
+    } finally {
+      reportLoading = false;
+    }
+  }
+
+  function sameGate(left, right) {
+    const fields = ['run_id', 'batch_mtime_ns', 'journal_mtime_ns', 'prediction_mtime_ns',
+      'editor_operation_count', 'published_editor_operation_count', 'final_generation_id',
+      'result_generation_id', 'risk_generation_id'];
+    return right?.status === 'PASS' && fields.every(field => left?.[field] === right[field]);
+  }
+
+  async function checkGate() {
+    if (gateChecking || reportLoading) return;
+    gateChecking = true;
+    try {
+      const response = await fetch('/api/future-preview/gate', {cache: 'no-store'});
+      const payload = await response.json();
+      if (!response.ok || payload.gate?.status !== 'PASS') {
+        const reasons = (payload.gate?.reasons || []).join('；');
+        clearDisplayedReport(`当前结果尚未定稿，报告暂时隐藏。${reasons ? ` 原因：${reasons}` : ''}`, 'locked');
+      } else if (!displayedGate || !sameGate(displayedGate, payload.gate)) {
+        clearDisplayedReport('检测到新的当前定稿，正在刷新报告…', '');
+        await load();
+      }
+    } catch (_) {
+      clearDisplayedReport('无法确认当前定稿状态，已清除报告图；连接恢复后自动刷新。', 'error');
+    } finally {
+      gateChecking = false;
     }
   }
 
   $('printReport').addEventListener('click', () => window.print());
   $('downloadExcel').addEventListener('click', () => saveReport('excel'));
   $('downloadHtml').addEventListener('click', () => saveReport('html'));
+  setInterval(() => { void checkGate(); }, 3000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) void checkGate(); });
   load();
 })();

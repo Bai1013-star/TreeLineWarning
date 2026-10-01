@@ -22,7 +22,7 @@ from core.stage_b.dbh_evidence import (
 )
 
 VERSION = "DBH_RECOVERY_V2"
-MAX_SEEDS = 3
+MAX_SEEDS = 4
 SEED_GRID_M = 0.35
 ROI_RADIUS_M = 0.60
 CONNECTION_BIN_M = 0.50
@@ -58,6 +58,16 @@ def current_exclusions(root: Path, br: Path, original: list, operations: list) -
         with np.load(br / "tree_segmentation_original.npz", allow_pickle=False) as archive:
             ids = archive["original_index"][np.isin(archive["tree_id"], sorted(deleted))]
         removed = np.unique(np.concatenate((removed, ids)))
+    from core.stage_b.tower_exclusion import _span_tower_indices
+
+    tower_parts = []
+    for span_root in sorted(br.glob("span-*")):
+        if span_root.is_dir():
+            tower = _span_tower_indices(root, span_root)
+            if tower is not None and len(tower):
+                tower_parts.append(np.asarray(tower, dtype=np.int64))
+    if tower_parts:
+        removed = np.unique(np.concatenate((removed, *tower_parts)))
     return removed
 
 
@@ -88,7 +98,8 @@ def current_seeds(xyz: np.ndarray, hag: np.ndarray, hint: Any = None) -> tuple[l
                         "support": int(counts[index]),
                     }
                 )
-            if len(proposals) == MAX_SEEDS:
+            # Leave one bounded ROI for a validated segmentation stem hint.
+            if len(proposals) == MAX_SEEDS - 1:
                 break
     if hint is not None:
         xy = np.asarray(hint, dtype=float)
@@ -130,6 +141,62 @@ def axis_connection(
         "radius_m": radius,
         "height_bin_counts": counts,
         "longest_consecutive_bins": longest,
+    }
+
+
+def raw_bridged_axis_connection(
+    current_xyz: np.ndarray,
+    current_hag: np.ndarray,
+    raw_xyz: np.ndarray,
+    raw_hag: np.ndarray,
+    origin: np.ndarray,
+    direction: np.ndarray,
+    diameter_cm: float,
+) -> dict:
+    """Prove a missing segmented lower trunk joins the surviving upper crown.
+
+    Current members must independently occupy two adjacent upper height bins.
+    Exact raw points must fill every bin from the already tracked lower stem to
+    that first member bin.  A raw-only tube is never crown ownership evidence.
+    """
+
+    radius = diameter_cm / 200 + 2 * DBH_RECOVERY_CONFIG.maximum_center_track_residual_m + 0.02
+    lowers = np.arange(2.0, 5.5, CONNECTION_BIN_M)
+    counts = []
+    for xyz, hag in ((current_xyz, current_hag), (raw_xyz, raw_hag)):
+        delta = xyz - origin
+        radial = np.linalg.norm(delta - np.outer(delta @ direction, direction), axis=1)
+        counts.append(
+            [
+                int(
+                    np.count_nonzero(
+                        (radial <= radius) & (hag >= low) & (hag < low + CONNECTION_BIN_M)
+                    )
+                )
+                for low in lowers
+            ]
+        )
+    current_counts, raw_counts = counts
+    threshold = DBH_RECOVERY_CONFIG.minimum_points_per_section
+    first_upper = next(
+        (
+            index for index in range(2, min(5, len(current_counts) - 1))
+            if current_counts[index] >= threshold and current_counts[index + 1] >= threshold
+        ),
+        None,
+    )
+    continuous_raw = first_upper is not None and all(
+        count >= threshold for count in raw_counts[:first_upper + 2]
+    )
+    return {
+        "status": "PASS" if continuous_raw else "RAW_BRIDGED_CURRENT_CONNECTION_UNPROVEN",
+        "mode": "RAW_BRIDGED_TO_TWO_CURRENT_UPPER_BINS",
+        "radius_m": radius,
+        "current_height_bin_counts": current_counts,
+        "raw_height_bin_counts": raw_counts,
+        "first_current_upper_bin_hag_m": (
+            float(lowers[first_upper]) if first_upper is not None else None
+        ),
     }
 
 
@@ -262,7 +329,10 @@ def recover_finalized_dbh_v2(
     cache_root = confined(root, prep["vegetation_role_tile_index_reference"])
     source = prep["ground_preparation"]["source_identity"]
     query = query_provider or local_raw_query
-    successful_ids = [r["global_tree_id"] for r in base["trees"] if r["dbh_cm"] is not None]
+    successful_ids = [
+        r["global_tree_id"] for r in base["trees"]
+        if r["dbh_cm"] is not None and r["dbh_method"] != "REFERENCE_ESTIMATE"
+    ]
     preserved_indices = np.sort(
         old_arrays["original_index"][np.isin(old_arrays["global_tree_id"], successful_ids)]
     )
@@ -272,7 +342,7 @@ def recover_finalized_dbh_v2(
         gid = row["global_tree_id"]
         if progress:
             progress(f"DBH_V2_TREE:{gid}")
-        if row["dbh_cm"] is not None:
+        if row["dbh_cm"] is not None and row["dbh_method"] != "REFERENCE_ESTIMATE":
             keep = old_arrays["global_tree_id"] == gid
             blocks.append({key: value[keep] for key, value in old_arrays.items()})
             rows.append(row)
@@ -281,7 +351,11 @@ def recover_finalized_dbh_v2(
         seeds, geometry = current_seeds(
             context["xyz"], context["hag"], row.get("stem_axis_xy_local_m")
         )
-        row["v1_failure_reason"] = old["dbh_fit_status"]
+        row["v1_failure_reason"] = old.get(
+            "dbh_pre_reference_failure_reason", old["dbh_fit_status"]
+        )
+        row.pop("dbh_reference_estimate", None)
+        row.pop("dbh_pre_reference_failure_reason", None)
         for key in (
             "fit_attempts",
             "dbh_continuity",

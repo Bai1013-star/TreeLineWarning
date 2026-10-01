@@ -46,11 +46,24 @@ def test_desktop_page_uses_existing_local_viewer_and_product_actions():
     assert 'id="openProject"' in page
     assert 'id="importPointCloud"' in page
     assert 'id="exportWorkOrder"' in page
-    assert "导出预测输入" in page
+    assert "导出树木风险结果" in page
     assert "单木结果查看与复核" in page
     assert "/download_prediction" in script
     assert "请先完成当前项目的单木复核" in script
     assert "if (!state.finalized) await jsonPost('/api/desktop/batch/finalize');" not in script
+
+
+def test_embedded_review_updates_workspace_after_committed_edits():
+    root = Path(__file__).resolve().parents[2] / "viewer_poc" / "giro3d"
+    shell = (root / "desktop.js").read_text(encoding="utf-8")
+    review = (root / "tree_review_app.js").read_text(encoding="utf-8")
+    assert "notifyWorkspaceChanged('EDIT_COMMITTED')" in review
+    assert "notifyWorkspaceChanged('FINALIZED')" in review
+    assert "event.source !== $('viewer').contentWindow" in shell
+    assert "event.origin !== window.location.origin" in shell
+    assert "treeline:tree-review-changed" in shell
+    assert "void requestWorkspaceRefresh()" in shell
+    assert "show('viewerWrap', state.viewerLoaded);" in shell
 
 
 def test_desktop_bridge_exports_required_methods_without_public_object_graph():

@@ -66,6 +66,7 @@ def test_single_source_creates_layout_and_identity(tmp_path: Path) -> None:
     ):
         assert directory.is_dir()
     assert ws.excel_path.name == "Prediction_Input.xlsx"
+    assert ws.excel_path.parent == ws.tree_analysis_dir
 
 
 def test_unsupported_extension_ignored(tmp_path: Path) -> None:

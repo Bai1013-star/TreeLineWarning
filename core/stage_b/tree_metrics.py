@@ -15,9 +15,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-
 from algorithms.manual_span.config import default_manual_span_config
 from algorithms.manual_span.metrics import TreeMetrics, compute_tree_metrics
+
 from core.config.fast_baseline import canonical_digest
 
 _SOURCE_PREPARATION_SCHEMA = "treeline-project-source-shared-preparation-v1"
@@ -93,7 +93,7 @@ def _valid_preparation_context(
 
 def _project_root_from_output(output_path: Path) -> Path | None:
     parent = output_path.resolve().parent
-    if parent.name.lower() != "exports":
+    if parent.name.lower() not in {"exports", "artifacts"}:
         return None
     root = parent.parent
     if (root / "stage-a-project.json").is_file() or (root / "project.json").is_file():

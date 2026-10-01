@@ -49,6 +49,19 @@ def _revision_key(workflow: Any, gate: Mapping[str, Any], result: Any) -> tuple[
     )
 
 
+def _current_dbh_cm(row: Mapping[str, Any]) -> Any:
+    if row.get("dbh_method") in {"REFERENCE_ESTIMATE", "UNAVAILABLE"} or row.get(
+        "diameter_source"
+    ) == "REFERENCE_ESTIMATE":
+        return None
+    value = row.get("dbh_cm")
+    if value is None and row.get("dbh_method") is None and row.get("diameter_source") in {
+        "DIRECT_STEM", "RECOVERED_STEM", "REVIEW_CONFIRMED_STEM", "FOLDER_BH_WIDTH_MEASUREMENT",
+    }:
+        return row.get("diameter_cm")
+    return value
+
+
 def _snapshot(workflow: Any, result: Any) -> tuple[tuple[dict[str, Any], ...], dict[str, Any]]:
     from core.future_preview import FinalizedTreeGeometry
     from core.stage_b.tree_display_id import ordered_product_spans
@@ -119,7 +132,7 @@ def _snapshot(workflow: Any, result: Any) -> tuple[tuple[dict[str, Any], ...], d
             height_m=row.get("height_m"),
             crown_major_m=row.get("crown_width_major_m"),
             crown_minor_m=row.get("crown_width_minor_m"),
-            dbh_cm=row.get("diameter_cm"),
+            dbh_cm=_current_dbh_cm(row),
             anchor_xyz_local_m=anchor,
         )
         snapshot.append(
@@ -135,7 +148,7 @@ def _snapshot(workflow: Any, result: Any) -> tuple[tuple[dict[str, Any], ...], d
                 "current_height_m": row.get("height_m"),
                 "current_crown_major_m": row.get("crown_width_major_m"),
                 "current_crown_minor_m": row.get("crown_width_minor_m"),
-                "current_dbh_cm": row.get("diameter_cm"),
+                "current_dbh_cm": _current_dbh_cm(row),
                 "parent_point_count": int(len(points)),
                 "display_point_count": int(len(keep)),
                 "geometry": geometry,

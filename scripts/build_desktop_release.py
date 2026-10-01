@@ -187,36 +187,80 @@ def _git_capture(args: Sequence[str], *, binary: bool = False) -> bytes | str:
 
 
 def tracked_source_digest() -> dict[str, Any]:
-    """Capture HEAD and a deterministic digest of tracked worktree bytes."""
+    """Hash tracked bytes and untracked files that PyInstaller can package.
+
+    The existing tracked fields retain their meaning.  The build-input digest
+    also covers new local modules and viewer assets before they enter Git's
+    index, so the before/after receipt detects edits to those build inputs.
+    """
 
     head = str(_git_capture(["rev-parse", "HEAD"])).strip()
     raw_paths = _git_capture(["ls-files", "-z"], binary=True)
     assert isinstance(raw_paths, bytes)
     digest = hashlib.sha256()
+    build_digest = hashlib.sha256()
     file_count = 0
-    for raw_path in raw_paths.split(b"\0"):
-        if not raw_path:
-            continue
+    tracked = {raw_path.replace(b"\\", b"/") for raw_path in raw_paths.split(b"\0") if raw_path}
+
+    def add_file(hasher: Any, raw_path: bytes, path: Path) -> None:
+        normalized = raw_path.replace(b"\\", b"/")
+        size = path.stat().st_size
+        hasher.update(b"PATH\0")
+        hasher.update(len(normalized).to_bytes(8, "big"))
+        hasher.update(normalized)
+        hasher.update(b"SIZE\0")
+        hasher.update(size.to_bytes(8, "big"))
+        hasher.update(b"DATA\0")
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                hasher.update(block)
+
+    for raw_path in sorted(tracked):
         relative = os.fsdecode(raw_path)
         path = REPO_ROOT / Path(relative)
         if not path.is_file():
             raise ReleaseError(f"tracked source file is unavailable: {relative}")
-        normalized = raw_path.replace(b"\\", b"/")
-        size = path.stat().st_size
-        digest.update(b"PATH\0")
-        digest.update(len(normalized).to_bytes(8, "big"))
-        digest.update(normalized)
-        digest.update(b"SIZE\0")
-        digest.update(size.to_bytes(8, "big"))
-        digest.update(b"DATA\0")
-        with path.open("rb") as stream:
-            for block in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(block)
+        add_file(digest, raw_path, path)
+        add_file(build_digest, raw_path, path)
         file_count += 1
+
+    # desktop_build.spec collects all algorithms/core modules and the complete
+    # giro3d viewer directory; desktop/scripts modules are imported or hidden.
+    # Only these small source trees are scanned.  Build outputs and native
+    # runtimes elsewhere in the repository are deliberately outside the walk.
+    untracked: set[bytes] = set()
+    for name in ("algorithms", "core", "desktop", "scripts", "viewer_poc/giro3d"):
+        directory = REPO_ROOT / name
+        if not directory.is_dir():
+            continue
+        for current, dirs, files in os.walk(directory, followlinks=False):
+            dirs[:] = sorted(
+                item for item in dirs if item not in {"__pycache__", ".pytest_cache"}
+            )
+            for filename in files:
+                path = Path(current) / filename
+                if path.is_symlink() or not path.is_file():
+                    continue
+                if name != "viewer_poc/giro3d" and path.suffix != ".py":
+                    continue
+                relative = path.relative_to(REPO_ROOT)
+                raw_path = os.fsencode(relative.as_posix())
+                if raw_path not in tracked:
+                    untracked.add(raw_path)
+    spec_path = REPO_ROOT / "desktop_build.spec"
+    if spec_path.is_file() and not spec_path.is_symlink():
+        spec_relative = b"desktop_build.spec"
+        if spec_relative not in tracked:
+            untracked.add(spec_relative)
+    for raw_path in sorted(untracked):
+        path = REPO_ROOT / Path(os.fsdecode(raw_path))
+        add_file(build_digest, raw_path, path)
     return {
         "head": head,
         "tracked_source_sha256": digest.hexdigest(),
         "tracked_file_count": file_count,
+        "build_input_sha256": build_digest.hexdigest(),
+        "untracked_build_input_count": len(untracked),
     }
 
 
@@ -827,8 +871,9 @@ def _copy_package_metadata(
         "中文路径和含空格路径受支持。\n\n"
         "## 分析流程\n\n选择档距并执行 AUTO 分析；打开 3D 单木复核，使用 DELETE、MERGE、UNDO；"
         "确认后点击“完成复核”生成 final state。原始分割保持只读，修改仅记录在 edits 层。\n\n"
-        "## 导出方法\n\n定稿后点击“导出预测输入”保存 `Prediction_Input.xlsx`，"
-        "或点击“导出 HTML 报告”。"
+        "## 导出方法\n\n定稿后点击“导出树木风险结果”保存 `树木风险结果.xlsx`，"
+        "或点击“导出 HTML 报告”。Excel 与示例 CSV 一样严格为 23 列，每棵当前保留树一行。"
+        "胸径单元格批注会说明本树测量方法；证据不足时留空并注明原因。"
         "两个导出均来自同一 final projection。\n\n"
         "## 已知限制\n\n- 首次大型点云分析可能较慢，速度取决于磁盘与内存。\n"
         "- GPU 仅用于经认证的净空候选筛选；精确距离判定仍由 CPU 完成。\n"
@@ -846,7 +891,8 @@ def _copy_package_metadata(
         "   ask IT to run webview2_offline_prerequisite/offline_verified/"
         "MicrosoftEdgeWebView2RuntimeInstallerX64.exe manually. No automatic install.\n"
         "5. New/Open Project > import LAS/LAZ > confirm units > towers/spans >\n"
-        "   analyze (AUTO or SERIAL) > Tree Review > Finalize > current report/export.\n"
+        "   analyze (AUTO or SERIAL) > Tree Review > Finalize > current report/"
+        "tree risk results XLSX.\n"
         "6. Close and restart, reopen the project, and verify finalized state/export.\n\n"
         "Parallel is unavailable in this release.\n"
         "Local future preview is experimental, not a validated forecast or safety result.\n"

@@ -13,6 +13,7 @@ import pytest
 from desktop.editor_tasks import EditorTaskError, editor_tasks
 from desktop.server import DesktopApplication
 from desktop.workflow import DesktopWorkflow
+from openpyxl import load_workbook
 from tests.desktop.test_stage_c_workflow import _workflow
 
 
@@ -46,6 +47,115 @@ def assert_membership(actual, expected):
         np.testing.assert_array_equal(a, e)
 
 
+def disk_membership(editor):
+    with np.load(editor.artifact_root / "tree_segmentation_final.npz", allow_pickle=False) as data:
+        return data["original_index"], data["tree_id"], data["xyz_local_m"]
+
+
+@pytest.mark.parametrize("action", ["DELETE", "REMOVE_POINTS"])
+def test_previewed_membership_is_persisted_before_final_publication(tmp_path: Path, action):
+    workflow, matrix, polygon = ready(tmp_path)
+    workflow.finalize()
+    editor = workflow._ensure_editor()
+    original = disk_membership(editor)
+
+    if action == "DELETE":
+        workflow.select_editor_trees([0])
+        workflow.delete_selected()
+    else:
+        preview = workflow.preview_trim_lasso(-1, matrix, polygon)
+        workflow.commit_trim(preview["preview_id"])
+
+    # A UI preview may fill the in-memory cache while the disk still holds the
+    # previous generation. The next finalize must publish the previewed arrays.
+    previewed = editor.final_reconciled()
+    expected = (previewed.final_original_index, previewed.final_tree_id,
+                previewed.final_xyz_local_m)
+    assert len(expected[0]) < len(original[0])
+    assert_membership(disk_membership(editor), original)
+    workflow.finalize()
+    assert_membership(disk_membership(editor), expected)
+    assert workflow.current_report()["status"] == "FINALIZED"
+
+    reopened = DesktopWorkflow(workflow.project_root)
+    assert reopened.current_report()["status"] == "FINALIZED"
+    assert_membership(disk_membership(reopened._ensure_editor()), expected)
+
+    workflow.undo_editor()
+    editor.final_reconciled()  # Preview the restored membership before publish.
+    workflow.finalize()
+    assert_membership(disk_membership(editor), original)
+    assert DesktopWorkflow(workflow.project_root).current_report()["status"] == "FINALIZED"
+
+
+def test_persisted_membership_reuses_file_until_missing(tmp_path: Path, monkeypatch):
+    workflow, _matrix, _polygon = ready(tmp_path)
+    workflow.select_editor_trees([0])
+    workflow.delete_selected()
+    workflow.finalize()
+    editor = workflow._ensure_editor()
+    expected = disk_membership(editor)
+    final_path = editor.artifact_root / "tree_segmentation_final.npz"
+    original_write = editor._write_npz
+    monkeypatch.setattr(editor, "_write_npz", lambda *a, **k: pytest.fail("redundant NPZ write"))
+    workflow.finalize()
+    assert_membership(disk_membership(editor), expected)
+
+    final_path.unlink()
+    monkeypatch.setattr(editor, "_write_npz", original_write)
+    editor.persist()
+    assert_membership(disk_membership(editor), expected)
+
+
+def test_reopen_replays_equal_count_different_source_membership(tmp_path: Path):
+    from algorithms.folder_pipeline.tree_editor import _encode_indices
+
+    workflow, matrix, polygon = ready(tmp_path)
+    first = workflow.preview_trim_lasso(-1, matrix, polygon)
+    assert first["point_count"] == 1
+    workflow.commit_trim(first["preview_id"])
+    workflow.finalize()
+    editor = workflow._ensure_editor()
+    final_path = editor.artifact_root / "tree_segmentation_final.npz"
+    stale_npz = final_path.read_bytes()
+    stale_indices = disk_membership(editor)[0]
+
+    workflow.undo_editor()
+    source = editor.original.original_index[editor.original.tree_id == 0]
+    survivors = set(stale_indices)
+    second_index = next(int(index) for index in source if index in survivors)
+    editor.session.operations.append({
+        "type": "REMOVE_POINTS", "tree_ids": [0], "point_count": 1,
+        "removed_indices_b64": _encode_indices(np.array([second_index], dtype=np.int64)),
+    })
+    workflow.finalize()
+    correct = disk_membership(editor)
+    assert len(correct[0]) == len(stale_indices)
+    assert not np.array_equal(correct[0], stale_indices)
+    # Recreate a legacy failure: the new batch/journal was published but an
+    # older, equal-length NPZ remained. Record counts and generation still pass.
+    final_path.write_bytes(stale_npz)
+
+    reopened = DesktopWorkflow(workflow.project_root)
+    assert reopened.current_report()["status"] == "LOCKED"
+    recovered_editor = reopened._ensure_editor()
+    assert recovered_editor._final_membership_disk_mismatch is True
+    np.testing.assert_array_equal(recovered_editor.final_reconciled().final_original_index,
+                                  correct[0])
+    assert recovered_editor._persisted_final_membership_key is None
+    reopened.finalize()
+    assert_membership(disk_membership(recovered_editor), correct)
+    assert reopened.current_report()["status"] == "FINALIZED"
+
+
+def test_journal_identity_distinguishes_equal_size_point_removals():
+    from core.stage_b.final_generation import editor_journal_digest
+
+    first = {"type": "REMOVE_POINTS", "tree_ids": [0], "removed_indices_b64": "first"}
+    second = {"type": "REMOVE_POINTS", "tree_ids": [0], "removed_indices_b64": "second"}
+    assert editor_journal_digest([first]) != editor_journal_digest([second])
+
+
 def test_exact_lasso_undo_and_reopen_without_raw_access(tmp_path: Path, monkeypatch):
     workflow, matrix, polygon = ready(tmp_path)
     before = membership(workflow)
@@ -77,6 +187,15 @@ def test_exact_lasso_undo_and_reopen_without_raw_access(tmp_path: Path, monkeypa
     workflow.commit_trim(preview["preview_id"])
     reopened = DesktopWorkflow(workflow.project_root)
     assert_membership(membership(reopened), after)
+    display = reopened.editor_data(display_budget=1_500)["trees3d"]
+    visible_indices = {
+        int(index)
+        for index, visible in zip(
+            display["original_index_by_index"], display["visible_by_index"], strict=True
+        )
+        if visible
+    }
+    assert visible_indices == set(map(int, after[0]))
     reopened.undo_editor()
     assert_membership(membership(reopened), before)
     assert raw.read_bytes() == raw_before
@@ -253,8 +372,70 @@ def test_delete_and_undo_reset_done_state_and_drive_final_projection(tmp_path: P
     }
 
 
+def test_same_length_new_delete_stays_stale_after_restart_until_refinalized(tmp_path: Path):
+    from desktop.review_extensions import _result_matches_editor_revision
+
+    workflow, _matrix, _polygon = ready(tmp_path)
+    workflow.select_editor_trees([0])
+    workflow.delete_selected()
+    workflow.finalize()
+    assert _result_matches_editor_revision(workflow._ensure_editor(), workflow._result)
+
+    workflow.undo_editor()
+    workflow.select_editor_trees([1])
+    workflow.delete_selected()
+    assert not _result_matches_editor_revision(workflow._ensure_editor(), workflow._result)
+    projection = workflow.final_projection()
+    assert len(projection["trees"]) == 1
+    assert projection["trees"][0]["minimum_clearance_m"] is None
+    assert projection["metadata"]["revision_current"] is False
+    assert workflow.batch_projection()["risk_unavailable_tree_count"] == 1
+    assert workflow.current_report()["status"] == "LOCKED"
+
+    restarted = DesktopWorkflow(workflow.project_root)
+    assert restarted.editor_state()["step"] == "TREE_EDITING"
+    assert len(restarted.final_projection()["trees"]) == 1
+    assert restarted.final_projection()["trees"][0]["minimum_clearance_m"] is None
+    assert restarted.batch_projection()["final_tree_count"] == 1
+    assert restarted.current_report()["status"] == "LOCKED"
+    restarted.finalize()
+    assert {row["persistent_tree_id"] for row in restarted.current_report()["trees"]} == {
+        row["persistent_tree_id"] for row in restarted.final_projection()["trees"]
+    }
+
+
+def test_legacy_published_edit_is_invalidated_after_same_length_change(tmp_path: Path):
+    from desktop.review_extensions import _result_matches_editor_revision
+
+    workflow, _matrix, _polygon = ready(tmp_path)
+    workflow.select_editor_trees([0])
+    workflow.delete_selected()
+    workflow.finalize()
+    batch_path = workflow._ensure_editor().artifact_root / "batch.json"
+    batch = json.loads(batch_path.read_text(encoding="utf-8"))
+    batch["global_reconciliation"]["diagnostics"].pop("editor_journal_digest", None)
+    batch["batch_diagnostics"].pop("editor_journal_digest", None)
+    batch_path.write_text(json.dumps(batch), encoding="utf-8")
+
+    legacy = DesktopWorkflow(workflow.project_root)
+    assert _result_matches_editor_revision(legacy._ensure_editor(), legacy._result)
+    legacy.undo_editor()
+    legacy.select_editor_trees([1])
+    legacy.delete_selected()
+
+    restarted = DesktopWorkflow(workflow.project_root)
+    editor = restarted._ensure_editor()
+    assert not _result_matches_editor_revision(editor, restarted._result)
+    assert restarted.editor_state()["step"] == "TREE_EDITING"
+    assert restarted.final_projection()["metadata"]["revision_current"] is False
+    assert restarted.current_report()["status"] == "LOCKED"
+
+
 def test_background_finalize_keeps_generated_excel_cache_current(tmp_path: Path):
     workflow, _matrix, _polygon = ready(tmp_path)
+    legacy = workflow.project_root / "exports" / "Prediction_Input.xlsx"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_bytes(b"prior user workbook")
     workflow.start_finalize()
     thread = workflow._finalize_thread
     assert thread is not None
@@ -262,14 +443,35 @@ def test_background_finalize_keeps_generated_excel_cache_current(tmp_path: Path)
     assert workflow.editor_state()["step"] == "DONE"
 
     editor = workflow._ensure_editor()
-    workbook = workflow.project_root / "exports" / "Prediction_Input.xlsx"
+    workbook = workflow.project_root / "artifacts" / "Prediction_Input.xlsx"
     batch = editor.artifact_root / "batch.json"
     assert workbook.is_file() and batch.is_file()
+    assert not legacy.exists()
+    archived = list(workbook.parent.glob("Prediction_Input.legacy-*.xlsx"))
+    assert len(archived) == 1
+    assert archived[0].read_bytes() == b"prior user workbook"
     assert workbook.stat().st_mtime_ns >= batch.stat().st_mtime_ns
     modified = workbook.stat().st_mtime_ns
 
     assert workflow.export_prediction() == workbook
     assert workbook.stat().st_mtime_ns == modified
+
+
+def test_missing_dbh_keeps_finalized_result_and_exports_blank_with_reason(tmp_path: Path):
+    workflow, _matrix, _polygon = ready(tmp_path)
+    workflow.start_finalize()
+    workflow._finalize_thread.join(10)
+    assert workflow.editor_state()["step"] == "DONE"
+    assert workflow.current_report()["status"] == "FINALIZED"
+    delivery = workflow.export_delivery()
+    workbook = load_workbook(delivery)
+    try:
+        diameter = workbook.active["I2"]
+        assert diameter.value is None
+        assert diameter.comment is not None
+        assert "胸径留空" in diameter.comment.text
+    finally:
+        workbook.close()
 
 
 def request(base, path, payload=None):

@@ -10,6 +10,8 @@ import numpy as np
 import pytest
 from core.stage_b import BatchSpanStatus
 from desktop.current_report import (
+    _bounded_tree_display,
+    _tower_exclusion_warnings,
     build_current_report,
     current_finalized_gate,
     current_wire_curves,
@@ -17,6 +19,114 @@ from desktop.current_report import (
 from desktop.workflow import DesktopWorkflow
 
 RUN_ID = "analysis-current-report"
+
+
+def test_tower_coverage_warning_reads_new_and_legacy_audits(tmp_path: Path) -> None:
+    new_result = SimpleNamespace(span_results={"span-1": SimpleNamespace(diagnostics={
+        "tower_exclusion": {"towers": [
+            {"tower_id": "T001", "coverage": "UNAVAILABLE",
+             "reason": "AMBIGUOUS_NEARBY_VERTICAL_SHAFTS"},
+            {"tower_id": "T002", "coverage": "PARTIAL_CONNECTED_STRUCTURE"},
+        ]}
+    })}, batch_diagnostics={})
+    warnings = _tower_exclusion_warnings(new_result, tmp_path)
+    assert len(warnings) == 2
+    assert "不能视为已从树木成员中剔除" in warnings[0]["message"]
+    assert "AMBIGUOUS_NEARBY_VERTICAL_SHAFTS" in warnings[0]["message"]
+    assert "覆盖不保证完整" in warnings[1]["message"]
+
+    manifest = tmp_path / "span-2" / "tower_membership.json"
+    manifest.parent.mkdir()
+    manifest.write_text(json.dumps({"towers": [{
+        "tower_id": "T003", "coverage": "UNAVAILABLE", "reason": "NO_LOCAL_RAW_SUPPORT"
+    }]}), encoding="utf-8")
+    legacy = SimpleNamespace(span_results={}, batch_diagnostics={"tower_exclusion_final": {
+        "span_membership_manifests": [str(manifest.relative_to(tmp_path))]
+    }})
+    assert _tower_exclusion_warnings(legacy, tmp_path)[0]["tower_id"] == "T003"
+
+
+def test_current_report_display_excludes_deleted_tree_and_lasso_members() -> None:
+    display = {"trees3d": {
+        "xyz": [[0, 0, 1], [1, 0, 2], [2, 0, 3], [3, 0, 4], [4, 0, 5]],
+        "tree_id_by_index": [1, 1, 1, 2, 2],
+        "original_index_by_index": [10, 11, 12, 20, 21],
+        "visible_by_index": [True, False, True, False, False],
+        "color": ["red", "red", "red", "blue", "blue"],
+    }}
+    output = _bounded_tree_display(display, max_points=30_000)
+    assert output["xyz"] == [[0.0, 0.0, 1.0], [2.0, 0.0, 3.0]]
+    assert output["tree_id_by_index"] == [1, 1]
+    assert output["source_point_count"] == 2
+    assert output["point_count"] == 2
+    limited = _bounded_tree_display(display, max_points=1)
+    assert limited["xyz"] == [[0.0, 0.0, 1.0]]
+    assert limited["source_point_count"] == 2
+    all_deleted = {"trees3d": {**display["trees3d"], "visible_by_index": [False] * 5}}
+    empty = _bounded_tree_display(all_deleted, max_points=30_000)
+    assert empty["xyz"] == []
+    assert empty["tree_id_by_index"] == []
+    assert empty["source_point_count"] == 0
+
+
+def test_report_discards_projection_when_editor_revision_changes_during_read(
+    tmp_path: Path,
+) -> None:
+    workflow = _workflow(tmp_path)
+    edits_path = workflow._latest_batch_path().with_name("tree_edits.json")
+
+    def concurrent_edit(**_kwargs):
+        os.utime(edits_path, ns=(4_000_000_000, 4_000_000_000))
+        return _final_projection()
+
+    workflow.final_projection = concurrent_edit
+    report = build_current_report(workflow)
+    assert report["status"] == "LOCKED"
+    assert "display" not in report
+
+
+def test_same_operation_count_with_different_journal_digest_locks_report(tmp_path: Path) -> None:
+    from core.stage_b.final_generation import editor_journal_digest
+
+    workflow = _workflow(tmp_path)
+    manifest = workflow._latest_batch_manifest()
+    original = [{"type": "DELETE"}]
+    manifest["global_reconciliation"]["diagnostics"]["editor_journal_digest"] = (
+        editor_journal_digest(original)
+    )
+    batch_path = workflow._latest_batch_path()
+    batch_path.write_text(json.dumps(manifest), encoding="utf-8")
+    edits_path = batch_path.with_name("tree_edits.json")
+    edits_path.write_text(
+        json.dumps({"operations": [{"type": "DELETE", "tree_ids": [5]}]}),
+        encoding="utf-8",
+    )
+    os.utime(batch_path, ns=(4_000_000_000, 4_000_000_000))
+    os.utime(edits_path, ns=(3_000_000_000, 3_000_000_000))
+
+    report = build_current_report(workflow)
+    assert report["status"] == "LOCKED"
+    assert report["gate"]["editor_operation_count"] == 1
+    assert report["gate"]["editor_revision_match"] is False
+
+
+def test_old_reference_estimate_is_not_current_dbh() -> None:
+    from desktop.current_report import _current_row
+
+    row = _current_row({
+        "persistent_tree_id": "tree-1", "dbh_cm": 23.1, "diameter_cm": 23.1,
+        "dbh_method": "REFERENCE_ESTIMATE", "diameter_source": "REFERENCE_ESTIMATE",
+    })
+    assert row["dbh_cm"] is None
+    assert row["diameter_cm"] is None
+    assert row["dbh_method"] == "UNAVAILABLE"
+    assert row["dbh_fit_status"] == "STALE_REFERENCE_ESTIMATE"
+    measured = _current_row({
+        "persistent_tree_id": "tree-2", "diameter_cm": 25.0,
+        "diameter_source": "FOLDER_BH_WIDTH_MEASUREMENT",
+    })
+    assert measured["dbh_cm"] == 25.0
+    assert measured["dbh_method"] == "FOLDER_BH_WIDTH_MEASUREMENT"
 
 
 def _wire_result() -> SimpleNamespace:
@@ -316,6 +426,22 @@ def test_old_persisted_finalize_failure_does_not_lock_a_new_run(tmp_path: Path) 
     workflow = _workflow(tmp_path, finalize_state={"run_id": "analysis-old", "status": "FAILED"})
     gate = current_finalized_gate(workflow)
     assert gate["status"] == "PASS"
+
+
+def test_dbh_workbook_revision_changes_gate_without_editor_change(tmp_path: Path) -> None:
+    workflow = _workflow(tmp_path)
+    workbook = tmp_path / "artifacts" / "Prediction_Input.xlsx"
+    workbook.parent.mkdir(exist_ok=True)
+    workbook.write_bytes(b"published-a")
+    os.utime(workbook, ns=(5_000_000_000, 5_000_000_000))
+    before = current_finalized_gate(workflow)
+    workbook.write_bytes(b"published-b")
+    os.utime(workbook, ns=(6_000_000_000, 6_000_000_000))
+    after = current_finalized_gate(workflow)
+    assert before["status"] == after["status"] == "PASS"
+    assert before["editor_operation_count"] == after["editor_operation_count"]
+    assert before["prediction_mtime_ns"] == 5_000_000_000
+    assert after["prediction_mtime_ns"] == 6_000_000_000
 
 
 def test_corrupt_persisted_batch_cannot_be_replaced_by_cached_result(tmp_path: Path) -> None:

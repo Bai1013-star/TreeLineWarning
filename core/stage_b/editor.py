@@ -18,6 +18,10 @@ from algorithms.spans.reconcile import GlobalTreeRecord, TreeReconciliationResul
 from core.config.fast_baseline import FastBaselineConfig, canonical_digest
 from core.stage_b.danger_points import persist_final_danger_points
 from core.stage_b.region_edit_session import RegionTreeEditSession
+from core.stage_b.tower_exclusion import (
+    TOWER_EDITOR_SELECTION_METHOD,
+    ensure_editor_tower_exclusion,
+)
 
 
 class BatchTreeEditorError(RuntimeError):
@@ -73,7 +77,11 @@ class BatchTreeEditor:
         self.tree_load_seconds = time.perf_counter() - load_started
         self.last_viewer_update_seconds = 0.0
         self.finalization_performance: dict[str, Any] = {}
-        self._final_reconciled_cache: tuple[tuple[int, ...], TreeReconciliationResult] | None = None
+        self._final_reconciled_cache: tuple[str, TreeReconciliationResult] | None = None
+        # A UI read may populate the reconciliation cache before the matching
+        # full-resolution NPZ has been published. Keep disk publication separate.
+        self._persisted_final_membership_key: str | None = None
+        self._final_membership_disk_mismatch = False
 
     def _check_span(self, span_id: str, tree_ids: list[int]) -> None:
         allowed = set(self.tree_ids_by_span.get(span_id, ()))
@@ -95,6 +103,22 @@ class BatchTreeEditor:
         return self.session.merge_selected()
 
     def undo(self) -> dict[str, Any] | None:
+        if (
+            self.session.operations
+            and self.session.operations[-1].get("selection_method")
+            == TOWER_EDITOR_SELECTION_METHOD
+        ):
+            if len(self.session.operations) == 1:
+                return None
+            self.session.undo()
+            undone = self.session.undo()
+            ensure_editor_tower_exclusion(
+                self.project_root,
+                self.artifact_root,
+                tuple(self.result.span_statuses),
+                self.session,
+            )
+            return undone
         return self.session.undo()
 
     def snapshot(self) -> dict[str, Any]:
@@ -183,11 +207,14 @@ class BatchTreeEditor:
 
         self.persist_edits()
         final_path = self.artifact_root / "tree_segmentation_final.npz"
-        cache_key = tuple(id(operation) for operation in self.session.operations)
+        from core.stage_b.final_generation import editor_journal_digest
+
+        cache_key = editor_journal_digest(self.session.operations)
         cached_final = (
             self._final_reconciled_cache[1]
             if self._final_reconciled_cache is not None
             and self._final_reconciled_cache[0] == cache_key
+            and self._persisted_final_membership_key == cache_key
             and final_path.is_file()
             else None
         )
@@ -228,6 +255,9 @@ class BatchTreeEditor:
                 xyz_local_m=final_xyz,
                 tree_id=final_tree,
             )
+        # Only a completed atomic replacement proves the current journal's
+        # membership is on disk. A preview-only cache must never set this key.
+        self._persisted_final_membership_key = cache_key
         # BatchAnalysisScheduler._finish() already calls this method immediately
         # after exact clearance is produced.  Persist its exact danger XYZ here
         # so a close/reopen before the user first opens Step-2 does not discard
@@ -252,7 +282,9 @@ class BatchTreeEditor:
     ) -> TreeReconciliationResult:
         """Return the post-editor, unique full-resolution publication result."""
 
-        cache_key = tuple(id(operation) for operation in self.session.operations)
+        from core.stage_b.final_generation import editor_journal_digest
+
+        cache_key = editor_journal_digest(self.session.operations)
         if self._final_reconciled_cache is not None:
             cached = self._final_reconciled_cache[1]
             same_membership = final_membership is None or (
@@ -363,7 +395,7 @@ class BatchTreeEditor:
             for source_record in source_records:
                 for key in source_record.merged_span_tree_keys:
                     span_tree_to_global[key] = final_id
-        from core.stage_b.final_generation import final_generation_id
+        from core.stage_b.final_generation import editor_journal_digest, final_generation_id
 
         generation_id = final_generation_id(
             self.result.analysis_run_id,
@@ -375,6 +407,7 @@ class BatchTreeEditor:
             {
                 "editor_schema": "treeline-stage-b-batch-editor-v1",
                 "editor_operation_count": len(self.session.operations),
+                "editor_journal_digest": editor_journal_digest(self.session.operations),
                 "duplicate_final_original_index": 0,
                 "original_tree_count": len(
                     self.original_reconciled.global_tree_records
@@ -527,7 +560,9 @@ class BatchTreeEditor:
             danger_points=danger_points,
         )
 
-    def finalize(self, *, progress: Any = None) -> Any:
+    def finalize(
+        self, *, progress: Any = None, reference_dbh_cm: float | None = None
+    ) -> Any:
         """Persist edited memberships and return a finalized exportable result."""
 
         from core.stage_b.batch import BatchSpanStatus
@@ -543,6 +578,12 @@ class BatchTreeEditor:
             raise BatchTreeEditorError("FINALIZE_REQUIRES_USER_REVIEW")
         if progress is not None:
             progress("APPLYING_EDITS")
+        tower_exclusion_audit = ensure_editor_tower_exclusion(
+            self.project_root,
+            self.artifact_root,
+            tuple(self.result.span_statuses),
+            self.session,
+        )
         final_projection_started = time.perf_counter()
         final_membership = self.persist()
         final = self.final_reconciled(final_membership)
@@ -660,6 +701,9 @@ class BatchTreeEditor:
         statuses = {span_id: BatchSpanStatus.FINALIZED for span_id in statuses}
         batch_diagnostics = dict(self.result.batch_diagnostics)
         batch_diagnostics["finalization_performance"] = performance
+        batch_diagnostics["editor_journal_digest"] = final.diagnostics["editor_journal_digest"]
+        if tower_exclusion_audit is not None:
+            batch_diagnostics["tower_exclusion_final"] = tower_exclusion_audit
         batch_diagnostics["derived_generations"] = {
             "final_generation_id": generation_id,
             "result_generation_id": generation_id,
@@ -684,13 +728,18 @@ class BatchTreeEditor:
             self.artifact_root / "batch.json",
             self.result.to_dict(),
         )
+        self._final_membership_disk_mismatch = False
         # Additive geometry only: DBH failure must not undo successful Survey
         # finalization or change crown/clearance membership. Reports only read
         # the resulting provenance-bound sidecar; they never trigger recovery.
         from core.stage_b.dbh_identity_recovery import finalize_dbh
 
         try:
-            recovered = finalize_dbh(self.project_root, self.result, final)
+            dbh_options = (
+                {"reference_dbh_cm": reference_dbh_cm}
+                if reference_dbh_cm is not None else {}
+            )
+            recovered = finalize_dbh(self.project_root, self.result, final, **dbh_options)
             self.dbh_recovery_status = {
                 "status": "COMPLETE", "tree_count": len(recovered["trees"])
             }

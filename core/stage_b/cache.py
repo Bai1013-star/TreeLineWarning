@@ -29,6 +29,7 @@ from algorithms.spans.project_adapter import (
     SpanScienceResult,
 )
 from algorithms.spans.reconcile import reconcile_trees
+from algorithms.spans.tower_exclusion import TOWER_TREE_EXCLUSION_VERSION
 from algorithms.spans.tree_runner import load_span_tree_outcome
 from algorithms.spans.wire import load_span_wire_result
 
@@ -203,6 +204,14 @@ def _loader_artifacts(
         _artifact_reference(project_root, wire_manifest, "wire_manifest"),
         _artifact_reference(project_root, wire_arrays, "wire_arrays"),
     ]
+    if "tower_membership" in artifact_files:
+        for role, path in (
+            ("tower_membership_manifest", output_root / "tower_membership.json"),
+            ("tower_membership_indices", output_root / "tower_membership.npz"),
+        ):
+            if not path.is_file():
+                raise SpanCacheUnavailable(f"SPAN_CACHE_ARTIFACT_MISSING:{role}")
+            references.append(_artifact_reference(project_root, path, role))
     # The wire loader consumes this optional diagnostic archive when present.
     wire_diagnostics = wire_manifest.parent / "span_wire_diagnostics.npz"
     if wire_diagnostics.is_file():
@@ -516,6 +525,13 @@ def _validate_artifacts(
         by_role[role] = path
 
     required = {"tree_manifest", "tree_members", "wire_manifest", "wire_arrays"}
+    diagnostics = payload.get("diagnostics")
+    if isinstance(diagnostics, Mapping) and isinstance(
+        diagnostics.get("tower_exclusion"), Mapping
+    ):
+        if diagnostics["tower_exclusion"].get("schema") != TOWER_TREE_EXCLUSION_VERSION:
+            return None, "SPAN_CACHE_TOWER_MEMBERSHIP_VERSION_MISMATCH"
+        required.update({"tower_membership_manifest", "tower_membership_indices"})
     missing = sorted(required - set(by_role))
     if missing:
         return None, "SPAN_CACHE_ARTIFACT_MISSING:" + ",".join(missing)
@@ -525,6 +541,13 @@ def _validate_artifacts(
         "wire_manifest": output_root / "wire" / "span_wire_result.json",
         "wire_arrays": output_root / "wire" / "w1_arrays.npz",
     }
+    if "tower_membership_manifest" in required:
+        expected_paths.update(
+            {
+                "tower_membership_manifest": output_root / "tower_membership.json",
+                "tower_membership_indices": output_root / "tower_membership.npz",
+            }
+        )
     for role, expected in expected_paths.items():
         if by_role[role] != expected.resolve():
             return None, f"SPAN_CACHE_ARTIFACT_PATH_MISMATCH:{role}"

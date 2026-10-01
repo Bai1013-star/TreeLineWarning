@@ -74,6 +74,9 @@ def _apply_risk_tree_colors(
 def _result_matches_editor_revision(editor: Any, result: Any) -> bool:
     """Return whether published final membership matches current edit revision."""
 
+    if getattr(editor, "_final_membership_disk_mismatch", False):
+        return False
+
     operation_count = (
         len(editor.session.operations)
         if editor is not None and getattr(editor, "session", None) is not None
@@ -88,7 +91,30 @@ def _result_matches_editor_revision(editor: Any, result: Any) -> bool:
     if not post_editor:
         return operation_count == 0
     published_count = diagnostics.get("editor_operation_count")
-    return type(published_count) is int and published_count == operation_count
+    if type(published_count) is not int or published_count != operation_count:
+        return False
+    if editor is None or getattr(editor, "session", None) is None:
+        return False
+    published_digest = diagnostics.get("editor_journal_digest")
+    result_digest = (
+        (getattr(result, "batch_diagnostics", {}) or {})
+        .get("editor_journal_digest")
+    )
+    legacy_digest = getattr(editor, "_legacy_published_journal_digest", None)
+    if published_digest is None:
+        if legacy_digest is None:
+            return True  # Lightweight legacy/test results predate this marker.
+        from core.stage_b.final_generation import editor_journal_digest
+
+        return legacy_digest == editor_journal_digest(editor.session.operations)
+    from core.stage_b.final_generation import editor_journal_digest
+
+    current_digest = editor_journal_digest(editor.session.operations)
+    return published_digest == current_digest and (
+        result_digest is None or result_digest == current_digest
+    ) and (
+        result_digest is not None or legacy_digest is None or legacy_digest == current_digest
+    )
 
 
 def _persist_optional_danger_sidecar(project_root: Any, result: Any) -> None:
@@ -263,7 +289,7 @@ def install_review_extensions() -> None:
         metrics = compute_stage_b_tree_metrics(
             result,
             reconciled,
-            self.project_root / "exports" / "Prediction_Input.xlsx",
+            self.project_root / "artifacts" / "Prediction_Input.xlsx",
             project_root=self.project_root,
         )
         persistent_to_metric = {

@@ -9,6 +9,7 @@
     horizon: 1,
     view: 'future',
     gateChecking: false,
+    loading: false,
   };
 
   const esc = value => String(value ?? '—').replace(/[&<>"']/g, char => ({
@@ -201,6 +202,7 @@
     state.controller = typeof AbortController === 'function' ? new AbortController() : null;
     const controller = state.controller;
     const timeout = setTimeout(() => controller?.abort('timeout'), 180000);
+    state.loading = true;
     clearPreview();
     setStatus(`正在读取 +${requested} 年本地场景…`, 'loading');
     try {
@@ -217,17 +219,22 @@
       setStatus(controller?.signal.reason === 'timeout' ? '预测读取超时，请返回项目检查后重试。' : `预测读取失败：${error?.message || error}`, 'error');
     } finally {
       clearTimeout(timeout);
-      if (requestId === state.requestId) state.controller = null;
+      if (requestId === state.requestId) {
+        state.controller = null;
+        state.loading = false;
+      }
     }
   }
 
   function sameGate(left, right) {
-    const fields = ['run_id', 'batch_mtime_ns', 'journal_mtime_ns', 'editor_operation_count', 'published_editor_operation_count'];
+    const fields = ['run_id', 'batch_mtime_ns', 'journal_mtime_ns', 'prediction_mtime_ns',
+      'editor_operation_count', 'published_editor_operation_count', 'final_generation_id',
+      'result_generation_id', 'risk_generation_id'];
     return right?.status === 'PASS' && fields.every(field => left?.[field] === right[field]);
   }
 
   async function checkGate() {
-    if (!state.data || state.gateChecking) return false;
+    if (state.gateChecking || state.loading) return false;
     state.gateChecking = true;
     const previous = state.data;
     const controller = new AbortController();
@@ -236,18 +243,22 @@
       const response = await fetch('/api/future-preview/gate', {cache: 'no-store', signal: controller.signal});
       const payload = await response.json();
       if (state.data !== previous) return false;
-      if (!response.ok || !sameGate(previous.gate, payload.gate)) {
-        clearPreview();
+      if (!response.ok || payload.gate?.status !== 'PASS') {
+        if (state.data) clearPreview();
         $('futureTitle').textContent = '预测与模拟 🔒';
-        setStatus('当前结果已变化。请先完成当前项目的单木复核，然后重新打开本地预测。', 'locked');
+        setStatus(`当前结果尚未定稿，预测暂时隐藏。${(payload.gate?.reasons || []).join('；')}`, 'locked');
+        return false;
+      }
+      if (!previous || !sameGate(previous.gate, payload.gate)) {
+        await loadPreview(state.horizon);
         return false;
       }
       return true;
     } catch (_) {
-      if (state.data === previous) {
+      if (state.data === previous && state.data) {
         clearPreview();
-        setStatus('无法确认当前定稿状态，已清除预览。请返回项目检查后重试。', 'error');
       }
+      setStatus('无法确认当前定稿状态，已清除预览；连接恢复后自动刷新。', 'error');
       return false;
     } finally {
       clearTimeout(timeout);

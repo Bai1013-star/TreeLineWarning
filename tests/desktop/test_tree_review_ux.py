@@ -258,8 +258,9 @@ def test_background_finalize_reports_real_stages_and_finishes_excel(
         for stage in ("RECALCULATING_RISK", "GENERATING_EXCEL"):
             stages.append(stage)
             progress(stage)
-        Path(output).parent.mkdir(parents=True, exist_ok=True)
-        Path(output).write_bytes(b"xlsx")
+        from algorithms.folder_pipeline.export_excel import write_prediction_input_excel
+
+        write_prediction_input_excel(Path(output), [], {"science_run_id": "fixture"})
 
     monkeypatch.setattr("core.stage_b.export.export_batch_prediction", fake_export)
     workflow._run_finalize()
@@ -272,4 +273,5 @@ def test_background_finalize_reports_real_stages_and_finishes_excel(
     ]
     assert workflow._finalize_stage == "DONE"
     assert workflow._finalize_message == "完成"
-    assert (tmp_path / "exports" / "Prediction_Input.xlsx").read_bytes() == b"xlsx"
+    assert (tmp_path / "artifacts" / "Prediction_Input.xlsx").is_file()
+    assert (tmp_path / "exports" / "树木风险结果.xlsx").is_file()

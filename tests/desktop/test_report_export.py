@@ -23,3 +23,11 @@ def test_html_export_contains_only_current_final_rows() -> None:
     assert "survivor" in rendered
     assert "deleted-tree" not in rendered
     assert "EDITOR_FINAL_PROJECTION" in rendered
+
+
+def test_html_export_shows_incomplete_tower_exclusion() -> None:
+    report = {"status": "FINALIZED", "trees": [], "kpis": {},
+              "tower_exclusion_warnings": [{"message": "杆塔 T001：未能几何确认，不能视为已剔除"}]}
+    rendered = render_current_report_html(report)
+    assert "杆塔 T001：未能几何确认，不能视为已剔除" in rendered
+    assert 'class="warning"' in rendered

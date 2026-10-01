@@ -63,6 +63,24 @@ def unavailable(reason: str) -> dict[str, Any]:
 def publication_fields(row: dict[str, Any]) -> dict[str, Any]:
     fields = {key: row.get(key) for key in DBH_FIELDS}
     fields.update(diameter_cm=row.get("dbh_cm"), diameter_source=row.get("dbh_method"))
+    reference = row.get("dbh_reference_estimate")
+    fields["dbh_pre_reference_failure_reason"] = row.get("dbh_pre_reference_failure_reason")
+    fields["dbh_reference_estimate"] = reference
+    fields["dbh_reference_estimate_json"] = (
+        json.dumps(reference, ensure_ascii=False, sort_keys=True) if reference is not None else None
+    )
+    for key in (
+        "basis", "estimator", "value_cm", "count", "mean_cm", "median_cm",
+        "min_cm", "max_cm", "std_cm",
+    ):
+        source_key = key if key in {"basis", "estimator", "value_cm"} else "reference_" + key
+        fields["dbh_reference_" + key] = reference.get(source_key) if reference else None
+    fields["dbh_reference_tree_ids"] = (
+        ",".join(str(value) for value in reference["reference_tree_ids"]) if reference else None
+    )
+    fields["dbh_reference_tree_persistent_ids"] = (
+        ",".join(reference["reference_tree_persistent_ids"]) if reference else None
+    )
     return fields
 
 
@@ -175,6 +193,7 @@ def load_finalized_dbh(root: Path, result: Any, reconciled: Any) -> dict[int, di
                 "RECOVERED_STEM",
                 "REVIEW_CONFIRMED_STEM",
                 "ALLOMETRIC_ESTIMATE",
+                "REFERENCE_ESTIMATE",
                 "UNAVAILABLE",
             }:
                 raise ValueError("DBH_INVALID_METHOD")
@@ -186,6 +205,21 @@ def load_finalized_dbh(root: Path, result: Any, reconciled: Any) -> dict[int, di
                 raise ValueError("DBH_INVALID_DIAMETER")
             if (value is None) != (method == "UNAVAILABLE"):
                 raise ValueError("DBH_VALUE_METHOD_MISMATCH")
+            if method == "REFERENCE_ESTIMATE":
+                reference = row.get("dbh_reference_estimate")
+                if (
+                    row.get("dbh_quality") != "ESTIMATE"
+                    or row.get("dbh_point_count") != 0
+                    or row.get("dbh_evidence_point_count") != 0
+                    or row.get("dbh_uncertainty_cm") is not None
+                    or not isinstance(reference, dict)
+                    or reference.get("basis") not in {
+                        "PROJECT_TRUSTED_MEASUREMENTS", "USER_PROVIDED_REFERENCE"
+                    }
+                    or reference.get("value_cm") != value
+                    or not isinstance(row.get("dbh_pre_reference_failure_reason"), str)
+                ):
+                    raise ValueError("DBH_REFERENCE_PROOF_INVALID")
             if method == "REVIEW_CONFIRMED_STEM":
                 review = row.get("dbh_review", {})
                 decision = confined(root, row["dbh_review_decision_reference"])
@@ -383,7 +417,7 @@ def recover_finalized_dbh(
     cache_root = confined(root, prep["vegetation_role_tile_index_reference"])
     source = prep["ground_preparation"]["source_identity"]
     metrics = compute_stage_b_tree_metrics(
-        result, reconciled, root / "exports/Prediction_Input.xlsx", project_root=root
+        result, reconciled, root / "artifacts/Prediction_Input.xlsx", project_root=root
     )
     if len(metrics) != len(reconciled.global_tree_records):
         raise ValueError("DBH_CANONICAL_METRICS_MISSING")

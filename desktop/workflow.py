@@ -171,6 +171,48 @@ def _load_finalized_reconciliation(
         or len(final_index) != len(np.unique(final_index))
     ):
         raise ValueError("FINAL_PUBLICATION_MEMBERSHIP_INVALID")
+    diagnostics = dict(global_payload.get("diagnostics") or {})
+    operation_count = diagnostics.get("editor_operation_count")
+    if type(operation_count) is not int or operation_count < 0:
+        raise ValueError("FINAL_PUBLICATION_EDITOR_REVISION_INVALID")
+    # A published record/generation check cannot distinguish two equal-sized
+    # point deletions in the same tree. Replay only a journal that belongs to
+    # this batch; a newer, unfinalized journal legitimately differs from disk.
+    from algorithms.folder_pipeline.tree_editor import build_original_trees
+    from core.stage_b.final_generation import editor_journal_digest
+    from core.stage_b.region_edit_session import RegionTreeEditSession
+
+    edits_path = artifact_root / "tree_edits.json"
+    edits = _load_json(edits_path)
+    if not isinstance(edits, Mapping):
+        raise ValueError("FINAL_PUBLICATION_JOURNAL_MISSING")
+    operations = load_edits_payload(edits.get("operations", []))
+    published_digest = diagnostics.get("editor_journal_digest") or (
+        manifest.get("batch_diagnostics") or {}
+    ).get("editor_journal_digest")
+    journal_published = (
+        len(operations) == operation_count
+        and (
+            published_digest == editor_journal_digest(operations)
+            if published_digest is not None
+            else edits_path.stat().st_mtime_ns <= (artifact_root / "batch.json").stat().st_mtime_ns
+        )
+    )
+    disk_matches_journal = True
+    if journal_published:
+        session = RegionTreeEditSession(build_original_trees(
+            original.global_tree_records, original.final_original_index,
+            original.final_xyz_local_m, original.final_tree_id,
+        ))
+        session.operations = operations
+        replay_index, replay_tree, replay_xyz, _ = session.build_final()
+        disk_matches_journal = (
+            np.array_equal(final_index, replay_index)
+            and np.array_equal(final_tree, replay_tree)
+            and np.array_equal(final_xyz, replay_xyz)
+        )
+        if not disk_matches_journal:
+            final_index, final_tree, final_xyz = replay_index, replay_tree, replay_xyz
     record_ids = {int(record.global_tree_id) for record in records}
     member_ids = {int(value) for value in np.unique(final_tree) if int(value) >= 0}
     if member_ids != record_ids:
@@ -181,10 +223,6 @@ def _load_finalized_reconciliation(
         for record in records
     ):
         raise ValueError("FINAL_PUBLICATION_POINT_COUNTS_MISMATCH")
-    diagnostics = dict(global_payload.get("diagnostics") or {})
-    operation_count = diagnostics.get("editor_operation_count")
-    if type(operation_count) is not int or operation_count < 0:
-        raise ValueError("FINAL_PUBLICATION_EDITOR_REVISION_INVALID")
     from core.stage_b.final_generation import final_generation_id
 
     computed_generation = final_generation_id(
@@ -198,6 +236,7 @@ def _load_finalized_reconciliation(
             "original_tree_count": len(original.global_tree_records),
             "global_tree_count": len(records),
             "final_generation_id": computed_generation,
+            "final_membership_disk_mismatch": not disk_matches_journal,
         }
     )
     span_map = {
@@ -450,6 +489,9 @@ class DesktopWorkflow:
             "last_batch_status": manifest.get("last_batch_status"),
             "last_error": manifest.get("last_error"),
             "finalize_state": dict(manifest.get("finalize_state") or {}),
+            "dbh_reference_cm": manifest.get("dbh_reference_cm"),
+            "dbh_delivery_status": manifest.get("dbh_delivery_status"),
+            "dbh_delivery_message": manifest.get("dbh_delivery_message"),
             "analysis_progress": list(manifest.get("analysis_progress") or []),
             "updated_at": manifest.get("updated_at", _now()),
         }
@@ -734,6 +776,8 @@ class DesktopWorkflow:
             "ui_state": ui_state,
             "tree_review_ready": tree_review_ready,
             "finalized": finalized,
+            "dbh_delivery_status": self._workflow.get("dbh_delivery_status"),
+            "dbh_delivery_message": self._workflow.get("dbh_delivery_message"),
         }
 
     def capability_projection(self) -> dict[str, Any]:
@@ -1366,28 +1410,34 @@ class DesktopWorkflow:
             }
             global_tree_count = int(current.get("current_tree_count", len(visible_ids)))
             tree_count_source = "EDITOR_FINAL_PROJECTION"
-            clearance_records = (
+            from desktop.review_extensions import _result_matches_editor_revision
+
+            if not _result_matches_editor_revision(editor, getattr(editor, "result", None)):
+                risk_counts = {"DANGER": 0, "WARNING": 0, "SAFE": 0}
+                unavailable_risk_count = len(visible_ids)
+            else:
+                clearance_records = (
                 final_clearance.get("records")
                 if isinstance(final_clearance, Mapping)
                 else ()
-            )
-            risk_counts, unavailable_risk_count = _risk_counts_from_saved_clearance(
-                [
-                    item
-                    for item in (clearance_records or ())
-                    if isinstance(item, Mapping)
-                    and int(item.get("global_tree_id", -1)) in visible_ids
-                ],
-                policy,
-            )
-            unavailable_risk_count += len(
-                visible_ids
-                - {
-                    int(item.get("global_tree_id", -1))
-                    for item in (clearance_records or ())
-                    if isinstance(item, Mapping)
-                }
-            )
+                )
+                risk_counts, unavailable_risk_count = _risk_counts_from_saved_clearance(
+                    [
+                        item
+                        for item in (clearance_records or ())
+                        if isinstance(item, Mapping)
+                        and int(item.get("global_tree_id", -1)) in visible_ids
+                    ],
+                    policy,
+                )
+                unavailable_risk_count += len(
+                    visible_ids
+                    - {
+                        int(item.get("global_tree_id", -1))
+                        for item in (clearance_records or ())
+                        if isinstance(item, Mapping)
+                    }
+                )
         selected = set(self._workflow.get("selected_span_ids") or [])
         spans = []
         source_preparation_failed = False
@@ -1548,6 +1598,27 @@ class DesktopWorkflow:
         edits = _load_json(self._editor.artifact_root / "tree_edits.json")
         if edits:
             self._editor.session.operations = load_edits_payload(edits.get("operations", []))
+        diagnostics = result.global_reconciled.diagnostics
+        if (
+            diagnostics.get("editor_schema") == "treeline-stage-b-batch-editor-v1"
+            and diagnostics.get("editor_journal_digest") is None
+        ):
+            from core.stage_b.final_generation import editor_journal_digest
+
+            journal_path = self._editor.artifact_root / "tree_edits.json"
+            batch_path = self._editor.artifact_root / "batch.json"
+            journal_is_published = (
+                journal_path.is_file()
+                and batch_path.is_file()
+                and journal_path.stat().st_mtime_ns <= batch_path.stat().st_mtime_ns
+            )
+            self._editor._legacy_published_journal_digest = (
+                editor_journal_digest(self._editor.session.operations)
+                if journal_is_published else "STALE_JOURNAL"
+            )
+        self._editor._final_membership_disk_mismatch = bool(
+            diagnostics.get("final_membership_disk_mismatch")
+        )
         # The scheduler must open the edit session over immutable original
         # membership.  Once the journal is loaded, every downstream runtime
         # object is rebound to its replayed final projection.  This prevents
@@ -1557,11 +1628,12 @@ class DesktopWorkflow:
             status is BatchSpanStatus.FINALIZED
             for status in result.span_statuses.values()
         )
+        from desktop.review_extensions import _result_matches_editor_revision
+
         result_is_final = (
             result.global_reconciled.diagnostics.get("editor_schema")
             == "treeline-stage-b-batch-editor-v1"
-            and result.global_reconciled.diagnostics.get("editor_operation_count")
-            == len(self._editor.session.operations)
+            and _result_matches_editor_revision(self._editor, result)
         )
         final = (
             result.global_reconciled
@@ -1569,10 +1641,15 @@ class DesktopWorkflow:
             else self._editor.final_reconciled()
         )
         if result_is_final:
+            from core.stage_b.final_generation import editor_journal_digest
+
+            journal_key = editor_journal_digest(self._editor.session.operations)
             self._editor._final_reconciled_cache = (
-                tuple(id(operation) for operation in self._editor.session.operations),
+                journal_key,
                 final,
             )
+            # A fresh process has no write witness. Its first persist verifies
+            # the replayed membership by publishing the exact NPZ anew.
         published_records = {
             str(item.get("persistent_tree_id")): item
             for item in self._final_tree_records.values()
@@ -1581,7 +1658,7 @@ class DesktopWorkflow:
         final_records = {
             str(item.persistent_tree_id): item for item in final.global_tree_records
         }
-        if published_is_final and published_records and (
+        if published_is_final and result_is_final and published_records and (
             set(published_records) != set(final_records)
             or any(
                 int(published_records[key].get("full_resolution_point_count", -1))
@@ -1597,7 +1674,7 @@ class DesktopWorkflow:
             .get("final_generation_id")
         )
         replayed_generation = final.diagnostics.get("final_generation_id")
-        if published_generation and published_generation != replayed_generation:
+        if result_is_final and published_generation and published_generation != replayed_generation:
             self._editor = None
             raise ValueError("FINAL_GENERATION_MISMATCH")
         self._result = replace(result, global_reconciled=final)
@@ -2169,7 +2246,8 @@ class DesktopWorkflow:
             def editor_progress(stage: str) -> None:
                 self._set_finalize_stage(stage, stage_messages[stage])
 
-            self._result = editor.finalize(progress=editor_progress)
+            finalize_kwargs = {"progress": editor_progress}
+            self._result = editor.finalize(**finalize_kwargs)
             self._final_tree_records = {
                 int(record.global_tree_id): record.to_dict()
                 for record in self._result.global_reconciled.global_tree_records
@@ -2187,7 +2265,20 @@ class DesktopWorkflow:
             def export_progress(stage: str) -> None:
                 self._set_finalize_stage(stage, export_messages[stage])
 
-            path = self._root / "exports" / "Prediction_Input.xlsx"
+            from algorithms.folder_pipeline.user_delivery_excel import (
+                DELIVERY_FILENAME,
+                archive_internal_prediction,
+                migrate_legacy_prediction,
+                write_delivery_from_prediction,
+            )
+
+            path = self._root / "artifacts" / "Prediction_Input.xlsx"
+            migrate_legacy_prediction(
+                self._root / "exports" / "Prediction_Input.xlsx", path,
+                replacing=True,
+            )
+            if path.is_file():
+                archive_internal_prediction(path)
             export_timings: dict[str, float] = {}
             export_kwargs: dict[str, Any] = {
                 "final_reconciled": self._result.global_reconciled,
@@ -2196,6 +2287,18 @@ class DesktopWorkflow:
             if "timing_sink" in inspect.signature(export_batch_prediction).parameters:
                 export_kwargs["timing_sink"] = export_timings
             export_batch_prediction(self._result, path, **export_kwargs)
+            delivery_path = self._root / "exports" / DELIVERY_FILENAME
+            if delivery_path.is_file():
+                archive_path = (
+                    self._root / "artifacts"
+                    / f"{delivery_path.stem}.legacy-{uuid4().hex}{delivery_path.suffix}"
+                )
+                archive_path.parent.mkdir(parents=True, exist_ok=True)
+                delivery_path.replace(archive_path)
+            write_delivery_from_prediction(path, delivery_path)
+            self._workflow["dbh_delivery_status"] = "READY"
+            self._workflow["dbh_delivery_message"] = None
+            self._save_workflow()
             if export_timings:
                 diagnostics = dict(self._result.batch_diagnostics)
                 performance = dict(diagnostics.get("finalization_performance") or {})
@@ -2408,7 +2511,12 @@ class DesktopWorkflow:
 
         if not _result_matches_editor_revision(editor, result):
             raise ValueError("人工修改已更新，请先点击“完成复核并生成 Excel”。")
-        path = self._root / "exports" / "Prediction_Input.xlsx"
+        from algorithms.folder_pipeline.user_delivery_excel import migrate_legacy_prediction
+
+        path = self._root / "artifacts" / "Prediction_Input.xlsx"
+        migrate_legacy_prediction(
+            self._root / "exports" / "Prediction_Input.xlsx", path
+        )
         batch_path = editor.artifact_root / "batch.json"
         edits_path = editor.artifact_root / "tree_edits.json"
         dbh_path = editor.artifact_root / "dbh_final.json"
@@ -2429,12 +2537,33 @@ class DesktopWorkflow:
             and self._prediction_export_cache_matches_final(path, result)
         ):
             return path
+        from algorithms.folder_pipeline.user_delivery_excel import archive_internal_prediction
         from core.stage_b.export import export_batch_prediction
 
         self._require_finalize_disk_space(editor)
+        if path.is_file():
+            archive_internal_prediction(path)
         export_batch_prediction(result, path, final_reconciled=editor.final_reconciled())
         self._log("prediction_export", path=str(path))
         return path
+
+    def export_delivery(self) -> Path:
+        """Return the 23-column user workbook after validating final state."""
+        from algorithms.folder_pipeline.user_delivery_excel import (
+            DELIVERY_FILENAME,
+            write_delivery_from_prediction,
+        )
+
+        with self._lock:
+            internal = self.export_prediction()
+            # Always project the validated final workbook. An old 23-column
+            # file can outlive a replacement internal workbook.
+            output = self._root / "exports" / DELIVERY_FILENAME
+            delivered = write_delivery_from_prediction(internal, output)
+            self._workflow["dbh_delivery_status"] = "READY"
+            self._workflow["dbh_delivery_message"] = None
+            self._save_workflow()
+            return delivered
 
     def current_report(self) -> dict[str, Any]:
         """Return the read-only modern current-result projection."""
@@ -2476,16 +2605,16 @@ class DesktopWorkflow:
             getattr(editor.session, "revision", len(editor.session.operations))
         )
         published_editor_revision = (
-            (getattr(self._result, "batch_diagnostics", {}) or {})
-            .get("editor_publication", {})
-            .get("operation_count")
+            (getattr(self._result.global_reconciled, "diagnostics", {}) or {})
+            .get("editor_operation_count")
         )
         del include_metrics  # consumed by the desktop metrics extension
         from desktop.review_extensions import _result_matches_editor_revision
 
+        result_current = _result_matches_editor_revision(editor, self._result)
         reconciled = (
             self._result.global_reconciled
-            if _result_matches_editor_revision(editor, self._result)
+            if result_current
             else editor.final_reconciled()
         )
         records = {
@@ -2495,19 +2624,23 @@ class DesktopWorkflow:
         clearance_by_persistent = {
             str(record.persistent_tree_id): record
             for record in (
-                self._result.final_clearance.records if self._result.final_clearance else ()
+                self._result.final_clearance.records
+                if result_current and self._result.final_clearance
+                else ()
             )
             if getattr(record, "persistent_tree_id", None) is not None
         }
         clearance_by_tree = {
             int(record.global_tree_id): record
             for record in (
-                self._result.final_clearance.records if self._result.final_clearance else ()
+                self._result.final_clearance.records
+                if result_current and self._result.final_clearance
+                else ()
             )
         }
         persisted_by_persistent = {
             str(item.get("persistent_tree_id")): item
-            for item in self._final_tree_records.values()
+            for item in (self._final_tree_records.values() if result_current else ())
             if item.get("persistent_tree_id") is not None
         }
         rows = []
@@ -2585,7 +2718,7 @@ class DesktopWorkflow:
                 "state_source": "EDITOR_FINAL_PROJECTION",
                 "editor_revision": editor_revision,
                 "published_editor_revision": published_editor_revision,
-                "revision_current": published_editor_revision == editor_revision,
+                "revision_current": result_current,
                 "final_generation_id": (
                     getattr(reconciled, "diagnostics", {}) or {}
                 ).get("final_generation_id"),

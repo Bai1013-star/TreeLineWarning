@@ -14,8 +14,14 @@ import pytest
 from scripts.prepare_desktop_native_runtime import _is_reparse_point
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUNTIME_ROOT = REPO_ROOT / ".build-pdal-runtime-final-20260830"
-PROJ_DATA_ROOT = REPO_ROOT / ".build-pdal-proj-data-final-20260830-02"
+RUNTIME_ROOT = Path(os.environ.get(
+    "TREELINE_TEST_PDAL_STAGE",
+    REPO_ROOT / ".build-pdal-runtime-final-20260830",
+))
+PROJ_DATA_ROOT = Path(os.environ.get(
+    "TREELINE_TEST_PDAL_PROJ_DATA_ROOT",
+    REPO_ROOT / ".build-pdal-proj-data-final-20260830-02",
+))
 
 
 def _write_small_las(path: Path) -> laspy.LasData:

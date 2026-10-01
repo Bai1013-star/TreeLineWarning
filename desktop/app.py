@@ -145,6 +145,19 @@ class DesktopApi:
         # installed.  The leading underscore is therefore part of the bridge
         # contract, not merely an implementation style choice.
         self._window = None
+        self._last_export_dir: Path | None = None
+
+    @staticmethod
+    def _dialog_path(selected: Any) -> Path | None:
+        """pywebview returns a path string on some renderers and a sequence on others."""
+        if isinstance(selected, (list, tuple)):
+            selected = selected[0] if selected else None
+        if selected is None:
+            return None
+        if not isinstance(selected, (str, os.PathLike)):
+            raise ValueError("文件对话框返回了无效路径")
+        raw = os.fspath(selected)
+        return Path(raw) if isinstance(raw, str) and raw.strip() else None
 
     def _folder(self, title: str) -> str | None:
         if self._window is None:
@@ -154,7 +167,8 @@ class DesktopApi:
         selected = self._window.create_file_dialog(
             webview.FOLDER_DIALOG, directory="", allow_multiple=False
         )
-        return str(selected[0]) if selected else None
+        path = self._dialog_path(selected)
+        return str(path) if path is not None else None
 
     def choose_project_location(self) -> str | None:
         return self._folder("选择项目保存位置")
@@ -186,9 +200,10 @@ class DesktopApi:
             allow_multiple=False,
             file_types=("Point cloud (*.las;*.laz)", "All files (*.*)"),
         )
-        if not selected:
+        path = self._dialog_path(selected)
+        if path is None:
             return None
-        descriptor = import_pointcloud(self._backend.project_root, Path(selected[0]))
+        descriptor = import_pointcloud(self._backend.project_root, path)
         return self._configure_project(Path(descriptor["root"]))
 
     def import_gis(self) -> dict | None:
@@ -205,9 +220,10 @@ class DesktopApi:
                 "All files (*.*)",
             ),
         )
-        if not selected:
+        path = self._dialog_path(selected)
+        if path is None:
             return None
-        descriptor = import_gis_file(self._backend.project_root, Path(selected[0]))
+        descriptor = import_gis_file(self._backend.project_root, path)
         return self._configure_project(Path(descriptor["root"]))
 
     def _save_generated_file(
@@ -223,16 +239,17 @@ class DesktopApi:
             return {"ok": False, "cancelled": True}
         import webview
 
+        initial_directory = self._last_export_dir or getattr(self._backend, "project_root", None)
         selected = self._window.create_file_dialog(
             webview.SAVE_DIALOG,
-            directory="",
+            directory=str(initial_directory) if initial_directory is not None else "",
             allow_multiple=False,
             save_filename=save_filename,
             file_types=file_types,
         )
-        if not selected:
+        target = self._dialog_path(selected)
+        if target is None:
             return {"ok": False, "cancelled": True}
-        target = Path(selected[0])
         expected_suffix = Path(save_filename).suffix
         if expected_suffix and not target.suffix:
             target = target.with_suffix(expected_suffix)
@@ -244,15 +261,16 @@ class DesktopApi:
                 os.replace(temporary, target)
             finally:
                 temporary.unlink(missing_ok=True)
+        self._last_export_dir = target.parent.resolve()
         return {"ok": True, "path": str(target.resolve()), "bytes": target.stat().st_size}
 
     def export_excel(self) -> dict[str, Any]:
         if self._backend.local_app is None:
             raise RuntimeError("当前项目后端尚未就绪")
-        source = self._backend.local_app.workflow.export_prediction()
+        source = self._backend.local_app.workflow.export_delivery()
         return self._save_generated_file(
             source,
-            save_filename="Prediction_Input.xlsx",
+            save_filename=source.name,
             file_types=("Excel workbook (*.xlsx)",),
         )
 

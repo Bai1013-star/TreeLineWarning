@@ -117,7 +117,15 @@ class _DesktopHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         if download_name:
-            self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
+            if download_name.isascii():
+                disposition = f'attachment; filename="{download_name}"'
+            else:
+                encoded = urllib.parse.quote(download_name, safe="")
+                disposition = (
+                    'attachment; filename="tree_risk_results.xlsx"; '
+                    f"filename*=UTF-8''{encoded}"
+                )
+            self.send_header("Content-Disposition", disposition)
         self.end_headers()
         self.wfile.write(body)
 
@@ -361,11 +369,11 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             return
         if path in {"/download_prediction", "/download_excel"}:
             try:
-                output = self.workflow.export_prediction()
+                output = self.workflow.export_delivery()
                 self._send_bytes(
                     output.read_bytes(),
                     content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    download_name="Prediction_Input.xlsx",
+                    download_name=output.name,
                 )
             except Exception as exc:
                 self._exception_error(exc)
@@ -385,8 +393,12 @@ class _DesktopHandler(BaseHTTPRequestHandler):
 
     def _handle_post(self, path: str) -> None:
         try:
-            if path in {"/api/dbh-review/prepare", "/api/dbh-review/confirm"}:
-                from desktop.dbh_review import confirm, prepare
+            if path in {
+                "/api/dbh-review/prepare",
+                "/api/dbh-review/confirm",
+                "/api/dbh-review/recompute",
+            }:
+                from desktop.dbh_review import confirm, prepare, recompute
 
                 length = int(self.headers.get("Content-Length", "0") or 0)
                 origin = self.headers.get("Origin")
@@ -401,7 +413,12 @@ class _DesktopHandler(BaseHTTPRequestHandler):
                 request_id = payload.pop("request_id", None)
 
                 def callback():
-                    return (prepare if path.endswith("prepare") else confirm)(
+                    operation = (
+                        prepare if path.endswith("prepare")
+                        else recompute if path.endswith("recompute")
+                        else confirm
+                    )
+                    return operation(
                         self.workflow, payload
                     )
 
@@ -410,8 +427,8 @@ class _DesktopHandler(BaseHTTPRequestHandler):
                         raise ValueError("DBH_REVIEW_REQUEST_ID_REQUIRED")
                     self._send_json(
                         editor_tasks(self.workflow).submit(
-                            "DBH_REVIEW_PREVIEW"
-                            if path.endswith("prepare")
+                            "DBH_REVIEW_PREVIEW" if path.endswith("prepare")
+                            else "DBH_RECOMPUTE" if path.endswith("recompute")
                             else "DBH_REVIEW_CONFIRM",
                             callback,
                             request_id,

@@ -1,8 +1,7 @@
 (() => {
   'use strict';
 
-  // This page is a human identity gate.  It never accepts a typed diameter
-  // and never sends an automatic candidate or seed selection to the server.
+  // Diameter is derived from each tree's current point-cloud evidence.
   const POLL_INTERVAL_MS = 700;
   const MUTATION_TIMEOUT_MS = 600000;
   const REQUEST_TIMEOUT_MS = 15000;
@@ -16,6 +15,7 @@
     review: null,
     selectedCandidateId: null,
     selectedSeedOriginalIndex: null,
+    selectedGroundOriginalIndex: null,
     selectionMode: 'NONE',
     viewer: null,
     viewerIndexById: new Map(),
@@ -54,8 +54,9 @@
     return tree.display_tree_id || tree.persistent_tree_id || tree.global_tree_id || '未命名单木';
   }
 
-  function isUnavailable(tree) {
-    return String(tree && tree.dbh_method || '').toUpperCase() === 'UNAVAILABLE';
+  function isReviewable(tree) {
+    const method = String(tree && tree.dbh_method || '').toUpperCase();
+    return method === 'UNAVAILABLE' || method === 'REFERENCE_ESTIMATE';
   }
 
   function methodLabel(method) {
@@ -64,9 +65,46 @@
       RECOVERED_STEM: '恢复点云',
       DIRECT_STEM: '点云',
       ALLOMETRIC_ESTIMATE: '估算',
+      REFERENCE_ESTIMATE: '旧参考估算（已失效）',
       UNAVAILABLE: '不可用',
     };
     return labels[String(method || '')] || String(method || '—');
+  }
+
+  function fitReason(status) {
+    const reasons = {
+      NO_CROWN_TO_STEM_IDENTITY: '未找到与当前树冠可靠对应的树干',
+      NO_ABSOLUTE_CANDIDATE: '树干证据不足，未通过自动确认',
+      TOP_CANDIDATE_CONFLICT: '候选树干同时匹配多棵树，需人工复核归属',
+      EDITOR_REMOVED_BH_EVIDENCE: '胸高处点已由人工删点操作剔除',
+      INCOMPLETE_WIRE_RESULTS: '缺少完整证据',
+      REFERENCE_REQUIRED: '本树点云证据不足，无法可靠计算胸径',
+      FOREIGN_STEM_CLAIM_NOT_ASSIGNABLE: '树干已被其他树占用，无法自动归属',
+      SELECTED_SOURCE_OWNERSHIP_CONFLICT: '树干来源存在归属冲突',
+      LOCAL_BASE_HEIGHT_AMBIGUOUS: '本树根部有多个可能地面高度，需人工确认树根地面',
+      LOCAL_BASE_HEIGHT_UNVERIFIED: '本树根部地面尚未确认，需指定本树地面点',
+      MULTIPLE_STEM_AXES_REVIEW_REQUIRED: '本树有多根候选树干轴，需选择对应的一根',
+      PER_TREE_STEM_EVIDENCE_REQUIRED: '缺少本树可核验的树干和胸高点证据，需逐树复核',
+      SEARCH_BUDGET_EXHAUSTED: '树干原始点搜索达到预算上限，需缩小范围或指定树干证据',
+      PASS: '几何质量检查通过',
+    };
+    const selected = String(status || '');
+    return reasons[selected] || (selected.startsWith('SEARCH_BUDGET') ? reasons.SEARCH_BUDGET_EXHAUSTED : (status ? '证据不足，需人工复核' : ''));
+  }
+
+  function treeDbhLabel(tree) {
+    if (tree.dbh_method === 'REFERENCE_ESTIMATE') {
+      const reason = tree.dbh_fit_status || tree.dbh_pre_reference_failure_reason;
+      return `未测得 · 旧参考估算已失效${reason ? ` · ${fitReason(reason)}` : ''}，请逐树复核`;
+    }
+    if (tree.dbh_cm == null) return `未测得 · ${fitReason(tree.dbh_fit_status)}`;
+    const estimated = tree.dbh_quality === 'ESTIMATE' || tree.dbh_method === 'ALLOMETRIC_ESTIMATE';
+    const model = String(tree.dbh_model_version || '');
+    const source = model.includes('UPPER_PARTIAL_ARC') ? '本树胸高点云拟合（单侧估算）'
+      : model.includes('UPPER_CIRCULAR') ? '本树上部树干外推估算'
+      : estimated ? '本树点云估算' : methodLabel(tree.dbh_method);
+    const uncertainty = tree.dbh_uncertainty_cm == null ? '' : ` · ±${Number(tree.dbh_uncertainty_cm).toFixed(1)} cm`;
+    return `${Number(tree.dbh_cm).toFixed(1)} cm · ${source}${uncertainty}`;
   }
 
   function requestId() {
@@ -95,23 +133,23 @@
     const list = byId('tree-list');
     if (!list) return;
     list.innerHTML = '';
-    const unavailable = state.trees.filter(isUnavailable);
-    const selectableCount = unavailable.length;
+    const selectableCount = state.trees.filter(isReviewable).length;
     text('tree-count', `${selectableCount} 可复核`);
     if (!state.trees.length) {
       text('tree-list-note', '当前没有可读取的单木复核记录。');
       return;
     }
-    if (!selectableCount) text('tree-list-note', '当前没有胸径不可用且可复核的单木。');
+    if (!selectableCount) text('tree-list-note', '当前没有胸径缺失的单木。');
     state.trees.forEach(tree => {
       const button = document.createElement('button');
-      const selectable = isUnavailable(tree);
+      const selectable = true;
+      const reviewable = isReviewable(tree);
       const treeId = String(tree.persistent_tree_id ?? tree.global_tree_id ?? '');
       button.type = 'button';
-      button.className = `tree-entry${state.activeTreeId === treeId ? ' active' : ''}${selectable ? '' : ' locked'}`;
+      button.className = `tree-entry${state.activeTreeId === treeId ? ' active' : ''}${reviewable ? '' : ' measured'}`;
       button.dataset.treeId = treeId;
       button.disabled = !selectable || Boolean(state.pending) || state.uncertain;
-      button.innerHTML = `<span class="tree-entry-title">${esc(displayId(tree))}</span><span class="tree-entry-meta">持久 ID：${esc(tree.persistent_tree_id ?? '—')} · ${esc(methodLabel(tree.dbh_method))}</span>`;
+      button.innerHTML = `<span class="tree-entry-title">${esc(displayId(tree))}</span><span class="tree-entry-meta">${esc(treeDbhLabel(tree))}</span>`;
       if (selectable) button.addEventListener('click', () => selectTree(treeId));
       list.appendChild(button);
     });
@@ -127,7 +165,7 @@
     hidden('review-empty', true);
     hidden('review-content', false);
     text('review-tree-title', `${displayId(tree)} · 胸径复核`);
-    text('review-tree-meta', `persistent_tree_id=${tree.persistent_tree_id ?? '—'} · global_tree_id=${tree.global_tree_id ?? '—'} · 当前方法=${methodLabel(tree.dbh_method)}`);
+    text('review-tree-meta', `树木 ${displayId(tree)} · ${treeDbhLabel(tree)}`);
     setReviewStatus('请选择“准备点云复核”。');
     setConfirmMessage('');
     updateControls();
@@ -149,11 +187,14 @@
   function resetSelection() {
     state.selectedCandidateId = null;
     state.selectedSeedOriginalIndex = null;
+    state.selectedGroundOriginalIndex = null;
     state.selectionMode = 'NONE';
     const checkbox = byId('identity-confirmed');
     if (checkbox) checkbox.checked = false;
     text('seed-mode-label', '未选择');
     text('seed-selection', '尚未选择原始种子点。');
+    text('ground-mode-label', '未选择');
+    text('ground-selection', '未指定地面点；使用原始地面高程。');
     text('point-detail', '');
   }
 
@@ -181,8 +222,10 @@
     const originalIndex = display && Array.isArray(display.original_index) ? display.original_index : null;
     const hag = display && Array.isArray(display.hag_m) ? display.hag_m : null;
     const selectable = display && Array.isArray(display.selectable) ? display.selectable : null;
-    if (!xyz || !originalIndex || !hag || !selectable || new Set([xyz.length, originalIndex.length, hag.length, selectable.length]).size !== 1) {
-      throw new Error('复核显示数据的 xyz、original_index、hag_m、selectable 未对齐');
+    const groundSelectable = display && Array.isArray(display.ground_selectable)
+      ? display.ground_selectable : (xyz ? xyz.map(() => false) : null);
+    if (!xyz || !originalIndex || !hag || !selectable || !groundSelectable || new Set([xyz.length, originalIndex.length, hag.length, selectable.length, groundSelectable.length]).size !== 1) {
+      throw new Error('复核显示数据的 xyz、original_index、hag_m、selectable、ground_selectable 未对齐');
     }
     const indices = originalIndex.map(value => Number(value));
     if (indices.some(value => !Number.isSafeInteger(value) || value < 0) || new Set(indices).size !== indices.length) {
@@ -193,7 +236,8 @@
     }
     if (hag.some(value => !Number.isFinite(Number(value)))) throw new Error('复核显示数据包含无效 HAG');
     if (selectable.some(value => typeof value !== 'boolean')) throw new Error('复核显示数据包含无效 selectable 标志');
-    return {xyz, originalIndex: indices, hag: hag.map(Number), selectable: selectable.map(Boolean)};
+    if (groundSelectable.some(value => typeof value !== 'boolean')) throw new Error('复核显示数据包含无效 ground_selectable 标志');
+    return {xyz, originalIndex: indices, hag: hag.map(Number), selectable: selectable.map(Boolean), groundSelectable};
   }
 
   function axisEndpoints(axis, extent = 2.5) {
@@ -212,7 +256,11 @@
       ? review.current_crown.xyz : [];
     const viewerIds = normalized.originalIndex.map(index => Number(index));
     state.viewerIndexById = new Map(viewerIds.map((viewerId, row) => [String(viewerId), normalized.originalIndex[row]]));
-    const colors = normalized.selectable.map(value => value ? '#63d471' : '#6f8192');
+    const colors = normalized.selectable.map((value, row) => value ? '#63d471'
+      : normalized.groundSelectable[row] ? '#42d9e8' : '#6f8192');
+    const published = review.published_measurement || {};
+    const evidence = Array.isArray(published.evidence_xyz) ? published.evidence_xyz.filter(point =>
+      Array.isArray(point) && point.length >= 3 && point.slice(0, 3).every(value => Number.isFinite(Number(value)))) : [];
     return {
       background: {xyz: crown, rgb: crown.map(() => [94, 119, 234])},
       trees3d: {
@@ -230,7 +278,7 @@
       wires3d: {xyz: []},
       wire: {xyz: []},
       tower: {xyz: []},
-      danger_points: {xyz: []},
+      danger_points: {xyz: evidence},
     };
   }
 
@@ -241,10 +289,11 @@
     state.viewer = new constructor(byId('dbh-plot3d'), byId('dbh-tree-label-overlay'), {
       onTreePick: () => true,
       onPointPick: hit => {
-        if (state.pending || state.uncertain || !state.rendererReady || state.selectionMode !== 'SEED') return true;
+        if (state.pending || state.uncertain || !state.rendererReady || !['SEED', 'GROUND'].includes(state.selectionMode)) return true;
         const originalIndex = state.viewerIndexById.get(String(Number(hit && hit.treeId)));
         if (originalIndex == null) return true;
-        selectSeedIndex(originalIndex);
+        if (state.selectionMode === 'SEED') selectSeedIndex(originalIndex);
+        else selectGroundIndex(originalIndex);
         return true;
       },
       onQualityChange: event => {
@@ -352,15 +401,25 @@
     state.review = review;
     state.selectedCandidateId = null;
     state.selectedSeedOriginalIndex = null;
+    state.selectedGroundOriginalIndex = null;
     state.selectionMode = 'NONE';
     state.completed = false;
     state.rendererReady = false;
     const candidates = Array.isArray(review.candidates) ? review.candidates : [];
+    const published = review.published_measurement || null;
+    const wideSearch = review.wide_raw_stem_search || null;
+    const viewOnly = review.confirmation_allowed === false;
+    hidden('identity-confirm-label', viewOnly);
+    hidden('btn-confirm', viewOnly);
     renderCandidateCards(candidates);
     hidden('review-workspace', false);
     const crownLabel = review.current_crown && review.current_crown.label
       ? review.current_crown.label : '未提供标签';
-    text('dbh-context-label', `当前树冠上下文：${crownLabel}`);
+    const evidenceHag = Array.isArray(published?.evidence_hag_m) ? published.evidence_hag_m : [];
+    const breastHeightCount = evidenceHag.filter(value => Number.isFinite(Number(value)) && Math.abs(Number(value) - 1.3) <= 0.2).length;
+    text('dbh-context-label', viewOnly
+      ? `当前树冠上下文：${crownLabel} · 已发布 ${finite(published?.dbh_cm, '—')} cm（${methodLabel(published?.dbh_method)}）；红色点为测量证据，胸高 1.3±0.2 m 切片 ${breastHeightCount} 点`
+      : `当前树冠上下文：${crownLabel}`);
     const sample = values => values.length <= 12 ? values : [...values.slice(0, 6), '…', ...values.slice(-3)];
     text('diagnostics-text', JSON.stringify({
       review_id: review.review_id,
@@ -376,8 +435,18 @@
       })),
       display_point_count: normalized.xyz.length,
       selectable_point_count: normalized.selectable.filter(Boolean).length,
+      ground_selectable_point_count: normalized.groundSelectable.filter(Boolean).length,
+      wide_raw_stem_search: wideSearch,
       display_original_index_sample: sample(normalized.originalIndex),
       display_hag_m_sample: sample(normalized.hag),
+      published_measurement: published ? {
+        dbh_cm: published.dbh_cm,
+        dbh_method: published.dbh_method,
+        dbh_quality: published.dbh_quality,
+        dbh_fit_status: published.dbh_fit_status,
+        evidence_point_count: Array.isArray(published.evidence_xyz) ? published.evidence_xyz.length : 0,
+        breast_height_slice_point_count: breastHeightCount,
+      } : null,
     }, null, 2));
     try {
       const viewer = initViewer();
@@ -398,7 +467,13 @@
       handleViewerFailure(error);
     }
     if (state.rendererReady) {
-      setReviewStatus('点云已准备。请选择候选轴，或进入种子点模式后点击可选原始点。');
+      const searchLimited = wideSearch && wideSearch.status && String(wideSearch.status) !== 'PASS';
+      const baseStatus = viewOnly
+        ? '已加载当前树的点云与已发布胸径证据；此页面仅供查看。'
+        : '点云已准备。请选择候选轴，或进入种子点模式后点击可选原始点。';
+      setReviewStatus(searchLimited
+        ? `${baseStatus} ${wideSearch.message || `宽范围树干搜索未完成（${wideSearch.status}）；请在当前原始点中人工选择树干。`}`
+        : baseStatus, searchLimited ? 'warn' : '');
     }
     resetSelection();
     updateControls();
@@ -424,35 +499,56 @@
     return display.originalIndex.indexOf(Number(index));
   }
 
+  function refreshPickedPointColors() {
+    if (!state.viewer || !state.review) return;
+    const display = normalizeDisplay(state.review);
+    const seed = state.selectedSeedOriginalIndex;
+    const ground = state.selectedGroundOriginalIndex;
+    if (typeof state.viewer.setSelection === 'function') state.viewer.setSelection(seed == null ? [] : [Number(seed)]);
+    const groundRow = ground == null ? -1 : display.originalIndex.indexOf(Number(ground));
+    if (typeof state.viewer.setPreview === 'function') state.viewer.setPreview(
+      groundRow < 0 ? [] : [display.xyz[groundRow]], groundRow < 0 ? null : Number(ground)
+    );
+  }
+
   function updateControls() {
     const pending = Boolean(state.pending) || state.uncertain;
     const hasSelection = state.selectedCandidateId != null || state.selectedSeedOriginalIndex != null;
     const checked = Boolean(byId('identity-confirmed') && byId('identity-confirmed').checked);
     const prepare = byId('btn-prepare');
-    if (prepare) prepare.disabled = pending || !selectedTree() || !isUnavailable(selectedTree()) || Boolean(state.review);
+    if (prepare) prepare.disabled = pending || !selectedTree() || Boolean(state.review);
+    const recompute = byId('btn-recompute');
+    if (recompute) recompute.disabled = pending;
     const reset = byId('btn-reset-review');
     if (reset) reset.disabled = pending || !state.review;
     const seed = byId('btn-pick-seed');
-    if (seed) seed.disabled = pending || !state.review || !state.rendererReady || state.completed;
+    if (seed) seed.disabled = pending || !state.review || !state.rendererReady || state.completed || state.review.confirmation_allowed === false;
+    const ground = byId('btn-pick-ground');
+    if (ground) ground.disabled = pending || !state.review || !state.rendererReady || state.completed || state.review.confirmation_allowed === false
+      || !normalizeDisplay(state.review).groundSelectable.some(Boolean);
+    const cancelGround = byId('btn-cancel-ground');
+    if (cancelGround) cancelGround.disabled = pending || state.selectedGroundOriginalIndex == null;
     const cancelSeed = byId('btn-cancel-seed');
     if (cancelSeed) cancelSeed.disabled = pending || state.selectionMode !== 'SEED';
     const confirm = byId('btn-confirm');
-    if (confirm) confirm.disabled = pending || state.completed || !state.review || !state.rendererReady || !hasSelection || !checked;
+    if (confirm) confirm.disabled = pending || state.completed || !state.review || !state.rendererReady || !hasSelection || !checked || !isReviewable(selectedTree()) || state.review.confirmation_allowed === false;
     document.querySelectorAll('#tree-list .tree-entry').forEach(node => {
       const tree = state.treeMap.get(String(node.dataset.treeId));
-      node.disabled = pending || !isUnavailable(tree);
+      node.disabled = pending;
     });
     document.querySelectorAll('#axis-candidates button').forEach(node => {
       node.disabled = pending || state.uncertain || !state.rendererReady || state.completed;
     });
     const seedLabel = state.selectionMode === 'SEED' ? '点选中' : state.selectedCandidateId ? '候选轴已选' : '未选择';
     text('seed-mode-label', seedLabel);
+    text('ground-mode-label', state.selectionMode === 'GROUND' ? '点选中'
+      : state.selectedGroundOriginalIndex != null ? '地面点已选' : '未选择');
   }
 
   function selectTree(treeId) {
     if (state.pending || state.uncertain) return;
     const tree = state.treeMap.get(String(treeId));
-    if (!tree || !isUnavailable(tree)) return;
+    if (!tree) return;
     state.activeTreeId = String(treeId);
     resetReview();
     renderActiveTree();
@@ -468,7 +564,7 @@
     state.selectionMode = 'CANDIDATE';
     const checkbox = byId('identity-confirmed');
     if (checkbox) checkbox.checked = false;
-    if (state.viewer && typeof state.viewer.setSelection === 'function') state.viewer.setSelection([]);
+    refreshPickedPointColors();
     renderAxisOverlay();
     renderCandidateCards(state.review.candidates || []);
     text('point-detail', '');
@@ -491,6 +587,30 @@
     updateControls();
   }
 
+  function enterGroundMode() {
+    if (!state.review || state.pending || state.uncertain || !state.rendererReady || state.completed) return;
+    state.selectionMode = 'GROUND';
+    setReviewStatus('树根地面点模式已开启。请点击青色当前原始点；后台会检验地面支持和树干距离。');
+    text('ground-selection', '等待点击可选树根地面点…');
+    updateControls();
+  }
+
+  function selectGroundIndex(index) {
+    if (!state.review || state.pending || state.uncertain || !state.rendererReady || state.completed || state.selectionMode !== 'GROUND') return;
+    const display = normalizeDisplay(state.review);
+    const row = display.originalIndex.indexOf(Number(index));
+    if (row < 0 || !display.groundSelectable[row]) {
+      setReviewStatus('该原始点不是可选树根地面点，请选择青色点。', 'warn');
+      return;
+    }
+    state.selectedGroundOriginalIndex = display.originalIndex[row];
+    const point = display.xyz[row];
+    refreshPickedPointColors();
+    text('ground-selection', `已选择树根地面点 original_index=${state.selectedGroundOriginalIndex} · XYZ=${point.slice(0, 3).join(', ')} · HAG=${display.hag[row]} m`);
+    setReviewStatus('已选择精确原始树根地面点；提交后后台会校验其几何支持。');
+    updateControls();
+  }
+
   function selectSeedIndex(index) {
     if (!state.review || state.pending || state.uncertain || !state.rendererReady || state.completed || state.selectionMode !== 'SEED') return;
     const row = rowForIndex(index);
@@ -504,8 +624,7 @@
     state.selectedSeedOriginalIndex = display.originalIndex[row];
     const point = display.xyz[row];
     const hag = display.hag[row];
-    if (state.viewer && typeof state.viewer.setSelection === 'function') state.viewer.setSelection([Number(state.selectedSeedOriginalIndex)]);
-    if (state.viewer && typeof state.viewer.setPreview === 'function') state.viewer.setPreview([point], Number(state.selectedSeedOriginalIndex));
+    refreshPickedPointColors();
     text('seed-selection', `已选择原始种子点 original_index=${state.selectedSeedOriginalIndex}`);
     text('point-detail', `XYZ=${point.slice(0, 3).map(value => finite(value, '—')).join(', ')} · HAG=${finite(hag, '—')} m`);
     setReviewStatus('已选择精确原始种子点。请阅读诊断并勾选身份确认。');
@@ -593,7 +712,9 @@
     while (Date.now() <= deadline) {
       if (!state.pending || state.pending.requestId !== requestIdValue) throw unknownError('复核请求状态已改变');
       const elapsed = Math.max(0, Math.floor((Date.now() - pending.startedAt) / 1000));
-      setReviewStatus(`${pending.phase === 'prepare' ? '正在准备点云证据' : '正在提交人工确认'}（已等待 ${elapsed} 秒）`);
+      const phaseLabel = pending.phase === 'prepare' ? '正在准备点云证据'
+        : pending.phase === 'recompute' ? '正在重新计算胸径' : '正在提交人工确认';
+      setReviewStatus(`${phaseLabel}（已等待 ${elapsed} 秒）`);
       await delay(POLL_INTERVAL_MS);
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw unknownError('复核请求等待超过 600 秒，结果不确定；请重新打开复核页面核对，勿重复提交。');
@@ -683,7 +804,7 @@
       state.trees = Array.isArray(payload.trees) ? payload.trees : [];
       state.treeMap = new Map(state.trees.map(tree => [String(tree.persistent_tree_id ?? tree.global_tree_id ?? ''), tree]));
       renderTreeList();
-      if (!state.trees.some(isUnavailable)) text('tree-list-note', '当前没有胸径不可用且可复核的单木。');
+      if (!state.trees.some(isReviewable)) text('tree-list-note', '当前没有胸径缺失的单木。');
       return payload;
     } catch (error) {
       text('tree-count', '读取失败');
@@ -693,10 +814,30 @@
     }
   }
 
+  async function recomputeDbh() {
+    if (state.pending || state.uncertain) return null;
+    text('recompute-status', '正在按当前定稿结果重新计算胸径，请稍候…');
+    let outcome;
+    try {
+      outcome = await submitMutation('/api/dbh-review/recompute', {}, 'recompute');
+    } catch (error) {
+      text('recompute-status', `胸径重算失败：${error.message || error}`);
+      return null;
+    }
+    if (!outcome) return null;
+    resetReview();
+    await loadTrees();
+    text('recompute-status', `已重算 ${outcome.tree_count} 棵树，${outcome.dbh_available_count ?? 0} 棵有逐树胸径；其余保留空值和具体原因。`);
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({type: 'treeline:tree-review-changed', kind: 'DBH_RECOMPUTED'}, window.location.origin);
+    }
+    return outcome;
+  }
+
   async function prepareTree(treeId = state.activeTreeId) {
     if (state.pending || state.uncertain) return state.pendingPromise;
     const tree = state.treeMap.get(String(treeId));
-    if (!tree || !isUnavailable(tree)) return null;
+    if (!tree) return null;
     state.activeTreeId = String(treeId);
     resetReview();
     renderActiveTree();
@@ -725,16 +866,18 @@
 
   function selectionPayload() {
     if (state.selectedCandidateId != null && state.selectedSeedOriginalIndex == null) {
-      return {candidate_id: state.selectedCandidateId};
+      return {candidate_id: state.selectedCandidateId,
+        ...(state.selectedGroundOriginalIndex == null ? {} : {ground_original_index: state.selectedGroundOriginalIndex})};
     }
     if (state.selectedCandidateId == null && state.selectedSeedOriginalIndex != null) {
-      return {seed_original_index: state.selectedSeedOriginalIndex};
+      return {seed_original_index: state.selectedSeedOriginalIndex,
+        ...(state.selectedGroundOriginalIndex == null ? {} : {ground_original_index: state.selectedGroundOriginalIndex})};
     }
     return null;
   }
 
   async function confirmReview() {
-    if (state.pending || state.uncertain || state.completed || !state.review) return null;
+    if (state.pending || state.uncertain || state.completed || !state.review || !isReviewable(selectedTree()) || state.review.confirmation_allowed === false) return null;
     if (!state.rendererReady) {
       setConfirmMessage('3D 视图未就绪，暂不能确认点云身份。', 'warn');
       return null;
@@ -771,20 +914,27 @@
         tree.dbh_cm = terminal.dbh_cm;
         tree.dbh_method = terminal.dbh_method || 'REVIEW_CONFIRMED_STEM';
         tree.dbh_quality = terminal.dbh_quality;
+        tree.dbh_fit_status = terminal.dbh_fit_status;
+        tree.dbh_model_version = terminal.dbh_model_version || tree.dbh_model_version;
       }
       renderTreeList();
       setReviewStatus(`已恢复胸径 ${finite(terminal.dbh_cm, '—')} cm · ${methodLabel(terminal.dbh_method || 'REVIEW_CONFIRMED_STEM')}`, '');
-      setConfirmMessage(`人工身份已确认，几何计算状态：${terminal.dbh_fit_status || 'PASS'}。`, 'ok');
+      setConfirmMessage(`人工身份已确认，${fitReason(terminal.dbh_fit_status || 'PASS')}。`, 'ok');
     } else {
       state.completed = true;
       setReviewStatus('该树干点云不足，无法可靠计算胸径', 'warn');
-      setConfirmMessage(`结果：UNAVAILABLE · ${terminal.dbh_fit_status || terminal.message || '质量门未通过'}。未写入手工胸径。`, 'warn');
+      setConfirmMessage(`${fitReason(terminal.dbh_fit_status)}。未写入手工胸径。`, 'warn');
+    }
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({type: 'treeline:tree-review-changed', kind: 'DBH_CONFIRMED'}, window.location.origin);
     }
     updateControls();
     return terminal;
   }
 
   function bindControls() {
+    const recompute = byId('btn-recompute');
+    if (recompute) recompute.addEventListener('click', () => void recomputeDbh());
     const prepare = byId('btn-prepare');
     if (prepare) prepare.addEventListener('click', () => void prepareTree());
     const reset = byId('btn-reset-review');
@@ -793,6 +943,17 @@
     });
     const seed = byId('btn-pick-seed');
     if (seed) seed.addEventListener('click', enterSeedMode);
+    const ground = byId('btn-pick-ground');
+    if (ground) ground.addEventListener('click', enterGroundMode);
+    const cancelGround = byId('btn-cancel-ground');
+    if (cancelGround) cancelGround.addEventListener('click', () => {
+      if (state.pending || state.uncertain) return;
+      state.selectedGroundOriginalIndex = null;
+      if (state.selectionMode === 'GROUND') state.selectionMode = 'NONE';
+      text('ground-selection', '未指定地面点；使用原始地面高程。');
+      refreshPickedPointColors();
+      updateControls();
+    });
     const cancelSeed = byId('btn-cancel-seed');
     if (cancelSeed) cancelSeed.addEventListener('click', () => {
       if (state.pending || state.uncertain) return;
@@ -800,7 +961,7 @@
       state.selectedSeedOriginalIndex = null;
       text('seed-mode-label', '未选择');
       text('seed-selection', '尚未选择原始种子点。');
-      if (state.viewer && typeof state.viewer.setPreview === 'function') state.viewer.setPreview([], null);
+      refreshPickedPointColors();
       updateControls();
     });
     const confirm = byId('btn-confirm');
@@ -828,10 +989,14 @@
     selectCandidate,
     enterSeedMode,
     selectSeedIndex,
+    enterGroundMode,
+    selectGroundIndex,
     confirmReview,
+    recomputeDbh,
     resetReview,
     disposeViewer,
     methodLabel,
+    fitReason,
     normalizeDisplay,
     submitMutation,
   };

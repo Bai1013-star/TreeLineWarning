@@ -32,10 +32,49 @@ def test_current_mode_rejects_stale_historical_ownership():
     assert proof["historical_hint_used_as_owner"] is False
 
 
+def test_validated_stem_hint_keeps_bounded_roi_when_three_crown_modes_are_full():
+    groups = []
+    for center, count in ((0.0, 80), (2.0, 70), (4.0, 60), (7.0, 20)):
+        groups.append(np.column_stack((
+            np.full(count, center), np.zeros(count), np.full(count, 2.5)
+        )))
+    xyz = np.vstack(groups)
+    seeds, proof = v2.current_seeds(xyz, xyz[:, 2], [7.0, 0.0])
+    assert len(seeds) == v2.MAX_SEEDS == 4
+    assert [seed["source"] for seed in seeds].count("CURRENT_SUPPORTED_HINT") == 1
+    assert seeds[-1]["xy"] == [7.0, 0.0]
+    assert proof["historical_hint_current_support"] == 20
+
+    surviving = xyz[:-20]
+    after_delete, proof = v2.current_seeds(surviving, surviving[:, 2], [7.0, 0.0])
+    assert not any(seed["source"] == "CURRENT_SUPPORTED_HINT" for seed in after_delete)
+    assert proof["historical_hint_status"] == "REJECTED"
+
+
 def test_current_fragment_cannot_inherit_a_complete_historical_stem():
     xyz = rings([2.25, 2.30, 2.35])
     proof = v2.axis_connection(xyz, xyz[:, 2], np.array([0, 0, 1.3]), np.array([0, 0, 1]), 30)
     assert proof["status"] == "CURRENT_CONNECTION_UNPROVEN"
+
+
+def test_raw_bridge_requires_two_current_upper_bins_and_continuous_source():
+    raw = rings(np.arange(2.05, 4.51, 0.1))
+    current = rings([3.55, 3.65, 4.05, 4.15])
+    origin = np.array([0, 0, 1.3])
+    direction = np.array([0, 0, 1])
+    connected = v2.raw_bridged_axis_connection(
+        current, current[:, 2], raw, raw[:, 2], origin, direction, 30
+    )
+    assert connected["status"] == "PASS"
+    assert connected["first_current_upper_bin_hag_m"] == 3.5
+    gap = raw[(raw[:, 2] < 2.5) | (raw[:, 2] >= 3.0)]
+    assert v2.raw_bridged_axis_connection(
+        current, current[:, 2], gap, gap[:, 2], origin, direction, 30
+    )["status"] != "PASS"
+    only_one_upper_bin = rings([3.55, 3.65])
+    assert v2.raw_bridged_axis_connection(
+        only_one_upper_bin, only_one_upper_bin[:, 2], raw, raw[:, 2], origin, direction, 30
+    )["status"] != "PASS"
 
 
 def test_raw_gap_between_dbh_and_current_crown_is_rejected():

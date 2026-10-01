@@ -90,6 +90,7 @@ class FolderServer:
         *,
         state: FolderWorkflowState | None = None,
         threshold_m: float | None = None,
+        reference_dbh_cm: float | None = None,
         headless_poles: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
     ) -> None:
         self.workspace = workspace
@@ -97,7 +98,8 @@ class FolderServer:
         # threshold_m=None -> the canonical project risk standard (never a new
         # Folder-pipeline default); the orchestrator resolves it.
         self.orchestrator = FolderOrchestrator(
-            workspace, state=self.state, threshold_m=threshold_m
+            workspace, state=self.state, threshold_m=threshold_m,
+            reference_dbh_cm=reference_dbh_cm,
         )
         self._science_thread: threading.Thread | None = None
         self.headless_poles = headless_poles
@@ -444,13 +446,41 @@ class FolderServer:
                 return self._send_json(folder_server._build_final_display())
 
             def _download_excel(self) -> None:
-                excel_path = folder_server.workspace.excel_path
-                if not excel_path.is_file():
+                from algorithms.folder_pipeline.user_delivery_excel import (
+                    DELIVERY_FILENAME,
+                    DeliveryDiameterMissingError,
+                    archive_stale_delivery,
+                    migrate_legacy_prediction,
+                    write_delivery_from_prediction,
+                )
+
+                internal = folder_server.workspace.excel_path
+                migrate_legacy_prediction(
+                    folder_server.workspace.export_dir / "Prediction_Input.xlsx",
+                    internal,
+                )
+                if not internal.is_file():
                     return self._send_error("Excel 尚未生成，请先完成最终计算")
+                try:
+                    excel_path = write_delivery_from_prediction(
+                        internal, folder_server.workspace.export_dir / DELIVERY_FILENAME
+                    )
+                except DeliveryDiameterMissingError as exc:
+                    archive_stale_delivery(
+                        folder_server.workspace.export_dir / DELIVERY_FILENAME,
+                        folder_server.workspace.tree_analysis_dir,
+                    )
+                    return self._send_error(str(exc), status=409)
                 data = excel_path.read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                self.send_header("Content-Disposition", 'attachment; filename="Prediction_Input.xlsx"')
+                encoded = urllib.parse.quote(DELIVERY_FILENAME, safe="")
+                self.send_header(
+                    "Content-Disposition",
+                    'attachment; filename="tree_risk_results.xlsx"; '
+                    f"filename*=UTF-8''{encoded}",
+                )
+                self.send_header("Cache-Control", "no-store")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
@@ -736,7 +766,8 @@ class FolderServer:
 
     def _restart(self) -> None:
         self.orchestrator = FolderOrchestrator(
-            self.workspace, state=self.state, threshold_m=self.orchestrator.threshold_m
+            self.workspace, state=self.state, threshold_m=self.orchestrator.threshold_m,
+            reference_dbh_cm=self.orchestrator.reference_dbh_cm,
         )
         self.orchestrator.initialize()
         self.state.update(
@@ -844,12 +875,16 @@ def run_folder_server(
     port: int = 0,
     open_browser: bool = True,
     threshold_m: float | None = None,
+    reference_dbh_cm: float | None = None,
     headless_poles: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
 ) -> tuple[ThreadingHTTPServer, str]:
     """Start the folder server and return (httpd, url)."""
 
     # threshold_m=None -> the canonical project risk standard.
-    server = FolderServer(workspace, threshold_m=threshold_m, headless_poles=headless_poles)
+    server = FolderServer(
+        workspace, threshold_m=threshold_m, reference_dbh_cm=reference_dbh_cm,
+        headless_poles=headless_poles,
+    )
     httpd = ThreadingHTTPServer(("127.0.0.1", port), server.handler_factory())
     url = f"http://127.0.0.1:{httpd.server_address[1]}/"
     if open_browser and headless_poles is None:

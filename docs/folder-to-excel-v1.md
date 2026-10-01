@@ -12,7 +12,7 @@
 6. 点击「确认单木并继续」。
 7. 后台执行：最终单木几何 → 精确净空 → 危险 → 持久身份。
 8. 浏览器进入 **STEP 3**：查看最终结果。
-9. 得到 `03_export/Prediction_Input.xlsx`（`Trees` + `Run_Metadata` 两个 Sheet）。
+9. 得到 `03_export/树木风险结果.xlsx`（与示例 CSV 一致的 23 列，每棵保留树一行）。胸径依据本树点云测量；无法测得时该单元格留空并批注具体原因，其他结果仍可交付。
 
 三个步骤是同一个本地服务器下的三个 route（`/step1` `/step2` `/step3`），共享同一个
 运行/会话状态，不是三个互不相干的静态 HTML 程序。
@@ -28,9 +28,10 @@ workspace/
 ├─ 02_tree_analysis/
 │  ├─ tree_segmentation_original.{npz,json}     算法单木原始结果（绝不覆盖）
 │  ├─ tree_edits.json                           人工编辑日志（DELETE/MERGE）
-│  └─ tree_segmentation_final.{npz,json}        最终单木结果
+│  ├─ tree_segmentation_final.{npz,json}        最终单木结果
+│  └─ Prediction_Input.xlsx                    内部最终结果缓存与运行元数据
 └─ 03_export/
-   ├─ Prediction_Input.xlsx
+   ├─ 树木风险结果.xlsx
    └─ 03_final_result.html
 ```
 
@@ -58,6 +59,7 @@ workspace/
 - 每棵最终单木一个唯一 `persistent_tree_id`；`UNIQUE_PERSISTENT_TREE_IDS == FINAL_TREE_COUNT`。
 - 缺失值语义：`crown_width_m` / `diameter_cm` 缺失时写空（blank），绝不写 `0`；
   NaN / Inf 一律清洗为空。
+- 胸径只采用本树点云几何证据或针对本树完成的人工复核。证据不足时，交付 Excel 的 `diameter` 留空并批注原因；不会使用其他树的均值或统一参考值补齐。旧命令行参数 `--reference-dbh-cm` 会明确报错。
 
 ## STEP 1 查看器（冻结的 Potree LOD）
 

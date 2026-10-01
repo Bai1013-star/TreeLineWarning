@@ -121,11 +121,14 @@ class MockViewer {
 
 function load(fetchImpl, options = {}) {
   const {document, elements} = makeDocument();
+  const messages = [];
   const window = {
     crypto: {randomUUID: () => 'dbh-test-request'},
     addEventListener: () => {},
     TreeLineTreeReview3D: MockViewer,
+    location: {origin: 'http://127.0.0.1'},
   };
+  if (options.embedded) window.parent = {postMessage: value => messages.push(value)};
   const context = {
     window,
     document,
@@ -141,7 +144,7 @@ function load(fetchImpl, options = {}) {
     Math, Number, String, Boolean, Set, Map, Array, Object, Promise, Error, TypeError,
   };
   vm.runInNewContext(source, context, {filename: process.argv[1]});
-  return {app: window.TreeLineDbhReview, elements, window};
+  return {app: window.TreeLineDbhReview, elements, window, messages};
 }
 
 function reviewPayload(reviewId = 'review-1') {
@@ -171,12 +174,15 @@ function reviewPayload(reviewId = 'review-1') {
         },
       ],
       display: {
-        xyz: [[0, 0, 1.2], [0.01, 0, 1.35], [0.02, 0, 1.5]],
+        xyz: [[0, 0, 1.2], [0.01, 0, 1.35], [0.02, 0, 0.1]],
         original_index: [100, 101, 102],
-        hag_m: [1.2, 1.35, 1.5],
+        hag_m: [1.2, 1.35, 0.1],
         selectable: [true, true, false],
+        ground_selectable: [false, false, true],
       },
       current_crown: {xyz: [[0, 0, 2.2]], label: 'T-11 crown'},
+      wide_raw_stem_search: {status: 'LOCAL_GROUND_SPARSE',
+        message: '根部地面点不足；请在原始点中人工选择树干。'},
       status: 'REVIEW_READY',
     },
   };
@@ -198,6 +204,10 @@ async function main() {
             display_tree_id: 'T-11', dbh_cm: null, dbh_method: 'UNAVAILABLE'},
           {persistent_tree_id: 'p2', global_tree_id: 12,
             display_tree_id: 'T-12', dbh_cm: 18, dbh_method: 'DIRECT_STEM'},
+          {persistent_tree_id: 'p3', global_tree_id: 13,
+            display_tree_id: 'T-13', dbh_cm: 21, dbh_method: 'REFERENCE_ESTIMATE',
+            dbh_reference_basis: 'PROJECT_TRUSTED_MEASUREMENTS',
+            dbh_reference_count: 2, dbh_pre_reference_failure_reason: 'TOP_CANDIDATE_CONFLICT'},
         ],
       });
     }
@@ -226,12 +236,26 @@ async function main() {
     throw new Error(`unexpected request ${path}`);
   };
 
-  const {app, elements} = load(fetchImpl);
+  const {app, elements, messages} = load(fetchImpl, {embedded: true});
+  assert.strictEqual(app.fitReason('NO_CROWN_TO_STEM_IDENTITY'), '未找到与当前树冠可靠对应的树干');
+  assert.strictEqual(
+    app.fitReason('TOP_CANDIDATE_CONFLICT'),
+    '候选树干同时匹配多棵树，需人工复核归属'
+  );
+  assert.ok(app.fitReason('LOCAL_BASE_HEIGHT_AMBIGUOUS').includes('人工确认树根地面'));
+  assert.ok(app.fitReason('LOCAL_BASE_HEIGHT_UNVERIFIED').includes('地面尚未确认'));
+  assert.ok(app.fitReason('MULTIPLE_STEM_AXES_REVIEW_REQUIRED').includes('选择对应的一根'));
+  assert.ok(app.fitReason('PER_TREE_STEM_EVIDENCE_REQUIRED').includes('本树可核验'));
+  assert.ok(app.fitReason('SEARCH_BUDGET_LIMIT').includes('搜索达到预算上限'));
   await app.loadTrees();
   app.selectTree('p1');
   assert.strictEqual(elements.get('btn-prepare').disabled, false);
   app.selectTree('p2');
-  assert.strictEqual(app.state.activeTreeId, 'p1', 'direct trees stay locked');
+  assert.strictEqual(app.state.activeTreeId, 'p2', 'measured trees can open their point evidence');
+  app.selectTree('p3');
+  assert.strictEqual(app.state.activeTreeId, 'p3', 'reference estimates remain reviewable');
+  assert.ok(elements.get('tree-list').children[2].innerHTML.includes('旧参考估算已失效'));
+  app.selectTree('p1');
 
   const firstPrepare = app.prepareTree('p1');
   const duplicatePrepare = app.prepareTree('p1');
@@ -245,6 +269,7 @@ async function main() {
   assert.strictEqual(
     elements.get('dbh-axis-overlay').children.length, 2,
     'all candidate axes are rendered distinctly');
+  assert.ok(elements.get('review-status').textContent.includes('根部地面点不足'));
 
   app.selectCandidate('axis-a');
   assert.strictEqual(app.state.selectedCandidateId, 'axis-a');
@@ -260,6 +285,7 @@ async function main() {
   assert.strictEqual(confirmCount, 1);
   assert.strictEqual(app.state.completed, true);
   assert.strictEqual(app.state.treeMap.get('p1').dbh_method, 'REVIEW_CONFIRMED_STEM');
+  assert.strictEqual(messages[messages.length - 1].kind, 'DBH_CONFIRMED');
 
   const {app: seedApp, elements: seedElements} = load(fetchImpl);
   await seedApp.loadTrees();
@@ -275,12 +301,47 @@ async function main() {
   assert.strictEqual(
     seedApp.state.selectedSeedOriginalIndex, 101,
     'nonselectable rows cannot replace selection');
+  seedApp.enterGroundMode();
+  seedApp.selectGroundIndex(100);
+  assert.strictEqual(seedApp.state.selectedGroundOriginalIndex, null,
+    'stem points cannot become a ground anchor');
+  seedApp.selectGroundIndex(102);
+  assert.strictEqual(seedApp.state.selectedGroundOriginalIndex, 102,
+    'ground selection uses exact original_index');
+  assert.deepStrictEqual(seedApp.state.viewer.selection, [101], 'stem selection stays yellow');
+  assert.strictEqual(seedApp.state.viewer.preview[1], 102, 'ground anchor is shown red');
   seedElements.get('identity-confirmed').checked = true;
   await seedApp.confirmReview();
   const confirmBodies = calls.filter(call => call.path === '/api/dbh-review/confirm');
   const seedBody = JSON.parse(confirmBodies[confirmBodies.length - 1].init.body);
   assert.strictEqual(seedBody.seed_original_index, 101);
+  assert.strictEqual(seedBody.ground_original_index, 102);
   assert.ok(!Object.prototype.hasOwnProperty.call(seedBody, 'candidate_id'));
+
+  const measuredPage = load(async (path, init = {}) => {
+    if (path === '/api/dbh-review/trees') return response(200, {
+      ok: true, human_can_type_dbh: false,
+      trees: [{persistent_tree_id: 'p2', dbh_cm: 18, dbh_method: 'DIRECT_STEM'}],
+    });
+    if (path === '/api/dbh-review/prepare') {
+      const prepared = reviewPayload('measured').review;
+      prepared.confirmation_allowed = false;
+      prepared.published_measurement = {dbh_cm: 18, dbh_method: 'DIRECT_STEM',
+        evidence_xyz: [[0, 0, 1.25]], evidence_hag_m: [1.25]};
+      return response(200, {state: 'COMMITTED', request_id: JSON.parse(init.body).request_id,
+        result: {ok: true, review: prepared}});
+    }
+    throw new Error(`unexpected measured request ${path}`);
+  });
+  await measuredPage.app.loadTrees();
+  measuredPage.app.selectTree('p2');
+  await measuredPage.app.prepareTree('p2');
+  assert.strictEqual(measuredPage.elements.get('btn-confirm').classList.contains('hidden'), true);
+  assert.strictEqual(measuredPage.elements.get('btn-confirm').disabled, true);
+  assert.strictEqual(measuredPage.elements.get('btn-pick-ground').disabled, true);
+  assert.strictEqual(measuredPage.app.state.viewer.data.danger_points.xyz.length, 1);
+  assert.ok(measuredPage.elements.get('dbh-context-label').textContent.includes(
+    '胸高 1.3±0.2 m 切片 1 点'));
 
   let uncertainPosts = 0;
   const uncertainFetch = async (path, init = {}) => {
@@ -353,6 +414,28 @@ async function main() {
   assert.strictEqual(await stalled.prepareTree(), null);
   assert.strictEqual(bodyPolls, 1, 'stalled response bodies are bounded');
   assert.strictEqual(stalled.state.uncertain, true, 'stalled mutation bodies fail closed');
+
+  let recomputeCalls = 0;
+  let recomputeReference = null;
+  const recomputePage = load(async (path, init = {}) => {
+    if (path === '/api/dbh-review/trees') return response(200, {
+      ok: true, human_can_type_dbh: false, trees: [],
+    });
+    if (path === '/api/dbh-review/recompute') {
+      recomputeCalls += 1;
+      recomputeReference = JSON.parse(init.body).reference_dbh_cm;
+      return response(200, {
+        state: 'COMMITTED', request_id: JSON.parse(init.body).request_id,
+        result: {ok: true, status: 'RECOMPUTED', tree_count: 2, workbook_updated: true},
+      });
+    }
+    throw new Error(`unexpected recompute request ${path}`);
+  });
+  await recomputePage.app.start();
+  await recomputePage.app.recomputeDbh();
+  assert.strictEqual(recomputeCalls, 1);
+  assert.strictEqual(recomputeReference, undefined);
+  assert.ok(recomputePage.elements.get('recompute-status').textContent.includes('已重算 2 棵树'));
 }
 
 main().catch(error => {
@@ -375,19 +458,28 @@ def test_dbh_review_assets_and_behavior() -> None:
     assert 'src="/tree-review-3d.js"' in html
     assert 'id="dbh-axis-overlay"' in html
     assert 'id="identity-confirmed"' in html
+    assert 'id="btn-recompute"' in html
+    assert 'id="btn-pick-ground"' in html
+    assert 'id="ground-selection"' in html
+    assert 'id="reference-dbh-cm"' not in html
+    report_html = (ROOT / "viewer_poc" / "giro3d" / "current_report.html").read_text(
+        encoding="utf-8"
+    )
+    assert 'href="/dbh-review"' in report_html
     assert "该树干点云不足，无法可靠计算胸径" in js
     assert "human_can_type_dbh !== false" in js
     assert "/api/dbh-review/trees" in js
     assert "/api/dbh-review/prepare" in js
     assert "/api/dbh-review/confirm" in js
+    assert "/api/dbh-review/recompute" in js
     assert "/api/editor/mutation?request_id=" in js
     assert "async: true" in js
     assert "request_id" in js
     assert "600000" in js
     assert "original_index" in js
     assert "selectable" in js
-    assert 'type="number"' not in html
-    assert "手工输入胸径" not in html
+    assert html.count('type="number"') == 0
+    assert "其余保留空值和具体原因" in js
     assert ".dbh-axis-line.selected" in css
     assert "#dbh-plot3d canvas" in css and "width: 100%" in css and "height: 100%" in css
     assert 'id="btn-dbh-review"' in step2
@@ -395,6 +487,8 @@ def test_dbh_review_assets_and_behavior() -> None:
     assert "btn-dbh-review" in app
     assert "REVIEW_CONFIRMED_STEM: '人工确认点云'" in js
     assert "REVIEW_CONFIRMED_STEM: '人工确认点云'" in report
+    assert "row.dbh_quality === 'ESTIMATE'" in report
+    assert "dbh_uncertainty_cm" in report
 
     node = shutil.which("node")
     if node is None:

@@ -24,7 +24,7 @@ const original = fs.readFileSync(appPath, 'utf8');
 const exposed = original.replace(
   'window.TreeLineTreeReviewApp = {start, state, selectTree, beginLasso, cancelTrim, metrics};',
   'window.TreeLineTreeReviewApp = {start, state, selectTree, beginLasso, cancelTrim, '
-    + 'metrics, post, setEditingBusy, updateJournalCount, bindControls};'
+    + 'metrics, post, setEditingBusy, updateJournalCount, bindControls, refreshCommittedDisplay};'
 );
 if (exposed === original) throw new Error('test hook replacement did not match the app export');
 
@@ -55,7 +55,8 @@ function load(fetchImpl, options = {}) {
     addEventListener: () => {},
   };
   const window = {
-    location: {search: options.search || ''},
+    location: {search: options.search || '', origin: 'http://127.0.0.1:61282'},
+    parent: options.parent,
     crypto: options.crypto,
     addEventListener: () => {},
   };
@@ -80,6 +81,25 @@ function load(fetchImpl, options = {}) {
 }
 
 async function main() {
+  {
+    const notifications = [];
+    const parent = {postMessage: (payload, origin) => notifications.push({payload, origin})};
+    const app = load(async () => response(200, {}), {parent});
+    app.state.viewer = {
+      applyDelta: () => ({delta_apply_ms: 1, visible_tree_points: 2}),
+      rendererInfo: () => ({three_version: 'test'}),
+      setSelection: () => {},
+    };
+    app.state.editorDisplay = {trees: [{tree_id: 0}, {tree_id: 1}]};
+    await app.refreshCommittedDisplay({display_delta: {
+      available: true, revision: 1, trees: [{tree_id: 1}], operations: [],
+    }});
+    assert.strictEqual(app.state.treeMap.size, 1);
+    assert.strictEqual(notifications.length, 1);
+    assert.strictEqual(notifications[0].payload.kind, 'EDIT_COMMITTED');
+    assert.strictEqual(notifications[0].origin, 'http://127.0.0.1:61282');
+  }
+
   {
     const scoped = {trees: [{tree_id: 7, point_count: 3, display_tree_id: 'T-S001-007'}]};
     const globalSnapshot = {operations: [], trees: [

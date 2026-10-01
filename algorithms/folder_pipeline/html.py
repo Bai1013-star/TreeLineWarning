@@ -947,10 +947,11 @@ def step3_html() -> str:
     <h3>第三步：最终结果</h3>
     <div id="kpis" class="kpis"></div>
     <div style="margin-top:10px;display:flex;gap:10px">
-      <a id="excel-link" href="/download_excel"><button class="green">下载 Prediction_Input.xlsx</button></a>
+      <a id="excel-link" href="/download_excel"><button class="green">下载 树木风险结果.xlsx</button></a>
       <button id="btn-restart" class="gray">重新开始</button>
     </div>
     <div id="metadata" style="font-size:12px;color:#5f6b7a;margin-top:8px"></div>
+    <div id="export-warning" style="font-size:13px;color:#9a4d00;margin-top:8px"></div>
   </div>
   <div class="panel plot-panel">
     <div id="plot3d" style="height:100%"></div>
@@ -981,6 +982,10 @@ async function refreshState(){
   }catch(e){}
 }
 function renderSummary(sum){
+  document.getElementById("excel-link").style.display=sum.EXCEL_REPORT?"":"none";
+  document.getElementById("export-warning").textContent=sum.EXCEL_REPORT
+    ? "胸径依据本树点云证据；无法测得时 Excel 留空并批注原因。"
+    : "交付 Excel 尚未生成，请查看运行错误。";
   const k=document.getElementById("kpis");k.innerHTML="";
   const items=[["源文件","见 Run_Metadata"],["最终单木数",sum.FINAL_TREE_COUNT],
     ["危险单木数",sum.DANGEROUS_TREE_COUNT],["危险点数",sum.DANGER_POINT_COUNT],

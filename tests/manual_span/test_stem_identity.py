@@ -38,9 +38,18 @@ def test_crown_to_bh_track_and_unchanged_normal_fit(tilt):
     assert result["dbh_method"] == "RECOVERED_STEM"
 
 
-def test_missing_intermediate_layer_cannot_bridge_crown_to_bh():
+def test_one_missing_intermediate_layer_is_bridged_by_the_same_axis():
     xyz, hag, axis = cylinder()
     keep = np.abs(hag - 1.8) > 0.15
+    track = identity.track_downward(xyz[keep], hag[keep], np.flatnonzero(keep), axis)
+    assert track["status"] == "PASS"
+    assert track["bridged_occlusion_hag_m"] == pytest.approx(1.8)
+    assert track["refined_axis"] is not None
+
+
+def test_two_missing_intermediate_layers_cannot_bridge():
+    xyz, hag, axis = cylinder()
+    keep = (np.abs(hag - 1.8) > 0.15) & (np.abs(hag - 2.05) > 0.15)
     track = identity.track_downward(xyz[keep], hag[keep], np.flatnonzero(keep), axis)
     assert track["status"] == "CROWN_TO_BH_TRACK_INCOMPLETE"
     assert track["refined_axis"] is None

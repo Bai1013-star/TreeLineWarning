@@ -145,7 +145,7 @@ def local_raw_query(
     A portable strong identity binds this query even after source-path relocation.
     """
     center = np.asarray(center_xy, dtype=np.float64)
-    if center.shape != (2,) or not np.isfinite(center).all() or not 0 < radius_m <= 0.60:
+    if center.shape != (2,) or not np.isfinite(center).all() or not 0 < radius_m <= 1.20:
         raise ValueError("DBH_INVALID_LOCAL_ROI")
     if len(z_bounds) != 2 or not np.isfinite(z_bounds).all() or z_bounds[1] <= z_bounds[0]:
         raise ValueError("DBH_INVALID_LOCAL_Z_RANGE")
