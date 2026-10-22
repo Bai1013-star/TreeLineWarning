@@ -4,9 +4,9 @@
 
 ## 下载与启动
 
-普通使用者请下载 [2026/10/22 便携版](../../releases/tag/v2026.10.22)，不要把 GitHub 自动生成的 “Source code” 压缩包当成可运行软件。
+当前源码、使用说明和验收摘要已上传。**完整便携软件附件尚未上传完成**：大文件上传发生连接中断，因此发布仍为草稿，暂没有可用的 GitHub 软件包下载。完成后会在 [Releases](../../releases) 中提供；不要把 GitHub 自动生成的 “Source code” 压缩包当成可运行软件。
 
-完整便携 ZIP 大于 GitHub 单个附件限制，因此发布为 `TreeLineWarning_20261022.zip.part1`、`.part2` 两个分片。将两个分片、`Restore-Portable.ps1`、`restore-portable.cmd`、`portable-manifest.json` 下载到同一文件夹，双击 `restore-portable.cmd`，等待合并和 SHA-256 校验；再解压生成的 ZIP，运行目录中的 `启动TreeLineWarning_推荐.cmd`。不要只复制 EXE。
+完整便携 ZIP 大于 GitHub 单个附件限制，已在本机准备 `TreeLineWarning_20261022.zip.part1`、`.part2` 两个分片并验证可恢复。以下是附件上传完成后的操作说明：将两个分片、`Restore-Portable.ps1`、`restore-portable.cmd`、`portable-manifest.json` 下载到同一文件夹，双击 `restore-portable.cmd`，等待合并和 SHA-256 校验；再解压生成的 ZIP，运行目录中的 `启动TreeLineWarning_推荐.cmd`。不要只复制 EXE。
 
 为兼容已有项目，压缩包内部文件夹与 EXE 名仍保留 `20261021`，软件界面版本为 `2026/10/22`。数据保存位置可在软件中选择；发布包不附带本机用户账号、项目或天气历史。
 
