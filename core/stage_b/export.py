@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -121,7 +120,6 @@ def export_batch_prediction(
     final_reconciled: Any | None = None,
     identity_by_tree: Mapping[int, Mapping[str, Any]] | None = None,
     progress: Any = None,
-    timing_sink: dict[str, float] | None = None,
 ) -> Path:
     """Export only a globally reconciled, finalized tree set.
 
@@ -138,7 +136,6 @@ def export_batch_prediction(
     ``persistent_tree_id`` remains unchanged for Prediction and restart logic.
     """
 
-    total_started = time.perf_counter()
     output_path = Path(output_path)
     statuses = tuple(result.span_statuses.values())
     if any(
@@ -169,7 +166,6 @@ def export_batch_prediction(
     )
     if progress is not None:
         progress("RECALCULATING_RISK")
-    risk_started = time.perf_counter()
     rows: list[dict[str, Any]] = []
     for record in reconciled.global_tree_records:
         automatic_for_record = dict(automatic_identity.get(record.global_tree_id, {}))
@@ -273,7 +269,6 @@ def export_batch_prediction(
     for row in rows:
         tree_id = int(str(row["analysis_tree_id"]).removeprefix("analysis-tree-"))
         row.update(dbh_fields(metrics_by_tree.get(tree_id), dbh_rows.get(tree_id)))
-    risk_seconds = time.perf_counter() - risk_started
     metadata = {
         "project_id": result.project_id,
         "science_run_id": result.analysis_run_id,
@@ -288,33 +283,10 @@ def export_batch_prediction(
         "prediction_source": "FINAL_GLOBAL_RECONCILED_POST_EDITOR",
         "tree_metrics_source": "CANONICAL_FULLRES_POST_EDITOR",
         "tree_display_id_schema": "treeline-tree-display-id-v1",
-        "final_generation_id": (
-            getattr(reconciled, "diagnostics", {}) or {}
-        ).get("final_generation_id"),
-        "result_generation_id": (
-            (getattr(result, "batch_diagnostics", {}) or {})
-            .get("derived_generations", {})
-            .get("result_generation_id")
-        ),
-        "risk_generation_id": (
-            (getattr(result, "batch_diagnostics", {}) or {})
-            .get("derived_generations", {})
-            .get("risk_generation_id")
-        ),
     }
     if progress is not None:
         progress("GENERATING_EXCEL")
-    excel_started = time.perf_counter()
-    written = write_prediction_input_excel(output_path, rows, metadata)
-    if timing_sink is not None:
-        timing_sink.update(
-            {
-                "RISK_UPDATE_TIME": float(risk_seconds),
-                "XLSX_GENERATION_TIME": float(time.perf_counter() - excel_started),
-                "EXPORT_TOTAL_TIME": float(time.perf_counter() - total_started),
-            }
-        )
-    return written
+    return write_prediction_input_excel(output_path, rows, metadata)
 
 
 __all__ = ["export_batch_prediction"]

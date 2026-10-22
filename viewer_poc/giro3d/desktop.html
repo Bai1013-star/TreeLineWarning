@@ -3,34 +3,43 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>TreeLineWarning Survey V0.1</title>
+  <title>TreeLineWarning 2026/10/22</title>
   <link rel="stylesheet" href="/desktop.css">
 </head>
 <body>
 <!-- Legacy contract marker: <iframe id="viewer" src="/">. -->
 <div id="app">
   <header>
-    <div class="brand">TreeLineWarning<small>树线智能巡检软件 · 全离线桌面版</small></div>
-    <div class="toolbar">
-      <button id="newProject" class="primary">新建项目</button>
-      <button id="openProject">打开项目</button>
-      <button id="importPointCloud">导入 LAS/LAZ</button>
-      <button id="importGIS" class="secondary-action">导入 GIS（可选）</button>
-      <button id="exportWorkOrder" class="secondary-action">导出树木风险结果</button>
-    </div>
+    <div class="brand">TreeLineWarning<small>树线智能巡检软件 · 离线桌面版 · 2026/10/22</small></div>
+    <div id="accountChip" class="account-chip" hidden><img id="accountAvatar" class="account-avatar" alt="用户头像"><span>当前用户</span><strong id="accountName">—</strong><button id="changePasswordButton" class="ghost" type="button">修改密码</button><button id="logoutButton" class="ghost" type="button">退出</button></div>
+    <button id="navigateBack" class="ghost" type="button" disabled title="当前是起始页面">← 返回上一步</button>
     <div class="project-name">当前项目：<strong id="projectName">未打开项目</strong></div>
   </header>
 
-  <nav id="stepper" aria-label="工作步骤">
+  <section class="matlab-ribbon" aria-label="TreeLineWarning 一体化功能区">
+    <div class="ribbon-tools">
+      <div class="ribbon-group"><span class="ribbon-group-title">项目</span><div class="ribbon-buttons"><button id="newProject" class="primary">新建项目</button><button id="openProject">打开项目</button><button id="importPointCloud">导入 LAS/LAZ</button><button id="importGIS">导入 GIS</button></div></div>
+      <div class="ribbon-group"><span class="ribbon-group-title">处理</span><div class="ribbon-buttons"><button id="ribbonPreprocess" type="button">点云预处理</button><button id="ribbonGround" type="button">地面点去除</button><button id="ribbonWire" type="button">导线重建</button><button id="ribbonTrees" type="button">单木分割</button></div></div>
+      <div class="ribbon-group"><span class="ribbon-group-title">复核</span><div class="ribbon-buttons"><button id="ribbonReview" type="button">单木人工复核</button><button id="ribbonData" type="button">查看数据</button></div></div>
+      <div class="ribbon-group"><span class="ribbon-group-title">预测</span><div class="ribbon-buttons"><button id="openWarningModule" class="primary" type="button">短时树木预测（1～多棵）</button><button id="ribbonExternalBatch" type="button">长时表格预测</button><button id="ribbonTwin" type="button">点云孪生</button><button id="ribbonTraining" type="button">模型训练</button></div></div>
+      <div class="ribbon-group"><span class="ribbon-group-title">输出</span><div class="ribbon-buttons"><button id="exportWorkOrder" type="button">预测报告与工单</button><button id="ribbonHistory" type="button">历史记录</button></div></div>
+    </div>
+  </section>
+
+  <nav id="stepper" aria-label="工作步骤" hidden>
     <span data-step="1"><b>1</b>项目</span>
     <span data-step="2"><b>2</b>点云</span>
     <span data-step="3"><b>3</b>杆塔</span>
     <span data-step="4"><b>4</b>分析</span>
     <span data-step="5"><b>5</b>单木复核</span>
-    <span data-step="6"><b>6</b>结果导出</span>
+    <span data-step="6"><b>6</b>报告工单</span>
   </nav>
 
   <main id="workspace">
+    <section id="moduleFrameWrap" class="module-frame-wrap hidden" aria-label="一体化任务内容">
+      <iframe id="moduleFrame" title="TreeLineWarning 任务内容" src="about:blank"></iframe>
+      <iframe id="auxiliaryFrame" class="hidden" title="点云孪生与当前报告" src="about:blank"></iframe>
+    </section>
     <aside class="left">
       <section class="section">
         <h2>项目概览</h2>
@@ -58,6 +67,8 @@
       </section>
     </aside>
 
+    <div id="leftSplitter" class="panel-splitter" role="separator" aria-orientation="vertical" aria-label="拖动调整左侧与中间区域宽度"><button id="collapseLeft" type="button" title="收起或展开左侧">‹</button></div>
+
     <section id="center">
       <div id="stageHost" aria-live="polite"></div>
       <div id="viewerWrap" class="viewer-wrap hidden">
@@ -65,12 +76,14 @@
         <div class="viewer-actions">
           <button id="refreshViewer" class="small ghost">刷新视图</button>
         </div>
-        <iframe id="viewer" src="about:blank" sandbox="allow-scripts allow-forms allow-same-origin"></iframe>
+        <iframe id="viewer" src="about:blank" sandbox="allow-scripts allow-forms allow-same-origin allow-modals"></iframe>
       </div>
       <div id="analysisOverview" class="overview hidden">
         <div class="pipeline" id="pipelineStages"></div>
       </div>
     </section>
+
+    <div id="rightSplitter" class="panel-splitter" role="separator" aria-orientation="vertical" aria-label="拖动调整中间与右侧区域宽度"><button id="collapseRight" type="button" title="收起或展开右侧">›</button></div>
 
     <aside class="right">
       <section class="section contextual hidden" id="capabilitySection">
@@ -131,10 +144,9 @@
           <button id="openViewer" class="small">打开复核视图</button>
           <button id="openFuturePreview" class="small" type="button">预测与模拟 🔒</button>
           <button id="finalizeBatch" class="small success">完成复核</button>
-          <button id="exportPrediction" class="small primary grow">导出树木风险结果</button>
-          <button id="exportHtml" class="small">导出 HTML 报告</button>
+          <button id="exportPrediction" class="small primary grow">生成预警报告与工单</button>
         </div>
-        <div id="futurePreviewNote" class="hint">请先完成当前项目的单木复核。</div>
+        <div id="futurePreviewNote" class="hint">完成点云分析并确认树木后即可预览，无需先发布最终复核。</div>
         <div class="hint">证据不足的导线或净空结果继续标记为“需复核 / 无可用距离”，不会显示虚假安全结论。</div>
       </section>
 
@@ -150,6 +162,30 @@
     <span id="footerBatch">分析任务：未开始</span>
     <span class="footer-right">全离线运行</span>
   </footer>
+</div>
+<div id="loginGate" class="login-gate" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+  <form id="loginForm" class="login-card">
+    <div class="login-brand">TreeLineWarning<small>本机离线账户</small></div>
+    <h1 id="loginTitle">登录软件</h1>
+    <p id="loginHelp">首次登录用户名和密码均为 000000；登录后必须修改密码。</p>
+    <label id="loginUsernameLabel">用户名<input id="loginUsername" autocomplete="username" value="000000" required></label>
+    <label id="loginPasswordLabel">密码<input id="loginPassword" type="password" autocomplete="current-password" value="000000" required></label>
+    <div id="identityFields" hidden>
+      <label>真实姓名<input id="realName" maxlength="64" autocomplete="name"></label>
+      <label>手机号<input id="phoneNumber" inputmode="tel" autocomplete="tel" placeholder="用于本机找回密码"></label>
+      <label>头像（PNG/JPEG/WebP，最大 2 MB）<input id="avatarFile" type="file" accept="image/png,image/jpeg,image/webp"></label>
+      <div class="avatar-preview-row"><img id="avatarPreview" class="avatar-preview" alt="待登记头像"><span id="avatarStatus">尚未选择头像</span></div>
+    </div>
+    <div id="changeFields" hidden>
+      <label>新用户名（可保持不变）<input id="newUsername" autocomplete="username"></label>
+      <label>新密码<input id="newPassword" type="password" autocomplete="new-password" minlength="6"></label>
+      <label>确认新密码<input id="confirmPassword" type="password" autocomplete="new-password" minlength="6"></label>
+    </div>
+    <div id="loginError" class="login-error" role="alert"></div>
+    <button id="loginSubmit" class="primary login-submit" type="submit">登录</button>
+    <button id="forgotPasswordButton" class="ghost login-secondary" type="button">忘记密码 / 重置密码</button>
+    <button id="cancelAuthAction" class="ghost login-secondary" type="button" hidden>返回登录</button>
+  </form>
 </div>
 <script src="/giro3d.bundle.js"></script>
 <script src="/tower-picker-3d.js"></script>
@@ -241,6 +277,78 @@
     });
     appendExtendedCapabilities();
   });
+})();
+</script>
+<script>
+(() => {
+  'use strict';
+  const $=id=>document.getElementById(id),gate=$('loginGate'),form=$('loginForm');
+  let mode='login',currentPassword='',avatarData='';
+  const error=message=>{$('loginError').textContent=message||''};
+  function labelText(label,value){label.childNodes[0].nodeValue=value}
+  function setMode(next,status={}){
+    mode=next;const changing=next==='change',recovering=next==='recover',profiling=next==='profile';
+    const first=changing&&Boolean(status.must_change_password);
+    $('loginTitle').textContent=first?'首次登录：建立安全账户':changing?'修改密码':recovering?'忘记密码：核验身份并重置':profiling?'补充找回资料':'登录软件';
+    $('loginHelp').textContent=first?'请设置新用户名和密码，并登记姓名、手机号、头像；这些资料仅保存在本机，用于忘记密码时核验。':changing?'验证当前密码后设置新密码。':recovering?'输入首次登记的用户名、姓名、手机号和同一头像，核验通过后设置新密码。':profiling?'旧版账户需补充姓名、手机号和头像，之后才能使用忘记密码功能。':'首次登录用户名和密码均为 000000；登录后必须建立安全账户。';
+    $('loginUsernameLabel').hidden=changing||profiling;$('loginPasswordLabel').hidden=recovering||profiling;labelText($('loginPasswordLabel'),changing?'当前密码':'密码');
+    $('changeFields').hidden=!(changing||recovering);$('identityFields').hidden=!(first||recovering||profiling);
+    $('loginUsername').required=!changing&&!profiling;
+    $('loginPassword').required=!recovering&&!profiling;
+    $('newUsername').required=changing||recovering;
+    $('newPassword').required=changing||recovering;
+    $('confirmPassword').required=changing||recovering;
+    $('realName').required=first||recovering||profiling;
+    $('phoneNumber').required=first||recovering||profiling;
+    $('avatarFile').required=first||recovering||profiling;
+    $('loginSubmit').textContent=profiling?'保存找回资料':recovering?'核验并重置密码':changing?'保存新密码':'登录';
+    $('forgotPasswordButton').hidden=next!=='login';$('cancelAuthAction').hidden=next==='login'||first||profiling;
+    if(changing||recovering){$('newUsername').value=status.username||$('accountName').textContent||'000000';$('newPassword').value='';$('confirmPassword').value=''}
+    if(first||recovering||profiling){$('realName').value='';$('phoneNumber').value='';$('avatarFile').value='';avatarData='';$('avatarPreview').removeAttribute('src');$('avatarStatus').textContent='尚未选择头像'}
+    error();
+  }
+  function unlock(status){$('accountName').dataset.username=status.username||'';$('accountName').textContent=status.real_name?`${status.real_name}（${status.username||'—'}）`:(status.username||'—');if(status.avatar_data_url)$('accountAvatar').src=status.avatar_data_url;else $('accountAvatar').removeAttribute('src');$('accountChip').hidden=false;gate.hidden=true;document.body.classList.remove('auth-locked')}
+  async function bridge(){
+    if(window.pywebview?.api)return window.pywebview.api;
+    await new Promise(resolve=>window.addEventListener('pywebviewready',resolve,{once:true}));
+    return window.pywebview.api;
+  }
+  async function initialize(){
+    if(new URLSearchParams(location.search).has('browser-test')){unlock({username:'自动验收'});return}
+    document.body.classList.add('auth-locked');
+    try{await bridge();setMode('login')}catch(_){error('本机登录服务未连接，请重新启动软件。')}
+  }
+  form.addEventListener('submit',async event=>{
+    event.preventDefault();$('loginSubmit').disabled=true;error();
+    try{
+      const api=await bridge();
+      if(mode==='login'){
+        const result=await api.login($('loginUsername').value,$('loginPassword').value);
+        if(!result.ok)throw Error(result.error||'登录失败');
+        currentPassword=$('loginPassword').value;
+        if(result.must_change_password){setMode('change',result);return}
+        if(result.profile_setup_required){setMode('profile',result);return}
+        unlock(result);
+      }else if(mode==='change'){
+        const suppliedCurrent=currentPassword||$('loginPassword').value;
+        const result=await api.change_password(suppliedCurrent,$('newPassword').value,$('confirmPassword').value,$('newUsername').value,$('realName').value,$('phoneNumber').value,avatarData);
+        if(!result.ok)throw Error(result.error||'修改密码失败');
+        currentPassword='';$('loginPassword').value='';unlock(result);
+      }else if(mode==='profile'){
+        const result=await api.setup_profile($('realName').value,$('phoneNumber').value,avatarData);
+        if(!result.ok)throw Error(result.error||'保存资料失败');unlock(result);
+      }else if(mode==='recover'){
+        const result=await api.reset_password($('loginUsername').value,$('realName').value,$('phoneNumber').value,avatarData,$('newPassword').value,$('confirmPassword').value);
+        if(!result.ok)throw Error(result.error||'身份核验失败');setMode('login');error(result.message||'密码已重置，请登录');
+      }
+    }catch(ex){error(ex.message||String(ex))}finally{$('loginSubmit').disabled=false}
+  });
+  $('changePasswordButton').onclick=()=>{currentPassword='';$('loginPassword').value='';gate.hidden=false;document.body.classList.add('auth-locked');setMode('change',{username:$('accountName').dataset.username||'',must_change_password:false})};
+  $('forgotPasswordButton').onclick=()=>setMode('recover');
+  $('cancelAuthAction').onclick=()=>setMode('login');
+  $('avatarFile').onchange=()=>{const file=$('avatarFile').files?.[0];if(!file){avatarData='';return}if(file.size>2*1024*1024){error('头像不能超过 2 MB');$('avatarFile').value='';return}const reader=new FileReader();reader.onload=()=>{avatarData=String(reader.result||'');$('avatarPreview').src=avatarData;$('avatarStatus').textContent=file.name;error()};reader.onerror=()=>error('头像读取失败');reader.readAsDataURL(file)};
+  $('logoutButton').onclick=async()=>{try{const api=await bridge();await api.logout()}finally{$('accountChip').hidden=true;gate.hidden=false;document.body.classList.add('auth-locked');$('loginUsername').value='';$('loginPassword').value='';setMode('login')}};
+  initialize();
 })();
 </script>
 <script src="/desktop.js"></script>

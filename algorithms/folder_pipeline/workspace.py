@@ -11,8 +11,8 @@ Layout (V1):
       input/pointcloud/source.las | source.laz   (exactly one)
       source_cache/                              science staging (run checkpoints)
       01_span_selection/                         span_selection.json
-      02_tree_analysis/                          algorithm data + internal Prediction_Input.xlsx
-      03_export/                                 树木风险结果.xlsx + final html
+      02_tree_analysis/                          algorithm original + edit log + final
+      03_export/                                 Prediction_Input.xlsx + final html
 
 Nothing here hard-codes an absolute drive path: the workspace is always passed
 in by the launcher (``RUN_FOLDER_TO_EXCEL.bat <workspace>``) or resolved to the
@@ -141,7 +141,7 @@ class FolderWorkspace:
 
     @property
     def excel_path(self) -> Path:
-        return self.tree_analysis_dir / "Prediction_Input.xlsx"
+        return self.export_dir / "Prediction_Input.xlsx"
 
     @property
     def final_html_path(self) -> Path:

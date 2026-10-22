@@ -327,6 +327,7 @@
     }
 
     clearContent() {
+      this.editSeedMarkers = null;
       if (!this.scene || !this.content) return;
       this.scene.remove(this.content);
       this.disposeObject(this.content);
@@ -394,7 +395,7 @@
     }
 
     computeBounds(data) {
-      const layers = [data.background, data.wire, data.wires3d, data.tower, data.trees3d, data.danger_points];
+      const layers = [data.background, data.wire, data.wires3d, data.tower, data.infrastructure, data.trees3d, data.danger_points];
       const min = [Infinity, Infinity, Infinity];
       const max = [-Infinity, -Infinity, -Infinity];
       let count = 0;
@@ -456,12 +457,12 @@
       return object;
     }
 
-    addWireCurve(points) {
+    addWireCurve(points, role = 'WIRE_CURVE', color = 0xff1744) {
       if (points.length < 2) return;
       const geometry = new this.THREE.BufferGeometry();
       geometry.setAttribute('position', new this.THREE.BufferAttribute(this.positions(points), 3));
-      const line = new this.THREE.Line(geometry, new this.THREE.LineBasicMaterial({color: 0xff1744}));
-      line.userData.role = 'WIRE_CURVE';
+      const line = new this.THREE.Line(geometry, new this.THREE.LineBasicMaterial({color}));
+      line.userData.role = role;
       this.content.add(line);
     }
 
@@ -479,8 +480,12 @@
       const rgb = Array.isArray(this.source.background && this.source.background.rgb) ? this.source.background.rgb : [];
       this.addPoints(background, index => rgb[index] || [145, 165, 180], {role: 'BACKGROUND', size: 1, opacity: 0.22, fallback: 0x78909c});
       this.addPoints(xyzOf(this.source.wire), '#ff1744', {role: 'WIRE', size: 2.2, opacity: 1, fallback: 0xff1744});
-      this.addWireCurve(xyzOf(this.source.wires3d));
+      const fittedSegments = this.source.wires3d && this.source.wires3d.segments;
+      if (Array.isArray(fittedSegments)) fittedSegments.forEach(segment => this.addWireCurve(xyzOf(segment)));
+      else this.addWireCurve(xyzOf(this.source.wires3d)); // Compatibility for raw DBH candidate axes.
       this.addPoints(xyzOf(this.source.tower), '#ff9800', {role: 'TOWER', size: 7, opacity: 1, fallback: 0xff9800});
+      this.addPoints(xyzOf(this.source.infrastructure), '#ffb74d', {role: 'PROTECTED_INFRASTRUCTURE', size: 1.8, opacity: 1, fallback: 0xffb74d});
+      (this.source.infrastructure?.pole_segments || []).forEach(pole => this.addWireCurve(xyzOf(pole), 'PROTECTED_POLE_FIT', 0xff9800));
       this.addPoints(xyzOf(this.source.danger_points), '#ff0000', {role: 'DANGER_POINT', size: 5.2, opacity: 1, fallback: 0xff0000});
       const trees = this.source.trees3d || {};
       this.treeXYZ = Array.isArray(trees.xyz) ? trees.xyz : [];
@@ -591,12 +596,20 @@
       const mapping = delta.tree_id_by_source || {};
       const removed = new Set((delta.removed_original_index || []).map(Number));
       const clearanceCurrent = delta.clearance_current === true;
+      const exactIds = delta.tree_id_by_index;
+      const exactVisible = delta.visible_by_index;
+      const exact = Array.isArray(exactIds) && Array.isArray(exactVisible);
+      if (exact && (exactIds.length !== this.treeXYZ.length || exactVisible.length !== this.treeXYZ.length)) {
+        throw new Error('EDITOR_DISPLAY_DELTA_SHAPE_MISMATCH');
+      }
       for (let index = 0; index < this.treeXYZ.length; index += 1) {
         const sourceId = Number(this.treeSourceIds[index]);
-        const mapped = Object.prototype.hasOwnProperty.call(mapping, String(sourceId))
-          ? Number(mapping[String(sourceId)]) : -1;
+        const mapped = exact ? Number(exactIds[index])
+          : Object.prototype.hasOwnProperty.call(mapping, String(sourceId))
+            ? Number(mapping[String(sourceId)]) : -1;
         this.treeIds[index] = mapped;
-        this.treeVisible[index] = mapped >= 0 && !removed.has(Number(this.treeOriginalIndices[index]));
+        this.treeVisible[index] = mapped >= 0 && (exact ? Boolean(exactVisible[index])
+          : !removed.has(Number(this.treeOriginalIndices[index])));
         this.treeBaseColors[index] = clearanceCurrent && this.treeInitialColors[index]
           ? this.treeInitialColors[index].clone()
           : parseColor(this.THREE, `hsl(${(Math.max(0, mapped) * 137) % 360},72%,58%)`, 0x62d96b);
@@ -644,6 +657,23 @@
       this.updateTreeColors();
     }
 
+    setEditSeeds(points) {
+      if (this.editSeedMarkers) {
+        this.content.remove(this.editSeedMarkers);
+        this.disposeObject(this.editSeedMarkers);
+        this.editSeedMarkers = null;
+      }
+      if (points.length) {
+        const geometry = new this.THREE.BufferGeometry();
+        geometry.setAttribute('position', new this.THREE.Float32BufferAttribute(points.flatMap(p => p.map((v, i) => Number(v) - this.origin[i])), 3));
+        const material = new this.THREE.PointsMaterial({color: 0x25eaff, size: 14, sizeAttenuation: false, depthTest: false});
+        this.editSeedMarkers = new this.THREE.Points(geometry, material);
+        this.editSeedMarkers.renderOrder = 20;
+        this.content.add(this.editSeedMarkers);
+      }
+      this.requestRender();
+    }
+
     setLabelsVisible(visible) {
       this.labelsVisible = Boolean(visible);
       this.renderLabels();
@@ -668,7 +698,7 @@
         button.setAttribute('aria-label', `选择树 ${treeId}`);
         button.style.left = `${(projected.x + 1) * 50}%`;
         button.style.top = `${(1 - projected.y) * 50}%`;
-        button.onclick = event => { event.stopPropagation(); if (typeof this.options.onTreePick === 'function') this.options.onTreePick(treeId, true); };
+        button.onclick = event => { event.stopPropagation(); if (typeof this.options.onTreePick === 'function') this.options.onTreePick(treeId, event); };
         this.labelOverlay.appendChild(button);
       });
     }
@@ -733,8 +763,8 @@
         if (!this.controls.enabled || !start || start.button !== 0 || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
         const hit = this.hitAt(event.clientX, event.clientY);
         if (!hit) return;
-        if (typeof this.options.onPointPick === 'function' && this.options.onPointPick(hit) === true) return;
-        if (typeof this.options.onTreePick === 'function') this.options.onTreePick(hit.treeId, true);
+        if (typeof this.options.onPointPick === 'function' && this.options.onPointPick(hit, event) === true) return;
+        if (typeof this.options.onTreePick === 'function') this.options.onTreePick(hit.treeId, event);
       };
       this.canvas.addEventListener('pointerdown', this._onPointerDown);
       this.canvas.addEventListener('pointercancel', this._onPointerCancel);

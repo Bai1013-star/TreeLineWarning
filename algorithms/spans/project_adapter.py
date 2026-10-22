@@ -287,9 +287,13 @@ def prepare_source_shared(
     """
 
     from core.stage_b.ground import ensure_ground_preparation
-    from core.stage_b.role_preparation import ensure_role_tile_indexes
+    from core.stage_b.role_preparation import (
+        _span_admission_digest,
+        ensure_role_tile_indexes,
+    )
 
     role_span_inputs = span_inputs or (input_data,)
+    span_admission_digest = _span_admission_digest(role_span_inputs)
 
     source_digest = canonical_digest(dict(input_data.source_identity))
     configuration_digest = input_data.science_configuration_digest
@@ -306,6 +310,7 @@ def prepare_source_shared(
             isinstance(payload, dict)
             and payload.get("source_binding_digest") == source_digest
             and payload.get("configuration_digest") == configuration_digest
+            and payload.get("wire_span_admission_digest") == span_admission_digest
         ):
             # Bind only the explicit role-index directories.  In particular,
             # ``wire-tile-cache``/``vegetation-tile-cache`` are not accepted:
@@ -377,6 +382,7 @@ def prepare_source_shared(
                     ),
                     "source_point_count": role_preparation.source_point_count,
                     "role_preparation": dict(role_preparation.details),
+                    "wire_span_admission_digest": span_admission_digest,
                 }
                 for key, value in role_values.items():
                     if payload.get(key) != value:
@@ -432,6 +438,7 @@ def prepare_source_shared(
         "configuration_digest": configuration_digest,
         "authority": "FULL_RESOLUTION_RAW",
         "tower_membership_used_for_vegetation": False,
+        "wire_span_admission_digest": span_admission_digest,
         "raw_to_representative_mapping": None,
         "ground_hag_reference": None,
         "coarse_ground_reference": None,

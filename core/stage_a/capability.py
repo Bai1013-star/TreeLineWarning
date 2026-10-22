@@ -128,9 +128,29 @@ def inspect_point_cloud(
         parsed_crs = None
         try:
             parsed_crs = header.parse_crs()
-        except (AttributeError, ValueError, RuntimeError):
+        except (AttributeError, ImportError, OSError, ValueError, RuntimeError):
+            # CRS decoding is optional. A missing/blocked CRS library must not
+            # discard verified LAS header counts, bounds and point dimensions.
+            # Keep geographic lookup unresolved, never infer a CRS or unit.
             parsed_crs = None
-        horizontal_crs = parsed_crs.to_string() if parsed_crs is not None else None
+        crs_string = parsed_crs.to_string() if parsed_crs is not None else None
+        # A LAS WKT can be syntactically valid while still describing only an
+        # arbitrary engineering/local frame (for example ``LOCAL_CS``).  Such
+        # a frame carries metre/foot units but cannot be transformed to
+        # longitude/latitude and must not drive automatic weather lookup.
+        is_engineering_crs = bool(
+            parsed_crs is not None and getattr(parsed_crs, "is_engineering", False)
+        )
+        is_georeferenced_crs = bool(
+            parsed_crs is not None
+            and not is_engineering_crs
+            and (
+                getattr(parsed_crs, "is_geographic", False)
+                or getattr(parsed_crs, "is_projected", False)
+                or getattr(parsed_crs, "is_compound", False)
+            )
+        )
+        horizontal_crs = crs_string if is_georeferenced_crs else None
         linear_unit = None
         if parsed_crs is not None:
             axis_info = getattr(parsed_crs, "axis_info", ()) or ()
@@ -152,7 +172,7 @@ def inspect_point_cloud(
             vertical_reference=None,
             linear_unit=linear_unit,
             unit_status=unit_status,
-            coordinate_kind="GEOREFERENCED" if horizontal_crs else "LOCAL",
+            coordinate_kind="GEOREFERENCED" if is_georeferenced_crs else "LOCAL",
         )
         capabilities = {
             "POINT_CLOUD": CapabilityState.AVAILABLE,
@@ -169,7 +189,7 @@ def inspect_point_cloud(
             "SCAN_ANGLE": _optional_dimension(dimensions, "scan_angle", "scan_angle_rank"),
             "CRS": CapabilityState.AVAILABLE if parsed_crs is not None else CapabilityState.UNKNOWN,
             "HORIZONTAL_CRS": CapabilityState.AVAILABLE
-            if horizontal_crs
+            if is_georeferenced_crs
             else CapabilityState.UNKNOWN,
             "VERTICAL_CRS": CapabilityState.AVAILABLE
             if parsed_crs is not None and getattr(parsed_crs, "is_compound", False)
@@ -191,7 +211,9 @@ def inspect_point_cloud(
             "dimensions": sorted(dimensions),
             "bounds_min_xyz": [float(value) for value in header.mins],
             "bounds_max_xyz": [float(value) for value in header.maxs],
-            "crs_string": horizontal_crs,
+            "crs_string": crs_string,
+            "is_engineering_crs": is_engineering_crs,
+            "is_georeferenced_crs": is_georeferenced_crs,
         }
     return CapabilityReport(source, capabilities, coordinate, details)
 

@@ -4,6 +4,10 @@
   const state = {
     treeMap: new Map(),
     selected: new Set(),
+    operationMode: 'SELECT',
+    editPicks: [],
+    additiveKey: 'N',
+    additiveHeld: false,
     reviewed: new Set(),
     activeTreeId: null,
     editorDisplay: null,
@@ -23,6 +27,7 @@
     previewRequestId: 0,
     editorLoadPromise: null,
     redirectOnDone: false,
+    viewExitRequested: false,
     workflowDone: false,
     showLabels: true,
     localPreviewXYZ: [],
@@ -87,11 +92,12 @@
     state.refreshGeneration += 1;
     state.editingBusy = Boolean(busy);
     if (!state.editingBusy) state.refreshPaused = false;
-    ['btn-prev', 'btn-next', 'btn-delete', 'btn-merge', 'btn-trim-component', 'btn-trim-lasso', 'btn-trim-cancel', 'btn-undo', 'btn-trim-confirm', 'btn-confirm', 'btn-dbh-review'].forEach(id => {
+    ['btn-prev', 'btn-next', 'btn-delete', 'btn-merge', 'btn-split', 'btn-trim-component', 'btn-trim-lasso', 'btn-trim-cancel', 'btn-undo', 'btn-trim-confirm', 'btn-confirm', 'btn-dbh-review', 'btn-edit-execute', 'btn-selection-clear', 'multi-select-key'].forEach(id => {
       const element = byId(id);
       if (element) element.disabled = state.editingBusy;
     });
     updateUndoControl();
+    updateOperationControls();
   }
 
   function showFailure(error, prefix = '失败：') {
@@ -105,12 +111,11 @@
     const message = error && error.message ? error.message : String(error);
     const editMessage = byId('editmsg');
     if (editMessage) editMessage.textContent = prefix + message;
-    if (error && error.dataLoad) {
+    if (!state.viewer || !state.editorDisplay) {
       const rendererStatus = byId('viewer-renderer-status');
-      if (rendererStatus) rendererStatus.textContent = '单木复核数据加载失败，请刷新视图重试。';
-    } else if (!state.viewer || !state.editorDisplay) {
-      const rendererStatus = byId('viewer-renderer-status');
-      if (rendererStatus) rendererStatus.textContent = '3D复核视图初始化失败，请查看详情。';
+      if (rendererStatus) rendererStatus.textContent = error?.displayLoad
+        ? '复核点云数据暂未加载，请查看具体原因或刷新视图。'
+        : '3D复核视图初始化失败，请查看详情。';
     }
     const details = byId('error-details');
     const text = byId('error-detail-text');
@@ -216,17 +221,12 @@
     '/api/trim/commit',
     '/api/delete',
     '/api/merge',
+    '/api/split',
     '/api/undo',
   ]);
   const MUTATION_POLL_MS = 500;
   const MUTATION_RECOVERY_MS = 60000;
   const MUTATION_REQUEST_TIMEOUT_MS = 15000;
-  // A first read after reopening a real project may need to hydrate the
-  // persisted final membership and build the bounded 3D display cache.  That
-  // is a read-only operation and has legitimately taken about 30 seconds on a
-  // 105-million-point survey.  Do not abort it with the edit-mutation deadline.
-  const DISPLAY_REQUEST_TIMEOUT_MS = 180000;
-  const DISPLAY_SLOW_NOTICE_MS = 15000;
 
   function newRequestId() {
     const sequence = (++state.mutationRequestSequence).toString(36);
@@ -275,7 +275,7 @@
       message || (result && result.status === 'EDIT_RUNNING' ? '已有编辑操作正在运行，请等待完成后再试。' : `请求失败 ${path}`)
     );
     error.statusCode = response && response.status;
-    error.code = result && (result.status || result.code);
+    error.code = result && (result.status || result.code) || (source && source.code);
     error.details = source && typeof source === 'object' && source.details
       ? source.details
       : (result && result.details) || '';
@@ -291,16 +291,12 @@
     return error;
   }
 
-  function requestTimeout(path, timeoutMs) {
-    const displayRead = path.startsWith('/api/editor_data') || path.startsWith('/api/desktop/review');
-    const error = new Error(displayRead
-      ? '单木复核数据准备超时，请刷新复核视图重试。'
-      : '网络请求超时，操作结果未确认，正在查询编辑状态。');
+  function mutationRequestTimeout(path) {
+    const error = new Error('网络请求超时，操作结果未确认，正在查询编辑状态。');
     error.recoverable = true;
     error.network = true;
     error.timeout = true;
-    error.dataLoad = displayRead;
-    error.details = `${path} 请求超过 ${timeoutMs} 毫秒未完成`;
+    error.details = `${path} 请求超过 ${MUTATION_REQUEST_TIMEOUT_MS} 毫秒未完成`;
     return error;
   }
 
@@ -324,7 +320,7 @@
         if (controller) {
           try { controller.abort(); } catch (_) {}
         }
-        reject(requestTimeout(path, timeoutMs));
+        reject(mutationRequestTimeout(path));
       }, timeoutMs);
     });
     try {
@@ -530,7 +526,7 @@
       const row = document.createElement('tr');
       row.dataset.tid = String(treeId);
       row.innerHTML = `<td>${treeId}</td><td>${tree.point_count}</td><td>${tree.apex_height_m != null ? Number(tree.apex_height_m).toFixed(1) : '—'}</td><td>${tree.merged ? '合并' : '—'}</td>`;
-      row.onclick = () => selectTree(treeId, true, true);
+      row.onclick = event => selectTree(treeId, additiveSelection(event), true);
       tbody.appendChild(row);
     });
     byId('treecount').textContent = `共 ${trees.length} 棵`;
@@ -542,24 +538,24 @@
   function updateReviewStatus() {
     const total = state.treeMap.size;
     const reviewedCount = [...state.reviewed].filter(id => state.treeMap.has(Number(id))).length;
-    byId('review-status').textContent = `${total} 棵树 · 已复核 ${reviewedCount} · 待复核 ${Math.max(0, total - reviewedCount)}`;
+    byId('review-status').textContent = `${total} 棵树 · 本次已查看 ${reviewedCount} · 本次待查看 ${Math.max(0, total - reviewedCount)}（项目定稿状态见主界面）`;
     byId('current-tree').textContent = state.activeTreeId == null ? '当前：未选择' : `当前：树 ${state.activeTreeId}`;
     const ids = [...state.selected].sort((a, b) => a - b);
     byId('selection-state').textContent = ids.length ? `已选择 ${ids.length} 棵树：${ids.join('、')}` : '未选择单木';
     byId('btn-delete').textContent = ids.length === 1 ? `删除树 ${ids[0]}` : '删除单木';
     byId('btn-merge').textContent = ids.length > 1 ? `合并选中（${ids.length} 棵）` : '合并选中';
+    updateOperationControls();
   }
 
   function applyTreeSelectionStyles() {
     document.querySelectorAll('#treetable tr[data-tid]').forEach(row => {
       const treeId = Number(row.dataset.tid);
-      row.className = state.selected.has(treeId) || state.activeTreeId === treeId ? 'sel' : '';
+      row.className = state.selected.has(treeId) ? 'sel' : '';
     });
   }
 
   function selectionHighlightIds() {
     const ids = new Set(state.selected);
-    if (state.activeTreeId != null) ids.add(Number(state.activeTreeId));
     return ids;
   }
 
@@ -567,7 +563,7 @@
     if (state.viewer) state.viewer.setSelection(selectionHighlightIds());
   }
 
-  function selectTree(treeId, toggle = true, scroll = false) {
+  function selectTree(treeId, toggle = false, scroll = false) {
     if (state.editingBusy) return;
     const started = performance.now();
     const id = Number(treeId);
@@ -580,6 +576,9 @@
       if (state.selected.has(id)) state.selected.delete(id);
       else state.selected.add(id);
     } else state.selected = new Set([id]);
+    if (!state.selected.has(id)) state.activeTreeId = [...state.selected].at(-1) ?? null;
+    // Labels/list rows select entities; point picks below select split/component positions.
+    if (state.editPicks.length && !state.editPicks.every(pick => state.selected.has(pick.tree_id))) clearEditPicks();
     applyTreeSelectionStyles();
     updateReviewStatus();
     updatePlotSelection();
@@ -626,6 +625,7 @@
     const cloud = (state.editorDisplay && state.editorDisplay.trees3d) || {};
     const xyz = Array.isArray(cloud.xyz) ? cloud.xyz : [];
     const ids = Array.isArray(cloud.tree_id_by_index) ? cloud.tree_id_by_index : [];
+    const visible = Array.isArray(cloud.visible_by_index) ? cloud.visible_by_index : null;
     const region = Number(treeId) < 0;
     const scope = new Set(
       (scopeIds || (region ? [...state.treeMap.keys()] : [])).map(Number)
@@ -633,6 +633,7 @@
     const bounds = polygonBounds(polygon);
     const preview = [];
     for (let index = 0; index < xyz.length; index += 1) {
+      if (visible && !visible[index]) continue;
       const pointTreeId = Number(ids[index]);
       if (region ? !scope.has(pointTreeId) : pointTreeId !== Number(treeId)) continue;
       const point = xyz[index];
@@ -656,12 +657,114 @@
   function setTrimMode(mode, message) {
     state.trimMode = mode;
     state.viewerState.lassoMode = mode === 'LASSO';
-    byId('btn-trim-component').style.outline = mode === 'COMPONENT' ? '3px solid #d64545' : '';
     byId('btn-trim-lasso').style.outline = mode === 'LASSO' ? '3px solid #d64545' : '';
     byId('editmsg').textContent = message || '';
     const indicator = byId('lasso-mode-indicator');
     indicator.style.display = mode === 'LASSO' ? 'block' : 'none';
-    indicator.textContent = mode === 'LASSO' ? '区域套索：拖动鼠标圈选要剔除的树木点\n框内跨多棵树生效 · Esc 取消' : '';
+    indicator.textContent = mode === 'LASSO' ? '区域套索：拖动鼠标圈选要删除的点云\n不限树木分类 · 跨对象生效 · Esc 取消' : '';
+    updateOperationControls();
+  }
+
+  function additiveSelection(event) {
+    return Boolean((event && (event.ctrlKey || event.metaKey)) || state.additiveHeld);
+  }
+
+  function clearEditPicks() {
+    state.editPicks = [];
+    if (state.viewer && state.viewer.setEditSeeds) state.viewer.setEditSeeds([]);
+  }
+
+  function updateOperationControls() {
+    const modes = {'btn-merge': 'MERGE', 'btn-split': 'SPLIT', 'btn-trim-component': 'COMPONENT'};
+    Object.entries(modes).forEach(([id, mode]) => {
+      const button = byId(id);
+      if (!button) return;
+      const active = state.operationMode === mode;
+      button.setAttribute('aria-pressed', String(active));
+      button.style.outline = active ? '3px solid #25c6da' : '';
+    });
+    const labels = {SELECT: '请选择操作', MERGE: '执行合并', SPLIT: '执行分开', COMPONENT: '预览所选团块'};
+    const button = byId('btn-edit-execute');
+    if (button) {
+      button.textContent = labels[state.operationMode];
+      const ready = state.operationMode === 'MERGE' ? state.selected.size >= 2
+        : state.operationMode === 'SPLIT' ? state.selected.size === 1 && [0, 2].includes(state.editPicks.length)
+        : state.operationMode === 'COMPONENT' && state.editPicks.length > 0;
+      button.disabled = !ready || state.editingBusy || Boolean(state.mutation) || Boolean(state.activePreview) || state.trimMode === 'LASSO';
+    }
+    const hint = byId('edit-operation-hint');
+    const modifier = `Ctrl 或按住 ${state.additiveKey}`;
+    if (hint) hint.textContent = {
+      SELECT: `单击单选；${modifier}再点击可加选/取消。选好两个或更多编号，点击“合并选中”并确认即可合并。`,
+      MERGE: `合并模式：已选 ${state.selected.size} 个编号；${modifier}加选。选好两个或更多编号后，再点“合并选中”、点击“执行合并”或按 Enter。`,
+      SPLIT: `分开模式：在同一编号的粘连树中点第一个中心，再${modifier}点第二个中心（已选 ${state.editPicks.length}/2 个位置）；或只选择编号后自动分开。`,
+      COMPONENT: `团块模式：直接点误分点团，再${modifier}加选其他点团（已选 ${state.editPicks.length} 个位置）；点击预览，检查红色区域后确认剔除。`,
+    }[state.operationMode];
+  }
+
+  async function chooseOperationMode(mode, toggle = true) {
+    if (state.editingBusy || state.mutation) return;
+    const nextMode = toggle && state.operationMode === mode ? 'SELECT' : mode;
+    if (state.activePreview || state.trimMode !== 'IDLE') await cancelTrim(undefined, true);
+    clearEditPicks();
+    state.operationMode = nextMode;
+    updateOperationControls();
+    byId('editmsg').textContent = '已切换操作模式，点云尚未改变。';
+  }
+
+  async function mergeSelection() {
+    if (state.editingBusy || state.mutation) return;
+    await chooseOperationMode('MERGE', false);
+    if (state.selected.size < 2) {
+      byId('editmsg').textContent = `请选两个或更多编号：单击第一个，再按 Ctrl 或按住 ${state.additiveKey} 点击其他编号，最后再点“合并选中”。`;
+      return;
+    }
+    await executeOperation();
+  }
+
+  function handleEditPointPick(hit, event) {
+    if (state.editingBusy || state.mutation || state.activePreview) return true;
+    if (!['SPLIT', 'COMPONENT'].includes(state.operationMode)) return false;
+    const id = Number(hit.treeId), xyz = hit.xyz.map(Number);
+    if (!state.treeMap.has(id)) return true;
+    const additive = additiveSelection(event);
+    if (state.operationMode === 'SPLIT' && additive && state.editPicks.length && state.editPicks[0].tree_id !== id) {
+      byId('editmsg').textContent = '分开需要点击同一编号里粘连的两个部分；不同编号请使用合并。';
+      return true;
+    }
+    if (!additive) clearEditPicks();
+    const existing = state.editPicks.findIndex(pick => pick.tree_id === id && Math.hypot(...pick.seed_xyz.map((v, i) => v - xyz[i])) < 0.05);
+    if (existing >= 0) state.editPicks.splice(existing, 1);
+    else {
+      const limit = state.operationMode === 'SPLIT' ? 2 : 32;
+      if (state.editPicks.length >= limit) {
+        byId('editmsg').textContent = `最多选择 ${limit} 个位置，请清空选择后重选。`;
+        return true;
+      }
+      state.editPicks.push({tree_id: id, seed_xyz: xyz});
+    }
+    state.selected = new Set(state.editPicks.map(pick => pick.tree_id));
+    state.activeTreeId = state.selected.has(id) ? id : [...state.selected].at(-1) ?? null;
+    state.viewer.setEditSeeds(state.editPicks.map(pick => pick.seed_xyz));
+    applyTreeSelectionStyles(); updatePlotSelection(); updateReviewStatus();
+    byId('editmsg').textContent = `已选 ${state.editPicks.length} 个位置，尚未修改点云。`;
+    return true;
+  }
+
+  async function executeOperation() {
+    const button = byId('btn-edit-execute');
+    if (!button || button.disabled || state.editingBusy || state.mutation) return;
+    if (state.operationMode === 'MERGE') {
+      if (!window.confirm(`将 ${state.selected.size} 个选中编号合并为一棵。所有点保留，可撤销。继续吗？`)) return;
+      await editAndReload('/api/merge', '已合并所选单木');
+    } else if (state.operationMode === 'SPLIT') {
+      if (!window.confirm(state.editPicks.length === 2
+        ? '按所选两个中心分开当前粘连树。所有点保留，请检查结果，不正确可撤销。继续吗？'
+        : '自动寻找两个中心分开当前粘连树。所有点保留，请检查结果，不正确可撤销。继续吗？')) return;
+      await editAndReload('/api/split', '已分开粘连树，请检查两个新编号', state.editPicks.length === 2 ? {seed_xyz: state.editPicks.map(pick => pick.seed_xyz)} : {});
+    } else if (state.operationMode === 'COMPONENT') {
+      await previewComponent(null, null, state.editPicks.map(pick => ({...pick, seed_xyz: [...pick.seed_xyz]})));
+    }
   }
 
   function requireOneTree() {
@@ -694,8 +797,8 @@
       const affected = Number(preview.affected_tree_count || (preview.tree_ids || []).length || 0);
       const fullyRemoved = Array.isArray(preview.fully_removed_tree_ids) ? preview.fully_removed_tree_ids.length : 0;
       const warning = preview.large_removal_warning ? ' 本次区域剔除点数较多，请确认红色区域是否正确。' : '';
-      const fullText = fullyRemoved ? `，其中 ${fullyRemoved} 棵树将被完全移除` : '';
-      byId('trim-summary').textContent = `待剔除 ${Number(preview.point_count).toLocaleString()} 个完整分辨率树木点，影响 ${affected} 棵树${fullText}；占当前可见范围树点 ${percent}%。${warning}`;
+      const fullText = fullyRemoved ? `，其中 ${fullyRemoved} 个对象将被完全移除` : '';
+      byId('trim-summary').textContent = `待剔除 ${Number(preview.point_count).toLocaleString()} 个完整分辨率点，影响 ${affected} 个对象${fullText}；占当前可编辑点云 ${percent}%。不论树木还是误识别物体，圈中点都可删除；即使仅剩少量点，圈外点也保留。前后重叠点按屏幕投影一起选取，请检查红色预览。${warning}`;
     } else {
       const warning = preview.large_removal_warning ? ' 本次将移除该树较大比例的点，请确认选择是否正确。' : '';
       byId('trim-summary').textContent = `待剔除 ${Number(preview.point_count).toLocaleString()} 个点，占当前单木 ${percent}%。${warning}`;
@@ -703,17 +806,30 @@
     byId('trim-preview').dataset.previewId = String(preview.preview_id || '');
     byId('trim-preview').style.display = 'block';
     if (!keepLocalDisplayPreview) updatePreviewTrace(preview.preview_xyz || [], preview.tree_id);
+    byId('editmsg').textContent = '圈选已完成，但尚未删除。点击红色“确认删除圈内点”才会应用；取消不改变点云。';
+    // In the desktop iframe the editor panel has its own scroll container.
+    // Bring the commit button into that container, not below its visible edge.
+    const panel = byId('trim-preview').closest('.side');
+    if (panel) {
+      const container = panel.getBoundingClientRect();
+      const button = byId('btn-trim-confirm').getBoundingClientRect();
+      if (button.bottom > container.bottom - 12) panel.scrollTop += button.bottom - container.bottom + 12;
+      else if (button.top < container.top + 12) panel.scrollTop += button.top - container.top - 12;
+    }
+    requestAnimationFrame(() => {
+      if (state.activePreview === preview) byId('btn-trim-confirm').scrollIntoView({block: 'nearest', inline: 'nearest'});
+    });
   }
 
-  async function previewComponent(treeId, seed) {
+  async function previewComponent(treeId, seed, picks = null) {
     if (state.editingBusy || state.mutation) return;
     setEditingBusy(true);
     state.refreshPaused = true;
     try {
       byId('editmsg').textContent = '正在分析当前单木的完整点成员...';
       const requestId = ++state.previewRequestId;
-      const preview = await post('/api/trim/component-preview', {tree_id: treeId, seed_xyz: seed});
-      if (requestId !== state.previewRequestId || Number(state.activeTreeId) !== Number(treeId)) {
+      const preview = await post('/api/trim/component-preview', picks ? {picks} : {tree_id: treeId, seed_xyz: seed});
+      if (requestId !== state.previewRequestId || (!picks && Number(state.activeTreeId) !== Number(treeId))) {
         await post('/api/trim/cancel', {preview_id: preview.preview_id});
         return;
       }
@@ -731,12 +847,14 @@
     if (state.editingBusy || state.mutation) return;
     const visibleTreeIds = [...state.treeMap.keys()].map(Number);
     if (!visibleTreeIds.length || !state.viewer) {
-      byId('editmsg').textContent = '当前视图没有可进行区域剔除的树木。';
+      byId('editmsg').textContent = '当前视图没有可进行区域剔除的可编辑点云。';
       return;
     }
     const treeId = -1;
+    state.operationMode = 'SELECT';
+    clearEditPicks();
     removeLassoOverlay();
-    setTrimMode('LASSO', '区域套索已开启：直接框住不需要的树木区域；框内所有树木点都会被剔除。');
+    setTrimMode('LASSO', '区域套索已开启：圈住不需要的点云，不限树木分类和已选编号。检查红色预览后确认删除；前后重叠点也会圈中，原始 LAS 不变，可撤销。');
     state.viewer.setControlsEnabled(false);
     const stage = byId('tree-review-stage');
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -747,18 +865,27 @@
     line.setAttribute('fill', 'rgba(255,0,0,.12)');
     line.setAttribute('stroke', '#ff3030');
     line.setAttribute('stroke-width', '2');
+    line.setAttribute('pointer-events', 'none');
     svg.appendChild(line);
     stage.appendChild(svg);
     let points = [];
     let drawing = false;
+    // offsetX/Y are relative to the event target. SVG painted children can
+    // become that target, shifting the polygon as it crosses its own outline.
+    const localPoint = event => {
+      const rect = svg.getBoundingClientRect();
+      return [event.clientX - rect.left, event.clientY - rect.top];
+    };
     svg.onpointerdown = event => {
+      if (event.button !== 0) return;
+      event.preventDefault();
       drawing = true;
-      points = [[event.offsetX, event.offsetY]];
+      points = [localPoint(event)];
       svg.setPointerCapture(event.pointerId);
     };
     svg.onpointermove = event => {
       if (!drawing) return;
-      const next = [event.offsetX, event.offsetY];
+      const next = localPoint(event);
       const last = points[points.length - 1];
       // Preserve every pointer vertex; only an exact consecutive duplicate is redundant.
       if (!last || next[0] !== last[0] || next[1] !== last[1]) {
@@ -775,7 +902,7 @@
     svg.onpointerup = async event => {
       if (!drawing) return;
       drawing = false;
-      const finalPoint = [event.offsetX, event.offsetY];
+      const finalPoint = localPoint(event);
       const last = points[points.length - 1];
       if (!last || finalPoint[0] !== last[0] || finalPoint[1] !== last[1]) {
         points.push(finalPoint);
@@ -797,7 +924,7 @@
       try {
         const matrix = state.viewer.currentViewProjection();
         const displayCount = displayLassoPreview(treeId, matrix, polygon);
-        setTrimMode('PREVIEW_LOADING', `显示样本已命中 ${displayCount.toLocaleString()} 个树木点并标红；正在按完整分辨率精确计算框内所有树木点...`);
+        setTrimMode('PREVIEW_LOADING', `显示样本已命中 ${displayCount.toLocaleString()} 个点并标红；正在按完整分辨率精确计算圈内可编辑点云...`);
         await post('/api/select', {tree_ids: visibleTreeIds});
         const exactStarted = performance.now();
         const preview = await post('/api/trim/lasso-preview', {tree_id: treeId, view_projection: matrix, polygon_ndc: polygon});
@@ -834,13 +961,19 @@
     delete byId('trim-preview').dataset.previewId;
     setTrimMode('IDLE', message);
     updatePreviewTrace([], null);
+    if (!internal) {
+      state.operationMode = 'SELECT';
+      clearEditPicks();
+      updateOperationControls();
+    }
   }
 
   function initializeViewer() {
     if (state.viewer) return;
     const viewer = new window.TreeLineTreeReview3D(byId('plot3d'), byId('tree-label-overlay'), {
-      onTreePick: treeId => selectTree(treeId, true, true),
-      onPointPick: hit => {
+      onTreePick: (treeId, event) => selectTree(treeId, additiveSelection(event), true),
+      onPointPick: (hit, event) => {
+        if (handleEditPointPick(hit, event)) return true;
         if (state.editingBusy || state.mutation) return true;
         if (state.trimMode !== 'COMPONENT') return false;
         if (state.selected.size !== 1 || !state.selected.has(Number(hit.treeId))) {
@@ -865,36 +998,54 @@
 
   async function loadEditorData() {
     if (state.editorLoadPromise) return state.editorLoadPromise;
+    const wasEditingBusy = state.editingBusy;
+    let waitingForBackend = false;
     state.editorLoadPromise = (async () => {
       if (!state.editorDisplay) byId('editmsg').textContent = '正在加载单木列表与 Giro3D 预览...';
       const spanQuery = reviewSpanId ? `&span_id=${encodeURIComponent(reviewSpanId)}` : '';
       const path = `/api/editor_data?display_budget=${displayBudget()}${spanQuery}`;
       let outcome;
-      const slowNotice = setTimeout(() => {
-        if (state.editorDisplay) return;
-        const message = byId('editmsg');
-        if (message) message.textContent = '正在准备真实点云复核数据，首次加载可能需要几十秒，请稍候…';
-      }, DISPLAY_SLOW_NOTICE_MS);
-      try {
-        outcome = await fetchJsonWithDeadline(
-          path,
-          {headers: {Accept: 'application/json'}, cache: 'no-store'},
-          DISPLAY_REQUEST_TIMEOUT_MS,
-        );
-      } catch (cause) {
-        if (cause && cause.responseParse) throw cause;
-        const error = cause && cause.timeout ? cause : networkError(path, cause);
-        error.dataLoad = true;
-        throw error;
-      } finally { clearTimeout(slowNotice); }
+      const deadline = performance.now() + 120000;
+      // Returning from a cold DBH evidence read can overlap its backend task.
+      // Only retry this read-only GET on EDIT_RUNNING, never replay an edit,
+      // finalize, or DBH preparation request. Other failures remain explicit.
+      while (true) {
+        if (waitingForBackend && performance.now() >= deadline) {
+          const error = mutationResponseError(path, outcome.response, outcome.result);
+          error.message = '后台任务仍未完成，暂时不能读取复核点云。请稍后点击“刷新视图”，无需重新分析。';
+          error.displayLoad = true;
+          throw error;
+        }
+        try {
+          outcome = await fetchJsonWithDeadline(path, {headers: {Accept: 'application/json'}, cache: 'no-store'}, Math.max(1, deadline - performance.now()));
+        } catch (cause) {
+          if (cause && cause.responseParse) throw cause;
+          throw networkError(path, cause);
+        }
+        const {response, result} = outcome;
+        const busy = response.status === 409 && (result?.status === 'EDIT_RUNNING' || result?.error?.code === 'EDIT_RUNNING');
+        if (!busy) break;
+        if (!waitingForBackend) {
+          waitingForBackend = true;
+          setEditingBusy(true);
+          state.refreshPaused = true;
+        }
+        const message = '正在等待后台完成胸径证据读取或编辑任务，完成后自动加载复核点云，请稍候…';
+        byId('editmsg').textContent = message;
+        byId('review-status').textContent = message;
+        byId('viewer-renderer-status').textContent = '后台数据准备中，3D 点云将在完成后自动显示。';
+        if (performance.now() >= deadline) {
+          const error = mutationResponseError(path, response, result);
+          error.message = '后台任务仍未完成，暂时不能读取复核点云。请稍后点击“刷新视图”，无需重新分析。';
+          error.displayLoad = true;
+          throw error;
+        }
+        await wait(Math.min(750, Math.max(1, deadline - performance.now())));
+      }
       const {response, result: data} = outcome;
-      if (!response.ok) {
-        const error = new Error(
-          data && data.error && data.error.message
-            ? data.error.message : '单木显示数据加载失败'
-        );
-        error.dataLoad = true;
-        error.statusCode = response.status;
+      if (!response.ok || data?.ok === false) {
+        const error = mutationResponseError(path, response, data);
+        error.displayLoad = true;
         throw error;
       }
       // Keep the latest display payload available for a Viewer-only retry. It
@@ -925,10 +1076,17 @@
         metrics.renderer_info = info;
         const dangerCount = Number(data.danger_points && data.danger_points.full_point_count || 0);
         const dangerText = dangerCount ? ` · 危险点 ${dangerCount.toLocaleString()}` : '';
-        byId('viewer-renderer-status').textContent = `Giro3D / Three.js r${info.three_version} · WebGL${info.webgl_version} · ${timing.visible_tree_points.toLocaleString()} 树点${dangerText}`;
+        const locked = data.infrastructure;
+        const fittedWireCount=Array.isArray(data.wires3d?.segments)?data.wires3d.segments.length:0;
+        const lockedText = locked ? ` · 杆线锁定 ${Number(locked.protected_point_count || 0).toLocaleString()} 原始点 / ${Number(locked.pole_count || 0)} 根已拟合杆 / ${fittedWireCount} 根已拟合导线` : '';
+        byId('viewer-renderer-status').textContent = `Giro3D / Three.js r${info.three_version} · WebGL${info.webgl_version} · ${timing.visible_tree_points.toLocaleString()} 树点${dangerText}${lockedText}`;
         state.editorDisplay = data;
         clearViewerDiagnostic();
+        if (byId('error-details')) byId('error-details').style.display = 'none';
+        if (byId('error-detail-text')) byId('error-detail-text').textContent = '';
         if (byId('editmsg').textContent.startsWith('正在加载')) byId('editmsg').textContent = '';
+        if (waitingForBackend) byId('editmsg').textContent = '后台任务已完成，复核点云已自动加载。';
+        if (locked && locked.status !== 'AVAILABLE') byId('editmsg').textContent = `杆线原始证据已锁定，但拟合未完整通过，暂不能定稿：${(locked.diagnostics || []).join('；')}`;
         return data;
       } catch (error) {
         restorePreviousViewer();
@@ -936,7 +1094,10 @@
       }
     })();
     try { return await state.editorLoadPromise; }
-    finally { state.editorLoadPromise = null; }
+    finally {
+      state.editorLoadPromise = null;
+      if (waitingForBackend && !wasEditingBusy && !state.mutation) setEditingBusy(false);
+    }
   }
 
   async function retryViewer() {
@@ -986,20 +1147,9 @@
     return wrapped;
   }
 
-  function notifyWorkspaceChanged(kind) {
-    if (window.parent && window.parent !== window) {
-      window.parent.postMessage(
-        {type: 'treeline:tree-review-changed', kind}, window.location.origin,
-      );
-    }
-  }
-
   async function refreshCommittedDisplay(snapshot) {
     // Retain the server-confirmed journal count even when the display fetch fails.
-    state.workflowDone = false;
-    state.redirectOnDone = false;
     updateJournalCount(snapshot);
-    notifyWorkspaceChanged('EDIT_COMMITTED');
     byId('editmsg').textContent = '编辑已提交，正在刷新3D复核显示...';
     try {
       const delta = snapshot && snapshot.display_delta;
@@ -1048,7 +1198,6 @@
         if (!state.mutation) setEditingBusy(false);
       }
       if (current.step === 'DONE') {
-        if (!state.workflowDone) notifyWorkspaceChanged('FINALIZED');
         state.workflowDone = true;
         clearInterval(state.refreshTimer);
         state.refreshTimer = null;
@@ -1071,16 +1220,19 @@
     selectTree(ids[Math.max(0, Math.min(ids.length - 1, index + delta))], false, true);
   }
 
-  async function editAndReload(path, successMessage) {
+  async function editAndReload(path, successMessage, payload = {}) {
     if (state.editingBusy || state.mutation) return;
     setEditingBusy(true);
     state.refreshPaused = true;
     try {
       if (state.activePreview) await cancelTrim(undefined, true);
       await post('/api/select', {tree_ids: [...state.selected]});
-      const snapshot = await post(path, {});
+      const snapshot = await post(path, payload);
       await refreshCommittedDisplay(snapshot);
       state.selected.clear();
+      state.activeTreeId = null;
+      clearEditPicks();
+      applyTreeSelectionStyles(); updateReviewStatus();
       updatePlotSelection();
       byId('editmsg').textContent = successMessage;
     } catch (error) { showFailure(error); }
@@ -1090,15 +1242,63 @@
   }
 
   function bindControls() {
+    const reviewBack = byId('btn-review-back');
+    if (reviewBack) reviewBack.onclick = async () => {
+      // Leaving a view is not an undo/cancel operation. The server continues
+      // a submitted edit even if loading or the WebGL display has failed.
+      state.viewExitRequested = true;
+      state.redirectOnDone = false;
+      if (!state.editingBusy && !state.mutation && (state.activePreview || state.trimMode !== 'IDLE')) {
+        try { await cancelTrim(undefined, true); } catch (_) { /* An ephemeral preview is not a committed edit. */ }
+      }
+      if (window.parent !== window) window.parent.postMessage({type:'treeline-exit-review'}, location.origin);
+      else window.location.href = '/';
+    };
+    window.addEventListener('message', event => {
+      if (event.origin === location.origin && event.source === window.parent
+          && event.data?.type === 'treeline-review-hidden') {
+        state.viewExitRequested = true;
+        state.redirectOnDone = false;
+      }
+    });
+    const required = ['btn-prev', 'btn-next', 'btn-delete', 'btn-merge', 'btn-split',
+      'btn-trim-component', 'btn-trim-lasso', 'btn-trim-cancel', 'btn-trim-confirm',
+      'btn-undo', 'btn-confirm', 'toggle-labels', 'btn-edit-execute', 'btn-selection-clear', 'multi-select-key'];
+    const missing = required.filter(id => !byId(id));
+    if (missing.length) throw new Error(`复核页面控件不完整：${missing.join('、')}。请关闭软件并重新打开最新版本。`);
     const dbhReview = byId('btn-dbh-review');
     if (dbhReview) dbhReview.onclick = () => {
       if (state.editingBusy || state.mutation || state.displayRefreshUncertain) return;
       window.location.href = '/dbh-review';
     };
-    byId('btn-trim-component').onclick = () => { if (requireOneTree() != null) setTrimMode('COMPONENT', '请点击需要从当前单木中剔除的误分点团。'); };
+    byId('btn-trim-component').onclick = () => void chooseOperationMode('COMPONENT');
+    byId('btn-edit-execute').onclick = () => void executeOperation();
+    byId('btn-selection-clear').onclick = async () => {
+      if (state.editingBusy || state.mutation) return;
+      if (state.activePreview || state.trimMode !== 'IDLE') await cancelTrim(undefined, true);
+      clearEditPicks(); state.selected.clear(); state.activeTreeId = null;
+      applyTreeSelectionStyles(); updatePlotSelection(); updateReviewStatus();
+      byId('editmsg').textContent = '已清空选择，点云没有改变。';
+    };
+    const keyControl = byId('multi-select-key');
+    for (let code = 65; code <= 90; code += 1) {
+      const option = document.createElement('option');
+      option.value = option.textContent = String.fromCharCode(code);
+      keyControl.appendChild(option);
+    }
+    try { const saved = localStorage.getItem('treeline-review-additive-key'); if (/^[A-Z]$/.test(saved || '')) state.additiveKey = saved; } catch (_) {}
+    keyControl.value = state.additiveKey;
+    keyControl.onchange = () => {
+      state.additiveKey = keyControl.value;
+      state.additiveHeld = false;
+      try { localStorage.setItem('treeline-review-additive-key', state.additiveKey); } catch (_) {}
+      updateOperationControls();
+      keyControl.blur();
+    };
     byId('btn-trim-lasso').textContent = '区域套索剔除';
-    byId('btn-trim-lasso').title = '框选区域后，剔除框内所有树木点（跨多棵树）';
+    byId('btn-trim-lasso').title = '圈内可编辑点均可删除（含误识别物体，不限已选编号），先预览再确认，支持撤销；原始 LAS 不变';
     byId('btn-trim-lasso').onclick = beginLasso;
+    byId('btn-trim-confirm').textContent = '确认删除圈内点';
     byId('btn-trim-cancel').onclick = () => void cancelTrim();
     byId('btn-trim-confirm').onclick = async () => {
       if (state.editingBusy || state.mutation || !state.activePreview) return;
@@ -1112,11 +1312,14 @@
         updatePreviewTrace([], null);
         byId('trim-preview').style.display = 'none';
         delete byId('trim-preview').dataset.previewId;
-        setTrimMode('IDLE', '已剔除框内树木点，可使用撤销精确恢复整个区域操作。');
+        setTrimMode('IDLE', '已删除圈内点云，圈外点保留；可用撤销精确恢复整个区域操作，原始 LAS 未修改。');
         await refreshCommittedDisplay(snapshot);
         state.selected.clear();
+        state.activeTreeId = null;
+        clearEditPicks();
+        updateReviewStatus(); applyTreeSelectionStyles();
         updatePlotSelection();
-        byId('editmsg').textContent = '已剔除框内树木点，可使用撤销精确恢复整个区域操作。';
+        byId('editmsg').textContent = '已删除圈内点云，圈外点保留；可用撤销精确恢复整个区域操作，原始 LAS 未修改。';
       } catch (error) { showFailure(error); }
       finally {
         if (!state.mutation && !state.displayRefreshUncertain) setEditingBusy(false);
@@ -1130,7 +1333,8 @@
     byId('btn-prev').onclick = () => stepTree(-1);
     byId('btn-next').onclick = () => stepTree(1);
     byId('btn-delete').onclick = () => void editAndReload('/api/delete', '已删除所选单木');
-    byId('btn-merge').onclick = () => void editAndReload('/api/merge', '已合并所选单木');
+    byId('btn-merge').onclick = () => void mergeSelection();
+    byId('btn-split').onclick = () => void chooseOperationMode('SPLIT');
     byId('btn-undo').onclick = async () => {
       if (state.editingBusy || state.mutation) return;
       if (!(state.committedJournalCount > 0)) {
@@ -1146,6 +1350,9 @@
         const snapshot = await post('/api/undo', {});
         await refreshCommittedDisplay(snapshot);
         state.selected.clear();
+        state.activeTreeId = null;
+        clearEditPicks();
+        updateReviewStatus(); applyTreeSelectionStyles();
         updatePlotSelection();
         const journalCountAfter = journalCountFrom(snapshot);
         byId('editmsg').textContent = journalCountAfter != null && journalCountAfter >= journalCountBefore
@@ -1159,6 +1366,7 @@
     byId('btn-confirm').onclick = async () => {
       if (state.editingBusy || state.mutation) return;
       setEditingBusy(true);
+      state.viewExitRequested = false;
       if (state.activeTreeId != null) state.reviewed.add(Number(state.activeTreeId));
       updateReviewStatus();
       const pending = Math.max(0, state.treeMap.size - state.reviewed.size);
@@ -1166,8 +1374,7 @@
       byId('progress').textContent = '正在应用人工修改';
       try {
         await post('/api/confirm_trees', {});
-        notifyWorkspaceChanged('FINALIZING');
-        state.redirectOnDone = true;
+        state.redirectOnDone = !state.viewExitRequested;
       }
       catch (error) {
         state.redirectOnDone = false;
@@ -1180,32 +1387,61 @@
       void refreshTrees();
     };
     document.addEventListener('keydown', event => {
-      if (!state.editingBusy && !state.mutation && event.key === 'Escape' && (state.trimMode !== 'IDLE' || state.activePreview)) {
+      const editable = /INPUT|TEXTAREA|SELECT/.test((event.target && event.target.tagName) || '') || event.target?.isContentEditable;
+      if (editable) return;
+      if (event.code === `Key${state.additiveKey}` && !event.altKey && !event.ctrlKey && !event.metaKey) {
+        state.additiveHeld = true; event.preventDefault(); return;
+      }
+      if (!state.editingBusy && !state.mutation && event.key === 'Escape' && (state.operationMode !== 'SELECT' || state.trimMode !== 'IDLE' || state.activePreview || state.editPicks.length)) {
         event.preventDefault();
         void cancelTrim();
         return;
+      }
+      if (event.key === 'Enter' && !event.repeat && (!/BUTTON|A/.test(event.target?.tagName || '') || ['btn-merge', 'btn-split', 'btn-trim-component'].includes(event.target?.id))) {
+        event.preventDefault(); void executeOperation(); return;
       }
       if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && state.trimMode === 'IDLE' && !state.activePreview && !/INPUT|TEXTAREA|SELECT/.test((event.target && event.target.tagName) || '')) {
         event.preventDefault();
         stepTree(event.key === 'ArrowLeft' ? -1 : 1);
       }
     });
+    document.addEventListener('keyup', event => { if (event.code === `Key${state.additiveKey}`) state.additiveHeld = false; });
+    window.addEventListener('blur', () => { state.additiveHeld = false; });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) state.additiveHeld = false; });
     window.addEventListener('error', restoreCameraControls);
     window.addEventListener('unhandledrejection', restoreCameraControls);
     updateUndoControl();
+    updateOperationControls();
   }
 
   async function start() {
-    bindControls();
     try {
+      bindControls();
       await loadEditorData();
       await refreshTrees();
       if (!state.workflowDone) state.refreshTimer = setInterval(refreshTrees, 1500);
-    } catch (error) { showFailure(error); }
+    } catch (error) {
+      showFailure(error);
+      const reviewStatus = byId('review-status');
+      if (reviewStatus) reviewStatus.textContent = '复核加载失败，请查看下方详情或刷新视图。';
+    }
   }
 
   window.TreeLineTreeReviewApp = {start, state, selectTree, beginLasso, cancelTrim, metrics};
   window.TreeLineTreeReviewApp.retryViewer = retryViewer;
+  window.TreeLineTreeReviewApp.refreshThreshold = async function () {
+    if (state.editingBusy || state.mutation || state.trimMode !== 'IDLE') throw new Error('请先执行或取消当前编辑，再刷新危险点阈值。');
+    const camera = state.viewer?.camera;
+    const position = camera?.position.clone(), target = state.viewer?.controls.target.clone();
+    const quaternion = camera?.quaternion.clone();
+    await loadEditorData();
+    await refreshTrees();
+    if (position && target && state.viewer?.camera === camera) {
+      camera.position.copy(position); camera.quaternion.copy(quaternion);
+      state.viewer.controls.target.copy(target); state.viewer.controls.update();
+      state.viewer.requestRender(); state.viewer.renderLabels();
+    }
+  };
   window.TreeLineTreeReviewApp.showViewerDiagnostic = showViewerDiagnostic;
   window.TreeLineTreeReviewApp.clearViewerDiagnostic = clearViewerDiagnostic;
   installViewerRuntimeDiagnostics();

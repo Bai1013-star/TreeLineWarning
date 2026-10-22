@@ -193,7 +193,10 @@ def ensure_ground_preparation(
 
             workset_status, workset = ensure_ground_workset(
                 source,
-                shared_root / "ground-worksets",
+                # Keep internal cache paths short enough for Windows hosts
+                # where long-path policy is not enabled.  Digests remain in
+                # manifests; directory names are implementation details.
+                shared_root / "gw",
                 identity,
                 span_inputs,
             )
@@ -201,7 +204,7 @@ def ensure_ground_preparation(
             source_full_pass_count = (
                 0 if workset_status == "SKIPPED_FROM_CACHE" else workset.source_full_pass_count
             )
-            ground_root = shared_root / "ground-regions" / workset.region_digest
+            ground_root = shared_root / "gr" / workset.region_digest[:20]
 
         _status, result = run_fast_ground_hag(ground_input, ground_root)
         coarse_xyz = load_coarse_ground_representatives(result)

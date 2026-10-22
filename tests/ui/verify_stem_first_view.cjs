@@ -1,0 +1,20 @@
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE);
+const fs=require('node:fs'),assert=require('node:assert/strict');
+(async()=>{
+ const urls=JSON.parse(fs.readFileSync(process.env.REAL_SERVERS,'utf8'));
+ const browser=await chromium.launch({channel:'msedge',headless:true});
+ const page=await browser.newPage({viewport:{width:1700,height:1100}});
+ const workspace=await(await page.request.get(urls.processing+'api/desktop/workspace')).json();
+ const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto(urls.processing+'step2');
+ await page.waitForFunction(()=>window.TreeLineTreeReviewApp?.state.treeMap.size>0,{},{timeout:120000});
+ await page.locator('#btn-view-side').click();
+ const count=await page.locator('#treetable tbody tr').count();
+ assert.equal(count,workspace.batch.final_tree_count);
+ await page.locator('#treetable tbody tr').first().click();
+ await page.screenshot({path:process.env.REAL_OUTPUT+'/stem_first_review.png',fullPage:true});
+ assert.deepEqual(errors,[]);
+ fs.writeFileSync(process.env.REAL_OUTPUT+'/stem_first_view_checks.json',JSON.stringify({passed:true,rows:count,pageErrors:errors}));
+ console.log(JSON.stringify({passed:true,rows:count,pageErrors:errors}));
+ await browser.close();
+})().catch(e=>{console.error(e);process.exitCode=1});

@@ -11,7 +11,7 @@
     <div>
       <p class="eyebrow">TREELINEWARNING · HUMAN DBH REVIEW</p>
       <h1>胸径复核 <span>/ DBH Review</span></h1>
-      <p class="subtitle">逐树复核已定稿单木的树干身份。胸径由当前点云几何计算；证据不足时显示原因并保留为空。</p>
+      <p class="subtitle">直接读取原始 LAS。以该树原始点云最低点 + 1.30 m 定位，拟合 1.25–1.35 m 薄层点；不会使用去地面、裁剪或显示抽稀后的树底代替。</p>
     </div>
     <a class="back-link" href="/step2">返回树木复核</a>
   </header>
@@ -20,24 +20,32 @@
     <aside class="panel tree-panel">
       <div class="panel-heading">
         <div>
-          <p class="eyebrow">REVIEWABLE TREES</p>
-          <h2>待复核单木</h2>
+          <p class="eyebrow">ORIGINAL LAS · 1.30 M</p>
+          <h2>原始胸径断面</h2>
         </div>
         <span id="tree-count" class="pill">读取中</span>
       </div>
-      <p id="tree-list-note" class="hint" aria-live="polite">胸径缺失或旧参考估算的单木可继续用本树点云复核。</p>
-      <button id="btn-recompute" class="secondary" type="button">重新计算胸径</button>
-      <p id="recompute-status" class="hint" role="status">使用当前已定稿的单木和原始点云重新计算，人工确认的胸径会保留。</p>
+      <p id="tree-list-note" class="hint" aria-live="polite">选择待复核单木可查看原始树干、地面参考与 1.30 m 胸径截面。</p>
       <div id="tree-list" class="tree-list" role="list"></div>
     </aside>
 
     <section class="panel review-panel" aria-live="polite">
       <div id="review-empty" class="empty-state">
         <h2>请选择一棵待复核单木</h2>
-        <p>选择左侧胸径缺失的单木后，准备当前编辑版本的原始点云证据。</p>
+        <p>选择左侧单木后，先准备当前编辑版本的原始点云证据。</p>
       </div>
 
       <div id="review-content" class="hidden">
+        <section class="review-howto" aria-label="胸径复核操作步骤">
+          <h2>人工复核怎么操作</h2>
+          <ol>
+            <li>先在左侧选择一棵树，再点“准备点云复核”。</li>
+            <li>查看绿色原始 LAS 树干、黄色“原始树最低点 + 1.30 m”薄层和蓝色树冠上下文。</li>
+            <li>彩色候选轴若与真实树干重合，直接点该候选；若候选不可信，点“点击树干”，再在绿色原始树干中心点一下。</li>
+            <li>勾选“我确认这是该树的点云身份”，再点“确认人工身份并计算胸径”。人工只确认树干身份，胸径仍由后台几何质量门计算，不能手填假值。</li>
+            <li>计算成功会保存原始点云 1.30 m 胸径；仍无法测量则显示“未获取 / No”，可回到预测页填写现场实测胸径。</li>
+          </ol>
+        </section>
         <div class="review-heading">
           <div>
             <p class="eyebrow">CURRENT EDITOR REVISION</p>
@@ -66,10 +74,10 @@
               <div id="dbh-viewer-error" class="viewer-error hidden" role="alert"></div>
             </div>
             <div class="viewer-legend">
-              <span><i class="legend-dot raw-dot"></i>当前原始点（显示行保留精确 original_index）</span>
+              <span><i class="legend-dot raw-dot"></i>原始 LAS 点（未去地面，保留 exact original_index）</span>
+              <span><i class="legend-dot" style="background:#ffcc47"></i>原始树最低点以上 1.30 m 胸径截面</span>
               <span><i class="legend-dot crown-dot"></i>当前树冠上下文</span>
               <span><i class="legend-dot selected-dot"></i>已选复核点</span>
-              <span>青色：可选树根地面点；黄色：已选树干点；红色：已选地面点</span>
             </div>
             <div id="dbh-context-label" class="context-label">当前树冠上下文：—</div>
           </div>
@@ -78,9 +86,10 @@
             <section class="control-section">
               <div class="section-heading">
                 <h3>候选轴</h3>
-                <span class="hint">全部候选都保留</span>
+                <span class="hint">候选不会自动删除</span>
               </div>
               <p class="hint">候选轴仅用于人工确认身份；胸径仍由后台独立几何质量门计算。</p>
+              <button id="btn-best-candidate" class="secondary" type="button" disabled>采用评分最高候选（仍需人工确认）</button>
               <div id="axis-candidates" class="axis-candidates"></div>
             </section>
 
@@ -96,20 +105,13 @@
               <div id="point-detail" class="point-detail"></div>
             </section>
 
-            <section class="control-section ground-section">
-              <div class="section-heading"><h3>树根地面点（可选）</h3><span id="ground-mode-label" class="mode-pill">未选择</span></div>
-              <p class="hint">若树根附近地面高程有偏差，可在青色原始点中指定一处树根地面点。后台会验证原始索引、水平地面支持和与树干的距离。</p>
-              <button id="btn-pick-ground" class="secondary" type="button">点击树根地面点</button>
-              <button id="btn-cancel-ground" class="text-button" type="button">清除地面点</button>
-              <div id="ground-selection" class="selection-readout">未指定地面点；使用原始地面高程。</div>
-            </section>
-
             <section class="control-section confirm-section">
               <label id="identity-confirm-label" class="identity-check">
                 <input id="identity-confirmed" type="checkbox">
                 <span>我确认这是该树的点云身份；胸径由后台几何计算。</span>
               </label>
               <button id="btn-confirm" class="confirm-button" type="button" disabled>确认人工身份并计算胸径</button>
+              <p class="hint">操作顺序：准备点云复核 → 采用候选或点击树干 → 勾选身份确认 → 点击上方按钮。计算不通过会明确显示 No，之后可在预测页人工填写现场实测值。</p>
               <div id="confirm-message" class="confirm-message" role="status"></div>
             </section>
 

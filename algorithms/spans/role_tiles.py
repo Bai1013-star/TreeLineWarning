@@ -12,10 +12,14 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import shutil
 import threading
 import time
+import uuid
 from collections import OrderedDict
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -116,6 +120,69 @@ def _validate_unique_source_indices(
 
 class RoleTileCacheError(RuntimeError):
     """Raised when a role tile cache cannot be built or validated."""
+
+
+_ROLE_TILE_BUILD_LOCK = threading.RLock()
+
+
+@contextmanager
+def _role_tile_process_lock(cache_root: Path) -> Any:
+    """Hold an OS-level lock for one cache root across worker processes."""
+
+    root = cache_root.resolve()
+    root.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = root.parent / f".{root.name}.role-cache.lock"
+    stream = lock_path.open("a+b")
+    try:
+        stream.seek(0, os.SEEK_END)
+        if stream.tell() == 0:
+            stream.write(b"\0")
+            stream.flush()
+        stream.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+        else:  # pragma: no cover - release target is Windows
+            import fcntl
+
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            stream.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:  # pragma: no cover - release target is Windows
+                import fcntl
+
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            stream.close()
+
+
+def _serialize_role_tile_build(function: Any) -> Any:
+    """Prevent concurrent spans from publishing the same source-shared cache.
+
+    Desktop batch analysis deliberately runs spans in parallel.  Those spans can
+    share one wire/vegetation cache root, so cache creation itself must be a
+    single-writer operation.  An RLock is used because a completed cache is
+    validated through ``load`` before being returned.
+    """
+
+    def locked(*args: Any, **kwargs: Any) -> Any:
+        cache_root = kwargs.get("cache_root")
+        if cache_root is None and len(args) >= 3:
+            cache_root = args[2]
+        if cache_root is None:
+            raise TypeError("cache_root is required")
+        with _ROLE_TILE_BUILD_LOCK:
+            with _role_tile_process_lock(Path(cache_root)):
+                return function(*args, **kwargs)
+
+    return locked
 
 
 def role_source_cache_identity(source_identity: Mapping[str, Any]) -> dict[str, Any]:
@@ -234,12 +301,22 @@ def _tile_id(col: int, row: int) -> str:
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    temporary = path.with_name(path.name + ".tmp")
+    # Project roots can contain long Chinese product/project names.  Keep the
+    # temporary basename deliberately short so Windows MAX_PATH does not turn
+    # an otherwise valid atomic replace into a misleading FileNotFoundError.
+    temporary = path.parent / f".j-{uuid.uuid4().hex[:8]}"
     temporary.write_text(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
         encoding="utf-8",
     )
-    temporary.replace(path)
+    source = str(temporary.resolve())
+    destination = str(path.resolve())
+    if os.name == "nt":
+        if not source.startswith("\\\\?\\"):
+            source = "\\\\?\\" + source
+        if not destination.startswith("\\\\?\\"):
+            destination = "\\\\?\\" + destination
+    os.replace(source, destination)
 
 
 _ROLE_TILE_VALIDATION_CACHE: dict[tuple[Any, ...], tuple[int, int, int | None, int | None]] = {}
@@ -441,6 +518,7 @@ class RoleSpecificTileCache:
         self.index = {str(key): dict(value) for key, value in index.items()}
 
     @classmethod
+    @_serialize_role_tile_build
     def prepare_from_raw_region(
         cls,
         region: RawRegion,
@@ -497,7 +575,21 @@ class RoleSpecificTileCache:
         )
         root = Path(cache_root).resolve()
         if root.exists() and any(root.iterdir()):
-            raise RoleTileCacheError("ROLE_TILE_CACHE_ROOT_NOT_EMPTY")
+            metadata_path = root / "role-tile-cache.json"
+            index_path = root / "tiles" / "index.json"
+            if metadata_path.is_file() and index_path.is_file():
+                return cls.load(
+                    root,
+                    role=role,
+                    source_identity=source_identity,
+                    config_digest=config_digest,
+                    source_point_count=source_point_count,
+                    expected_cell_size_m=cell_size_m,
+                )
+            # A previous interrupted writer may leave tiles or a JSON temporary
+            # behind.  This directory is a derived cache, never user-authored
+            # data, and is safe to reconstruct from the authoritative region.
+            shutil.rmtree(root)
         root.mkdir(parents=True, exist_ok=True)
         tiles_dir = root / "tiles"
         started = time.perf_counter()

@@ -53,6 +53,8 @@ NON_CERTIFIED_MARKER = "NON_CERTIFIED_FAST_RESEARCH"
 NON_CERTIFIED_INPUT_MARKER = "NON_CERTIFIED_FAST_RESEARCH_INPUT"
 FAST_GROUND_ALGORITHM = "PDAL_SMRF_v1"
 FAST_HAG_ALGORITHM = "PDAL_HAG_NN_v1"
+NUMPY_GROUND_ALGORITHM = "NUMPY_GRID_GROUND_v1"
+NUMPY_HAG_ALGORITHM = "NUMPY_GRID_HAG_v1"
 
 
 class FastResearchError(RuntimeError):
@@ -220,6 +222,12 @@ def run_fast_ground_hag(
         raise FastResearchError("FAST_HAG_CONFIG_INVALID")
 
     source_sha = sha256_file(input_las)
+    try:
+        import pdal
+    except (ImportError, OSError):  # supported offline fallback below
+        pdal = None
+    algorithm_name = FAST_GROUND_ALGORITHM if pdal is not None else NUMPY_GROUND_ALGORITHM
+    hag_algorithm_name = FAST_HAG_ALGORITHM if pdal is not None else NUMPY_HAG_ALGORITHM
     parameters = {
         "smrf_cell_m": float(smrf_cell_m),
         "smrf_slope": float(smrf_slope),
@@ -227,12 +235,13 @@ def run_fast_ground_hag(
         "smrf_window_m": float(smrf_window_m),
         "hag_neighbor_count": int(hag_neighbor_count),
         "hag_allow_extrapolation": True,
+        "backend": "PDAL" if pdal is not None else "NUMPY_SCIPY_OFFLINE",
     }
     config_digest = canonical_digest(
         {
             "schema_version": FAST_RESEARCH_SCHEMA_VERSION,
-            "algorithm": FAST_GROUND_ALGORITHM,
-            "hag_algorithm": FAST_HAG_ALGORITHM,
+            "algorithm": algorithm_name,
+            "hag_algorithm": hag_algorithm_name,
             "input_sha256": source_sha,
             "parameters": parameters,
         }
@@ -242,13 +251,6 @@ def run_fast_ground_hag(
     cached = _load_fast_ground_cache(result_path, output_las, source_sha, config_digest)
     if cached is not None:
         return "SKIPPED_FROM_CACHE", cached
-
-    try:
-        import pdal
-    except ImportError as exc:  # pragma: no cover - environment-specific dependency
-        raise FastResearchError(
-            "FAST_GROUND_BACKEND_UNAVAILABLE: Python PDAL binding missing"
-        ) from exc
 
     output_root.mkdir(parents=True, exist_ok=True)
     temporary_output = output_las.with_suffix(".tmp.las")
@@ -278,7 +280,17 @@ def run_fast_ground_hag(
     }
     started = time.perf_counter()
     try:
-        processed = int(pdal.Pipeline(json.dumps(pipeline_definition)).execute())
+        if pdal is None:
+            processed = _run_numpy_ground_hag(
+                input_las,
+                temporary_output,
+                cell_m=smrf_cell_m,
+                slope=smrf_slope,
+                threshold_m=smrf_threshold_m,
+                window_m=smrf_window_m,
+            )
+        else:
+            processed = int(pdal.Pipeline(json.dumps(pipeline_definition)).execute())
         os.replace(temporary_output, output_las)
         result = _inspect_fast_ground_output(
             input_las=input_las,
@@ -287,13 +299,15 @@ def run_fast_ground_hag(
             parameters=parameters,
             config_digest=config_digest,
             elapsed_seconds=time.perf_counter() - started,
+            algorithm_name=algorithm_name,
+            hag_algorithm_name=hag_algorithm_name,
         )
     except Exception as exc:
         temporary_output.unlink(missing_ok=True)
         raise FastResearchError(f"FAST_GROUND_FAILED: {exc}") from exc
     if processed != result.output_point_count:
         raise FastResearchError(
-            "FAST_GROUND_FAILED: PDAL point count does not match written output"
+            "FAST_GROUND_FAILED: backend point count does not match written output"
         )
     _write_json_atomic(result_path, result.to_dict())
     return "PASS", result
@@ -664,6 +678,83 @@ def prepare_w1_reuse_snapshot(
     return "PASS", files
 
 
+def _run_numpy_ground_hag(
+    input_las: Path,
+    output_las: Path,
+    *,
+    cell_m: float,
+    slope: float,
+    threshold_m: float,
+    window_m: float,
+) -> int:
+    """Offline bounded ground/HAG fallback that preserves every LAS row.
+
+    The fallback works on the already voxel-reduced Ground workset, builds a
+    robust local-minimum terrain grid, fills gaps by nearest valid terrain,
+    smooths it at the configured window scale, and performs one low-point
+    refinement.  It is intentionally labelled non-certified in the result.
+    """
+
+    from scipy import ndimage
+
+    cloud = laspy.read(input_las)
+    count = len(cloud.points)
+    if count <= 0:
+        raise FastResearchError("FAST_GROUND_INPUT_EMPTY")
+    x = np.asarray(cloud.x, dtype=np.float64)
+    y = np.asarray(cloud.y, dtype=np.float64)
+    z = np.asarray(cloud.z, dtype=np.float64)
+    if not np.isfinite(np.column_stack((x, y, z))).all():
+        raise FastResearchError("FAST_GROUND_INPUT_NONFINITE")
+
+    xmin, ymin = float(x.min()), float(y.min())
+    width, height = max(float(x.max()) - xmin, 1e-6), max(float(y.max()) - ymin, 1e-6)
+    resolution = max(0.5, min(float(cell_m) / 4.0, 2.0))
+    maximum_grid_cells = 4_000_000
+    resolution = max(resolution, math.sqrt(width * height / maximum_grid_cells))
+    nx = max(1, int(math.ceil(width / resolution)) + 1)
+    ny = max(1, int(math.ceil(height / resolution)) + 1)
+    ix = np.clip(((x - xmin) / resolution).astype(np.int64), 0, nx - 1)
+    iy = np.clip(((y - ymin) / resolution).astype(np.int64), 0, ny - 1)
+
+    def terrain_from_rows(mask: np.ndarray, filter_size: int) -> np.ndarray:
+        grid = np.full(ny * nx, np.inf, dtype=np.float64)
+        flat = iy[mask] * nx + ix[mask]
+        np.minimum.at(grid, flat, z[mask])
+        grid = grid.reshape(ny, nx)
+        valid = np.isfinite(grid)
+        if not np.any(valid):
+            raise FastResearchError("FAST_GROUND_FALLBACK_NO_TERRAIN")
+        nearest = ndimage.distance_transform_edt(
+            ~valid, return_distances=False, return_indices=True
+        )
+        filled = grid[tuple(nearest)]
+        return ndimage.median_filter(filled, size=filter_size, mode="nearest")
+
+    filter_size = max(3, min(31, int(round(float(window_m) / resolution))))
+    if filter_size % 2 == 0:
+        filter_size += 1
+    initial_surface = terrain_from_rows(np.ones(count, dtype=bool), filter_size)
+    initial_hag = np.maximum(z - initial_surface[iy, ix], 0.0)
+    tolerance = max(float(threshold_m), 0.05) + max(float(slope), 0.0) * resolution
+    low = initial_hag <= tolerance
+    if int(np.count_nonzero(low)) < max(3, int(0.001 * count)):
+        low = initial_hag <= max(tolerance, float(np.quantile(initial_hag, 0.05)))
+    refined_surface = terrain_from_rows(low, max(3, filter_size // 2 * 2 + 1))
+    hag = np.maximum(z - refined_surface[iy, ix], 0.0).astype(np.float32)
+    ground = hag <= tolerance
+
+    dimensions = set(cloud.point_format.extra_dimension_names)
+    if "HeightAboveGround" not in dimensions:
+        cloud.add_extra_dim(laspy.ExtraBytesParams(name="HeightAboveGround", type=np.float32))
+    classification = np.asarray(cloud.classification, dtype=np.uint8).copy()
+    classification[ground] = 2
+    cloud.classification = classification
+    cloud["HeightAboveGround"] = hag
+    cloud.write(output_las)
+    return count
+
+
 def _inspect_fast_ground_output(
     *,
     input_las: Path,
@@ -672,6 +763,8 @@ def _inspect_fast_ground_output(
     parameters: dict[str, Any],
     config_digest: str,
     elapsed_seconds: float,
+    algorithm_name: str = FAST_GROUND_ALGORITHM,
+    hag_algorithm_name: str = FAST_HAG_ALGORITHM,
 ) -> FastGroundResult:
     source_xyz_digest = hashlib.sha256()
     output_xyz_digest = hashlib.sha256()
@@ -716,8 +809,8 @@ def _inspect_fast_ground_output(
         source_las_sha256=source_sha,
         output_las_path=str(output_las),
         output_las_sha256=sha256_file(output_las),
-        algorithm_name=FAST_GROUND_ALGORITHM,
-        hag_algorithm_name=FAST_HAG_ALGORITHM,
+        algorithm_name=algorithm_name,
+        hag_algorithm_name=hag_algorithm_name,
         parameters=parameters,
         config_digest=config_digest,
         source_point_count=source_count,

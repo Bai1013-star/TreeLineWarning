@@ -362,6 +362,7 @@ class TemporalPredictor:
         self.model_path = resolve_temporal_model_path(model_path)
         try:
             self.model, metadata = load_temporal_model(self.model_path)
+            self.metadata = dict(metadata)
             self.mean = np.asarray(metadata["normalization"]["mean"], dtype=np.float32)
             self.std = np.asarray(metadata["normalization"]["std"], dtype=np.float32)
             self.species_map = dict(metadata["species_map"])

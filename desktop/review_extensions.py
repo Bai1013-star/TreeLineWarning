@@ -12,9 +12,10 @@ from __future__ import annotations
 from functools import wraps
 from typing import Any
 
+from algorithms.vegetation.tree_wire_clearance import TreeWireClearanceError
+
 from core.stage_b.danger_points import (
     build_clearance_evidence_display,
-    build_danger_point_display,
     persist_final_danger_points,
 )
 from core.stage_b.measurement_fields import dbh_fields
@@ -74,9 +75,6 @@ def _apply_risk_tree_colors(
 def _result_matches_editor_revision(editor: Any, result: Any) -> bool:
     """Return whether published final membership matches current edit revision."""
 
-    if getattr(editor, "_final_membership_disk_mismatch", False):
-        return False
-
     operation_count = (
         len(editor.session.operations)
         if editor is not None and getattr(editor, "session", None) is not None
@@ -84,6 +82,11 @@ def _result_matches_editor_revision(editor: Any, result: Any) -> bool:
     )
     reconciled = getattr(result, "global_reconciled", None)
     diagnostics = getattr(reconciled, "diagnostics", {}) if reconciled is not None else {}
+    protected = getattr(getattr(editor, 'session', None), 'protected_original_index', ())
+    if len(protected):
+        from core.stage_b.dbh_evidence import array_digest
+        if diagnostics.get('protected_infrastructure_index_sha256') != array_digest(protected):
+            return False
     post_editor = (
         isinstance(diagnostics, dict)
         and diagnostics.get("editor_schema") == "treeline-stage-b-batch-editor-v1"
@@ -91,30 +94,7 @@ def _result_matches_editor_revision(editor: Any, result: Any) -> bool:
     if not post_editor:
         return operation_count == 0
     published_count = diagnostics.get("editor_operation_count")
-    if type(published_count) is not int or published_count != operation_count:
-        return False
-    if editor is None or getattr(editor, "session", None) is None:
-        return False
-    published_digest = diagnostics.get("editor_journal_digest")
-    result_digest = (
-        (getattr(result, "batch_diagnostics", {}) or {})
-        .get("editor_journal_digest")
-    )
-    legacy_digest = getattr(editor, "_legacy_published_journal_digest", None)
-    if published_digest is None:
-        if legacy_digest is None:
-            return True  # Lightweight legacy/test results predate this marker.
-        from core.stage_b.final_generation import editor_journal_digest
-
-        return legacy_digest == editor_journal_digest(editor.session.operations)
-    from core.stage_b.final_generation import editor_journal_digest
-
-    current_digest = editor_journal_digest(editor.session.operations)
-    return published_digest == current_digest and (
-        result_digest is None or result_digest == current_digest
-    ) and (
-        result_digest is not None or legacy_digest is None or legacy_digest == current_digest
-    )
+    return type(published_count) is int and published_count == operation_count
 
 
 def _persist_optional_danger_sidecar(project_root: Any, result: Any) -> None:
@@ -194,7 +174,7 @@ def install_review_extensions() -> None:
             min(20_000, int(display_budget) // 2),
         )
 
-        if result is None or not _result_matches_editor_revision(editor, result):
+        if result is None:
             display["danger_points"] = _stale_layer("STALE_AFTER_TREE_EDIT")
             display["clearance_evidence"] = {
                 "records": [],
@@ -204,16 +184,38 @@ def install_review_extensions() -> None:
         else:
             if persist_display_evidence:
                 _persist_optional_danger_sidecar(self.project_root, result)
-            display["danger_points"] = build_danger_point_display(
-                self.project_root,
-                result,
-                visible_tree_ids=visible_tree_ids,
-                display_budget=budget,
-            )
-            display["clearance_evidence"] = build_clearance_evidence_display(
-                result,
-                visible_tree_ids=visible_tree_ids,
-            )
+            from desktop.threshold_danger import build_threshold_danger_display
+            cache = getattr(self, "_threshold_danger_cache", None)
+            if cache is None:
+                cache = self._threshold_danger_cache = {}
+            try:
+                reconciled_override = None
+                if editor is not None and not _result_matches_editor_revision(editor, result):
+                    revision_key = self._editor_revision_key(editor)
+                    current = getattr(self, "_threshold_editor_reconciled_cache", None)
+                    if current is None or current[0] != revision_key:
+                        current = (revision_key, editor.final_reconciled())
+                        self._threshold_editor_reconciled_cache = current
+                    reconciled_override = current[1]
+                display["danger_points"] = build_threshold_danger_display(
+                    result, visible_tree_ids=visible_tree_ids,
+                    display_budget=budget, cache=cache,
+                    reconciled_override=reconciled_override,
+                )
+            except (ValueError, TypeError, KeyError, IndexError, TreeWireClearanceError) as exc:
+                display["danger_points"] = _stale_layer("THRESHOLD_GEOMETRY_UNAVAILABLE")
+                display["danger_points"]["reason"] = str(exc)
+            if editor is not None and not _result_matches_editor_revision(editor, result):
+                display["clearance_evidence"] = {
+                    "records": [],
+                    "record_count": 0,
+                    "authority": "STALE_AFTER_TREE_EDIT",
+                }
+            else:
+                display["clearance_evidence"] = build_clearance_evidence_display(
+                    result,
+                    visible_tree_ids=visible_tree_ids,
+                )
             _apply_risk_tree_colors(display, display["clearance_evidence"])
         return display
 
@@ -257,31 +259,20 @@ def install_review_extensions() -> None:
     def final_projection_with_metrics(
         self: Any, *args: Any, **kwargs: Any
     ) -> dict[str, Any]:
-        include_metrics = bool(kwargs.get("include_metrics", True)) and not bool(
-            getattr(self, "_skip_final_projection_metrics", False)
-        )
         projection = original_final_projection(self, *args, **kwargs)
-        if not include_metrics:
-            projection.setdefault("metadata", {})["tree_metrics_source"] = (
-                "FINAL_EXPORT_CACHE_OR_BASIC_PROJECTION"
-            )
-            return projection
         editor = self._ensure_editor()
         if editor is None:
             return projection
         result = getattr(self, "_result", None) or getattr(editor, "result", None)
-        reconciled = getattr(result, "global_reconciled", None)
-        if (
-            result is not None
-            and _result_matches_editor_revision(editor, result)
-            and callable(getattr(editor, "final_reconciled", None))
-        ):
+        reconciled = None
+        if result is not None and callable(getattr(editor, "final_reconciled", None)):
+            # Measurements belong to the current exact editor membership, not
+            # only to the last published revision.  This keeps crown width,
+            # raw-lowest-point height and DBH available immediately after a
+            # merge/split/trim while formal report publication remains gated
+            # independently by current_finalized_gate().
             reconciled = editor.final_reconciled()
-        if (
-            result is None
-            or reconciled is None
-            or not _result_matches_editor_revision(editor, result)
-        ):
+        if result is None or reconciled is None:
             projection.setdefault("metadata", {})["tree_metrics_source"] = (
                 "STALE_AFTER_TREE_EDIT"
             )
@@ -289,7 +280,7 @@ def install_review_extensions() -> None:
         metrics = compute_stage_b_tree_metrics(
             result,
             reconciled,
-            self.project_root / "artifacts" / "Prediction_Input.xlsx",
+            self.project_root / "exports" / "Prediction_Input.xlsx",
             project_root=self.project_root,
         )
         persistent_to_metric = {
@@ -298,13 +289,11 @@ def install_review_extensions() -> None:
         }
         from core.stage_b.dbh_recovery import load_finalized_dbh
 
-        try:
-            recovered = load_finalized_dbh(self.project_root, result, reconciled)
-        except (AttributeError, KeyError, OSError, TypeError, ValueError):
-            # DBH enrichment is optional for legacy/test publications.  A
-            # missing run identifier must not make the authoritative editor
-            # projection unreadable; the DBH fields remain explicitly absent.
-            recovered = {}
+        recovered = (
+            load_finalized_dbh(self.project_root, result, reconciled)
+            if _result_matches_editor_revision(editor, result)
+            else {}
+        )
         dbh_by_persistent = {
             str(record.persistent_tree_id): recovered.get(int(record.global_tree_id))
             for record in reconciled.global_tree_records

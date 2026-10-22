@@ -1,0 +1,492 @@
+[
+  {
+    "chinese_name": "油松",
+    "scientific_name": "Pinus tabuliformis",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "华北落叶松",
+    "scientific_name": "Larix principis-rupprechtii",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "白杄",
+    "scientific_name": "Picea meyeri",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "青杄",
+    "scientific_name": "Picea wilsonii",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "侧柏",
+    "scientific_name": "Platycladus orientalis",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "圆柏",
+    "scientific_name": "Juniperus chinensis",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "白皮松",
+    "scientific_name": "Pinus bungeana",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "雪松",
+    "scientific_name": "Cedrus deodara",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "银杏",
+    "scientific_name": "Ginkgo biloba",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "毛白杨",
+    "scientific_name": "Populus tomentosa",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "河北杨",
+    "scientific_name": "Populus hopeiensis",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "山杨",
+    "scientific_name": "Populus davidiana",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "青杨",
+    "scientific_name": "Populus cathayana",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "小叶杨",
+    "scientific_name": "Populus simonii",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "旱柳",
+    "scientific_name": "Salix matsudana",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "垂柳",
+    "scientific_name": "Salix babylonica",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "胡桃",
+    "scientific_name": "Juglans regia",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "核桃楸",
+    "scientific_name": "Juglans mandshurica",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "白桦",
+    "scientific_name": "Betula platyphylla",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "鹅耳枥",
+    "scientific_name": "Carpinus turczaninowii",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "板栗",
+    "scientific_name": "Castanea mollissima",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "麻栎",
+    "scientific_name": "Quercus acutissima",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "栓皮栎",
+    "scientific_name": "Quercus variabilis",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "槲树",
+    "scientific_name": "Quercus dentata",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "槲栎",
+    "scientific_name": "Quercus aliena",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "辽东栎",
+    "scientific_name": "Quercus wutaishanica",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "蒙古栎",
+    "scientific_name": "Quercus mongolica",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "榆树",
+    "scientific_name": "Ulmus pumila",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "大果榆",
+    "scientific_name": "Ulmus macrocarpa",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "黑榆",
+    "scientific_name": "Ulmus davidiana",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "小叶朴",
+    "scientific_name": "Celtis bungeana",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "青檀",
+    "scientific_name": "Pteroceltis tatarinowii",
+    "category": "北京市主要林木"
+  },
+  {
+    "chinese_name": "桑树",
+    "scientific_name": "Morus alba",
+    "category": "北京常见树种"
+  },
+  {
+    "chinese_name": "构树",
+    "scientific_name": "Broussonetia papyrifera",
+    "category": "北京常见树种"
+  },
+  {
+    "chinese_name": "玉兰",
+    "scientific_name": "Magnolia denudata",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "二乔玉兰",
+    "scientific_name": "Magnolia soulangeana",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "悬铃木",
+    "scientific_name": "Platanus acerifolia",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "海棠",
+    "scientific_name": "Malus spectabilis",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "山荆子",
+    "scientific_name": "Malus baccata",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "山桃",
+    "scientific_name": "Prunus davidiana",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "桃",
+    "scientific_name": "Prunus persica",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "山杏",
+    "scientific_name": "Prunus sibirica",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "樱花",
+    "scientific_name": "Prunus serrulata",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "稠李",
+    "scientific_name": "Prunus padus",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "杜梨",
+    "scientific_name": "Pyrus betulifolia",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "秋子梨",
+    "scientific_name": "Pyrus ussuriensis",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "山楂",
+    "scientific_name": "Crataegus pinnatifida",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "花楸",
+    "scientific_name": "Sorbus pohuashanensis",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "刺槐",
+    "scientific_name": "Robinia pseudoacacia",
+    "category": "北京常见树种"
+  },
+  {
+    "chinese_name": "国槐",
+    "scientific_name": "Styphnolobium japonicum",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "皂荚",
+    "scientific_name": "Gleditsia sinensis",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "怀槐",
+    "scientific_name": "Maackia amurensis",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "臭椿",
+    "scientific_name": "Ailanthus altissima",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "香椿",
+    "scientific_name": "Toona sinensis",
+    "category": "北京常见树种"
+  },
+  {
+    "chinese_name": "黄栌",
+    "scientific_name": "Cotinus coggygria",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "火炬树",
+    "scientific_name": "Rhus typhina",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "元宝枫",
+    "scientific_name": "Acer truncatum",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "五角枫",
+    "scientific_name": "Acer pictum",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "茶条槭",
+    "scientific_name": "Acer ginnala",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "复叶槭",
+    "scientific_name": "Acer negundo",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "蒙椴",
+    "scientific_name": "Tilia mongolica",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "糠椴",
+    "scientific_name": "Tilia amurensis",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "栾树",
+    "scientific_name": "Koelreuteria paniculata",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "白蜡",
+    "scientific_name": "Fraxinus chinensis",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "水曲柳",
+    "scientific_name": "Fraxinus mandshurica",
+    "category": "北京常见树种"
+  },
+  {
+    "chinese_name": "大叶白蜡",
+    "scientific_name": "Fraxinus pennsylvanica",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "北京丁香",
+    "scientific_name": "Syringa pekinensis",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "紫丁香",
+    "scientific_name": "Syringa oblata",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "暴马丁香",
+    "scientific_name": "Syringa reticulata",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "连翘",
+    "scientific_name": "Forsythia suspensa",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "女贞",
+    "scientific_name": "Ligustrum lucidum",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "楸树",
+    "scientific_name": "Catalpa bungei",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "梓树",
+    "scientific_name": "Catalpa ovata",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "毛泡桐",
+    "scientific_name": "Paulownia tomentosa",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "柿树",
+    "scientific_name": "Diospyros kaki",
+    "category": "北京常见树种"
+  },
+  {
+    "chinese_name": "君迁子",
+    "scientific_name": "Diospyros lotus",
+    "category": "北京常见树种"
+  },
+  {
+    "chinese_name": "杜仲",
+    "scientific_name": "Eucommia ulmoides",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "枣",
+    "scientific_name": "Ziziphus jujuba",
+    "category": "北京常见树种"
+  },
+  {
+    "chinese_name": "沙枣",
+    "scientific_name": "Elaeagnus angustifolia",
+    "category": "北京常见树种"
+  },
+  {
+    "chinese_name": "沙棘",
+    "scientific_name": "Hippophae rhamnoides",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "大叶黄杨",
+    "scientific_name": "Euonymus japonicus",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "卫矛",
+    "scientific_name": "Euonymus alatus",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "丝棉木",
+    "scientific_name": "Euonymus maackii",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "紫叶小檗",
+    "scientific_name": "Berberis thunbergii",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "黄刺玫",
+    "scientific_name": "Rosa xanthina",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "月季",
+    "scientific_name": "Rosa chinensis",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "榆叶梅",
+    "scientific_name": "Prunus triloba",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "鸡麻",
+    "scientific_name": "Rhodotypos scandens",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "溲疏",
+    "scientific_name": "Deutzia scabra",
+    "category": "北京市主要林木"
+  },
+  {
+    "chinese_name": "山梅花",
+    "scientific_name": "Philadelphus pekinensis",
+    "category": "北京市主要林木"
+  },
+  {
+    "chinese_name": "木本香薷",
+    "scientific_name": "Elsholtzia stauntonii",
+    "category": "北京市主要林木"
+  },
+  {
+    "chinese_name": "金银木",
+    "scientific_name": "Lonicera maackii",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "柽柳",
+    "scientific_name": "Tamarix chinensis",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "紫珠",
+    "scientific_name": "Callicarpa bodinieri",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "流苏树",
+    "scientific_name": "Chionanthus retusus",
+    "category": "北京常见园林树种"
+  },
+  {
+    "chinese_name": "文冠果",
+    "scientific_name": "Xanthoceras sorbifolium",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "黄檗",
+    "scientific_name": "Phellodendron amurense",
+    "category": "北京乡土树种"
+  },
+  {
+    "chinese_name": "花椒",
+    "scientific_name": "Zanthoxylum bungeanum",
+    "category": "北京常见树种"
+  }
+]

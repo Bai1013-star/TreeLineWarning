@@ -5,15 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import multiprocessing
-import os
-import shutil
+import socket
 import sys
 import threading
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
-from uuid import uuid4
 
 from desktop.packaged_diagnostics import (
     PackagedPrerequisiteError,
@@ -24,8 +22,10 @@ from desktop.packaged_diagnostics import (
     require_webview2_prerequisites,
     write_json_exclusive,
 )
+from desktop.account import DesktopAccount
 from desktop.project_management import (
     create_empty_project,
+    create_empty_project_in_folder,
     describe_project,
     import_gis_file,
     import_pointcloud,
@@ -134,44 +134,178 @@ class BackendProcess:
         self.thread = None
 
 
+class WarningBackend:
+    """Run the Chinese risk-warning web module beside the processing backend."""
+
+    def __init__(
+        self,
+        project_root: Path,
+        repository_root: Path,
+        processing_backend: BackendProcess | None = None,
+    ) -> None:
+        self.project_root = project_root.resolve()
+        self.repository_root = repository_root.resolve()
+        self.processing_backend = processing_backend
+        self.server = None
+        self.thread: threading.Thread | None = None
+        self.socket: socket.socket | None = None
+
+    def start(self) -> str:
+        try:
+            import uvicorn
+
+            from api.prediction_api import create_app
+
+            runtime_root = self.project_root / "runtime" / "warning"
+            runtime_root.mkdir(parents=True, exist_ok=True)
+            models_root = self.repository_root / "models"
+            application = create_app(
+                database_path=runtime_root / "prediction_history.db",
+                temporal_model_path=models_root / "temporal_attention.npz",
+                species_growth_model_path=models_root / "species_growth.json",
+                training_output_dir=runtime_root / "training",
+                web_index_path=self.repository_root / "web" / "templates" / "index.html",
+            )
+            if self.processing_backend is not None:
+                from desktop.warning_bridge import register_warning_bridge
+
+                register_warning_bridge(
+                    application,
+                    processing_backend=self.processing_backend,
+                    project_root=self.project_root,
+                )
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.socket.bind(("127.0.0.1", 0))
+            self.socket.listen(128)
+            port = int(self.socket.getsockname()[1])
+            config = uvicorn.Config(
+                application,
+                host="127.0.0.1",
+                port=port,
+                log_level="warning",
+                access_log=False,
+            )
+            self.server = uvicorn.Server(config)
+            self.thread = threading.Thread(
+                target=self.server.run,
+                kwargs={"sockets": [self.socket]},
+                name="treeline-warning-http",
+                daemon=True,
+            )
+            self.thread.start()
+            return f"http://127.0.0.1:{port}/"
+        except (ImportError, OSError, RuntimeError) as exc:
+            self.stop()
+            raise RuntimeError(f"Warning backend failed to start: {exc}") from exc
+
+    def stop(self) -> None:
+        if self.server is not None:
+            self.server.should_exit = True
+        if self.thread is not None:
+            self.thread.join(timeout=5.0)
+        if self.socket is not None:
+            try:
+                self.socket.close()
+            except OSError:
+                pass
+        self.server = None
+        self.thread = None
+        self.socket = None
+
+
 class DesktopApi:
     """Native file dialogs plus narrow project lifecycle operations for the UI."""
 
     def __init__(self, backend: BackendProcess) -> None:
         self._backend = backend
+        repository = Path(getattr(backend, "repository_root", resource_root())).resolve()
+        self._account = DesktopAccount(repository)
         # pywebview recursively scans every public non-callable attribute on
         # ``js_api`` objects.  Keeping the native Window public makes the scan
         # descend into .NET objects and abort before any bridge function is
         # installed.  The leading underscore is therefore part of the bridge
         # contract, not merely an implementation style choice.
         self._window = None
-        self._last_export_dir: Path | None = None
 
-    @staticmethod
-    def _dialog_path(selected: Any) -> Path | None:
-        """pywebview returns a path string on some renderers and a sequence on others."""
-        if isinstance(selected, (list, tuple)):
-            selected = selected[0] if selected else None
-        if selected is None:
-            return None
-        if not isinstance(selected, (str, os.PathLike)):
-            raise ValueError("文件对话框返回了无效路径")
-        raw = os.fspath(selected)
-        return Path(raw) if isinstance(raw, str) and raw.strip() else None
+    def auth_status(self) -> dict:
+        """Return local session state without exposing a password hash."""
 
-    def _folder(self, title: str) -> str | None:
+        return self._account.status()
+
+    def login(self, username: str, password: str) -> dict:
+        return self._account.login(username, password)
+
+    def change_password(
+        self,
+        current_password: str,
+        new_password: str,
+        confirm_password: str,
+        new_username: str | None = None,
+        real_name: str | None = None,
+        phone: str | None = None,
+        avatar_data_url: str | None = None,
+    ) -> dict:
+        return self._account.change_password(
+            current_password,
+            new_password,
+            confirm_password,
+            new_username,
+            real_name,
+            phone,
+            avatar_data_url,
+        )
+
+    def setup_profile(self, real_name: str, phone: str, avatar_data_url: str) -> dict:
+        return self._account.setup_profile(real_name, phone, avatar_data_url)
+
+    def reset_password(
+        self,
+        username: str,
+        real_name: str,
+        phone: str,
+        avatar_data_url: str,
+        new_password: str,
+        confirm_password: str,
+    ) -> dict:
+        return self._account.reset_password(
+            username,
+            real_name,
+            phone,
+            avatar_data_url,
+            new_password,
+            confirm_password,
+        )
+
+    def logout(self) -> dict:
+        return self._account.logout()
+
+    def _projects_home(self) -> Path:
+        repository = Path(getattr(self._backend, "repository_root", resource_root())).resolve()
+        if repository.name == "程序文件":
+            root = repository.parent / "项目数据"
+        else:
+            root = repository / "项目数据"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _folder(self, title: str, *, directory: str = "") -> str | None:
         if self._window is None:
             return None
         import webview
 
         selected = self._window.create_file_dialog(
-            webview.FOLDER_DIALOG, directory="", allow_multiple=False
+            webview.FOLDER_DIALOG, directory=directory, allow_multiple=False
         )
-        path = self._dialog_path(selected)
-        return str(path) if path is not None else None
+        return str(selected[0]) if selected else None
 
     def choose_project_location(self) -> str | None:
         return self._folder("选择项目保存位置")
+
+    def default_project_location(self) -> str:
+        """Return the dedicated project library beside the installed program."""
+
+        return str(self._projects_home())
 
     def _configure_project(self, project_root: Path) -> dict[str, bool | str]:
         """Switch projects while keeping scientific projections off the native bridge."""
@@ -180,13 +314,19 @@ class DesktopApi:
         return {"ok": True, "project_root": str(resolved_root)}
 
     def choose_existing_project(self) -> dict | None:
-        selected = self._folder("打开 TreeLineWarning 项目")
+        selected = self._folder(
+            "打开 TreeLineWarning 项目", directory=str(self._projects_home())
+        )
         if not selected:
             return None
         return self._configure_project(Path(selected))
 
     def create_project(self, parent: str, project_name: str) -> dict:
         descriptor = create_empty_project(Path(parent), project_name)
+        return self._configure_project(Path(descriptor["root"]))
+
+    def create_project_in_folder(self, folder: str) -> dict:
+        descriptor = create_empty_project_in_folder(Path(folder))
         return self._configure_project(Path(descriptor["root"]))
 
     def import_point_cloud(self) -> dict | None:
@@ -200,10 +340,9 @@ class DesktopApi:
             allow_multiple=False,
             file_types=("Point cloud (*.las;*.laz)", "All files (*.*)"),
         )
-        path = self._dialog_path(selected)
-        if path is None:
+        if not selected:
             return None
-        descriptor = import_pointcloud(self._backend.project_root, path)
+        descriptor = import_pointcloud(self._backend.project_root, Path(selected[0]))
         return self._configure_project(Path(descriptor["root"]))
 
     def import_gis(self) -> dict | None:
@@ -220,69 +359,123 @@ class DesktopApi:
                 "All files (*.*)",
             ),
         )
-        path = self._dialog_path(selected)
-        if path is None:
+        if not selected:
             return None
-        descriptor = import_gis_file(self._backend.project_root, path)
+        descriptor = import_gis_file(self._backend.project_root, Path(selected[0]))
         return self._configure_project(Path(descriptor["root"]))
 
-    def _save_generated_file(
-        self,
-        source: Path,
-        *,
-        save_filename: str,
-        file_types: tuple[str, ...],
-    ) -> dict[str, Any]:
-        """Use WebView2's native save dialog, then publish with atomic replace."""
+    def _save_path(self, default_filename: str) -> Path | None:
+        """Open a real Windows Save As dialog for exported project data."""
 
         if self._window is None:
-            return {"ok": False, "cancelled": True}
+            return None
         import webview
 
-        initial_directory = self._last_export_dir or getattr(self._backend, "project_root", None)
+        safe_name = Path(str(default_filename)).name or "TreeLineWarning_export.xlsx"
+        suffix = Path(safe_name).suffix.lower()
+        labels = {
+            ".xlsx": "Excel workbook (*.xlsx)",
+            ".csv": "CSV (*.csv)",
+            ".tsv": "TSV (*.tsv)",
+            ".txt": "Text (*.txt)",
+            ".json": "JSON (*.json)",
+            ".html": "Work order HTML (*.html)",
+        }
         selected = self._window.create_file_dialog(
             webview.SAVE_DIALOG,
-            directory=str(initial_directory) if initial_directory is not None else "",
-            allow_multiple=False,
-            save_filename=save_filename,
-            file_types=file_types,
+            directory="",
+            save_filename=safe_name,
+            file_types=(labels.get(suffix, "All files (*.*)"), "All files (*.*)"),
         )
-        target = self._dialog_path(selected)
-        if target is None:
+        if not selected:
+            return None
+        value = selected[0] if isinstance(selected, (list, tuple)) else selected
+        path = Path(str(value))
+        if suffix and not path.suffix:
+            path = path.with_suffix(suffix)
+        return path
+
+    def save_export_file(self, default_filename: str, data_base64: str) -> dict:
+        """Save browser-generated bytes through a user-selected native path."""
+
+        import base64
+
+        path = self._save_path(default_filename)
+        if path is None:
             return {"ok": False, "cancelled": True}
-        expected_suffix = Path(save_filename).suffix
-        if expected_suffix and not target.suffix:
-            target = target.with_suffix(expected_suffix)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if source.resolve() != target.resolve():
-            temporary = target.with_name(target.name + "." + uuid4().hex + ".tmp")
-            try:
-                shutil.copyfile(source, temporary)
-                os.replace(temporary, target)
-            finally:
-                temporary.unlink(missing_ok=True)
-        self._last_export_dir = target.parent.resolve()
-        return {"ok": True, "path": str(target.resolve()), "bytes": target.stat().st_size}
+        payload = str(data_base64)
+        if "," in payload:
+            payload = payload.split(",", 1)[1]
+        data = base64.b64decode(payload, validate=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return {"ok": True, "path": str(path), "bytes": len(data)}
 
-    def export_excel(self) -> dict[str, Any]:
-        if self._backend.local_app is None:
-            raise RuntimeError("当前项目后端尚未就绪")
-        source = self._backend.local_app.workflow.export_delivery()
-        return self._save_generated_file(
-            source,
-            save_filename=source.name,
-            file_types=("Excel workbook (*.xlsx)",),
-        )
+    def save_export_url(self, default_filename: str, url: str) -> dict:
+        """Save a local processing-server export through Windows Save As."""
 
-    def export_html(self) -> dict[str, Any]:
-        if self._backend.local_app is None:
-            raise RuntimeError("当前项目后端尚未就绪")
-        source = self._backend.local_app.workflow.export_html_report()
-        return self._save_generated_file(
-            source,
-            save_filename="TreeLineWarning_Current_Report.html",
-            file_types=("HTML report (*.html)",),
-        )
+        from urllib.parse import urlparse
+        from urllib.request import urlopen
+
+        parsed = urlparse(str(url))
+        if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
+            "127.0.0.1",
+            "localhost",
+        }:
+            raise ValueError("EXPORT_URL_MUST_BE_LOCAL")
+        path = self._save_path(default_filename)
+        if path is None:
+            return {"ok": False, "cancelled": True}
+        with urlopen(str(url), timeout=120.0) as response:  # noqa: S310 - localhost only
+            data = response.read()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return {"ok": True, "path": str(path), "bytes": len(data)}
+
+    def save_table_export(
+        self,
+        default_filename: str,
+        export_format: str,
+        columns: list,
+        rows: list,
+    ) -> dict:
+        """Write a validated result table in the operator-selected format."""
+
+        import csv
+        import json
+
+        fmt = str(export_format).lower()
+        if fmt not in {"xlsx", "csv", "tsv", "txt", "json"}:
+            raise ValueError("EXPORT_FORMAT_INVALID")
+        if len(columns) > 100 or len(rows) > 20_000:
+            raise ValueError("EXPORT_TABLE_TOO_LARGE")
+        path = self._save_path(default_filename)
+        if path is None:
+            return {"ok": False, "cancelled": True}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        normalized = [["" if value is None else value for value in row] for row in rows]
+        if fmt == "xlsx":
+            from openpyxl import Workbook
+
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "预测结果"
+            sheet.append([str(value) for value in columns])
+            for row in normalized:
+                sheet.append(row)
+            sheet.freeze_panes = "A2"
+            sheet.auto_filter.ref = sheet.dimensions
+            workbook.save(path)
+        elif fmt == "json":
+            payload = [dict(zip(columns, row, strict=False)) for row in normalized]
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), "utf-8-sig")
+        else:
+            delimiter = "\t" if fmt in {"tsv", "txt"} else ","
+            with path.open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.writer(stream, delimiter=delimiter)
+                writer.writerow(columns)
+                writer.writerows(normalized)
+        return {"ok": True, "path": str(path), "rows": len(normalized)}
 
 
 def _write_diagnostic(path: Path | None, payload: dict) -> int:
@@ -382,7 +575,7 @@ def launch(
     desktop_home = False
     if project is None:
         desktop_home = True
-        home_parent = (Path.cwd() / "workspace").resolve()
+        home_parent = (Path.cwd() / "项目数据").resolve()
         home_parent.mkdir(parents=True, exist_ok=True)
         home_root = home_parent / "TreeLineWarning Desktop Home"
         if not (home_root / "stage-a-project.json").is_file():
@@ -409,9 +602,14 @@ def launch(
         desktop_home=desktop_home,
         ui_test_mode=ui_test_mode,
     )
+    warning_backend = WarningBackend(project.resolve(), resource_root(), backend)
     try:
-        url = backend.start()
+        processing_url = backend.start()
+        warning_url = warning_backend.start()
+        url = processing_url + "?warning_url=" + urllib.parse.quote(warning_url, safe="")
     except RuntimeError as exc:
+        warning_backend.stop()
+        backend.stop()
         _diagnostic_failure(diagnostic_output, mode="gui-launch", error=exc)
         _show_gui_error(str(exc))
         print(str(exc), file=sys.stderr)
@@ -419,7 +617,7 @@ def launch(
     try:
         desktop_api = DesktopApi(backend)
         window = webview.create_window(
-            "TreeLineWarning",
+            "TreeLineWarning · 2026/10/22",
             # Each backend owns its landing route: the Stage-A desktop server
             # maps ``/`` to the dashboard, while a legacy project server maps
             # ``/`` to the full-source project viewer.
@@ -442,6 +640,8 @@ def launch(
                 "schema": "treeline-desktop-gui-launch-v1",
                 "status": "PASS",
                 "backend_url": url,
+                "processing_backend_url": processing_url,
+                "warning_backend_url": warning_url,
                 "project_root": str(backend.project_root),
                 "resource_root": str(resource_root()),
                 "webview2_prerequisites": prerequisite_report,
@@ -472,6 +672,7 @@ def launch(
         print(f"Desktop window failed to open: {exc}", file=sys.stderr)
         return 4
     finally:
+        warning_backend.stop()
         backend.stop()
 
 

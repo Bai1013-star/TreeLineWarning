@@ -48,16 +48,6 @@ def dbh_fields(metric: Any, recovered: dict[str, Any] | None) -> dict[str, Any]:
         return publication_fields(recovered)
     if metric is None:
         return publication_fields(unavailable("GROUND_CONTEXT_UNAVAILABLE"))
-    evidence = metric.dbh
-    row = unavailable("BREAST_HEIGHT_" + evidence.dbh_quality)
-    row.update(
-        dbh_cm=None if evidence.dbh_m is None else float(evidence.dbh_m) * 100.0,
-        dbh_quality=evidence.dbh_quality,
-        dbh_point_count=evidence.stem_point_count,
-        dbh_source="BREAST_HEIGHT_1P30M_ROBUST_XY_WIDTH",
-    )
-    if evidence.dbh_m is not None:
-        row["dbh_method"] = "DIRECT_STEM"
-    fields = publication_fields(row)
-    fields["diameter_source"] = "BREAST_HEIGHT_1P30M_" + evidence.dbh_quality
-    return fields
+    # A processed-crown width is not the requested original LAS measurement.
+    # Do not silently republish that fallback while raw recovery is pending.
+    return publication_fields(unavailable("ORIGINAL_LAS_1P30_MEASUREMENT_REQUIRED"))

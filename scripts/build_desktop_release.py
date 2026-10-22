@@ -58,7 +58,6 @@ WEBVIEW2_RECEIPTS = (
 MAX_BUILD_TIMEOUT_SECONDS = 7_200.0
 BUILD_SCHEMA = "treeline-desktop-release-receipt-v1"
 MANIFEST_SCHEMA = "treeline-desktop-release-file-manifest-v1"
-FINAL_PACKAGE_NAME = "TreeLineWarning-Engineering-Release-2026-Final"
 
 
 class ReleaseError(RuntimeError):
@@ -187,80 +186,36 @@ def _git_capture(args: Sequence[str], *, binary: bool = False) -> bytes | str:
 
 
 def tracked_source_digest() -> dict[str, Any]:
-    """Hash tracked bytes and untracked files that PyInstaller can package.
-
-    The existing tracked fields retain their meaning.  The build-input digest
-    also covers new local modules and viewer assets before they enter Git's
-    index, so the before/after receipt detects edits to those build inputs.
-    """
+    """Capture HEAD and a deterministic digest of tracked worktree bytes."""
 
     head = str(_git_capture(["rev-parse", "HEAD"])).strip()
     raw_paths = _git_capture(["ls-files", "-z"], binary=True)
     assert isinstance(raw_paths, bytes)
     digest = hashlib.sha256()
-    build_digest = hashlib.sha256()
     file_count = 0
-    tracked = {raw_path.replace(b"\\", b"/") for raw_path in raw_paths.split(b"\0") if raw_path}
-
-    def add_file(hasher: Any, raw_path: bytes, path: Path) -> None:
-        normalized = raw_path.replace(b"\\", b"/")
-        size = path.stat().st_size
-        hasher.update(b"PATH\0")
-        hasher.update(len(normalized).to_bytes(8, "big"))
-        hasher.update(normalized)
-        hasher.update(b"SIZE\0")
-        hasher.update(size.to_bytes(8, "big"))
-        hasher.update(b"DATA\0")
-        with path.open("rb") as stream:
-            for block in iter(lambda: stream.read(1024 * 1024), b""):
-                hasher.update(block)
-
-    for raw_path in sorted(tracked):
+    for raw_path in raw_paths.split(b"\0"):
+        if not raw_path:
+            continue
         relative = os.fsdecode(raw_path)
         path = REPO_ROOT / Path(relative)
         if not path.is_file():
             raise ReleaseError(f"tracked source file is unavailable: {relative}")
-        add_file(digest, raw_path, path)
-        add_file(build_digest, raw_path, path)
+        normalized = raw_path.replace(b"\\", b"/")
+        size = path.stat().st_size
+        digest.update(b"PATH\0")
+        digest.update(len(normalized).to_bytes(8, "big"))
+        digest.update(normalized)
+        digest.update(b"SIZE\0")
+        digest.update(size.to_bytes(8, "big"))
+        digest.update(b"DATA\0")
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
         file_count += 1
-
-    # desktop_build.spec collects all algorithms/core modules and the complete
-    # giro3d viewer directory; desktop/scripts modules are imported or hidden.
-    # Only these small source trees are scanned.  Build outputs and native
-    # runtimes elsewhere in the repository are deliberately outside the walk.
-    untracked: set[bytes] = set()
-    for name in ("algorithms", "core", "desktop", "scripts", "viewer_poc/giro3d"):
-        directory = REPO_ROOT / name
-        if not directory.is_dir():
-            continue
-        for current, dirs, files in os.walk(directory, followlinks=False):
-            dirs[:] = sorted(
-                item for item in dirs if item not in {"__pycache__", ".pytest_cache"}
-            )
-            for filename in files:
-                path = Path(current) / filename
-                if path.is_symlink() or not path.is_file():
-                    continue
-                if name != "viewer_poc/giro3d" and path.suffix != ".py":
-                    continue
-                relative = path.relative_to(REPO_ROOT)
-                raw_path = os.fsencode(relative.as_posix())
-                if raw_path not in tracked:
-                    untracked.add(raw_path)
-    spec_path = REPO_ROOT / "desktop_build.spec"
-    if spec_path.is_file() and not spec_path.is_symlink():
-        spec_relative = b"desktop_build.spec"
-        if spec_relative not in tracked:
-            untracked.add(spec_relative)
-    for raw_path in sorted(untracked):
-        path = REPO_ROOT / Path(os.fsdecode(raw_path))
-        add_file(build_digest, raw_path, path)
     return {
         "head": head,
         "tracked_source_sha256": digest.hexdigest(),
         "tracked_file_count": file_count,
-        "build_input_sha256": build_digest.hexdigest(),
-        "untracked_build_input_count": len(untracked),
     }
 
 
@@ -590,7 +545,7 @@ def _render_version(
     proj_data: ProjData | None,
 ) -> str:
     lines = [
-        "TreeLineWarning Engineering Release 2026 Final",
+        "TreeLineWarning Windows release candidate",
         f"version = {version}",
         f"status = {status}",
         "baseline = Survey Core",
@@ -724,7 +679,6 @@ def _run_pyinstaller(options: ReleaseOptions, work_root: Path) -> dict[str, Any]
     env = os.environ.copy()
     env["TREELINE_PDAL_RUNTIME_ENV"] = str(options.native_runtime)
     env["TREELINE_COMPAT_DLL_ROOT"] = str(options.native_runtime / "compat")
-    env["TREELINE_PACKAGE_DIR_NAME"] = FINAL_PACKAGE_NAME
     if options.proj_data_root is not None:
         env["TREELINE_PDAL_PROJ_DATA_ROOT"] = str(options.proj_data_root)
     for name in (
@@ -817,7 +771,6 @@ def _run_pyinstaller(options: ReleaseOptions, work_root: Path) -> dict[str, Any]
         "environment": {
             "TREELINE_PDAL_RUNTIME_ENV": str(options.native_runtime),
             "TREELINE_COMPAT_DLL_ROOT": str(options.native_runtime / "compat"),
-            "TREELINE_PACKAGE_DIR_NAME": FINAL_PACKAGE_NAME,
             "TREELINE_PDAL_PROJ_DATA_ROOT": (
                 str(options.proj_data_root) if options.proj_data_root is not None else None
             ),
@@ -855,33 +808,6 @@ def _copy_package_metadata(
 ) -> dict[str, Any]:
     package_root.mkdir(parents=True, exist_ok=True)
     _copy_exact(options.guide_path, package_root / options.guide_path.name)
-    (package_root / "README.md").write_text(
-        "# TreeLineWarning Engineering Release 2026 Final\n\n"
-        "## 软件介绍\n\nTreeLineWarning 是 Windows x64 输电线路点云分析与单木复核工具。"
-        "本版本支持 LAS/LAZ 导入、AUTO 分析、3D 复核、DELETE/MERGE/UNDO，"
-        "以及 XLSX/HTML 最终报告导出。\n\n"
-        "## 系统要求\n\n- Windows 10/11 x64\n- 建议 16 GB 以上内存和足够的本地磁盘空间\n"
-        "- Microsoft Edge WebView2 Runtime；包内附离线安装程序\n"
-        "- GPU 可选，CPU fallback 为权威路径\n\n"
-        "## 安装运行方式\n\n完整解压 ZIP 到可写本地目录，保留 `_internal` 和所有相邻文件，"
-        "双击 `TreeLineWarning.exe`。"
-        "无需安装 Python、Conda 或 PDAL。\n\n"
-        "## LAS/LAZ 导入方法\n\n新建或打开项目，点击“导入点云”，选择 `.las` 或 `.laz`；"
-        "确认单位、杆塔顺序与档距。"
-        "中文路径和含空格路径受支持。\n\n"
-        "## 分析流程\n\n选择档距并执行 AUTO 分析；打开 3D 单木复核，使用 DELETE、MERGE、UNDO；"
-        "确认后点击“完成复核”生成 final state。原始分割保持只读，修改仅记录在 edits 层。\n\n"
-        "## 导出方法\n\n定稿后点击“导出树木风险结果”保存 `树木风险结果.xlsx`，"
-        "或点击“导出 HTML 报告”。Excel 与示例 CSV 一样严格为 23 列，每棵当前保留树一行。"
-        "胸径单元格批注会说明本树测量方法；证据不足时留空并注明原因。"
-        "两个导出均来自同一 final projection。\n\n"
-        "## 已知限制\n\n- 首次大型点云分析可能较慢，速度取决于磁盘与内存。\n"
-        "- GPU 仅用于经认证的净空候选筛选；精确距离判定仍由 CPU 完成。\n"
-        "- 编辑后必须重新完成复核才能导出，以防旧报告泄漏。\n"
-        "- 若系统缺少 WebView2，请由用户或 IT 手动运行包内离线安装程序。\n",
-        encoding="utf-8",
-        newline="\n",
-    )
     (package_root / "QUICK_START.md").write_text(
         "# TreeLineWarning Quick Start\n\n"
         "1. Extract the entire folder to a writable local Windows x64 directory.\n"
@@ -891,10 +817,9 @@ def _copy_package_metadata(
         "   ask IT to run webview2_offline_prerequisite/offline_verified/"
         "MicrosoftEdgeWebView2RuntimeInstallerX64.exe manually. No automatic install.\n"
         "5. New/Open Project > import LAS/LAZ > confirm units > towers/spans >\n"
-        "   analyze (AUTO or SERIAL) > Tree Review > Finalize > current report/"
-        "tree risk results XLSX.\n"
+        "   analyze (AUTO or SERIAL) > Tree Review > Finalize > current report/export.\n"
         "6. Close and restart, reopen the project, and verify finalized state/export.\n\n"
-        "Parallel is unavailable in this release.\n"
+        "Independent clean-PC acceptance is PENDING. Parallel is unavailable.\n"
         "Local future preview is experimental, not a validated forecast or safety result.\n"
         "See WINDOWS_USER_GUIDE.zh-CN.md and THIRD_PARTY_NOTICES.txt.\n",
         encoding="utf-8",
@@ -902,25 +827,6 @@ def _copy_package_metadata(
     )
     _copy_exact(options.notice_text, package_root / "THIRD_PARTY_NOTICES.txt")
     _copy_exact(options.notice_json, package_root / "THIRD_PARTY_NOTICES.json")
-    _copy_exact(options.notice_text, package_root / "licenses" / "THIRD_PARTY_NOTICES.txt")
-    _copy_exact(options.notice_json, package_root / "licenses" / "THIRD_PARTY_NOTICES.json")
-    (package_root / "examples" / "README.md").parent.mkdir(parents=True, exist_ok=True)
-    (package_root / "examples" / "README.md").write_text(
-        "# Examples\n\nUse your own LAS/LAZ data. This directory is intentionally "
-        "data-free so the release stays compact.\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    (package_root / "configs" / "default.json").parent.mkdir(parents=True, exist_ok=True)
-    _write_json(
-        package_root / "configs" / "default.json",
-        {
-            "schema": "treeline-engineering-release-config-v1",
-            "execution_mode": "AUTO",
-            "acceleration_mode": "AUTO",
-            "scientific_configuration": "BUILT_IN_FROZEN_DEFAULTS",
-        },
-    )
     (package_root / "VERSION.txt").write_text(
         _render_version(
             version=version,
@@ -1019,16 +925,9 @@ def run_release(options: ReleaseOptions) -> dict[str, Any]:
         "timed_out": False,
         "elapsed_seconds": 0.0,
     }
-    pyinstaller_package_root = options.dist_root / "TreeLineWarning"
-    package_root = options.dist_root / FINAL_PACKAGE_NAME
+    package_root = options.dist_root / "TreeLineWarning"
     if options.execute:
         process = _run_pyinstaller(options, options.work_root)
-        if (
-            process.get("returncode") == 0
-            and pyinstaller_package_root.is_dir()
-            and not package_root.exists()
-        ):
-            pyinstaller_package_root.replace(package_root)
         source_end = tracked_source_digest()
         build_ok = (
             process.get("returncode") == 0

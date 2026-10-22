@@ -42,6 +42,15 @@ DBH_FIELDS = (
     "dbh_source",
     "dbh_model_version",
     "dbh_uncertainty_cm",
+    "dbh_ground_z_absolute_m",
+    "dbh_measurement_z_absolute_m",
+    "dbh_height_reference",
+    "dbh_ground_reference_method",
+    "dbh_ground_reference_point_count",
+    "dbh_site_slope_deg",
+    "dbh_common_height_applied",
+    "dbh_measurement_height_policy",
+    "dbh_calibration_tree_id",
 )
 
 
@@ -57,30 +66,29 @@ def unavailable(reason: str) -> dict[str, Any]:
         "dbh_source": VERSION,
         "dbh_model_version": None,
         "dbh_uncertainty_cm": None,
+        "dbh_ground_z_absolute_m": None,
+        "dbh_measurement_z_absolute_m": None,
+        "dbh_height_reference": None,
+        "dbh_ground_reference_method": None,
+        "dbh_ground_reference_point_count": 0,
     }
 
 
 def publication_fields(row: dict[str, Any]) -> dict[str, Any]:
     fields = {key: row.get(key) for key in DBH_FIELDS}
+    measurement = row.get("dbh_section_measurement", {})
+    fields["dbh_measurement_height_m"] = measurement.get("target_hag_m")
+    bounds = measurement.get("section_bounds_hag_m") or [None, None]
+    fields["dbh_section_lower_hag_m"], fields["dbh_section_upper_hag_m"] = bounds
+    fields["dbh_coordinate_source"] = (
+        "DIRECT_ORIGINAL_LAS_INTEGER_COORDINATES"
+        if measurement.get("diameter_derived_from") in {
+            "ACTUAL_RAW_1P30_SLAB_CIRCLE_NOT_INTERPOLATED",
+            "DIRECT_ORIGINAL_LAS_TREE_MEMBER_SECTION_AT_1P30",
+        }
+        else None
+    )
     fields.update(diameter_cm=row.get("dbh_cm"), diameter_source=row.get("dbh_method"))
-    reference = row.get("dbh_reference_estimate")
-    fields["dbh_pre_reference_failure_reason"] = row.get("dbh_pre_reference_failure_reason")
-    fields["dbh_reference_estimate"] = reference
-    fields["dbh_reference_estimate_json"] = (
-        json.dumps(reference, ensure_ascii=False, sort_keys=True) if reference is not None else None
-    )
-    for key in (
-        "basis", "estimator", "value_cm", "count", "mean_cm", "median_cm",
-        "min_cm", "max_cm", "std_cm",
-    ):
-        source_key = key if key in {"basis", "estimator", "value_cm"} else "reference_" + key
-        fields["dbh_reference_" + key] = reference.get(source_key) if reference else None
-    fields["dbh_reference_tree_ids"] = (
-        ",".join(str(value) for value in reference["reference_tree_ids"]) if reference else None
-    )
-    fields["dbh_reference_tree_persistent_ids"] = (
-        ",".join(reference["reference_tree_persistent_ids"]) if reference else None
-    )
     return fields
 
 
@@ -96,13 +104,31 @@ def _context(root: Path, result: Any) -> tuple[Path, dict[str, Any], np.ndarray,
     from core.stage_b.tree_metrics import _preparation_candidates, _valid_preparation_context
 
     contexts = []
+    expected_count = getattr(getattr(result, "telemetry", None), "source_point_count", None)
     for path in _preparation_candidates(root, result):
         value = _valid_preparation_context(
-            root, path, expected_point_count=result.telemetry.source_point_count
+            root, path, expected_point_count=expected_count
         )
         if value is not None:
             manifest = read_json(path)
-            strong_source(manifest.get("ground_preparation", {}).get("source_identity", {}))
+            # Builds before the strong-identity contract persisted the verified
+            # point count at the preparation root but left the duplicate field
+            # inside ground_preparation.source_identity as null.  The validated
+            # preparation above already proves that root count matches the
+            # current run telemetry.  Enrich only the in-memory copy so an old,
+            # otherwise valid project can still protect its poles/wires and be
+            # finalized; do not rewrite or weaken the hash-bound artifact.
+            ground_preparation = dict(manifest.get("ground_preparation") or {})
+            identity = dict(ground_preparation.get("source_identity") or {})
+            if identity.get("source_point_count") is None:
+                legacy_count = manifest.get("source_point_count")
+                if type(legacy_count) is not int or legacy_count <= 0:
+                    legacy_count = expected_count
+                identity["source_point_count"] = legacy_count
+            strong_source(identity)
+            ground_preparation["source_identity"] = identity
+            manifest = dict(manifest)
+            manifest["ground_preparation"] = ground_preparation
             contexts.append((path, manifest, *value))
     if len(contexts) != 1:
         raise ValueError("DBH_SOURCE_PREPARATION_AMBIGUOUS_OR_MISSING")
@@ -120,7 +146,7 @@ def _binding(root: Path, result: Any, reconciled: Any) -> dict[str, Any]:
         "status": "DONE",
     } or states == {"FINALIZED"}
     if (
-        not finalized
+        (not finalized and not (batch.get('status') == 'COMPLETE' and states == {'AUTO_ANALYZED'}))
         or batch.get("analysis_run_id") != result.analysis_run_id
         or batch.get("project_id") != result.project_id
     ):
@@ -137,15 +163,31 @@ def _binding(root: Path, result: Any, reconciled: Any) -> dict[str, Any]:
         if len(scans) != 1 or project["project_id"] != result.project_id:
             raise ValueError("DBH_CURRENT_PROJECT_SCAN_MISMATCH")
         identity = dict(scans[0]["source_identity"])
-        identity["source_point_count"] = scans[0]["capability_report"]["details"]["point_count"]
+        details = (scans[0].get("capability_report") or {}).get("details") or {}
+        point_count = details.get("point_count")
+        if type(point_count) is not int or point_count <= 0:
+            point_count = getattr(getattr(result, "telemetry", None), "source_point_count", None)
+        identity["source_point_count"] = point_count
         if strong_source(identity) != source:
             raise ValueError("DBH_CURRENT_SOURCE_IDENTITY_MISMATCH")
+    # Human DBH review needs a fully materialized editor snapshot, not a
+    # previously approved report. Source, journal, membership and artifact
+    # hashes below remain mandatory. Keep this binding stable when that SAME
+    # geometry later becomes a finalized publication; the report gate is
+    # independent. Preserve legacy finalized bindings for existing projects.
+    geometry_state = 'GEOMETRY_BOUND'
+    pointer = br / 'dbh_final.json'
+    if finalized and pointer.is_file():
+        reference = read_json(pointer)
+        prior = read_json(confined(root, reference['geometry_reference']))
+        if prior.get('binding', {}).get('finalized_state') == 'FINALIZED':
+            geometry_state = 'FINALIZED'
     return {
         "schema": SCHEMA,
         "version": VERSION,
         "project_id": result.project_id,
         "analysis_run_id": result.analysis_run_id,
-        "finalized_state": "FINALIZED",
+        "finalized_state": geometry_state,
         "source_identity": strong_source(preparation["ground_preparation"]["source_identity"]),
         "preparation_reference": path.relative_to(root).as_posix(),
         "preparation_sha256": sha256(path),
@@ -160,7 +202,10 @@ def _binding(root: Path, result: Any, reconciled: Any) -> dict[str, Any]:
 def load_finalized_dbh(root: Path, result: Any, reconciled: Any) -> dict[int, dict[str, Any]]:
     """Read-only publication. Existing invalid proof overrides with explicit unavailable."""
     root = Path(root).resolve()
-    pointer = _run_root(root, str(result.analysis_run_id)) / "dbh_final.json"
+    analysis_run_id = getattr(result, "analysis_run_id", None)
+    if not analysis_run_id:
+        return {}
+    pointer = _run_root(root, str(analysis_run_id)) / "dbh_final.json"
     if not pointer.is_file():
         return {}
     try:
@@ -191,9 +236,9 @@ def load_finalized_dbh(root: Path, result: Any, reconciled: Any) -> dict[int, di
             if method not in {
                 "DIRECT_STEM",
                 "RECOVERED_STEM",
+                "RAW_GROUND_BH_SECTION",
                 "REVIEW_CONFIRMED_STEM",
                 "ALLOMETRIC_ESTIMATE",
-                "REFERENCE_ESTIMATE",
                 "UNAVAILABLE",
             }:
                 raise ValueError("DBH_INVALID_METHOD")
@@ -205,21 +250,30 @@ def load_finalized_dbh(root: Path, result: Any, reconciled: Any) -> dict[int, di
                 raise ValueError("DBH_INVALID_DIAMETER")
             if (value is None) != (method == "UNAVAILABLE"):
                 raise ValueError("DBH_VALUE_METHOD_MISMATCH")
-            if method == "REFERENCE_ESTIMATE":
-                reference = row.get("dbh_reference_estimate")
-                if (
-                    row.get("dbh_quality") != "ESTIMATE"
-                    or row.get("dbh_point_count") != 0
-                    or row.get("dbh_evidence_point_count") != 0
-                    or row.get("dbh_uncertainty_cm") is not None
-                    or not isinstance(reference, dict)
-                    or reference.get("basis") not in {
-                        "PROJECT_TRUSTED_MEASUREMENTS", "USER_PROVIDED_REFERENCE"
-                    }
-                    or reference.get("value_cm") != value
-                    or not isinstance(row.get("dbh_pre_reference_failure_reason"), str)
+            if value is not None and str(payload.get("recovery_version", "")).startswith(("DBH_RECOVERY_V5", "DBH_RECOVERY_V6")):
+                measurement = row.get("dbh_section_measurement", {})
+                ground_z = row.get("dbh_ground_z_absolute_m")
+                measurement_z = row.get("dbh_measurement_z_absolute_m")
+                if (method not in {"DIRECT_STEM", "RECOVERED_STEM", "RAW_GROUND_BH_SECTION", "REVIEW_CONFIRMED_STEM"}
+                        or measurement.get("diameter_derived_from")
+                        != "ACTUAL_RAW_1P30_SLAB_CIRCLE_NOT_INTERPOLATED"
+                        or ground_z is None or measurement_z is None
+                        or abs(measurement_z - ground_z - 1.30) > 1e-8
+                        or row.get("dbh_ground_reference_method") not in {
+                            "ORIGINAL_RAW_LOCAL_GROUND_MODE", "ORIGINAL_RAW_VERIFIED_LEVEL_GROUND_CALIBRATION"}):
+                    raise ValueError("DBH_ACTUAL_RAW_1P30_PROOF_REQUIRED")
+                if method == "RAW_GROUND_BH_SECTION" and not any(
+                    q.get("proof", {}).get("coordinate_source") == "DIRECT_ORIGINAL_LAS_INTEGER_COORDINATES"
+                    for q in row.get("v3_queries", [])
                 ):
-                    raise ValueError("DBH_REFERENCE_PROOF_INVALID")
+                    raise ValueError("DBH_DIRECT_ORIGINAL_LAS_COORDINATE_PROOF_REQUIRED")
+                with np.load(evidence, allow_pickle=False) as archive:
+                    mask = archive["global_tree_id"] == row["global_tree_id"]
+                    heights = archive["hag_m"][mask]
+                    if (len(heights) != row["dbh_point_count"] or not len(heights)
+                            or not np.isfinite(heights).all()
+                            or np.any(np.abs(heights - 1.30) > 0.050001)):
+                        raise ValueError("DBH_EVIDENCE_OUTSIDE_ORIGINAL_1P30_SLAB")
             if method == "REVIEW_CONFIRMED_STEM":
                 review = row.get("dbh_review", {})
                 decision = confined(root, row["dbh_review_decision_reference"])
@@ -291,12 +345,43 @@ def _span_evidence(tree_root: Path) -> dict[str, Any]:
         tree_root / "legacy_reference/fine_representatives.npz", allow_pickle=False
     ) as archive:
         weights = archive["raw_count"]
+        classification = archive["classification"] if "classification" in archive else None
     xyz, hag = fine["fine_xyz_local_m"], fine["fine_hag_m"]
     if len(np.unique(fine["fine_original_index"])) != len(xyz):
         raise ValueError("DBH_FINE_DUPLICATE_ORIGINAL_INDEX")
-    hybrid = segment_stem_guided_hybrid(xyz, hag, baseline, raw_count=weights)
+    manifest = read_json(tree_root / "span_tree_manifest.json")
+    diagnostics = manifest.get("membership_diagnostics", {})
+    raw_backend = diagnostics.get("version") in {
+        "RAW_SECTIONS_STEM_FIRST_V1", "RAW_SECTIONS_STEM_FIRST_V2_STRUCTURAL_PLANES"
+    }
+    if raw_backend:
+        from algorithms.spans.raw_stem_first import segment_from_raw_stems
+        from algorithms.spans.stem_guided_hybrid import StemEvidence
+        raw_stems = tuple(StemEvidence(**{**row, "xy_local_m": tuple(row["xy_local_m"])})
+            for row in diagnostics.get("validated_raw_stems", []))
+        pole_axes = tuple(StemEvidence(**{**row, "xy_local_m": tuple(row["xy_local_m"])})
+            for row in diagnostics.get("excluded_confirmed_pole_axes", []))
+        hybrid = segment_from_raw_stems(xyz, hag, raw_stems, classification=classification,
+            excluded_pole_axes=pole_axes)
+    else:
+        hybrid = segment_stem_guided_hybrid(xyz, hag, baseline, raw_count=weights)
     if not np.array_equal(hybrid.fine_tree_id, fine["fine_tree_id"]):
         raise ValueError("DBH_HYBRID_REPLAY_MISMATCH")
+    if raw_backend:
+        stems = {stem.stem_seed_id: stem for stem in hybrid.validated_stems}
+        anchors = {}
+        for candidate in hybrid.candidates:
+            stem = stems[candidate.stem_seed_ids[0]]
+            anchors[candidate.tree_id] = {
+                "xy": np.asarray(stem.xy_local_m), "confidence": stem.stem_confidence,
+                "primary_xy": list(stem.xy_local_m),
+                "selection": "CURRENT_RAW_MULTI_SECTION_AXIS_PROPOSAL_NOT_DBH",
+                "group_raw_stem_ids": [stem.stem_seed_id],
+            }
+        return {"fine": fine, "anchors": anchors, "proof": {
+            name: sha256(tree_root / name) for name in (
+                "tree_fine.npz", "span_tree_manifest.json", "legacy_reference/tree_fine.npz",
+                "legacy_reference/fine_representatives.npz")}}
     cfg = StemGuidedHybridConfig()
     crown_ids = sorted(int(v) for v in np.unique(baseline) if v >= 0)
     crowns = {cid: cKDTree(xyz[baseline == cid, :2]) for cid in crown_ids}
@@ -417,7 +502,7 @@ def recover_finalized_dbh(
     cache_root = confined(root, prep["vegetation_role_tile_index_reference"])
     source = prep["ground_preparation"]["source_identity"]
     metrics = compute_stage_b_tree_metrics(
-        result, reconciled, root / "artifacts/Prediction_Input.xlsx", project_root=root
+        result, reconciled, root / "exports/Prediction_Input.xlsx", project_root=root
     )
     if len(metrics) != len(reconciled.global_tree_records):
         raise ValueError("DBH_CANONICAL_METRICS_MISSING")

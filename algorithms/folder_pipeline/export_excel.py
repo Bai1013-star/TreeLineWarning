@@ -87,22 +87,16 @@ _TREE_COLUMNS = [
     "horizontal_clearance_m",
     "vertical_clearance_m",
     "clearance_component_source",
-    # Reference fallback provenance is internal only; the delivered workbook
-    # keeps the exact 23-column user CSV contract.
-    "dbh_pre_reference_failure_reason",
-    "dbh_reference_basis",
-    "dbh_reference_count",
-    "dbh_reference_estimator",
-    "dbh_reference_value_cm",
-    "dbh_reference_mean_cm",
-    "dbh_reference_median_cm",
-    "dbh_reference_min_cm",
-    "dbh_reference_max_cm",
-    "dbh_reference_std_cm",
-    "dbh_reference_tree_ids",
-    "dbh_reference_tree_persistent_ids",
-    "dbh_reference_estimate_json",
     "display_tree_id",
+    "dbh_ground_z_absolute_m",
+    "dbh_measurement_z_absolute_m",
+    "dbh_height_reference",
+    "dbh_ground_reference_method",
+    "dbh_ground_reference_point_count",
+    "dbh_measurement_height_m",
+    "dbh_section_lower_hag_m",
+    "dbh_section_upper_hag_m",
+    "dbh_coordinate_source",
 ]
 
 _NUMERIC_COLUMNS = {
@@ -126,13 +120,12 @@ _NUMERIC_COLUMNS = {
     "dbh_fit_rmse",
     "dbh_slice_count",
     "dbh_uncertainty_cm",
-    "dbh_reference_count",
-    "dbh_reference_value_cm",
-    "dbh_reference_mean_cm",
-    "dbh_reference_median_cm",
-    "dbh_reference_min_cm",
-    "dbh_reference_max_cm",
-    "dbh_reference_std_cm",
+    "dbh_ground_z_absolute_m",
+    "dbh_measurement_z_absolute_m",
+    "dbh_ground_reference_point_count",
+    "dbh_measurement_height_m",
+    "dbh_section_lower_hag_m",
+    "dbh_section_upper_hag_m",
 }
 
 _METADATA_ROWS = [
@@ -187,9 +180,6 @@ _METADATA_ROWS = [
     ("risk_config_digest", "risk_config_digest", "危险净空配置摘要"),
     ("viewer_mode", "viewer_mode", "浏览器模式"),
     ("science_scope", "science_scope", "科学范围"),
-    ("final_generation_id", "final_generation_id", "最终态生成标识"),
-    ("result_generation_id", "result_generation_id", "结果生成标识"),
-    ("risk_generation_id", "risk_generation_id", "风险生成标识"),
     ("created_at", "created_at", "创建时间"),
     ("git_commit", "git_commit", "Git 提交"),
 ]

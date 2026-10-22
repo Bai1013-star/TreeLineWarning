@@ -37,6 +37,10 @@ class TreeInput:
     maximum_sag_winter: float = 3.5
     maximum_sag_summer: float = 5.0
     observation_month: int = 7
+    # Relative conductor displacement from the actually observed point-cloud
+    # geometry.  Zero means the supplied distances already include the
+    # observation-date conductor position.
+    sag_adjustment: float = 0.0
     standards: dict[str, Any] | None = None
 
 
@@ -51,6 +55,7 @@ class PredictionResult:
 
 class TreeRiskPredictor:
     def predict(self, tree: TreeInput) -> PredictionResult:
+        self._validate_input(tree)
         standard = PredictionStandards.from_mapping(tree.standards)
         score = 0.0
 
@@ -84,7 +89,11 @@ class TreeRiskPredictor:
             observation_month=tree.observation_month,
             standards=standard,
         )
-        sag_adjustment = max(0.0, wire_analysis["maximum_sag"] - wire_analysis["current_sag"])
+        # Point-cloud distances already contain the conductor position on the
+        # observation date.  Only a forecast-relative displacement may be
+        # subtracted; applying (maximum-current) here double-counted sag and
+        # incorrectly made winter more dangerous than summer.
+        sag_adjustment = max(0.0, float(tree.sag_adjustment))
         adjusted_vertical = max(0.0, vertical - sag_adjustment)
         adjusted_clearance = max(0.0, clearance - sag_adjustment)
         geometric_clearance = max(
@@ -169,3 +178,57 @@ class TreeRiskPredictor:
             },
             standard_analysis=analysis,
         )
+
+    @staticmethod
+    def _validate_input(tree: TreeInput) -> None:
+        numeric_fields = {
+            "height": tree.height,
+            "age": tree.age,
+            "diameter": tree.diameter,
+            "wind_speed": tree.wind_speed,
+            "rainfall": tree.rainfall,
+            "humidity": tree.humidity,
+            "slope": tree.slope,
+            "temperature": tree.temperature,
+            "sunlight_hours": tree.sunlight_hours,
+            "distance_to_wire": tree.distance_to_wire,
+            "vertical_distance": tree.vertical_distance,
+            "horizontal_distance": tree.horizontal_distance,
+            "clearance_distance": tree.clearance_distance,
+            "wind_offset_distance": tree.wind_offset_distance,
+            "voltage_level_kv": tree.voltage_level_kv,
+            "maximum_sag_winter": tree.maximum_sag_winter,
+            "maximum_sag_summer": tree.maximum_sag_summer,
+            "observation_month": tree.observation_month,
+        }
+        for name, value in numeric_fields.items():
+            if not math.isfinite(float(value)):
+                raise ValueError(f"{name} 必须是有限数值")
+        if tree.height <= 0 or tree.diameter <= 0:
+            raise ValueError("树高和胸径必须大于 0")
+        for name in (
+            "age",
+            "wind_speed",
+            "rainfall",
+            "slope",
+            "sunlight_hours",
+            "distance_to_wire",
+            "vertical_distance",
+            "horizontal_distance",
+            "clearance_distance",
+            "wind_offset_distance",
+            "maximum_sag_winter",
+            "maximum_sag_summer",
+        ):
+            if float(numeric_fields[name]) < 0:
+                raise ValueError(f"{name} 不能小于 0")
+        if not 0 <= tree.humidity <= 100:
+            raise ValueError("湿度必须在 0–100% 之间")
+        if not -60 <= tree.temperature <= 60:
+            raise ValueError("温度必须在 -60–60℃ 之间")
+        if tree.sunlight_hours > 24:
+            raise ValueError("日照时长不能超过 24 小时")
+        if tree.voltage_level_kv <= 0:
+            raise ValueError("电压等级必须大于 0")
+        if not 1 <= int(tree.observation_month) <= 12:
+            raise ValueError("观测月份必须在 1–12 之间")

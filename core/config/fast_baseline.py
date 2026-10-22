@@ -24,6 +24,7 @@ NON_CERTIFIED_MARKER = "NON_CERTIFIED_RESEARCH_DEMONSTRATION"
 _ROUTE_MODE_POLE_SPAN = "POLE_SPAN_MATURE_BASELINE"
 _ROUTE_MODE_EXPERIMENTAL_V4 = "EXPERIMENTAL_V4"
 TREE_BACKEND_CROWN_STEM_HYBRID = "crown_stem_hybrid"
+TREE_BACKEND_RAW_STEM_FIRST = "raw_stem_first_v1"
 TREE_BACKEND_LEGACY_WATERSHED = "legacy_watershed"
 
 
@@ -77,9 +78,12 @@ class FastBaselineConfig:
     # --- shared representation scales --------------------------------------
     vegetation_fine_voxel_size_m: float = 0.10
     wire_fine_voxel_size_m: float = 0.10
-    # Crown candidates remain primary.  The legacy CHM/watershed-only route is
-    # retained as an explicit fallback/reference, never deleted.
-    tree_backend: str = TREE_BACKEND_CROWN_STEM_HYBRID
+    # Original stem sections precede canopy/noise filtering. Older crown-first
+    # algorithms remain explicitly selectable for reproducibility.
+    tree_backend: str = TREE_BACKEND_RAW_STEM_FIRST
+    # Included in the canonical config digest: old checkpoints must never be
+    # reused as if they had passed the new overlapping-infrastructure filter.
+    tree_structural_filter_version: str = "structural-panels-20261002-v1"
 
     # --- pole candidate detection ------------------------------------------
     pole_minimum_height_m: float = 5.0
@@ -188,6 +192,10 @@ class FastBaselineConfig:
     wire_endpoint_hag_tolerance_m: float = 4.0
 
     # --- V2 conductor confirmation (slice-track evidence) -----------------
+    # Bump whenever publication evidence changes so completed projects do not
+    # silently reuse an older two-conductor cache after an algorithm upgrade.
+    wire_confirmation_version: str = "same-height-family-20261022-v3"
+    wire_parallel_max_height_difference_m: float = 0.75
     # One metre slices are deliberately longer than the 0.10 m fine voxel but
     # short enough to expose local branches and unsupported gaps.
     wire_slice_width_m: float = 1.0
@@ -212,8 +220,8 @@ class FastBaselineConfig:
     clearance_tie_tolerance_m: float = 1e-9
 
     def __post_init__(self) -> None:
-        if self.tree_backend not in {TREE_BACKEND_CROWN_STEM_HYBRID, TREE_BACKEND_LEGACY_WATERSHED}:
-            raise ValueError("tree_backend must be crown_stem_hybrid or legacy_watershed")
+        if self.tree_backend not in {TREE_BACKEND_RAW_STEM_FIRST, TREE_BACKEND_CROWN_STEM_HYBRID, TREE_BACKEND_LEGACY_WATERSHED}:
+            raise ValueError("tree_backend must be raw_stem_first_v1, crown_stem_hybrid or legacy_watershed")
         for field in fields(self):
             value = getattr(self, field.name)
             if field.name.endswith("_m") and field.name not in {
@@ -363,6 +371,7 @@ __all__ = [
     "_ROUTE_MODE_POLE_SPAN",
     "_ROUTE_MODE_EXPERIMENTAL_V4",
     "TREE_BACKEND_CROWN_STEM_HYBRID",
+    "TREE_BACKEND_RAW_STEM_FIRST",
     "TREE_BACKEND_LEGACY_WATERSHED",
     "canonical_digest",
     "FastBaselineConfig",

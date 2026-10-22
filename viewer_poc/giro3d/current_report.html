@@ -16,16 +16,12 @@
       </div>
       <div class="report-actions">
         <button id="printReport" type="button">打印</button>
-        <button id="downloadExcel" class="primary" type="button">下载 树木风险结果.xlsx</button>
-        <button id="downloadHtml" type="button">下载 HTML 报告</button>
-        <a class="button" href="/dbh-review">胸径复核</a>
         <a class="button" href="/">返回项目</a>
       </div>
     </header>
 
     <section id="reportStatus" class="notice" aria-live="polite">正在读取当前最终结果…</section>
     <section id="reportBody" class="hidden">
-      <section id="towerWarning" class="notice locked hidden" aria-live="polite"></section>
       <div id="kpiGrid" class="kpi-grid"></div>
       <section class="panel geometry-panel">
         <div class="panel-heading">
@@ -47,7 +43,7 @@
           <span id="rowCount" class="source-pill"></span>
         </div>
         <div class="table-wrap">
-          <p class="hint">水平、垂直净空为同一三维最近点对的距离分量，单位米。胸径单位厘米；未测得的树木保留原因。</p>
+          <p class="hint">树高＝该树原始点云最高点与最低点的高差。胸径＝该树原始点云最低点 + 1.30 m 断面拟合，不使用处理后或显示抽稀点云；未测得时保留中文原因，并可返回复核页人工点选原始树干种子。</p>
           <table>
             <thead>
               <tr>

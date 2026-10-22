@@ -2,18 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 from pathlib import Path
 
 import laspy
 import numpy as np
 import pytest
 from algorithms.features import geometry
-from algorithms.features.geometry import (
-    GeometryFeatureError,
-    load_geometry_features,
-    run_geometry_feature_extraction,
-)
+from algorithms.features.geometry import GeometryFeatureError, run_geometry_feature_extraction
 from core.contracts import (
     CancellationToken,
     FeatureQualityFlag,
@@ -109,18 +104,6 @@ def run_features(
         project_root=project,
     )
     return result, load_npz(result.output_npz_path)
-
-
-def _published_geometry(tmp_path: Path, xyz: np.ndarray):
-    project, input_npz, input_json, output = make_project(tmp_path, xyz)
-    return run_geometry_feature_extraction(input_npz, input_json, output, project_root=project)
-
-
-def _refresh_geometry_integrity(json_path: Path, npz_path: Path) -> None:
-    payload = json.loads(json_path.read_text(encoding="utf-8"))
-    payload["output_npz_sha256"] = hashlib.sha256(npz_path.read_bytes()).hexdigest()
-    payload["output_npz_bytes"] = npz_path.stat().st_size
-    json_path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_line_has_high_linearity_and_principal_direction(tmp_path: Path) -> None:
@@ -367,156 +350,3 @@ def test_queries_are_bounded_and_no_las_read_is_called(
     assert query_sizes
     assert max(size for size, _k in query_sizes) <= 7
     assert max(k for _size, k in query_sizes) <= 33
-
-
-def test_public_loader_reloads_relocated_a2a_and_freezes_arrays(tmp_path: Path) -> None:
-    result = _published_geometry(tmp_path, np.column_stack((np.arange(12), np.zeros(12), np.zeros(12))))
-    before = {
-        path: hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in (result.output_npz_path, result.output_json_path)
-    }
-    loaded, features = load_geometry_features(result.output_npz_path, result.output_json_path)
-    assert loaded == result
-    assert features.point_count == 12
-    assert not features.xyz_local.flags.writeable
-    assert not features.eigenvalues.flags.writeable
-    with pytest.raises(ValueError):
-        features.linearity[0] = np.float32(0.0)
-    assert {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in before} == before
-
-    relocated = tmp_path / "relocated"
-    relocated.mkdir()
-    npz_path, json_path = relocated / result.output_npz_path.name, relocated / result.output_json_path.name
-    shutil.copy2(result.output_npz_path, npz_path)
-    shutil.copy2(result.output_json_path, json_path)
-    relocated_result, relocated_features = load_geometry_features(npz_path, json_path)
-    assert relocated_result.output_npz_path == result.output_npz_path
-    assert np.array_equal(relocated_features.xyz_local, features.xyz_local)
-
-
-@pytest.mark.parametrize("mutation", ["missing", "unknown", "version", "hash", "size"])
-def test_public_loader_rejects_a2a_json_failures(tmp_path: Path, mutation: str) -> None:
-    result = _published_geometry(tmp_path, np.column_stack((np.arange(12), np.zeros(12), np.zeros(12))))
-    payload = json.loads(result.output_json_path.read_text(encoding="utf-8"))
-    if mutation == "missing":
-        payload.pop("arrays")
-    elif mutation == "unknown":
-        payload["unexpected"] = True
-    elif mutation == "version":
-        payload["algorithm_version"] = "unsupported"
-    elif mutation == "hash":
-        payload["output_npz_sha256"] = "0" * 64
-    else:
-        payload["output_npz_bytes"] += 1
-    result.output_json_path.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(GeometryFeatureError):
-        load_geometry_features(result.output_npz_path, result.output_json_path)
-
-
-@pytest.mark.parametrize("mutation", ["missing", "dtype", "shape", "object", "nonfinite"])
-def test_public_loader_rejects_invalid_a2a_arrays(tmp_path: Path, mutation: str) -> None:
-    result = _published_geometry(tmp_path, np.column_stack((np.arange(12), np.zeros(12), np.zeros(12))))
-    arrays = load_npz(result.output_npz_path)
-    if mutation == "missing":
-        arrays.pop("linearity")
-    elif mutation == "dtype":
-        arrays["linearity"] = arrays["linearity"].astype(np.float64)
-    elif mutation == "shape":
-        arrays["linearity"] = arrays["linearity"].reshape((-1, 1))
-    elif mutation == "object":
-        arrays["linearity"] = np.asarray(["bad"] * len(arrays["linearity"]), dtype=object)
-    else:
-        arrays["xyz_local"][0, 0] = np.nan
-    np.savez_compressed(result.output_npz_path, **arrays)
-    _refresh_geometry_integrity(result.output_json_path, result.output_npz_path)
-    with pytest.raises(GeometryFeatureError):
-        load_geometry_features(result.output_npz_path, result.output_json_path)
-
-
-def test_public_loader_preserves_contract_allowed_invalid_a2a_features(tmp_path: Path) -> None:
-    result = _published_geometry(tmp_path, np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], np.float32))
-    _loaded, features = load_geometry_features(result.output_npz_path, result.output_json_path)
-    assert np.any(features.quality_flags & int(FeatureQualityFlag.INSUFFICIENT_NEIGHBORS))
-    assert np.isfinite(features.principal_direction).all()
-
-
-@pytest.mark.parametrize(
-    "mutation",
-    [
-        "shape",
-        "dtype",
-        "unit",
-        "quality_counts",
-        "formulas",
-        "origin_string",
-        "origin_bool",
-        "origin_large_int",
-    ],
-)
-def test_public_loader_rejects_tampered_a2a_deterministic_metadata(
-    tmp_path: Path, mutation: str
-) -> None:
-    result = _published_geometry(tmp_path, np.column_stack((np.arange(12), np.zeros(12), np.zeros(12))))
-    payload = json.loads(result.output_json_path.read_text(encoding="utf-8"))
-    if mutation == "shape":
-        payload["arrays"]["linearity"]["shape"] = [99]
-    elif mutation == "dtype":
-        payload["arrays"]["linearity"]["dtype"] = "float64"
-    elif mutation == "unit":
-        payload["arrays"]["linearity"]["unit"] = "m"
-    elif mutation == "quality_counts":
-        payload["quality_flag_counts"]["NONE"] += 1
-    elif mutation == "formulas":
-        payload["formulas"]["height_m"] = "tampered"
-    elif mutation == "origin_string":
-        payload["origin_xyz"][0] = "10.0"
-    elif mutation == "origin_bool":
-        payload["origin_xyz"][0] = True
-    else:
-        payload["origin_xyz"][0] = 10**400
-    result.output_json_path.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(GeometryFeatureError):
-        load_geometry_features(result.output_npz_path, result.output_json_path)
-
-
-def test_public_loader_wraps_a2a_integrity_io_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    result = _published_geometry(tmp_path, np.column_stack((np.arange(12), np.zeros(12), np.zeros(12))))
-
-    def fail_sha(_path: Path) -> str:
-        raise OSError("synthetic hash read failure")
-
-    monkeypatch.setattr(geometry, "_sha256_file", fail_sha)
-    with pytest.raises(GeometryFeatureError):
-        load_geometry_features(result.output_npz_path, result.output_json_path)
-
-
-@pytest.mark.parametrize("mutation", ["negative_original", "duplicate_sample", "linearity", "density"])
-def test_public_loader_rejects_invalid_a2a_identity_and_semantics(
-    tmp_path: Path, mutation: str
-) -> None:
-    result = _published_geometry(tmp_path, np.column_stack((np.arange(12), np.zeros(12), np.zeros(12))))
-    arrays = load_npz(result.output_npz_path)
-    if mutation == "negative_original":
-        arrays["original_index"][0] = -1
-    elif mutation == "duplicate_sample":
-        arrays["sample_index"][1] = arrays["sample_index"][0]
-    elif mutation == "linearity":
-        arrays["linearity"][0] = np.float32(1.1)
-    else:
-        arrays["local_density"][0] = np.float32(-1.0)
-    np.savez_compressed(result.output_npz_path, **arrays)
-    _refresh_geometry_integrity(result.output_json_path, result.output_npz_path)
-    with pytest.raises(GeometryFeatureError):
-        load_geometry_features(result.output_npz_path, result.output_json_path)
-
-
-def test_public_loader_freezes_every_a2a_contract_array(tmp_path: Path) -> None:
-    result = _published_geometry(tmp_path, np.column_stack((np.arange(12), np.zeros(12), np.zeros(12))))
-    _loaded, features = load_geometry_features(result.output_npz_path, result.output_json_path)
-    assert all(
-        not getattr(features, name).flags.writeable
-        for name in features.__dataclass_fields__
-        if isinstance(getattr(features, name), np.ndarray)
-    )

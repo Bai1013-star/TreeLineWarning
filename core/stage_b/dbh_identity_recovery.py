@@ -7,28 +7,37 @@ from pathlib import Path
 
 import numpy as np
 from algorithms.manual_span import stem_identity as geometry
-from algorithms.manual_span.metrics import _hag_chunked
-from algorithms.manual_span.partial_arc_identity import (
-    elevated_local_base_probe,
-    recover_bh_tube_identity,
-    recover_partial_arc_identity,
-    recover_upper_partial_arc_identity,
-    recover_upper_supported_identity,
+from algorithms.manual_span.dbh_breast_height import (
+    fit_original_tree_member_breast_height,
+    fit_raw_breast_height_section,
 )
+from algorithms.manual_span.metrics import _hag_chunked
 from algorithms.manual_span.stem_ownership import resolve_stem_ownership
 from scipy.spatial import cKDTree
 
 from core.stage_b import dbh_raw_recovery as v2
 from core.stage_b import dbh_recovery as v1
 from core.stage_b.dbh_evidence import (
-    MAX_LOCAL_POINTS, array_digest, confined, local_raw_query, read_json, sha256,
+    array_digest,
+    confined,
+    local_raw_query,
+    raw_ground_reference,
+    raw_tree_lowest_reference,
+    original_raw_query,
+    ground_reference_at_stem,
+    calibrated_breast_height,
+    read_json,
+    sha256,
 )
-from core.stage_b.dbh_reference_estimation import apply_reference_estimates
-from core.stage_b.dbh_wide_search import current_crown_wide_seeds
 
-VERSION = "DBH_RECOVERY_V3_PER_TREE_V3"
-PRIOR_AUTO_SOURCES = {"DBH_RECOVERY_V3_PER_TREE_V2"}
-MAX_V3_SEEDS = 8
+VERSION = "DBH_RECOVERY_V8_ALL_TREES_RAW_LOWEST_1P30"
+BH_TARGET_M = 1.30
+BH_SECTION_CENTER_MAX_DISTANCE_M = 0.10
+BH_SEED_MAX_DISTANCE_M = 0.30
+BH_OWNERSHIP_MARGIN_M = 0.08
+BH_MAX_RELATIVE_DIAMETER_SPREAD = 0.25
+BH_ESTIMATE_MAX_DIAMETER_M = 0.80
+BH_BASELINE_DIAMETER_MAX_RELATIVE_CHANGE = 0.50
 
 
 def _fixed_claim(row, arrays):
@@ -46,7 +55,16 @@ def _fixed_claim(row, arrays):
         if band.any():
             centers.append(np.median(xyz[band], axis=0))
             heights.append(float(np.median(hag[band])))
-    line = geometry._fit_hag_line(np.asarray(centers), np.asarray(heights), np.arange(len(centers)))
+    measured = row.get("dbh_review", {}).get("fit", {})
+    anchor = measured.get("breast_height_origin_xyz")
+    direction = measured.get("unit_direction_xyz")
+    identified = row.get("v3_final_fit", {}).get("identified_axis", {})
+    if anchor is None or direction is None:
+        anchor = identified.get("bh_reference_xyz")
+        direction = identified.get("direction_xyz")
+    line = (np.asarray(anchor), np.asarray(direction), None) if anchor and direction else (
+        geometry._fit_hag_line(np.asarray(centers), np.asarray(heights), np.arange(len(centers)))
+    )
     if line is None:
         raise ValueError("ACCEPTED_STEM_RESERVATION_AXIS_UNPROVEN")
     center, unit, _ = line
@@ -70,14 +88,186 @@ def _v2_axes(candidate):
     return result
 
 
+def _breast_height_section_estimate(
+    sections,
+    seed_xy,
+    seed_registry,
+    tree_id,
+    expected_dbh_cm=None,
+    seed_max_distance_m=BH_SEED_MAX_DISTANCE_M,
+):
+    """Return a conservative raw-ground 1.30 m section estimate.
+
+    This is deliberately an estimate, not a recovered high-confidence stem.
+    It is used only when the global crown-to-stem resolver cannot publish a
+    direct fit, and requires agreeing circles immediately below and above
+    breast height plus unambiguous proximity to the current tree seed.
+    """
+
+    below, above = [], []
+    for section in sections:
+        for proposal in section.get("proposals", []):
+            if not proposal.get("proposal_ready"):
+                continue
+            center_hag = proposal.get("center_hag_m")
+            diameter = proposal.get("diameter_m")
+            center_x = proposal.get("center_x_m")
+            center_y = proposal.get("center_y_m")
+            if any(value is None for value in (center_hag, diameter, center_x, center_y)):
+                continue
+            item = {
+                "proposal": proposal,
+                "center": np.asarray((center_x, center_y), dtype=np.float64),
+                "hag": float(center_hag),
+                "diameter_m": float(diameter),
+            }
+            if item["hag"] <= BH_TARGET_M + 1.0e-9:
+                below.append(item)
+            if item["hag"] >= BH_TARGET_M - 1.0e-9:
+                above.append(item)
+
+    candidates = []
+    for lower in below:
+        for upper in above:
+            if lower["hag"] >= upper["hag"] - 1.0e-9:
+                continue
+            if not (
+                lower["hag"] >= BH_TARGET_M - 0.20
+                and upper["hag"] <= BH_TARGET_M + 0.20
+            ):
+                continue
+            center_gap = float(np.linalg.norm(lower["center"] - upper["center"]))
+            if center_gap > BH_SECTION_CENTER_MAX_DISTANCE_M:
+                continue
+            mean_diameter = (lower["diameter_m"] + upper["diameter_m"]) / 2.0
+            relative_spread = abs(lower["diameter_m"] - upper["diameter_m"]) / mean_diameter
+            if relative_spread > BH_MAX_RELATIVE_DIAMETER_SPREAD:
+                continue
+            fraction = (BH_TARGET_M - lower["hag"]) / (upper["hag"] - lower["hag"])
+            center = lower["center"] + fraction * (upper["center"] - lower["center"])
+            diameter = lower["diameter_m"] + fraction * (
+                upper["diameter_m"] - lower["diameter_m"]
+            )
+            if diameter > BH_ESTIMATE_MAX_DIAMETER_M:
+                continue
+            baseline_difference = None
+            if expected_dbh_cm is not None:
+                baseline_difference = abs(diameter * 100.0 - expected_dbh_cm) / expected_dbh_cm
+                if baseline_difference > BH_BASELINE_DIAMETER_MAX_RELATIVE_CHANGE:
+                    continue
+            distances = {
+                gid: min(float(np.linalg.norm(center - seed)) for seed in seeds)
+                for gid, seeds in seed_registry.items()
+                if seeds
+            }
+            own_distance = distances.get(tree_id, float("inf"))
+            foreign = min(
+                (distance for gid, distance in distances.items() if gid != tree_id),
+                default=float("inf"),
+            )
+            ownership_margin = foreign - own_distance
+            if own_distance > seed_max_distance_m:
+                continue
+            if np.isfinite(foreign) and ownership_margin < BH_OWNERSHIP_MARGIN_M:
+                continue
+            support = sum(
+                int(item["proposal"].get("anchor_inlier_point_count", 0))
+                for item in (lower, upper)
+            )
+            rmse = max(
+                float(item["proposal"].get("fit_rmse_m") or 0.0)
+                for item in (lower, upper)
+            )
+            candidates.append(
+                {
+                    "dbh_cm": float(diameter * 100.0),
+                    "center_xy_local_m": center.tolist(),
+                    "point_count": support,
+                    "fit_rmse_m": rmse,
+                    "uncertainty_cm": float(
+                        max(0.5, abs(lower["diameter_m"] - upper["diameter_m"]) * 50.0)
+                    ),
+                    "section_center_distance_m": center_gap,
+                    "relative_diameter_spread": relative_spread,
+                    "seed_distance_m": own_distance,
+                    "ownership_margin_m": None
+                    if not np.isfinite(ownership_margin)
+                    else ownership_margin,
+                    "baseline_relative_difference": baseline_difference,
+                    "lower": lower["proposal"],
+                    "upper": upper["proposal"],
+                }
+            )
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda item: (
+            item["baseline_relative_difference"]
+            if item["baseline_relative_difference"] is not None
+            else float("inf"),
+            item["seed_distance_m"],
+            item["relative_diameter_spread"],
+            item["section_center_distance_m"],
+            -item["point_count"],
+        ),
+    )
+
+
+def _matching_proposal_history(root, br, binding):
+    """Recover proposals after undo, never diameters or old acceptance claims.
+
+    A journal revision changes on undo even when every member is restored.
+    Rebuilding V1/V2 then discards the prior proposal registry. Only snapshots
+    with identical source, preparation, ground and tree identities may
+    contribute seed locations. Modern snapshots also require exact canonical
+    membership; legacy row-order snapshots are proposals only, never proof.
+    """
+    keys = ("project_id", "analysis_run_id", "source_identity", "preparation_sha256",
+            "ground_sha256", "original_lineage_sha256")
+    found = {}
+    paths = sorted((br / "dbh_v1").glob("*/finalized_geometry.json"),
+                   key=lambda p: p.stat().st_mtime_ns, reverse=True)[:128]
+    for path in paths:
+        path = confined(root, path.relative_to(root).as_posix())
+        try:
+            snapshot = read_json(path)
+            previous = snapshot.get("binding", {})
+            if any(previous.get(key) != binding.get(key) for key in keys):
+                continue
+            old_members, members = previous.get("membership", {}), binding.get("membership", {})
+            legacy = old_members != members
+            if legacy and (old_members.get("ordering") is not None
+                           or not old_members.get("identities")
+                           or old_members.get("identities") != members.get("identities")):
+                continue
+            for row in snapshot.get("trees", []):
+                gid = row["global_tree_id"]
+                if gid in found or row.get("dbh_cm") is None:
+                    continue
+                seeds = [copy.deepcopy(q["seed"]) for q in row.get("v3_queries", [])
+                         if q.get("seed", {}).get("source") == "BASELINE_ACCEPTED_STEM_AXIS"]
+                xy = row.get("stem_axis_xy_local_m")
+                if not seeds and xy is not None:
+                    seeds = [{"xy": list(xy), "source": "BASELINE_ACCEPTED_STEM_AXIS",
+                              "support": int(row.get("dbh_point_count") or 0)}]
+                if seeds:
+                    found[gid] = {"seed": seeds[0],
+                                  "reference": path.relative_to(root).as_posix(),
+                                  "sha256": sha256(path), "legacy_ordering_proposal_only": legacy}
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return found
+
+
 def recover_finalized_dbh_v3(
-    root, result, reconciled, *, persist=True, progress=None, query_provider=None, member_hag=None,
-    recompute_auto=False, reference_dbh_cm=None,
+    root, result, reconciled, *, persist=True, progress=None, query_provider=None, member_hag=None
 ):
     root = Path(root).resolve()
     base, old_arrays = v2._load_base(root, result, reconciled)
     binding = base["binding"]
     br = v1._run_root(root, result.analysis_run_id)
+    proposal_history = _matching_proposal_history(root, br, binding)
     operations = read_json(br / "tree_edits.json")["operations"]
     original = read_json(br / "batch-reconciliation.json")["trees"]
     original_hash = (
@@ -117,92 +307,127 @@ def recover_finalized_dbh_v3(
     )
     source = prep["ground_preparation"]["source_identity"]
     cache = confined(root, prep["vegetation_role_tile_index_reference"])
-    query = query_provider or local_raw_query
-    legacy_base_proofs = {}
-    for accepted in base["trees"]:
-        if (accepted["dbh_cm"] is None
-                or accepted.get("dbh_method") not in {"DIRECT_STEM", "RECOVERED_STEM"}
-                or accepted.get("dbh_source") in {VERSION, *PRIOR_AUTO_SOURCES}):
-            continue
-        # V1/V2 could publish a crisp circle at the wrong global HAG when the
-        # actual root stands on a local terrace. Audit their existing evidence
-        # against *all-source* raw points before reserving or preserving it.
-        fixed_axis = _fixed_claim(accepted, old_arrays)
-        center = np.asarray(fixed_axis["axis_origin"][:2]) + origin[:2]
-        coarse_z = float(np.median(ground[
-            ground_tree.query(center, k=min(8, len(ground)))[1], 2
-        ]))
-        try:
-            audit_radius = min(1.20, max(0.60, accepted["dbh_cm"] / 200 + 0.43))
-            if query_provider is None:
-                raw, idx, proof = query(
-                    cache, source, center, (coarse_z - 1, coarse_z + 7),
-                    radius_m=audit_radius,
-                )
-            else:
-                raw, idx, proof = query(cache, source, center, (coarse_z - 1, coarse_z + 7))
-            raw, idx = np.asarray(raw), np.asarray(idx)
-            if (raw.shape != (len(idx), 3) or idx.ndim != 1
-                    or len(idx) > MAX_LOCAL_POINTS or (idx < 0).any()
-                    or (idx >= source["source_point_count"]).any()
-                    or v1.strong_source(proof["source_identity"]) != v1.strong_source(source)):
-                raise ValueError("LEGACY_BASE_RAW_SOURCE_PROVENANCE_INVALID")
-            keep = ~v2.contains(removed, idx)
-            raw = raw[keep] - origin
-            hag = _hag_chunked(raw, ground_tree, ground, origin, 250_000)
-            legacy_base_proofs[accepted["global_tree_id"]] = elevated_local_base_probe(
-                raw, hag, {"bh_reference_xyz": fixed_axis["axis_origin"],
-                           "direction_xyz": fixed_axis["axis_direction"],
-                           "radius_m": accepted["dbh_cm"] / 200}
-            )
-        except (OSError, ValueError, KeyError, RuntimeError) as exc:
-            legacy_base_proofs[accepted["global_tree_id"]] = {
-                "status": "LOCAL_BASE_AUDIT_UNAVAILABLE", "reason": str(exc),
+    query = query_provider or (lambda cache, source, center, bounds:
+                               original_raw_query(root, cache, source, center, bounds))
+    baseline_rows = {}
+    baseline_reference = base.get("baseline_geometry_reference")
+    baseline_sha256 = base.get("baseline_geometry_sha256")
+    if baseline_reference:
+        baseline_path = confined(root, baseline_reference)
+        if baseline_path.is_file() and (
+            not baseline_sha256 or sha256(baseline_path) == baseline_sha256
+        ):
+            baseline_rows = {
+                row["global_tree_id"]: row for row in read_json(baseline_path).get("trees", [])
             }
-    suspect_base_ids = {gid for gid, proof in legacy_base_proofs.items()
-                        if proof["status"] != "NO_ELEVATED_BASE_EVIDENCE"}
-
-    def replace_prior_auto(row):
-        if row["global_tree_id"] in suspect_base_ids:
-            return True
-        if row.get("dbh_method") == "REFERENCE_ESTIMATE":
-            return True
-        return bool(
-            recompute_auto
-            and row["dbh_cm"] is not None
-            and row.get("dbh_method") == "RECOVERED_STEM"
-            and row.get("dbh_source") in {VERSION, geometry.VERSION, *PRIOR_AUTO_SOURCES}
-        )
-
+    # Explicit human-confirmed evidence is retained.  All automatic values,
+    # including prior V1/V2 values, are remeasured so none can silently keep
+    # the old processed-ground height reference.
     fixed = [
         _fixed_claim(row, old_arrays)
         for row in base["trees"]
         if row["dbh_cm"] is not None
-        and not replace_prior_auto(row)
-        and row["dbh_method"] in {"DIRECT_STEM", "RECOVERED_STEM", "REVIEW_CONFIRMED_STEM"}
+        and row["dbh_method"] == "REVIEW_CONFIRMED_STEM"
+        and row.get("dbh_section_measurement", {}).get("diameter_derived_from")
+        == "ACTUAL_RAW_1P30_SLAB_CIRCLE_NOT_INTERPOLATED"
     ]
-    rows, jobs, claims = [], {}, []
+    seed_registry = {}
+    saved_by_tree = {}
+    raw_axis_proposals = {}
+    # Preserve the new stem-first proposal through V1/V2/V5. Dense crown modes
+    # must not consume all three ROI slots and push the measured raw shaft out.
+    # This is a search position only: current members, raw ground, slab fit and
+    # joint ownership are independently checked below, just like other seeds.
+    for tree_root in sorted(br.glob("*/tree")):
+        manifest_path = tree_root / "span_tree_manifest.json"
+        if not manifest_path.is_file():
+            continue
+        manifest = read_json(manifest_path)
+        if manifest.get("membership_diagnostics", {}).get("version") not in {
+            "RAW_SECTIONS_STEM_FIRST_V1", "RAW_SECTIONS_STEM_FIRST_V2_STRUCTURAL_PLANES"
+        }:
+            continue
+        span_proof = v1._span_evidence(tree_root)
+        for source_tree, anchor in span_proof["anchors"].items():
+            raw_axis_proposals[(int(manifest["span_id"]), int(source_tree))] = anchor
+    for old in base["trees"]:
+        gid = old["global_tree_id"]
+        current_raw_seed = None
+        saved = old.get("v2_candidates", [])
+        if not saved:
+            seeds, _ = v2.current_seeds(contexts[gid]["xyz"], contexts[gid]["hag"])
+            saved = [{"seed": seed} for seed in seeds]
+        baseline_row = baseline_rows.get(gid, {})
+        baseline_xy = baseline_row.get("stem_axis_xy_local_m")
+        proposals = [raw_axis_proposals[tuple(link)] for link in old.get("lineage", [])
+            if tuple(link) in raw_axis_proposals]
+        if proposals and all(np.linalg.norm(p["xy"] - proposals[0]["xy"]) <= .15 for p in proposals):
+            current = contexts[gid]
+            close = np.linalg.norm(current["xyz"][:, :2] - proposals[0]["xy"], axis=1) <= .30
+            low = close & (current["hag"] >= .35) & (current["hag"] <= 3.9)
+            levels = np.unique(np.floor(current["hag"][low] / .4))
+            if np.count_nonzero(low) >= 24 and len(levels) >= 3:
+                seed = {"xy": proposals[0]["xy"].tolist(), "source": "CURRENT_RAW_SHAFT_AXIS",
+                    "support": int(np.count_nonzero(low))}
+                current_raw_seed = seed
+                saved = [{"seed": seed}] + [item for item in saved
+                    if np.linalg.norm(np.asarray(item["seed"]["xy"]) - proposals[0]["xy"]) > .05]
+        # A repeated V5 calculation uses the current V5 publication as its
+        # immediate baseline. Preserve the original proposal (not its fitted
+        # diameter) so rerunning identical members cannot silently lose the
+        # V2 accepted-axis ROI. Every proposal is still reread and revalidated
+        # against the original LAS, original ground and current ownership.
+        prior_baseline_seed = next((q.get("seed") for q in old.get("v3_queries", [])
+            if q.get("seed", {}).get("source") == "BASELINE_ACCEPTED_STEM_AXIS"), None)
+        if prior_baseline_seed is None and gid in proposal_history:
+            prior_baseline_seed = proposal_history[gid]["seed"]
+        if prior_baseline_seed is not None:
+            saved = [{"seed": copy.deepcopy(prior_baseline_seed)}] + [
+                item for item in saved if np.linalg.norm(
+                    np.asarray(item["seed"]["xy"], dtype=np.float64)
+                    - np.asarray(prior_baseline_seed["xy"], dtype=np.float64)) > 0.05
+            ]
+        if (
+            baseline_row.get("dbh_cm") is not None
+            and baseline_row.get("dbh_method")
+            in {"DIRECT_STEM", "RECOVERED_STEM", "REVIEW_CONFIRMED_STEM"}
+            and baseline_xy is not None
+        ):
+            baseline_seed = {
+                "seed": {
+                    "xy": list(baseline_xy),
+                    "source": "BASELINE_ACCEPTED_STEM_AXIS",
+                    "support": int(baseline_row.get("dbh_point_count") or 0),
+                }
+            }
+            saved = [baseline_seed] + [
+                item
+                for item in saved
+                if np.linalg.norm(
+                    np.asarray(item["seed"]["xy"], dtype=np.float64)
+                    - np.asarray(baseline_xy, dtype=np.float64)
+                )
+                > 0.05
+            ]
+        if current_raw_seed is not None:
+            # Deterministic current inputs only: a previous fitted centre must
+            # not change this backend's proposal order on repeated finalize.
+            current_modes, _ = v2.current_seeds(contexts[gid]["xyz"], contexts[gid]["hag"])
+            saved = [{"seed": current_raw_seed}] + [{"seed": seed} for seed in current_modes
+                if np.linalg.norm(np.asarray(seed["xy"]) - current_raw_seed["xy"]) > .05]
+        saved = saved[: v2.MAX_SEEDS]
+        saved_by_tree[gid] = saved
+        seed_registry[gid] = [np.asarray(item["seed"]["xy"], dtype=np.float64) for item in saved]
+
+    rows, jobs, claims, section_jobs = [], {}, [], {}
     for old in sorted(base["trees"], key=lambda row: row["global_tree_id"]):
         row = copy.deepcopy(old)
         gid = row["global_tree_id"]
         rows.append(row)
-        if row["dbh_cm"] is not None and not replace_prior_auto(row):
+        if any(claim["tree_id"] == gid for claim in fixed):
             continue
         if progress:
             progress(f"V3_CURRENT_CROWN:{gid}")
-        if old.get("dbh_method") == "REFERENCE_ESTIMATE":
-            row["dbh_stale_reference_estimate"] = {
-                "value_cm": old.get("dbh_cm"),
-                "source": old.get("dbh_source"),
-                "reference": old.get("dbh_reference_estimate"),
-                "status": "RETIRED_NOT_TREE_MEASUREMENT",
-            }
-        if gid in suspect_base_ids:
-            row["dbh_stale_prior_geometry"] = {
-                "value_cm": old.get("dbh_cm"), "method": old.get("dbh_method"),
-                "source": old.get("dbh_source"),
-                "status": "RETIRED_LOCAL_BASE_NOT_VERIFIED",
-            }
         row.update(v1.unavailable("NO_CROWN_TO_STEM_IDENTITY"))
         row.update(
             dbh_source=VERSION,
@@ -211,59 +436,13 @@ def recover_finalized_dbh_v3(
             v3_queries=[],
             current_editor_revision=binding["editor_revision"],
         )
-        if gid in legacy_base_proofs:
-            row["legacy_base_probe"] = legacy_base_proofs[gid]
         row.pop("v3_final_fit", None)
         row.pop("selected_candidate_id", None)
-        row.pop("dbh_reference_estimate", None)
-        row.pop("dbh_pre_reference_failure_reason", None)
-        saved_candidates = old.get("v2_candidates", [])
-        if not saved_candidates:
-            seeds, _ = v2.current_seeds(
-                contexts[gid]["xyz"], contexts[gid]["hag"], old.get("stem_axis_xy_local_m")
-            )
-            saved_candidates = [{"seed": seed} for seed in seeds]
-        else:
-            # V2 projects saved before the reserved stem-hint ROI existed have
-            # three crown-mode seeds. Replay the validated lineage hint as an
-            # additional search location only when current members support it.
-            seeds, hint_proof = v2.current_seeds(
-                contexts[gid]["xyz"], contexts[gid]["hag"], old.get("stem_axis_xy_local_m")
-            )
-            hint = next(
-                (seed for seed in seeds if seed["source"] == "CURRENT_SUPPORTED_HINT"), None
-            )
-            if hint is not None and all(
-                np.linalg.norm(np.asarray(candidate["seed"]["xy"]) - hint["xy"])
-                > v2.ROI_RADIUS_M
-                for candidate in saved_candidates
-            ):
-                saved_candidates = [*saved_candidates, {"seed": hint}]
-                row["validated_stem_hint_replayed"] = hint_proof
-        if query_provider is None and not any(
-            c.get("absolute_pass") for c in old.get("v3_candidates", [])
-        ):
-            wide, wide_proof = current_crown_wide_seeds(
-                cache, source, contexts[gid]["xyz"], ground, ground_tree, origin,
-                excluded_indices=removed,
-                existing_seeds=[candidate["seed"] for candidate in saved_candidates],
-                limit=max(0, MAX_V3_SEEDS - len(saved_candidates)),
-            )
-            saved_candidates.extend({"seed": seed} for seed in wide)
-            row["wide_raw_stem_search"] = wide_proof
-        if len(saved_candidates) > MAX_V3_SEEDS:
+        saved_candidates = saved_by_tree[gid]
+        if len(saved_candidates) > v2.MAX_SEEDS:
             raise ValueError("V3_ROI_BUDGET_EXCEEDED")
-        has_axes = any(
-            c.get("fit", {}).get("axis", {}).get("plausible_candidates") for c in saved_candidates
-        )
         seen_raw, seen_deleted = [], []
         for roi_id, previous in enumerate(saved_candidates):
-            axes = _v2_axes(previous)
-            is_hint = previous["seed"].get("source") == "CURRENT_SUPPORTED_HINT"
-            is_wide = previous["seed"].get("source") == "ALL_SOURCE_VERTICAL_OCCUPANCY"
-            discover = not has_axes or is_hint or is_wide
-            if has_axes and not axes and not discover:
-                continue
             center = np.asarray(previous["seed"]["xy"]) + origin[:2]
             ground_z = float(
                 np.median(ground[ground_tree.query(center, k=min(8, len(ground)))[1], 2])
@@ -287,60 +466,71 @@ def recover_finalized_dbh_v3(
                 seen_raw.append(idx)
                 deleted = v2.contains(removed, idx)
                 seen_deleted.append(idx[deleted])
-                deleted_bh_count = 0
-                if deleted.any():
-                    deleted_hag = _hag_chunked(
-                        raw[deleted] - origin, ground_tree, ground, origin, 250_000
-                    )
-                    deleted_bh_count = int(
-                        np.count_nonzero(np.abs(deleted_hag - 1.30) <= 0.15)
-                    )
-                query_record.update(
-                    proof=proof,
-                    editor_excluded_point_count=int(deleted.sum()),
-                    editor_excluded_bh_point_count=deleted_bh_count,
+                query_record.update(proof=proof, editor_excluded_point_count=int(deleted.sum()))
+                raw, idx = raw[~deleted], idx[~deleted]
+                ground_reference = raw_tree_lowest_reference(
+                    contexts[gid]["xyz"] + origin,
+                    processed_ground_prior_z=ground_z,
                 )
-                raw, idx = raw[~deleted] - origin, idx[~deleted]
-                hag = _hag_chunked(raw, ground_tree, ground, origin, 250_000)
-                low = (hag >= -0.25) & (hag <= 5.5)
+                query_record["ground_reference"] = ground_reference
+                hag = raw[:, 2] - ground_reference["ground_z_absolute_m"]
+                raw = raw - origin
+                low = (hag >= 0.5) & (hag <= 5.5)
                 raw, idx, hag = raw[low], idx[low], hag[low]
-                if discover:
-                    axes, proposal_proof = geometry.upper_axes(raw, hag)
-                    query_record["upper_proposals"] = proposal_proof
-                partial_arc = None
-                if not axes and discover:
-                    partial_arc, partial_proof = recover_partial_arc_identity(raw, hag, idx)
-                    query_record["partial_arc_probe"] = partial_proof
-                    if partial_arc is None:
-                        partial_arc, upper_proof = recover_upper_supported_identity(raw, hag, idx)
-                        query_record["upper_circular_probe"] = upper_proof
-                    if partial_arc is None:
-                        partial_arc, upper_arc_proof = recover_upper_partial_arc_identity(
-                            raw, hag, idx
+                bh_sections, _, _, _ = geometry._section_proposals(raw, hag)
+                query_record["breast_height_proposals"] = {"sections": bh_sections}
+                section_estimate = _breast_height_section_estimate(
+                    bh_sections,
+                    previous["seed"]["xy"],
+                    seed_registry,
+                    gid,
+                    None,  # A processed/legacy diameter must not select the new measurement.
+                    0.45
+                    if previous["seed"].get("source") == "BASELINE_ACCEPTED_STEM_AXIS"
+                    else BH_SEED_MAX_DISTANCE_M,
+                )
+                if section_estimate is not None:
+                    section_ground = calibrated_breast_height(
+                        ground_reference, np.asarray(section_estimate["center_xy_local_m"]) + origin[:2],
+                        rows,
+                    )
+                    section_hag = raw[:, 2] + origin[2] - section_ground["ground_z_absolute_m"]
+                    section_estimate.update(
+                        roi_id=roi_id,
+                        ground_reference=section_ground,
+                    )
+                    measurement = fit_raw_breast_height_section(
+                        raw, section_hag, section_estimate["center_xy_local_m"],
+                        section_estimate["dbh_cm"] / 200,
+                    )
+                    query_record["actual_1p30_section_fit"] = measurement
+                    if measurement["dbh_cm"] is None:
+                        section_estimate = None
+                    else:
+                        section_estimate.update(
+                            dbh_cm=measurement["dbh_cm"], point_count=measurement["dbh_point_count"],
+                            fit_rmse_m=measurement["dbh_fit_rmse"],
+                            uncertainty_cm=measurement["dbh_uncertainty_cm"],
+                            measurement=measurement,
+                            evidence=dict(xyz_local_m=raw[measurement["selected_input_indices"]],
+                                          hag_m=section_hag[measurement["selected_input_indices"]],
+                                          original_index=idx[measurement["selected_input_indices"]]),
                         )
-                        query_record["upper_partial_arc_probe"] = upper_arc_proof
-                    if partial_arc is None:
-                        partial_arc, tube_proof = recover_bh_tube_identity(
-                            raw, hag, idx, expected_xy=previous["seed"]["xy"]
-                        )
-                        query_record["bh_tube_probe"] = tube_proof
-                    if partial_arc is not None:
-                        axes = [partial_arc["axis"]]
+                    prior = section_jobs.get(gid)
+                    if section_estimate is not None and (prior is None or (
+                        section_estimate["seed_distance_m"],
+                        section_estimate["relative_diameter_spread"],
+                    ) < (prior["seed_distance_m"], prior["relative_diameter_spread"])):
+                        section_jobs[gid] = section_estimate
+                axes, proposal_proof = geometry.upper_axes(raw, hag)
+                query_record["upper_proposals"] = proposal_proof
                 for axis_number, axis in enumerate(axes):
                     identifier = f"g{gid}-r{roi_id}-a{axis_number}"
-                    tracked = (
-                        copy.deepcopy(partial_arc["track"])
-                        if partial_arc is not None
-                        else geometry.track_downward(raw, hag, idx, axis)
-                    )
+                    tracked = geometry.track_downward(raw, hag, idx, axis)
                     support = tracked.pop("original_index")
                     effective = tracked["refined_axis"] or axis
                     axis_origin = np.asarray(effective["bh_reference_xyz"])
                     direction = np.asarray(effective["direction_xyz"])
-                    local_base = elevated_local_base_probe(
-                        raw, hag, {**effective,
-                                   "radius_m": effective.get("radius_m", axis["radius_m"])}
-                    )
                     bridge = v2.raw_bridge(raw, hag, axis_origin, direction, axis["radius_m"] * 200)
                     scores = {}
                     for other in sorted(contexts):
@@ -352,26 +542,9 @@ def recover_finalized_dbh_v3(
                             direction,
                             axis["radius_m"] * 200,
                         )
-                        if tracked["status"] == "PASS" and connection["status"] != "PASS":
-                            bridged = v2.raw_bridged_axis_connection(
-                                context["xyz"], context["hag"], raw, hag,
-                                axis_origin, direction, axis["radius_m"] * 200,
-                            )
-                            connection["raw_bridged_upper_crown"] = bridged
-                            if bridged["status"] == "PASS":
-                                connection = {
-                                    **connection,
-                                    "status": "PASS",
-                                    "mode": "RAW_BRIDGED_TO_CURRENT_UPPER_CROWN",
-                                }
                         scores[other] = geometry.score_crown(
                             tracked, effective, context["anchor"], connection, bridge
                         )
-                        if local_base["status"] in {
-                            "LOCAL_BASE_HEIGHT_AMBIGUOUS", "LOCAL_BASE_HEIGHT_UNVERIFIED",
-                        }:
-                            scores[other]["absolute_pass"] = False
-                            scores[other]["local_base_gate"] = local_base
                     item = {
                         "candidate_id": identifier,
                         "roi_id": roi_id,
@@ -381,7 +554,6 @@ def recover_finalized_dbh_v3(
                         "identity_support_count": len(support),
                         "identity_support_original_index_sha256": array_digest(support),
                         "editor_excluded_point_count": int(deleted.sum()),
-                        "local_base_probe": local_base,
                         **scores[gid],
                     }
                     row["v3_candidates"].append(item)
@@ -392,8 +564,7 @@ def recover_finalized_dbh_v3(
                         "axis": effective,
                         "item": item,
                         "source_tree": gid,
-                        "editor_excluded_bh_point_count": deleted_bh_count,
-                        "prefit": partial_arc["fit"] if partial_arc is not None else None,
+                        "ground_reference": ground_reference,
                     }
                     for other, score in scores.items():
                         # Always report the source crown; only plausible foreign claims
@@ -419,6 +590,8 @@ def recover_finalized_dbh_v3(
         row["v3_editor_excluded_point_count"] = (
             len(np.unique(np.concatenate(seen_deleted))) if seen_deleted else 0
         )
+        if row["v3_queries"] and all(q.get("status") == "UNAVAILABLE" for q in row["v3_queries"]):
+            row["raw_source_failure"] = row["v3_queries"][0]["reason"]
     # Equivalent tracks from overlapping ROIs are one physical option, not a
     # synthetic runner-up. Keep every score in the audit and retain foreign
     # claims so deduplication cannot conceal cross-crown ambiguity.
@@ -443,27 +616,6 @@ def recover_finalized_dbh_v3(
                 duplicates.add(cid)
                 jobs[cid]["item"]["duplicate_track_of"] = prior
     claims = [c for c in claims if c["candidate_id"] not in duplicates]
-    # Overlapping ROIs can report one physical stem twice for the same target:
-    # once from its own crown and once as a foreign suggestion.  That is one
-    # option, not two close-scoring alternatives.  Keep cross-target claims so
-    # a stem shared by two *different* trees is still rejected by ownership.
-    unique_claims = []
-    for claim in sorted(claims, key=lambda c: (
-        c["tree_id"],
-        "-claim-" in c["candidate_id"],
-        -c["score"], c["candidate_id"],
-    )):
-        same = next((prior for prior in unique_claims
-                     if prior["tree_id"] == claim["tree_id"]
-                     and geometry._line_candidates_are_equivalent(
-                         {"bh_reference_xyz": prior["axis_origin"],
-                          "direction_xyz": prior["axis_direction"]},
-                         {"bh_reference_xyz": claim["axis_origin"],
-                          "direction_xyz": claim["axis_direction"]},
-                     )), None)
-        if same is None:
-            unique_claims.append(claim)
-    claims = unique_claims
     resolution = resolve_stem_ownership(claims, fixed)
     # Global resolver output must be identical under a reverse presentation order.
     if resolution != resolve_stem_ownership(list(reversed(claims)), list(reversed(fixed))):
@@ -471,7 +623,7 @@ def recover_finalized_dbh_v3(
     blocks = []
     for row in rows:
         gid = row["global_tree_id"]
-        if row["dbh_cm"] is not None:
+        if any(claim["tree_id"] == gid for claim in fixed):
             mask = old_arrays["global_tree_id"] == gid
             blocks.append({key: value[mask] for key, value in old_arrays.items()})
             continue
@@ -479,22 +631,50 @@ def recover_finalized_dbh_v3(
             candidate["decision"] = resolution["decisions"].get(candidate["candidate_id"])
         chosen_id = resolution["selected"].get(gid)
         row["dbh_fit_status"] = resolution["tree_status"].get(gid, "NO_CROWN_TO_STEM_IDENTITY")
-        if row["v3_candidates"] and max(
-            row["v3_candidates"], key=lambda c: c["score"]
-        ).get("local_base_probe", {}).get("status") in {
-            "LOCAL_BASE_HEIGHT_AMBIGUOUS", "LOCAL_BASE_HEIGHT_UNVERIFIED",
-        }:
-            row["dbh_fit_status"] = max(
-                row["v3_candidates"], key=lambda c: c["score"]
-            )["local_base_probe"]["status"]
-        elif len([c for c in row["v3_candidates"]
-                  if c.get("crown_scores", {}).get(str(gid), {}).get(
-                      "connection", {}).get("status") == "PASS"
-                  and c.get("crown_scores", {}).get(str(gid), {}).get(
-                      "raw_bridge", {}).get("status") == "PASS"]) >= 2:
-            row["dbh_fit_status"] = "MULTIPLE_STEM_AXES_REVIEW_REQUIRED"
+        if row.get("raw_source_failure"):
+            row["dbh_fit_status"] = row["raw_source_failure"]
         row["dbh_evidence_point_count"] = row["dbh_band_point_count"] = 0
         if chosen_id is None:
+            estimate = section_jobs.get(gid)
+            if estimate is not None:
+                reference = estimate["ground_reference"]
+                evidence = estimate.pop("evidence")
+                selected_idx = evidence["original_index"]
+                if v2.contains(removed, selected_idx).any() or v2.conflicting_current_owner(
+                    selected_idx, sorted_members, sorted_owners, gid
+                ):
+                    row["dbh_fit_status"] = "RAW_1P30_SECTION_SOURCE_OWNERSHIP_CONFLICT"
+                    continue
+                blocks.append({**evidence, "global_tree_id": np.full(len(selected_idx), gid, np.int32)})
+                row.update(
+                    dbh_cm=estimate["dbh_cm"],
+                    dbh_method="RAW_GROUND_BH_SECTION",
+                    dbh_quality="ESTIMATED",
+                    dbh_point_count=estimate["point_count"],
+                    dbh_evidence_point_count=estimate["point_count"],
+                    dbh_band_point_count=estimate["point_count"],
+                    dbh_fit_rmse=estimate["fit_rmse_m"],
+                    dbh_slice_count=1,
+                    dbh_fit_status="PASS_ACTUAL_RAW_GROUND_1P30_SECTION",
+                    dbh_source=VERSION,
+                    dbh_model_version=VERSION,
+                    dbh_uncertainty_cm=estimate["uncertainty_cm"],
+                    stem_association_status="CURRENT_SEED_BH_SECTION_ESTIMATE",
+                    stem_axis_xy_local_m=estimate["center_xy_local_m"],
+                    dbh_ground_z_absolute_m=reference["ground_z_absolute_m"],
+                    dbh_measurement_z_absolute_m=reference["breast_height_z_absolute_m"],
+                    dbh_height_reference="ORIGINAL_RAW_TREE_LOWEST_PLUS_1P30M",
+                    dbh_ground_reference_method=reference["ground_reference_method"],
+                    dbh_ground_reference_point_count=reference[
+                        "raw_ground_support_point_count"
+                    ],
+                    raw_ground_bh_section_estimate=estimate,
+                    dbh_section_measurement=estimate["measurement"],
+                    dbh_site_slope_deg=reference.get('site_slope_deg'),
+                    dbh_common_height_applied=reference.get('common_height_applied', False),
+                    dbh_measurement_height_policy=reference.get('measurement_height_policy'),
+                    dbh_calibration_tree_id=reference.get('calibration_tree_id'),
+                )
             continue
         if chosen_id not in jobs:
             row["dbh_fit_status"] = "FOREIGN_STEM_CLAIM_NOT_ASSIGNABLE"
@@ -504,31 +684,31 @@ def recover_finalized_dbh_v3(
             # A foreign claim exists solely to veto duplicated ownership.
             row["dbh_fit_status"] = "FOREIGN_STEM_CLAIM_NOT_ASSIGNABLE"
             continue
-        fitted = (
-            copy.deepcopy(job["prefit"])
-            if job["prefit"] is not None
-            else geometry.fit_identified_stem(job["raw"], job["hag"], job["axis"])
-        )
-        if (
-            fitted["dbh_cm"] is not None
-            and fitted.get("dbh_quality") == "ESTIMATE"
-            and job["editor_excluded_bh_point_count"] >= 12
-        ):
-            fitted.update(
-                dbh_cm=None,
-                dbh_method="UNAVAILABLE",
-                dbh_quality="UNAVAILABLE",
-                dbh_fit_status="EDITOR_REMOVED_BH_EVIDENCE",
-            )
+        fitted = geometry.fit_identified_stem(job["raw"], job["hag"], job["axis"])
         positions = np.asarray(fitted.pop("selected_input_indices"), dtype=np.int64)
         row["v3_final_fit"] = fitted
         row["selected_candidate_id"] = chosen_id
         row["dbh_fit_status"] = fitted["dbh_fit_status"]
-        if row.get("v2_failure_reason") == "MULTIPLE_CURRENT_STEMS_AMBIGUOUS":
-            row["dbh_fit_status"] = "MULTIPLE_STEM_AXES_REVIEW_REQUIRED"
+        # The 0.85--1.75 m multisection fit is an identity/axis diagnostic only.
+        # Once identity is established, measure the actual target slab even
+        # when taper/branches make that older pooled diameter unavailable.
+        stem_ground = calibrated_breast_height(
+            job["ground_reference"], np.asarray(job["axis"]["bh_reference_xyz"][:2]) + origin[:2],
+            rows,
+        )
+        stem_hag = job["raw"][:, 2] + origin[2] - stem_ground["ground_z_absolute_m"]
+        measurement = fit_raw_breast_height_section(
+            job["raw"], stem_hag, job["axis"]["bh_reference_xyz"][:2],
+            fitted["dbh_cm"] / 200 if fitted["dbh_cm"] is not None else job["item"]["axis"]["radius_m"],
+        )
+        row["dbh_section_measurement"] = measurement
+        if measurement["dbh_cm"] is None:
+            row["dbh_fit_status"] = measurement["dbh_fit_status"]
             continue
-        if fitted["dbh_cm"] is None:
-            continue
+        fitted.update({key: measurement.get(key) for key in v1.DBH_FIELDS if key in measurement})
+        positions = np.asarray(measurement["selected_input_indices"], dtype=np.int64)
+        job["ground_reference"] = stem_ground
+        job["hag"] = stem_hag
         selected_idx = job["idx"][positions]
         if v2.contains(removed, selected_idx).any() or v2.conflicting_current_owner(
             selected_idx, sorted_members, sorted_owners, gid
@@ -545,6 +725,21 @@ def recover_finalized_dbh_v3(
             dbh_band_point_count=int(
                 np.count_nonzero((job["hag"][positions] >= 0.85) & (job["hag"][positions] <= 1.75))
             ),
+            dbh_ground_z_absolute_m=job["ground_reference"]["ground_z_absolute_m"],
+            dbh_measurement_z_absolute_m=job["ground_reference"][
+                "breast_height_z_absolute_m"
+            ],
+            dbh_height_reference="ORIGINAL_RAW_TREE_LOWEST_PLUS_1P30M",
+            dbh_ground_reference_method=job["ground_reference"][
+                "ground_reference_method"
+            ],
+            dbh_ground_reference_point_count=job["ground_reference"][
+                "raw_ground_support_point_count"
+            ],
+            dbh_site_slope_deg=stem_ground.get('site_slope_deg'),
+            dbh_common_height_applied=stem_ground.get('common_height_applied', False),
+            dbh_measurement_height_policy=stem_ground.get('measurement_height_policy'),
+            dbh_calibration_tree_id=stem_ground.get('calibration_tree_id'),
         )
         blocks.append(
             {
@@ -554,6 +749,64 @@ def recover_finalized_dbh_v3(
                 "global_tree_id": np.full(len(positions), gid, np.int32),
             }
         )
+    # Final source-derived fallback: measure every still-unresolved tree from
+    # that tree's full-resolution original LAS membership.  The reconciled
+    # arrays retain exact original_index lineage and original coordinates;
+    # they are not the downsampled/denoised display cloud.  No crown allometry
+    # or placeholder value is permitted here.
+    for row in rows:
+        if row.get("dbh_cm") is not None:
+            continue
+        gid = int(row["global_tree_id"])
+        member_mask = reconciled.final_tree_id == gid
+        raw_tree_xyz = np.asarray(reconciled.final_xyz_local_m)[member_mask]
+        raw_tree_index = np.asarray(reconciled.final_original_index)[member_mask]
+        measurement = fit_original_tree_member_breast_height(raw_tree_xyz, raw_tree_index)
+        row["dbh_section_measurement"] = measurement
+        if measurement["dbh_cm"] is None:
+            row["dbh_fit_status"] = measurement["dbh_fit_status"]
+            continue
+        positions = np.asarray(measurement["selected_input_indices"], dtype=np.int64)
+        selected_idx = raw_tree_index[positions]
+        if v2.contains(removed, selected_idx).any():
+            row["dbh_fit_status"] = "ORIGINAL_TREE_1P30_SELECTED_POINT_WAS_DELETED"
+            continue
+        ground_absolute = float(measurement["ground_local_z_m"] + origin[2])
+        measurement_absolute = float(measurement["measurement_local_z_m"] + origin[2])
+        row.update(
+            dbh_cm=measurement["dbh_cm"],
+            dbh_method=measurement["dbh_method"],
+            dbh_quality=measurement["dbh_quality"],
+            dbh_point_count=measurement["dbh_point_count"],
+            dbh_evidence_point_count=measurement["dbh_point_count"],
+            dbh_band_point_count=measurement["dbh_point_count"],
+            dbh_fit_rmse=measurement["dbh_fit_rmse"],
+            dbh_slice_count=1,
+            dbh_fit_status=measurement["dbh_fit_status"],
+            dbh_source=VERSION,
+            dbh_model_version=VERSION,
+            dbh_uncertainty_cm=measurement["dbh_uncertainty_cm"],
+            stem_association_status="ORIGINAL_TREE_MEMBER_1P30_FALLBACK",
+            stem_axis_xy_local_m=measurement["center_xy_local_m"],
+            dbh_ground_z_absolute_m=ground_absolute,
+            dbh_measurement_z_absolute_m=measurement_absolute,
+            dbh_height_reference="ORIGINAL_RAW_TREE_LOWEST_PLUS_1P30M",
+            dbh_ground_reference_method="ORIGINAL_RAW_TREE_LOWEST_POINT",
+            dbh_ground_reference_point_count=1,
+            dbh_site_slope_deg=None,
+            dbh_common_height_applied=True,
+            dbh_measurement_height_policy="TREE_LOWEST_ORIGINAL_POINT_PLUS_1P30M",
+            dbh_calibration_tree_id=gid,
+        )
+        blocks.append(
+            {
+                "xyz_local_m": raw_tree_xyz[positions],
+                "hag_m": raw_tree_xyz[positions, 2] - measurement["ground_local_z_m"],
+                "original_index": selected_idx,
+                "global_tree_id": np.full(len(positions), gid, np.int32),
+            }
+        )
+
     arrays = {
         key: np.concatenate([block[key] for block in blocks]) if blocks else old_arrays[key][:0]
         for key in old_arrays
@@ -572,7 +825,6 @@ def recover_finalized_dbh_v3(
         from algorithms.manual_span.dbh_recovery import estimate_local_dbh
 
         allometry["evaluation"] = estimate_local_dbh(rows, [r for r in rows if r["dbh_cm"] is None])
-    reference_estimation = apply_reference_estimates(rows, reference_dbh_cm=reference_dbh_cm)
     if binding != v1._binding(root, result, reconciled):
         raise ValueError("V3_PROJECT_CHANGED_DURING_RECOVERY")
     if original_hash is not None and sha256(br / "tree_segmentation_original.npz") != original_hash:
@@ -581,13 +833,14 @@ def recover_finalized_dbh_v3(
         "schema": base["schema"],
         "binding": binding,
         "recovery_version": VERSION,
+        "measurement_policy": "DIRECT_ORIGINAL_LAS_GROUND_PLUS_1P30M_ACTUAL_SLAB",
+        "proposal_history_inputs": proposal_history,
         "baseline_geometry_reference": base["baseline_geometry_reference"],
         "baseline_geometry_sha256": base["baseline_geometry_sha256"],
         "span_proofs": base.get("span_proofs", {}),
         "trees": rows,
         "global_ownership": resolution,
         "allometry": allometry,
-        "reference_estimation": reference_estimation,
         "editor_excluded_index_count": len(removed),
         "editor_excluded_index_sha256": array_digest(removed),
         "current_member_hag_sha256": array_digest(member_hag),
@@ -611,35 +864,9 @@ def recover_finalized_dbh_v3(
     return payload
 
 
-def finalize_dbh(root, result, reconciled, *, force_recompute=False, reference_dbh_cm=None):
-    recompute = force_recompute or reference_dbh_cm is not None
-    existing = v1.load_finalized_dbh(Path(root), result, reconciled)
+def finalize_dbh(root, result, reconciled):
     try:
-        base, _ = v2._load_base(Path(root), result, reconciled)
+        v2._load_base(Path(root), result, reconciled)
     except (OSError, ValueError, KeyError):
-        base = None
-    current_version = base is not None and base.get("recovery_version") == VERSION
-    expected = {
-        int(record.global_tree_id): record.persistent_tree_id
-        for record in reconciled.global_tree_records
-    }
-    if not recompute and current_version and set(existing) == set(expected) and all(
-        existing[tree_id].get("persistent_tree_id") == persistent_id
-        and existing[tree_id].get("dbh_method") != "REFERENCE_ESTIMATE"
-        for tree_id, persistent_id in expected.items()
-    ):
-        # The proof loader revalidates the editor binding, membership hash and
-        # every evidence hash. Re-running raw ROI queries for that identical
-        # final generation changes no output and cost ~30 s on the 105 M-point
-        # production survey, so reuse the already-certified rows.
-        return {
-            "schema": "treeline-dbh-finalized-cache-v1",
-            "cache_hit": True,
-            "trees": [existing[tree_id] for tree_id in sorted(existing)],
-        }
-    if base is None:
         v2.finalize_dbh(root, result, reconciled)
-    return recover_finalized_dbh_v3(
-        root, result, reconciled, recompute_auto=recompute or not current_version,
-        reference_dbh_cm=reference_dbh_cm,
-    )
+    return recover_finalized_dbh_v3(root, result, reconciled)

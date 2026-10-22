@@ -38,9 +38,9 @@ tr.sel td{background:#fff3bf}
   #tree-label-overlay{position:absolute;inset:0;pointer-events:none;z-index:10}
   .tree-label{position:absolute;transform:translate(-50%,-100%);pointer-events:auto;border:1px solid #64748b;border-radius:4px;background:rgba(255,255,255,.92);color:#172033;padding:2px 5px;font:700 12px/1.1 "Microsoft YaHei","Segoe UI",sans-serif;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.28)}
   .tree-label.selected{border:2px solid #d97706;background:#fff3a3;color:#111827;font-size:15px;padding:3px 7px;box-shadow:0 1px 5px rgba(146,64,14,.48)}
-  .tree-review-main{flex-wrap:nowrap;height:calc(100vh - 48px);min-height:520px}
-  .tree-review-main .plot-panel{min-width:320px;height:auto;min-height:500px;padding:0;overflow:hidden;background:#071015}
-  .tree-review-main .side{min-width:240px;max-width:360px;overflow:auto}
+  .tree-review-main{flex-wrap:nowrap;height:calc(100vh - 48px);min-height:520px;min-width:1180px;overflow:visible}
+  .tree-review-main .plot-panel{flex:1 0 780px;min-width:780px;height:auto;min-height:500px;padding:0;overflow:hidden;background:#071015}
+  .tree-review-main .side{flex:0 0 360px;min-width:360px;max-width:360px;overflow:auto}
   #tree-review-stage{position:relative;width:100%;height:100%;min-height:500px;overflow:hidden}
   #plot3d{position:absolute;inset:0}
   .tree-review-canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
@@ -271,6 +271,7 @@ refreshTimer = setInterval(refreshState, 1500);
 def _legacy_step2_plotly_html() -> str:
     body = """
 <main class="tree-review-main">
+  <button id="btn-review-back" type="button" class="gray" style="position:fixed;right:18px;top:6px;z-index:40">← 返回上一步 / 退出复核</button>
   <div class="panel plot-panel">
     <div id="tree-review-stage">
       <div id="plot3d"></div>
@@ -296,6 +297,7 @@ def _legacy_step2_plotly_html() -> str:
         <button id="btn-next" class="gray">下一棵</button>
         <button id="btn-delete" class="red">删除单木</button>
         <button id="btn-merge">合并选中</button>
+        <button id="btn-split" type="button">分开粘连树</button>
         <button id="btn-trim-component">剔除误分团块</button>
         <button id="btn-trim-lasso">套索剔除</button>
         <button id="btn-undo" class="gray">撤销</button>
@@ -825,6 +827,7 @@ def step2_html() -> str:
       <div id="plot3d"></div>
       <div id="tree-label-overlay" aria-label="树编号标签"></div>
       <div id="viewer-toolbar" aria-label="三维视图控制">
+        <button id="btn-review-back" type="button" title="退出复核视图，不撤销已提交修改；后台任务继续">← 返回 / 退出复核</button>
         <button id="btn-view-reset" type="button">重置</button>
         <button id="btn-view-top" type="button">俯视</button>
         <button id="btn-view-side" type="button">侧视</button>
@@ -847,18 +850,31 @@ def step2_html() -> str:
   <div class="side">
     <div class="panel">
       <h3>第二步：人工审核单木</h3>
-      <p style="font-size:12px;color:#5f6b7a">点击选中单木。局部剔除会先红色预览，确认后才修改完整点成员。</p>
+      <p style="font-size:12px;color:#5f6b7a">单击单选；按住 Ctrl 或自定义按键再点击可多选。先选操作模式，再执行；剔除先红色预览，确认后才修改。</p>
+      <label style="display:flex;gap:8px;align-items:center;font-size:12px">多选按键（按住）
+        <select id="multi-select-key" aria-label="自定义多选按键"></select>
+        <span>Ctrl 始终可用</span>
+      </label>
       <div id="review-status" style="font-size:13px;font-weight:600;margin-bottom:8px">正在加载单木复核数据...</div>
       <div id="current-tree" style="font-size:12px;color:#5f6b7a;margin-bottom:8px">当前：未选择</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button id="btn-prev" class="gray">上一棵</button>
         <button id="btn-next" class="gray">下一棵</button>
         <button id="btn-delete" class="red">删除单木</button>
-        <button id="btn-merge">合并选中</button>
-        <button id="btn-trim-component">剔除误分团块</button>
+        <button id="btn-merge" type="button" aria-pressed="false">合并选中</button>
+        <button id="btn-split" type="button" aria-pressed="false">分开粘连树</button>
+        <button id="btn-trim-component" type="button" aria-pressed="false">剔除误分团块</button>
         <button id="btn-trim-lasso">套索剔除</button>
         <button id="btn-undo" class="gray">撤销</button>
-        <button id="btn-dbh-review" class="gray" type="button">胸径复核 / DBH Review</button>
+        <button id="btn-dbh-review" class="gray" type="button">查看原始树干并复核最低点以上 1.30m 胸径</button>
+      </div>
+      <div id="edit-operation-hint" style="margin-top:10px;font-size:13px;line-height:1.6" role="status"></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="btn-edit-execute" class="green" type="button" disabled>请选择操作</button>
+        <button id="btn-selection-clear" class="gray" type="button">清空选择</button>
+      </div>
+      <div style="margin-top:8px;padding:8px;border-left:3px solid #2878c7;background:#eef6ff;color:#31475d;font-size:12px;line-height:1.55">
+        当前彩色图显示的是处理后的单木成员，不代表胸径取样点。树高与胸径均回到该树未去地面的原始 LAS 成员计算；胸径断面固定为“该树原始最低点 + 1.30 m”。
       </div>
       <div id="selection-state" style="font-size:12px;color:#5f6b7a;margin-top:7px">未选择单木</div>
       <div id="lasso-mode-indicator" style="display:none;margin-top:8px;padding:8px;border-radius:4px;background:#fff3cd;color:#6b4f00;font-weight:600;white-space:pre-line"></div>
@@ -876,7 +892,8 @@ def step2_html() -> str:
     <div class="panel">
       <h3>单木列表 <span id="treecount" style="font-size:12px;color:#5f6b7a"></span></h3>
       <div id="treelist" style="max-height:40vh;overflow:auto">
-        <table id="treetable"><thead><tr><th>ID</th><th>点数</th><th>高度(m)</th><th>编辑状态</th></tr></thead><tbody></tbody></table>
+        <p class="hint">此列表高度为分割阶段参考值；原始树木最高点减最低点的正式树高请查看“查看数据”或最终报告。</p>
+        <table id="treetable"><thead><tr><th>ID</th><th>点数</th><th>分割参考高(m)</th><th>编辑状态</th></tr></thead><tbody></tbody></table>
       </div>
     </div>
   </div>
@@ -947,11 +964,10 @@ def step3_html() -> str:
     <h3>第三步：最终结果</h3>
     <div id="kpis" class="kpis"></div>
     <div style="margin-top:10px;display:flex;gap:10px">
-      <a id="excel-link" href="/download_excel"><button class="green">下载 树木风险结果.xlsx</button></a>
+      <a id="excel-link" href="/download_excel"><button class="green">下载 Prediction_Input.xlsx</button></a>
       <button id="btn-restart" class="gray">重新开始</button>
     </div>
     <div id="metadata" style="font-size:12px;color:#5f6b7a;margin-top:8px"></div>
-    <div id="export-warning" style="font-size:13px;color:#9a4d00;margin-top:8px"></div>
   </div>
   <div class="panel plot-panel">
     <div id="plot3d" style="height:100%"></div>
@@ -982,10 +998,6 @@ async function refreshState(){
   }catch(e){}
 }
 function renderSummary(sum){
-  document.getElementById("excel-link").style.display=sum.EXCEL_REPORT?"":"none";
-  document.getElementById("export-warning").textContent=sum.EXCEL_REPORT
-    ? "胸径依据本树点云证据；无法测得时 Excel 留空并批注原因。"
-    : "交付 Excel 尚未生成，请查看运行错误。";
   const k=document.getElementById("kpis");k.innerHTML="";
   const items=[["源文件","见 Run_Metadata"],["最终单木数",sum.FINAL_TREE_COUNT],
     ["危险单木数",sum.DANGEROUS_TREE_COUNT],["危险点数",sum.DANGER_POINT_COUNT],
@@ -1008,7 +1020,7 @@ async function loadFinal(){
       t.height_m!=null?t.height_m.toFixed(2):"—"}</td><td>${
       t.crown_width_m!=null?t.crown_width_m.toFixed(2):"—"}</td><td>${
       t.crown_area_m2!=null?t.crown_area_m2.toFixed(2):"—"}</td><td>${
-      t.diameter_cm!=null?t.diameter_cm.toFixed(2):"未测得"}</td><td>${
+      t.diameter_cm!=null?t.diameter_cm.toFixed(2):"No"}</td><td>${
       t.minimum_clearance_m!=null?t.minimum_clearance_m.toFixed(3):"—"}</td><td>${
       t.horizontal_clearance_m!=null?t.horizontal_clearance_m.toFixed(3):"—"}</td><td>${
       t.vertical_clearance_m!=null?t.vertical_clearance_m.toFixed(3):"—"}</td><td>${

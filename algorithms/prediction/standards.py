@@ -37,6 +37,7 @@ def _clearance_thresholds() -> dict[str, float]:
         "severe_clearance_distance": 2.5,
     }
 
+
 @dataclass(frozen=True)
 class PredictionStandards:
     profile_name: str = "通用输电线路标准"
@@ -50,6 +51,16 @@ class PredictionStandards:
     min_vertical_distance: float = 4.0
     min_horizontal_distance: float = 4.0
     min_clearance_distance: float = 5.0
+    use_actual_clearance_standard: bool = False
+    actual_min_clearance_distance: float = 0.0
+    use_contact_risk_override: bool = True
+    # Branch/line relation overrides these values.  They apply only when the
+    # branch has not passed through or touched the line.
+    general_risk_clearance_distance: float = 1.0
+    safe_clearance_distance: float = 5.0
+    # A separate early-warning line.  It only answers "when will the clearance
+    # reach this distance" and does not replace the applicable safety standard.
+    danger_clearance_distance: float = 5.0
     max_wind_offset_distance: float = 2.0
     wind_warning_speed: float = 10.0
     wind_high_speed: float = 15.0
@@ -62,6 +73,7 @@ class PredictionStandards:
     general_hazard_index: float = 0.20
     major_hazard_index: float = 0.40
     emergency_hazard_index: float = 0.70
+    pruning_trigger_hazard_index: float = 0.40
     risk_weight_distance: float = 0.40
     risk_weight_growth: float = 0.25
     risk_weight_weather: float = 0.20
@@ -233,7 +245,11 @@ class PredictionStandards:
                 merged_rules[voltage] = merged
             cleaned["voltage_standards"] = merged_rules
         for key in allowed:
-            if key in cleaned and isinstance(getattr(defaults, key), (int, float)):
+            if (
+                key in cleaned
+                and isinstance(getattr(defaults, key), (int, float))
+                and not isinstance(getattr(defaults, key), bool)
+            ):
                 cleaned[key] = float(cleaned[key])
         result = cls(**cleaned)
         result.validate()
@@ -253,6 +269,8 @@ class PredictionStandards:
             raise ValueError("高风险分数阈值必须大于中风险分数阈值")
         if self.high_risk_score > 100:
             raise ValueError("高风险分数阈值不能超过 100")
+        if self.safe_clearance_distance <= self.general_risk_clearance_distance:
+            raise ValueError("安全距离必须大于一般风险距离")
         if not (
             0
             < self.general_hazard_index
@@ -261,6 +279,8 @@ class PredictionStandards:
             <= 1
         ):
             raise ValueError("四级风险指数阈值必须满足 0 < 一般 < 重大 < 紧急 <= 1")
+        if not 0 < self.pruning_trigger_hazard_index <= 1:
+            raise ValueError("修剪预警阈值必须在 0—1 之间")
         weight_groups = {
             "综合风险 D/G/M/H": (
                 self.risk_weight_distance,
@@ -331,6 +351,11 @@ class PredictionStandards:
             key=lambda value: abs(float(value) - voltage_level_kv),
         )
         rules = {key: float(value) for key, value in self.voltage_standards[closest].items()}
+        if self.use_actual_clearance_standard:
+            actual = float(self.actual_min_clearance_distance)
+            rules["min_clearance_distance"] = actual
+            rules["severe_clearance_distance"] = actual * 0.5
+            rules["critical_clearance_distance"] = actual * 0.2
         rules["matched_voltage_level_kv"] = float(closest)
         return rules
 
@@ -357,6 +382,25 @@ def classify_clearance_defect(
     critical = rules["critical_clearance_distance"]
     severe = rules["severe_clearance_distance"]
     safe = rules["min_clearance_distance"]
+    if standards.use_actual_clearance_standard and safe == 0:
+        return {
+            "code": "safe",
+            "level": "安全",
+            "color": "绿色",
+            "interval": "按实际净空标准：净空距离 ≥ 0m",
+            "basis": "已启用实际净空标准，当前最小净空设为 0m",
+            "horizontal_distance": round(horizontal, 3),
+            "vertical_distance": round(vertical, 3),
+            "clearance_distance": round(clearance, 3),
+            "governing_component_distance": round(min(horizontal, vertical, clearance), 3),
+            "thresholds": {
+                "critical_max": 0.0,
+                "severe_max": 0.0,
+                "safe_min": 0.0,
+                "matched_voltage_level_kv": rules["matched_voltage_level_kv"],
+            },
+            "standard_reference": standards.standard_reference,
+        }
     governing_component = min(horizontal, vertical, clearance)
 
     if governing_component <= critical:

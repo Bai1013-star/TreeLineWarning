@@ -349,7 +349,11 @@ def reconstruct_slice_tracks(
             > config.wire_confirmed_max_p95_residual_m
         ):
             reasons.append("high_p95_model_residual")
-        if float(np.quantile(u_residual, 0.95)) > config.wire_confirmed_max_u_residual_m:
+        # Judge the published, robustly supported track on its own inliers.
+        # Rejected branch/attachment observations are already bounded by the
+        # inlier-ratio gate and must not veto an otherwise precise conductor.
+        accepted_u_p95 = float(np.quantile(u_residual[inliers], 0.95)) if np.any(inliers) else float('inf')
+        if accepted_u_p95 > config.wire_confirmed_max_u_residual_m:
             reasons.append("unstable_transverse_position")
         status = (
             CONFIRMED
@@ -390,7 +394,7 @@ def reconstruct_slice_tracks(
                 if np.any(inliers)
                 else float("inf"),
                 median_u_m=float(np.median(support_u)),
-                u_residual_p95_m=float(np.quantile(u_residual, 0.95)),
+                u_residual_p95_m=accepted_u_p95,
                 raw_support_count=int(np.sum(raw_count[rows], dtype=np.int64)),
                 support_slice_ids=support_slice_ids,
                 inlier_slice_ids=support_slice_ids[inliers],

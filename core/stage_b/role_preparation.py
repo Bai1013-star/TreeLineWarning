@@ -101,8 +101,12 @@ def _global_cache_root(project_root: Path) -> Path:
     configured = os.environ.get("TREELINE_SOURCE_CACHE_ROOT")
     if configured:
         return Path(configured).expanduser().resolve()
-    anchor = Path(project_root.anchor)
-    return (anchor / "TreeLineWarning-source-cache" / "role-index-v1").resolve()
+    # Keep the default shared cache beside projects instead of at the drive
+    # root.  Managed Windows computers commonly deny writes such as
+    # ``D:\\TreeLineWarning-source-cache``; this location stays inside the
+    # application's owned data directory and still permits sibling projects to
+    # reuse a strong source-bound cache.
+    return (Path(project_root).resolve().parent / ".source-cache" / "role-index-v1").resolve()
 
 
 def _link_tree(source: Path, destination: Path) -> None:
@@ -280,15 +284,17 @@ def ensure_role_tile_indexes(
     # PATH-B admission is topology-bound.  Digest-suffixed Wire roots prevent
     # an index prepared for a subset from being silently reused for a different
     # project topology.  Vegetation is source-wide HIGH RECALL and topology-free.
-    wire_root = preparation_root / (
-        f"wire-role-tile-index-path-ab-rescue-v2-{admission_digest[:12]}"
-    )
-    vegetation_root = preparation_root / "vegetation-role-tile-index-high-recall-v3"
+    # These directories sit below a source SHA and an already deep project
+    # hierarchy.  Short stable names keep every generated file comfortably
+    # below the Windows path limit without weakening the cache identity.
+    wire_root = preparation_root / f"w-v2-{admission_digest[:12]}"
+    vegetation_root = preparation_root / "v-hr-v3"
     expected = (
         ("wire", wire_root, wire_configuration_digest),
         ("vegetation", vegetation_root, vegetation_configuration_digest),
     )
     validated: dict[str, Any] = {}
+    stale_role_roots: list[Path] = []
     for role, root, digest in expected:
         try:
             validated[role] = RoleSpecificTileCache.load(
@@ -301,6 +307,7 @@ def ensure_role_tile_indexes(
             )
         except Exception:  # absent/stale indexes are rebuilt by the path below
             validated = {}
+            stale_role_roots = [candidate for _, candidate, _ in expected]
             break
     if len(validated) == 2:
         return RoleIndexPreparation(
@@ -312,6 +319,8 @@ def ensure_role_tile_indexes(
             details={
                 "schema": "treeline-stage-b-role-preparation-v1",
                 "status": "REUSED_VALIDATED_ROLE_INDEXES",
+                "wire_span_admission_digest": admission_digest,
+                "wire_span_count": len(span_inputs),
                 "wire_point_count": int(validated["wire"].metadata["totals"]["point_count"]),
                 "vegetation_point_count": int(
                     validated["vegetation"].metadata["totals"]["point_count"]
@@ -323,6 +332,19 @@ def ensure_role_tile_indexes(
                 ),
             },
         )
+
+    # A version/configuration change must not leave an old manifest in place:
+    # the builders below intentionally skip roots that already contain a
+    # manifest.  Remove only the two derived role-index directories (never the
+    # source LAS or the reusable coarse regions) so the next path rebuilds and
+    # validates them automatically.  This also makes the UI's normal "retry"
+    # button sufficient after an application upgrade.
+    for stale_root in stale_role_roots:
+        resolved = stale_root.resolve()
+        if resolved.parent != preparation_root:
+            raise ValueError("ROLE_INDEX_STALE_ROOT_OUTSIDE_PREPARATION")
+        if resolved.exists():
+            shutil.rmtree(resolved)
 
     global_cache_key = _global_role_cache_key(
         source_identity,
@@ -365,6 +387,8 @@ def ensure_role_tile_indexes(
             details={
                 "schema": "treeline-stage-b-role-preparation-v1",
                 "status": "REUSED_VALIDATED_GLOBAL_ROLE_INDEXES",
+                "wire_span_admission_digest": admission_digest,
+                "wire_span_count": len(span_inputs),
                 "global_cache_key": global_cache_key,
                 "source_sha256": (
                     source_identity.get("sha256")
@@ -383,7 +407,7 @@ def ensure_role_tile_indexes(
     voxel_size = _representative_voxel_size(point_count, xy_area)
     preprocess_status, working = build_weighted_working_set(
         source,
-        preparation_root / "role-preprocess",
+        preparation_root / "prep",
         voxel_size_m=voxel_size,
         artifact_stem="source_role",
         source_sha256=(
@@ -407,7 +431,7 @@ def ensure_role_tile_indexes(
 
     ground_status, ground = run_fast_ground_hag(
         Path(working.representative_las_path),
-        preparation_root / "role-ground",
+        preparation_root / "ground",
     )
     config = FastBaselineConfig()
     evidence = load_ground_evidence(
@@ -435,11 +459,9 @@ def ensure_role_tile_indexes(
     if not len(wire_representative_ids):
         raise ValueError("ROLE_INDEX_WIRE_ADMISSION_EMPTY")
 
-    wire_region_root = preparation_root / (
-        f"wire-region-span-rescue-{admission_digest[:12]}"
-    )
+    wire_region_root = preparation_root / f"wr-{admission_digest[:12]}"
     wire_region = _load_region(wire_region_root)
-    vegetation_region_root = preparation_root / "vegetation-region-high-recall"
+    vegetation_region_root = preparation_root / "vr-high-recall"
     vegetation_region = _load_region(vegetation_region_root)
     if wire_region is None and vegetation_region is None:
         wire_region, vegetation_region = recover_wire_and_high_recall_regions_raw(

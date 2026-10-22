@@ -7,6 +7,7 @@ from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from algorithms.prediction.contact_risk import contact_risk, normalize_contact_target
 from algorithms.prediction.feature_attention import (
     FEATURE_CATALOG,
     feature_attention_prior,
@@ -32,7 +33,11 @@ from algorithms.prediction.temporal_attention import (
 SPECIES_ANNUAL_GROWTH = {
     "松树": (0.45, 0.75),
     "杉树": (0.50, 0.80),
-    "杨树": (1.20, 1.35),
+    "法国梧桐": (3.00, 3.00),
+    "杨树": (3.00, 3.00),
+    "榆树": (1.00, 2.00),
+    "国槐": (0.60, 1.00),
+    "白蜡": (0.80, 1.20),
     "柳树": (1.00, 1.20),
     "柏树": (0.32, 0.60),
     "樟树": (0.75, 1.00),
@@ -68,6 +73,7 @@ OPTIONAL_INPUT_FIELDS = (
     "maximum_sag_summer",
     "span_length",
     "conductor_height",
+    "contact_target",
     "line_direction",
     "vertical_distance",
     "horizontal_distance",
@@ -108,6 +114,7 @@ INPUT_FIELD_LABELS = {
     "maximum_sag_summer": "夏季最大弧垂",
     "span_length": "档距",
     "conductor_height": "导线高度",
+    "contact_target": "现场接触对象",
     "line_direction": "线路走向",
     "vertical_distance": "垂直距离",
     "horizontal_distance": "水平距离",
@@ -215,6 +222,8 @@ class ForecastService:
         historical_records: list[dict[str, Any]] | None = None,
         selected_horizon_months: int | None = None,
         prediction_mode: str = "ai",
+        future_weather: list[dict[str, Any]] | None = None,
+        future_monthly_weather: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         prediction_mode = str(prediction_mode).strip().lower()
         if prediction_mode not in PREDICTION_MODES:
@@ -224,8 +233,8 @@ class ForecastService:
         long_months = sorted(set(long_horizons_months or [1, 2, 3, 6, 12]))
         if any(value <= 0 or value > 90 for value in short_days):
             raise ValueError("短时预测范围必须在 1–90 天")
-        if any(value <= 0 or value > 36 for value in long_months):
-            raise ValueError("长时预测范围必须在 1–36 个月")
+        if any(value <= 0 or value > 120 for value in long_months):
+            raise ValueError("长时预测范围必须在 1–120 个月")
         selected_month = (
             int(selected_horizon_months) if selected_horizon_months is not None else long_months[-1]
         )
@@ -234,7 +243,11 @@ class ForecastService:
 
         current = self._normalize_snapshot(snapshot, standard)
         self._validate_snapshot(current)
+        from algorithms.prediction.daily_weather import normalize_daily_weather, normalize_monthly_weather
+        weather_by_date = normalize_daily_weather(future_weather, current['observation_date'])
+        monthly_weather = normalize_monthly_weather(future_monthly_weather, max(long_months))
         current_rule = self._rule_result(current, standard)
+        self._attach_contact_risk(current_rule, current, standard)
         usable_history = self._normalize_history(historical_records or [], current)
         historical_risk = calculate_historical_risk(
             usable_history,
@@ -246,12 +259,15 @@ class ForecastService:
         current_rule["clearance_defect"] = current_rule.get("standard_analysis", {}).get(
             "clearance_defect"
         )
-        short_term = [self._short_projection(current, days, standard) for days in short_days]
+        short_term = [self._short_projection(current, days, standard, weather_by_date) for days in short_days]
 
         monthly_records = [*usable_history[-17:], current]
         long_term = []
         for month_index in range(1, max(long_months) + 1):
-            next_state = self._next_month(monthly_records[-1], current, month_index)
+            next_state = self._next_month(
+                monthly_records[-1], current, month_index, standard,
+                weather_override=monthly_weather.get(month_index),
+            )
             if prediction_mode == "ai":
                 temporal = self._temporal_predictor_for_prediction().predict(
                     [*monthly_records[-17:], next_state], current["species"]
@@ -301,6 +317,16 @@ class ForecastService:
                 baseline_effective_clearance=baseline_effective_clearance,
             )
 
+        threshold_timing = self._daily_threshold_timing(
+            current,
+            current_rule,
+            standard,
+            historical_risk,
+            baseline_effective_clearance,
+            long_term,
+            weather_by_date,
+        )
+
         target = next(item for item in long_term if item["horizon_months"] == selected_month)
         height_delta = target["predicted_height"] - current["height"]
         crown_width_delta = target["predicted_crown_width"] - current["crown_width"]
@@ -314,6 +340,7 @@ class ForecastService:
             current_rule,
             long_term,
             standard,
+            threshold_timing=threshold_timing,
         )
         all_assessments = [current_rule, *short_term, *long_term]
         maximum_score = max(float(item["risk_score"]) for item in all_assessments)
@@ -336,7 +363,7 @@ class ForecastService:
             target["comprehensive_risk"],
             standard,
         )
-        return {
+        response = {
             "prediction_mode": prediction_mode,
             "prediction_mode_label": (
                 "公式树木生长预测" if prediction_mode == "formula" else "时序模型树木生长预测"
@@ -406,9 +433,19 @@ class ForecastService:
             "clearance_defect_classification": current_rule.get("clearance_defect"),
             "current_assessment": current_rule,
             "short_term_forecast": short_term,
+            "future_weather": [dict(date=day, **weather) for day, weather in sorted(weather_by_date.items())],
+            "daily_weather_enabled": future_weather is not None,
+            "future_weather_note": (
+                "仅对已填写日期采用逐日天气；未填写日期沿用观测情景，并非实际气象预报。"
+                + ("长期月份按逐月平均天气表计算，空白月份沿用本地季节情景。" if monthly_weather else "长期月份沿用本地季节情景。")
+            ),
+            "future_monthly_weather": [dict(month_index=index, **weather) for index, weather in sorted(monthly_weather.items())],
+            "monthly_weather_enabled": future_monthly_weather is not None,
+            "future_monthly_weather_note": "仅对已填写月份采用人工逐月平均天气；空白月份沿用本地季节情景，并非实时天气预报。",
             "long_term_forecast": long_term,
             "selected_target_prediction": target,
             "risk_timeline_analysis": risk_timeline,
+            "threshold_timing": threshold_timing,
             "historical_context": {
                 "status": "已启用" if len(usable_history) >= 2 else "等待用户提供历史数据",
                 "record_count": len(usable_history),
@@ -494,6 +531,33 @@ class ForecastService:
                 "预测值用于预警和巡检排序，真实工程处置仍需现场复测。",
             ],
         }
+        # Numeric neutral inputs may be required internally by a growth model.
+        # They are NOT measurements or reportable DBH forecasts without DBH.
+        provided_dbh = observed_snapshot.get('diameter') is not None
+        source = str(snapshot.get('diameter_source') or
+                     ('INPUT_DATA' if provided_dbh else 'UNAVAILABLE'))
+        response['dbh_input'] = {
+            'value_cm': observed_snapshot.get('diameter'),
+            'source': source if provided_dbh else 'UNAVAILABLE',
+            'point_cloud_value_cm': snapshot.get('point_cloud_diameter'),
+            'display_missing': 'No',
+        }
+        response['measurement_provenance'] = {
+            'point_cloud_measurements': dict(snapshot.get('point_cloud_measurements') or {}),
+            'measurement_sources': dict(snapshot.get('measurement_sources') or {}),
+            'effective_prediction_measurements': {key: observed_snapshot.get(key) for key in
+                ('height', 'diameter', 'crown_width', 'horizontal_distance', 'vertical_distance', 'clearance_distance')},
+        }
+        if not provided_dbh:
+            response['input_snapshot'] = {**current, 'diameter': None}
+            for item in [*short_term, *long_term]:
+                item['predicted_diameter'] = None
+                for field in ('diameter_growth', 'monthly_diameter_growth'):
+                    if field in item:
+                        item[field] = None
+            response['growth_trend']['diameter_change'] = None
+            response['report_notes'].append('胸径 No：未提供可用胸径；不发布胸径预测和接触风级，可补填该树原始最低点以上 1.30 m 的现场实测胸径后重新预测。')
+        return response
 
     def _normalize_snapshot(
         self,
@@ -502,14 +566,28 @@ class ForecastService:
     ) -> dict[str, Any]:
         standard = standard or PredictionStandards()
         selection_active = isinstance(value.get("selected_fields"), list)
+        # No is an operator-visible missing measurement, not a numerical zero.
+        if isinstance(value.get('diameter'), str) and value['diameter'].strip().lower() == 'no':
+            value = {**value, 'diameter': None}
+            if selection_active:
+                value['selected_fields'] = [field for field in value['selected_fields']
+                                           if field != 'diameter']
         if selection_active:
             provided = {
                 str(field) for field in value["selected_fields"] if str(field) in ALL_INPUT_FIELDS
             }
+            # The UI and integrated point-cloud bridge use one ISO date field.
+            # Treat it as the complete observation date instead of requiring the
+            # legacy year/month/day columns as well.
+            iso_date_supplied = value.get("observation_date") not in (None, "")
+            supplied_by_iso_date = {
+                "observation_year", "observation_month", "observation_day"
+            } if iso_date_supplied else set()
             missing = [
                 INPUT_FIELD_LABELS[field]
                 for field in REQUIRED_INPUT_FIELDS
-                if field not in value or value[field] in (None, "")
+                if field not in supplied_by_iso_date
+                and (field not in value or value[field] in (None, ""))
             ]
             if missing:
                 raise ValueError(f"以下核心字段必须提供：{'、'.join(missing)}")
@@ -519,6 +597,9 @@ class ForecastService:
             # historical default behavior and only activate optional semantics
             # for the new checkbox-enabled client.
             provided = set(ALL_INPUT_FIELDS)
+
+        if value.get('diameter') in (None, ''):
+            provided.discard('diameter')
 
         observed_on = observation_date_from(value)
         clearance = float(value.get("clearance_distance", value.get("distance_to_wire", 999)))
@@ -540,6 +621,7 @@ class ForecastService:
             "maximum_sag_summer": float(rules["max_sag"]),
             "span_length": 0.0,
             "conductor_height": 0.0,
+            "contact_target": "none",
             "line_direction": "不确定",
             "vertical_distance": clearance,
             "horizontal_distance": clearance,
@@ -583,6 +665,9 @@ class ForecastService:
             "maximum_sag_summer": float(selected_value("maximum_sag_summer")),
             "span_length": float(selected_value("span_length")),
             "conductor_height": float(selected_value("conductor_height")),
+            "contact_target": normalize_contact_target(
+                selected_value("contact_target"), strict=True
+            ),
             "line_direction": str(selected_value("line_direction")),
             "observation_date": observed_on.isoformat(),
             "observation_year": observed_on.year,
@@ -634,6 +719,8 @@ class ForecastService:
             return "未提供方向信息；方向暂记为不确定，不额外加分"
         if field in {"span_length", "conductor_height"}:
             return "未提供线路几何档案；报告标记缺失，不额外加分"
+        if field == "contact_target":
+            return "未提供现场接触情况；按未碰到处理，不能替代现场巡检确认"
         return "未提供档案数据，仅在报告中标记为缺失"
 
     @staticmethod
@@ -669,6 +756,9 @@ class ForecastService:
 
     @staticmethod
     def _validate_snapshot(value: dict[str, Any]) -> None:
+        for field, field_value in value.items():
+            if isinstance(field_value, (int, float)) and not math.isfinite(float(field_value)):
+                raise ValueError(f"{field} 必须是有限数值")
         if value["height"] <= 0:
             raise ValueError("树高必须大于 0")
         if value["diameter"] <= 0:
@@ -802,6 +892,7 @@ class ForecastService:
         current: dict[str, Any],
         days: int,
         standard: PredictionStandards,
+        weather_by_date: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         state = dict(current)
         observed_on = date.fromisoformat(current["observation_date"])
@@ -810,6 +901,12 @@ class ForecastService:
         total_diameter_growth = 0.0
         for day_index in range(1, days + 1):
             projected_day = observed_on + timedelta(days=day_index)
+            from algorithms.prediction.daily_weather import FIELDS
+            # Each date starts from the baseline, never carries yesterday's
+            # gust or rain into an unfilled date.
+            weather = (weather_by_date or {}).get(projected_day.isoformat(), {})
+            for field in FIELDS:
+                state[field] = weather.get(field, current[field])
             state["observation_month"] = projected_day.month
             state["month"] = projected_day.month
             state["age"] = current["age"] + day_index / 365.2425
@@ -836,12 +933,33 @@ class ForecastService:
             state["clearance_distance"] - max(vertical_encroachment, crown_expansion),
         )
         state["distance_to_wire"] = state["clearance_distance"]
+        baseline_wire = analyze_wire(
+            voltage_level_kv=current["voltage_level_kv"],
+            maximum_sag_winter=current["maximum_sag_winter"],
+            maximum_sag_summer=current["maximum_sag_summer"],
+            observation_month=current["observation_month"],
+            standards=standard,
+        )
+        target_wire = analyze_wire(
+            voltage_level_kv=state["voltage_level_kv"],
+            maximum_sag_winter=state["maximum_sag_winter"],
+            maximum_sag_summer=state["maximum_sag_summer"],
+            observation_month=target_on.month,
+            standards=standard,
+        )
+        # Keep the worst displacement reached since observation.  This avoids
+        # an artificial winter recovery erasing prior tree encroachment.
+        state["_sag_adjustment"] = max(
+            float(target_wire["current_sag"]) - float(baseline_wire["current_sag"]),
+            0.0,
+        )
         state["observation_date"] = target_on.isoformat()
         state["observation_year"] = target_on.year
         state["observation_month"] = target_on.month
         state["observation_day"] = target_on.day
         state["month"] = target_on.month
         result = self._rule_result(state, standard)
+        self._attach_contact_risk(result, state, standard)
         wire = result["standard_analysis"]["wire"]
         return {
             "horizon_type": "短时",
@@ -877,10 +995,16 @@ class ForecastService:
             "predicted_rainfall": round(state["rainfall"], 2),
             "predicted_humidity": round(state["humidity"], 2),
             "predicted_wind_speed": round(state["wind_speed"], 2),
+            "weather_source": weather.get('source', '沿用观测情景，非实际气象预报'),
+            "weather_provided_fields": [field for field in FIELDS if field in weather],
+            "weather_scenario_date": target_on.isoformat(),
+            "weather_wind_input_basis": weather.get('wind_input_basis', '输入风速（m/s）' if 'wind_speed' in weather else '沿用观测情景'),
+            "standard_analysis": result.get("standard_analysis", {}),
             "season": season_for_month(state["observation_month"]),
             "season_stage": season_stage_for_month(state["observation_month"]),
             "wire_condition": wire["season"],
             "clearance_defect": result.get("standard_analysis", {}).get("clearance_defect"),
+            "contact_risk": result["contact_risk"],
             "suggestion": result["suggestion"],
         }
 
@@ -889,6 +1013,8 @@ class ForecastService:
         previous: dict[str, Any],
         baseline: dict[str, Any],
         month_index: int,
+        standard: PredictionStandards,
+        weather_override: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         state = dict(previous)
         target_on = add_months(date.fromisoformat(baseline["observation_date"]), month_index)
@@ -916,6 +1042,11 @@ class ForecastService:
                 - 0.20 * (state["temperature"] - baseline["temperature"]),
             ),
         )
+        weather_override = dict(weather_override or {})
+        for field in ("wind_speed", "rainfall", "humidity", "temperature", "sunlight_hours"):
+            if field in weather_override:
+                state[field] = float(weather_override[field])
+        state["_monthly_weather"] = weather_override
         state["observation_month"] = month
         state["observation_year"] = target_on.year
         state["observation_day"] = target_on.day
@@ -941,6 +1072,25 @@ class ForecastService:
             state["clearance_distance"] - max(vertical_encroachment, crown_expansion),
         )
         state["distance_to_wire"] = state["clearance_distance"]
+        baseline_wire = analyze_wire(
+            voltage_level_kv=baseline["voltage_level_kv"],
+            maximum_sag_winter=baseline["maximum_sag_winter"],
+            maximum_sag_summer=baseline["maximum_sag_summer"],
+            observation_month=baseline["observation_month"],
+            standards=standard,
+        )
+        target_wire = analyze_wire(
+            voltage_level_kv=state["voltage_level_kv"],
+            maximum_sag_winter=state["maximum_sag_winter"],
+            maximum_sag_summer=state["maximum_sag_summer"],
+            observation_month=month,
+            standards=standard,
+        )
+        state["_sag_adjustment"] = max(
+            float(previous.get("_sag_adjustment", 0.0)),
+            float(target_wire["current_sag"]) - float(baseline_wire["current_sag"]),
+            0.0,
+        )
         state["_height_growth"] = height_growth
         state["_diameter_growth"] = diameter_growth
         state["_crown_width_growth"] = 2 * crown_radial_growth
@@ -1060,9 +1210,11 @@ class ForecastService:
     ) -> dict[str, Any]:
         state = records[-1]
         rule = self._rule_result(state, standard)
+        self._attach_contact_risk(rule, state, standard)
         attention_prior = feature_attention_prior(state, records[:-1], standard)
         if prediction_mode == "ai":
-            lstm = state.get("_temporal_prediction") or self._temporal_predictor_for_prediction().predict(
+            temporal_predictor = self._temporal_predictor_for_prediction()
+            lstm = state.get("_temporal_prediction") or temporal_predictor.predict(
                 records, state["species"]
             )
             lstm_score: float | None = float(lstm["risk_score"])
@@ -1134,10 +1286,15 @@ class ForecastService:
             "predicted_rainfall": round(state["rainfall"], 2),
             "predicted_humidity": round(state["humidity"], 2),
             "predicted_wind_speed": round(state["wind_speed"], 2),
+            "weather_source": state.get("_monthly_weather", {}).get("source", "本地季节情景，非实时天气预报"),
+            "weather_provided_fields": [field for field in ("wind_speed", "rainfall", "humidity", "temperature", "sunlight_hours") if field in state.get("_monthly_weather", {})],
+            "weather_wind_input_basis": state.get("_monthly_weather", {}).get("wind_input_basis", "沿用观测或季节情景"),
             "season": season_for_month(target_on.month),
             "season_stage": season_stage_for_month(target_on.month),
             "wire_condition": wire["season"],
             "clearance_defect": rule.get("standard_analysis", {}).get("clearance_defect"),
+            "standard_analysis": rule.get("standard_analysis", {}),
+            "contact_risk": rule["contact_risk"],
             "suggestion": suggestion,
         }
 
@@ -1227,6 +1384,31 @@ class ForecastService:
             )
 
     @staticmethod
+    def _attach_contact_risk(
+        assessment: dict[str, Any], state: dict[str, Any], standard: PredictionStandards
+    ) -> None:
+        """Attach field contact and optionally apply it as a hard risk override."""
+        result = contact_risk(
+            contact_target=state.get("contact_target", "none"),
+            tree_height=float(state["height"]),
+            conductor_height=float(state.get("conductor_height", 0.0)),
+            clearance_distance=float(state.get("clearance_distance", 0.0)),
+            general_risk_distance=standard.general_risk_clearance_distance,
+            safe_distance=standard.safe_clearance_distance,
+        )
+        if not standard.use_contact_risk_override:
+            result = {
+                **result,
+                "applied": False,
+                "requires_immediate_pruning": False,
+                "action": "已记录现场接触情况，未参与本次风险升级",
+                "basis": f"{result['basis']}；设置中未启用接触情况风险升级。",
+            }
+        else:
+            result["applied"] = True
+        assessment["contact_risk"] = result
+
+    @staticmethod
     def _urgency(maximum_score: float, standard: PredictionStandards) -> tuple[str, str]:
         if maximum_score >= standard.high_risk_score:
             return "最高级（I级危险）", "⚠⚠⚠"
@@ -1246,12 +1428,269 @@ class ForecastService:
             return "关注级（III级监测）", "⚠"
         return "安全级（IV级巡检）", "✓"
 
+    def _daily_threshold_timing(
+        self,
+        current: dict[str, Any],
+        current_assessment: dict[str, Any],
+        standard: PredictionStandards,
+        historical_risk: dict[str, Any],
+        baseline_effective_clearance: float,
+        long_term_forecast: list[dict[str, Any]] | None = None,
+        weather_by_date: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Estimate the first day a configured risk threshold is reached.
+
+        The scan deliberately uses daily projections instead of rounding to a
+        future month, so the report can state how many days remain before the
+        next warning level or the user-defined pruning threshold is reached.
+        """
+        observed_on = date.fromisoformat(current["observation_date"])
+        current_index = float(current_assessment.get("comprehensive_risk_index", 0.0))
+        levels = (
+            ("一般隐患", "general", standard.general_hazard_index),
+            ("重大隐患", "major", standard.major_hazard_index),
+            ("紧急隐患", "emergency", standard.emergency_hazard_index),
+        )
+        next_level = next((item for item in levels if item[2] > current_index), None)
+        safety_clearance = standard.rules_for_voltage(current["voltage_level_kv"])[
+            "min_clearance_distance"
+        ]
+        current_effective_clearance = float(
+            current_assessment.get("standard_analysis", {}).get(
+                "effective_clearance", current["clearance_distance"]
+            )
+        )
+        immediate_contact = bool(
+            current_assessment.get("contact_risk", {}).get("requires_immediate_pruning")
+        )
+        current_clearance_violation = current_effective_clearance < safety_clearance
+
+        def timing_record(
+            *,
+            threshold: float | None,
+            label: str,
+            code: str,
+            days: int | None = None,
+            reason: str = "",
+        ) -> dict[str, Any]:
+            return {
+                "label": label,
+                "code": code,
+                "threshold_index": round(threshold, 4) if threshold is not None else None,
+                "days": days,
+                "target_date": (observed_on + timedelta(days=days)).isoformat()
+                if days is not None
+                else None,
+                "within_scan_window": days is not None,
+                "reason": reason,
+            }
+
+        next_timing = (
+            timing_record(threshold=next_level[2], label=next_level[0], code=next_level[1])
+            if next_level
+            else timing_record(
+                threshold=None,
+                label="已处于最高风险等级",
+                code="emergency",
+                days=0,
+                reason="当前综合风险指数已达到紧急隐患等级",
+            )
+        )
+        pruning_timing = timing_record(
+            threshold=standard.pruning_trigger_hazard_index,
+            label="设置的修剪/预警阈值",
+            code="configured_pruning_threshold",
+        )
+
+        danger_clearance = max(0.0, float(standard.danger_clearance_distance))
+
+        def clearance_timing_record(
+            *,
+            days: int | None = None,
+            reason: str = "",
+        ) -> dict[str, Any]:
+            return {
+                "label": "危险区域净空距离阈值",
+                "code": "configured_danger_clearance",
+                "threshold_clearance_distance": round(danger_clearance, 4),
+                "current_effective_clearance": round(current_effective_clearance, 4),
+                "days": days,
+                "target_date": (observed_on + timedelta(days=days)).isoformat()
+                if days is not None
+                else None,
+                "within_scan_window": days is not None,
+                "reason": reason,
+            }
+
+        danger_clearance_timing = clearance_timing_record()
+        if current_effective_clearance <= danger_clearance:
+            danger_clearance_timing = clearance_timing_record(
+                days=0,
+                reason=(
+                    f"当前有效净空 {current_effective_clearance:g} m 已达到或低于"
+                    f"设置的危险区域净空 {danger_clearance:g} m"
+                ),
+            )
+
+        if immediate_contact:
+            pruning_timing = timing_record(
+                threshold=standard.pruning_trigger_hazard_index,
+                label="设置的修剪/预警阈值",
+                code="configured_pruning_threshold",
+                days=0,
+                reason=current_assessment["contact_risk"].get("basis", "现场接触高风险"),
+            )
+        elif current_clearance_violation:
+            pruning_timing = timing_record(
+                threshold=standard.pruning_trigger_hazard_index,
+                label="设置的修剪/预警阈值",
+                code="configured_pruning_threshold",
+                days=0,
+                reason=f"当前有效净空低于 {safety_clearance:g} m 标准",
+            )
+        elif current_index >= standard.pruning_trigger_hazard_index:
+            pruning_timing = timing_record(
+                threshold=standard.pruning_trigger_hazard_index,
+                label="设置的修剪/预警阈值",
+                code="configured_pruning_threshold",
+                days=0,
+                reason="当前综合风险指数已达到设置的修剪/预警阈值",
+            )
+
+        pending_next = next_timing["days"] is None
+        pending_pruning = pruning_timing["days"] is None
+        pending_danger_clearance = danger_clearance_timing["days"] is None
+        for days in range(1, 366):
+            if not (pending_next or pending_pruning or pending_danger_clearance):
+                break
+            projection = self._short_projection(current, days, standard, weather_by_date)
+            self._attach_comprehensive_risk(
+                projection,
+                current,
+                standard,
+                historical_risk,
+                horizon_months=max(1, math.ceil(days / 30)),
+                baseline_effective_clearance=baseline_effective_clearance,
+            )
+            index = float(projection["comprehensive_risk_index"])
+            effective_clearance = float(
+                projection.get(
+                    "predicted_effective_clearance",
+                    projection["predicted_clearance_distance"],
+                )
+            )
+            if pending_next and next_level and index >= next_level[2]:
+                next_timing = timing_record(
+                    threshold=next_level[2],
+                    label=next_level[0],
+                    code=next_level[1],
+                    days=days,
+                    reason=f"预测综合风险指数达到 {next_level[2]:.2f}",
+                )
+                pending_next = False
+            if pending_pruning and (
+                index >= standard.pruning_trigger_hazard_index
+                or effective_clearance < safety_clearance
+                or projection.get("contact_risk", {}).get("requires_immediate_pruning")
+            ):
+                reason = (
+                    f"预测综合风险指数达到 {standard.pruning_trigger_hazard_index:.2f}"
+                    if index >= standard.pruning_trigger_hazard_index
+                    else f"预测有效净空低于 {safety_clearance:g} m 标准"
+                    if effective_clearance < safety_clearance
+                    else projection["contact_risk"].get("basis", "预测现场接触高风险")
+                )
+                pruning_timing = timing_record(
+                    threshold=standard.pruning_trigger_hazard_index,
+                    label="设置的修剪/预警阈值",
+                    code="configured_pruning_threshold",
+                    days=days,
+                    reason=reason,
+                )
+                pending_pruning = False
+            if pending_danger_clearance and effective_clearance <= danger_clearance:
+                danger_clearance_timing = clearance_timing_record(
+                    days=days,
+                    reason=(
+                        f"预测有效净空降至 {effective_clearance:g} m，达到设置的"
+                        f"危险区域净空 {danger_clearance:g} m"
+                    ),
+                )
+                pending_danger_clearance = False
+
+        if next_timing["days"] is None:
+            next_timing["reason"] = "未来 365 天内未达到下一风险等级阈值"
+        if pruning_timing["days"] is None:
+            pruning_timing["reason"] = "未来 365 天内未达到设置的修剪/预警阈值"
+        # If the requested forecast extends beyond one year, continue the
+        # dangerous-clearance search on monthly states and linearly interpolate
+        # the crossing date. The first year stays daily and exact.
+        if danger_clearance_timing["days"] is None and long_term_forecast:
+            previous_date = observed_on + timedelta(days=365)
+            previous_clearance = float(
+                self._short_projection(current, 365, standard, weather_by_date).get(
+                    "predicted_effective_clearance", current_effective_clearance
+                )
+            )
+            for item in long_term_forecast:
+                month_index = int(item.get("horizon_months", 0))
+                target_date = add_months(observed_on, month_index)
+                if target_date <= previous_date:
+                    continue
+                target_clearance = float(
+                    item.get("predicted_effective_clearance", item["predicted_clearance_distance"])
+                )
+                if target_clearance <= danger_clearance < previous_clearance:
+                    span = max(1, (target_date - previous_date).days)
+                    fraction = (previous_clearance - danger_clearance) / max(
+                        1.0e-9, previous_clearance - target_clearance
+                    )
+                    days = (previous_date - observed_on).days + max(
+                        1, min(span, int(math.ceil(span * fraction)))
+                    )
+                    danger_clearance_timing = clearance_timing_record(
+                        days=days,
+                        reason=(
+                            f"一年后按月度季节生长轨迹内插，预计有效净空达到"
+                            f"设置的危险区域净空 {danger_clearance:g} m"
+                        ),
+                    )
+                    break
+                previous_date = target_date
+                previous_clearance = target_clearance
+        scan_days = max(
+            365,
+            (
+                add_months(observed_on, int(long_term_forecast[-1]["horizon_months"]))
+                - observed_on
+            ).days
+            if long_term_forecast
+            else 365,
+        )
+        if danger_clearance_timing["days"] is None:
+            danger_clearance_timing["reason"] = (
+                f"未来 {scan_days} 天内预计不会达到设置的危险区域净空 {danger_clearance:g} m"
+            )
+        return {
+            "scan_days": scan_days,
+            "current_index": round(current_index, 4),
+            "current_level": current_assessment.get(
+                "hazard_level", current_assessment.get("risk_level")
+            ),
+            "next_level": next_timing,
+            "pruning_trigger": pruning_timing,
+            "minimum_clearance_standard": safety_clearance,
+            "danger_clearance": danger_clearance_timing,
+        }
+
     @staticmethod
     def _risk_timeline_analysis(
         current_snapshot: dict[str, Any],
         current_assessment: dict[str, Any],
         forecasts: list[dict[str, Any]],
         standard: PredictionStandards,
+        *,
+        threshold_timing: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         severity = {
             "安全": 0,
@@ -1263,12 +1702,16 @@ class ForecastService:
             "紧急隐患": 3,
         }
         current_score = float(current_assessment["risk_score"])
+        current_hazard_index = float(
+            current_assessment.get("comprehensive_risk_index", current_score / 100)
+        )
         current_level = str(current_assessment["risk_level"])
         previous_score = current_score
         previous_level = current_level
         timeline = []
         for item in forecasts:
             score = float(item["risk_score"])
+            hazard_index = float(item.get("comprehensive_risk_index", score / 100))
             level = str(item["risk_level"])
             change_previous = score - previous_score
             change_current = score - current_score
@@ -1281,6 +1724,7 @@ class ForecastService:
                     "target_year_month": item["target_year_month"],
                     "risk_level": level,
                     "risk_score": round(score, 2),
+                    "comprehensive_risk_index": round(hazard_index, 4),
                     "hazard_level": item.get("hazard_level"),
                     "comprehensive_risk_score": item.get("comprehensive_risk_score"),
                     "change_from_previous": round(change_previous, 2),
@@ -1308,11 +1752,19 @@ class ForecastService:
             ),
         )
         first_medium = next(
-            (item for item in timeline if item["risk_score"] >= standard.medium_risk_score),
+            (
+                item
+                for item in timeline
+                if item["comprehensive_risk_index"] >= standard.pruning_trigger_hazard_index
+            ),
             None,
         )
         first_high = next(
-            (item for item in timeline if item["risk_score"] >= standard.high_risk_score),
+            (
+                item
+                for item in timeline
+                if item["comprehensive_risk_index"] >= standard.emergency_hazard_index
+            ),
             None,
         )
         minimum_clearance = standard.rules_for_voltage(current_snapshot["voltage_level_kv"])[
@@ -1342,16 +1794,32 @@ class ForecastService:
         current_clearance_violation = current_effective_clearance < minimum_clearance or any(
             item.get("field") == "clearance_distance" for item in current_violations
         )
+        current_contact_risk = current_assessment.get("contact_risk", {})
+        first_contact_high = next(
+            (
+                forecast
+                for forecast in forecasts
+                if forecast.get("contact_risk", {}).get("code") in {"danger", "high"}
+            ),
+            None,
+        )
 
         observed_on = date.fromisoformat(current_snapshot["observation_date"])
         trigger_candidates = []
-        if first_medium is not None and current_score < standard.medium_risk_score:
+        if (
+            first_medium is not None
+            and current_hazard_index < standard.pruning_trigger_hazard_index
+        ):
             trigger_candidates.append(
-                (first_medium["horizon_months"], "风险达到中风险阈值", first_medium)
+                (
+                    first_medium["horizon_months"],
+                    "风险达到设置的修剪/预警阈值",
+                    first_medium,
+                )
             )
-        if first_high is not None and current_score < standard.high_risk_score:
+        if first_high is not None and current_hazard_index < standard.emergency_hazard_index:
             trigger_candidates.append(
-                (first_high["horizon_months"], "风险达到高风险阈值", first_high)
+                (first_high["horizon_months"], "风险达到紧急隐患阈值", first_high)
             )
         if first_clearance_violation is not None:
             trigger_candidates.append(
@@ -1362,7 +1830,52 @@ class ForecastService:
                 )
             )
 
-        if current_score >= standard.high_risk_score or current_clearance_violation:
+        daily_pruning = (threshold_timing or {}).get("pruning_trigger", {})
+        if daily_pruning.get("days") == 0:
+            maintenance = {
+                "status": "立即修剪",
+                "requires_trimming": True,
+                "recommended_trim_date": observed_on.isoformat(),
+                "recommended_trim_month": observed_on.strftime("%Y年%m月"),
+                "recommended_deadline": "当前已达到设置的修剪/预警阈值；立即现场复测并安排修剪",
+                "trigger_month": observed_on.strftime("%Y年%m月"),
+                "trigger_reason": daily_pruning.get("reason", "当前达到修剪阈值"),
+                "lead_time_months": 0,
+                "days_to_trigger": 0,
+            }
+        elif daily_pruning.get("days") is not None:
+            trigger_days = int(daily_pruning["days"])
+            trigger_date = date.fromisoformat(str(daily_pruning["target_date"]))
+            trim_date = observed_on + timedelta(days=max(0, trigger_days - 1))
+            maintenance = {
+                "status": "计划修剪",
+                "requires_trimming": True,
+                "recommended_trim_date": trim_date.isoformat(),
+                "recommended_trim_month": trim_date.strftime("%Y年%m月"),
+                "recommended_deadline": (
+                    f"预计 {trigger_days} 天后（{trigger_date:%Y-%m-%d}）达到设置的修剪/预警阈值；"
+                    f"建议最迟在 {trim_date:%Y-%m-%d} 完成修剪。"
+                ),
+                "trigger_month": trigger_date.strftime("%Y年%m月"),
+                "trigger_reason": daily_pruning.get("reason", "预测达到修剪阈值"),
+                "lead_time_months": round(trigger_days / 30.4375, 2),
+                "days_to_trigger": trigger_days,
+            }
+        elif current_contact_risk.get("requires_immediate_pruning"):
+            maintenance = {
+                "status": "立即修剪",
+                "requires_trimming": True,
+                "recommended_trim_date": observed_on.isoformat(),
+                "recommended_trim_month": observed_on.strftime("%Y年%m月"),
+                "recommended_deadline": "立即修剪；作业前必须完成现场安全复核",
+                "trigger_month": observed_on.strftime("%Y年%m月"),
+                "trigger_reason": current_contact_risk.get("basis", "现场接触高风险"),
+                "lead_time_months": 0,
+            }
+        elif (
+            current_hazard_index >= standard.pruning_trigger_hazard_index
+            or current_clearance_violation
+        ):
             maintenance = {
                 "status": "立即处置",
                 "requires_trimming": True,
@@ -1371,20 +1884,27 @@ class ForecastService:
                 "recommended_deadline": "立即安排，最晚7天内完成现场复测和修剪评估",
                 "trigger_month": observed_on.strftime("%Y年%m月"),
                 "trigger_reason": (
-                    "当前净空已经不符合标准" if current_clearance_violation else "当前已达到高风险"
+                    "当前净空已经不符合标准"
+                    if current_clearance_violation
+                    else "当前已达到设置的修剪/预警阈值"
                 ),
                 "lead_time_months": 0,
             }
-        elif current_score >= standard.medium_risk_score:
+        elif first_contact_high is not None:
+            trim_offset = max(0, int(first_contact_high["horizon_months"]) - 1)
+            trim_on = add_months(observed_on, trim_offset)
             maintenance = {
-                "status": "近期修剪",
+                "status": "计划修剪",
                 "requires_trimming": True,
-                "recommended_trim_date": observed_on.isoformat(),
-                "recommended_trim_month": observed_on.strftime("%Y年%m月"),
-                "recommended_deadline": "建议30天内完成定向修剪和净空复测",
-                "trigger_month": observed_on.strftime("%Y年%m月"),
-                "trigger_reason": "当前已达到中风险，应在进入高风险前处置",
-                "lead_time_months": 0,
+                "recommended_trim_date": trim_on.isoformat(),
+                "recommended_trim_month": trim_on.strftime("%Y年%m月"),
+                "recommended_deadline": (
+                    f"建议最迟在 {trim_on:%Y年%m月} 完成修剪，"
+                    f"避免树木超过导线高度的预测触发月 {first_contact_high['target_year_month']}"
+                ),
+                "trigger_month": first_contact_high["target_year_month"],
+                "trigger_reason": first_contact_high["contact_risk"]["basis"],
+                "lead_time_months": int(first_contact_high["horizon_months"]) - trim_offset,
             }
         elif trigger_candidates:
             trigger_offset, trigger_reason, trigger = min(
@@ -1434,7 +1954,7 @@ class ForecastService:
         )
         planning_level = (
             "高风险"
-            if maintenance["status"] == "立即处置"
+            if maintenance["status"] in {"立即处置", "立即修剪"}
             else "中风险"
             if maintenance["requires_trimming"]
             else "低风险"
@@ -1458,6 +1978,7 @@ class ForecastService:
             "first_medium_risk": first_medium,
             "first_high_risk": first_high,
             "first_clearance_violation": first_clearance_violation,
+            "threshold_timing": threshold_timing,
             "minimum_clearance_standard": minimum_clearance,
             "maintenance_decision": maintenance,
             "planning_risk": planning_risk,
@@ -1475,7 +1996,7 @@ class ForecastService:
         violations = current.get("standard_analysis", {}).get("violations", [])
         violated_names = "、".join(item.get("label", "") for item in violations)
         maintenance = risk_timeline["maintenance_decision"]
-        if maintenance["status"] == "立即处置":
+        if maintenance["status"] in {"立即处置", "立即修剪"}:
             action = "立即现场复测，评估修枝、移栽或线路清障"
         elif maintenance["status"] in {"近期修剪", "计划修剪"}:
             action = "缩短巡检周期，安排定向修剪并复核净空"
@@ -1522,6 +2043,7 @@ class ForecastService:
                 maximum_sag_winter=state["maximum_sag_winter"],
                 maximum_sag_summer=state["maximum_sag_summer"],
                 observation_month=state["observation_month"],
+                sag_adjustment=state.get("_sag_adjustment", 0.0),
                 standards=standard.to_dict(),
             )
         )

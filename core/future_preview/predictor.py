@@ -11,6 +11,8 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import date, timedelta
+from functools import lru_cache
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -33,6 +35,32 @@ _REQUIRED_TAGS = (
     NOT_CURRENT_SURVEY_SCIENCE,
     NOT_VALIDATED_LONG_TERM_BIOLOGICAL_FORECAST,
 )
+
+SPECIES_TWIN_MORPHOLOGY = {
+    "松树": (0.20, 0.62, 0.65, "针叶树顶端优势型"),
+    "杉树": (0.22, 0.65, 0.68, "针叶树顶端优势型"),
+    "柏树": (0.18, 0.60, 0.62, "常绿针叶紧凑冠型"),
+    "法国梧桐": (0.42, 0.86, 0.78, "速生阔叶扩冠型"),
+    "杨树": (0.34, 0.78, 0.72, "速生阔叶高生长型"),
+    "柳树": (0.46, 0.90, 0.70, "速生阔叶宽冠型"),
+    "榆树": (0.34, 0.82, 0.80, "环孔材春季前置型"),
+    "国槐": (0.36, 0.84, 0.82, "环孔材扩冠型"),
+    "白蜡": (0.33, 0.80, 0.78, "环孔材春季前置型"),
+    "樟树": (0.38, 0.86, 0.76, "常绿阔叶延长生长期型"),
+    "其他": (0.32, 0.75, 0.80, "通用阔叶保守型"),
+}
+
+
+def species_twin_morphology(species: str) -> dict[str, float | str]:
+    crown_ratio, minor_ratio, dbh_ratio, label = SPECIES_TWIN_MORPHOLOGY.get(
+        str(species or "其他"), SPECIES_TWIN_MORPHOLOGY["其他"]
+    )
+    return {
+        "crown_width_per_height": crown_ratio,
+        "minor_to_major_increment": minor_ratio,
+        "dbh_cm_per_height_m": dbh_ratio,
+        "architecture": label,
+    }
 def _non_empty_text(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
@@ -567,3 +595,213 @@ def _pca_axes(xy: np.ndarray, center_xy: np.ndarray) -> tuple[np.ndarray, np.nda
         major_axis = -major_axis
     minor_axis = np.array([-major_axis[1], major_axis[0]], dtype=np.float64)
     return major_axis, minor_axis, False
+
+
+def _smoothstep(value: np.ndarray | float, edge0: float, edge1: float) -> np.ndarray:
+    raw = np.asarray(value, dtype=np.float64)
+    scaled = np.clip((raw - edge0) / (edge1 - edge0), 0.0, 1.0)
+    return scaled * scaled * (3.0 - 2.0 * scaled)
+
+
+@lru_cache(maxsize=512)
+def seasonal_growth_years(start_iso: str, horizon_days: int, species: str = "其他") -> float:
+    """Integrate a seasonal annual growth fraction at daily resolution."""
+
+    if not 1 <= int(horizon_days) <= 3660:
+        raise ValueError("horizon_days must be in 1..3660")
+    from algorithms.prediction.species_growth import phenology_weights_for_species
+
+    current = date.fromisoformat(start_iso)
+    weights = phenology_weights_for_species(species)
+    total = 0.0
+    remaining = int(horizon_days)
+    day = current
+    # Integrate exact calendar-day fractions one month at a time. This is
+    # numerically identical to a per-day loop but keeps the five-year slider
+    # responsive when trajectories request hundreds of horizons.
+    while remaining:
+        next_month = date(
+            day.year + (day.month == 12),
+            1 if day.month == 12 else day.month + 1,
+            1,
+        )
+        month_start = date(day.year, day.month, 1)
+        days_in_month = (next_month - month_start).days
+        available = (next_month - day).days
+        take = min(remaining, available)
+        total += weights[day.month - 1] * take / days_in_month
+        remaining -= take
+        day += timedelta(days=take)
+    return total
+
+
+def _weather_multiplier(weather: dict[str, Any]) -> float:
+    """Bounded scenario modifier, not a fitted biological causal model."""
+
+    temperature = float(weather.get("temperature", 20.0))
+    sunlight = float(weather.get("sunlight_hours", 6.0))
+    rainfall = float(weather.get("rainfall", 0.0))
+    humidity = float(weather.get("humidity", 60.0))
+    wind = float(weather.get("wind_speed", 0.0))
+    temperature_factor = max(0.25, 1.0 - abs(temperature - 23.0) / 45.0)
+    light_factor = min(1.12, max(0.75, 0.78 + sunlight / 30.0))
+    moisture_factor = min(1.12, max(0.72, 0.78 + rainfall / 250.0 + humidity / 500.0))
+    wind_factor = min(1.0, max(0.72, 1.0 - max(0.0, wind - 8.0) / 55.0))
+    return min(1.25, max(0.35, temperature_factor * light_factor * moisture_factor * wind_factor))
+
+
+def seasonal_growth_metrics(
+    *,
+    horizon_days: int,
+    start_date: str,
+    species: str,
+    age: float,
+    weather: dict[str, Any],
+) -> dict[str, float | str]:
+    """Return the same phenology-driven increments used by the 3-D twin.
+
+    Keeping the scalar trajectory separate lets the UI draw a five-year
+    trend without repeatedly transforming every display point.  Spring and
+    summer receive most of the annual allocation; autumn tapers and winter is
+    close to dormant through :data:`_MONTH_GROWTH_WEIGHTS`.
+    """
+
+    if not math.isfinite(float(age)) or float(age) < 0:
+        raise ValueError("age must be a non-negative finite number")
+    from algorithms.prediction.species import annual_height_growth
+
+    growth_reference = annual_height_growth(str(species or "其他"))
+    annual_height = float(growth_reference.get("reference", 0.7))
+    age_factor = 1.0 if age <= 20 else (0.88 if age <= 50 else (0.72 if age <= 100 else 0.55))
+    seasonal_years = seasonal_growth_years(
+        str(start_date)[:10], int(horizon_days), str(species or "其他")
+    )
+    weather_factor = _weather_multiplier(weather)
+    height_increment = max(0.0, annual_height * seasonal_years * age_factor * weather_factor)
+    morphology = species_twin_morphology(species)
+    return {
+        "height_increment_m": height_increment,
+        "crown_width_increment_m": height_increment
+        * float(morphology["crown_width_per_height"]),
+        "dbh_increment_cm": height_increment * float(morphology["dbh_cm_per_height_m"]),
+        "seasonal_growth_years": seasonal_years,
+        "weather_multiplier": weather_factor,
+        "species": str(species or "其他"),
+        "age": float(age),
+        "architecture": str(morphology["architecture"]),
+        "minor_to_major_increment": float(morphology["minor_to_major_increment"]),
+    }
+
+
+def seasonal_nonuniform_prediction(
+    tree: FinalizedTreeGeometry,
+    *,
+    horizon_days: int,
+    start_date: str,
+    species: str,
+    age: float,
+    weather: dict[str, Any],
+) -> dict[str, Any]:
+    """Create a seasonal, non-rigid tree point-cloud twin overlay.
+
+    The base is fixed.  Height increment is concentrated toward the top,
+    crown expansion is limited to upper-canopy points along separate PCA axes,
+    and DBH increment affects lower-stem radial coordinates.  Consequently the
+    transformation is never a whole-tree uniform scale.
+    """
+
+    if not isinstance(tree, FinalizedTreeGeometry):
+        raise TypeError("tree must be a FinalizedTreeGeometry")
+    if not math.isfinite(float(age)) or float(age) < 0:
+        raise ValueError("age must be a non-negative finite number")
+    points = tree.xyz_local_m.reshape(-1, 3)
+    anchor = (
+        tree.anchor_xyz_local_m
+        if tree.anchor_xyz_local_m is not None
+        else np.asarray([np.mean(points[:, 0]), np.mean(points[:, 1]), np.min(points[:, 2])])
+    )
+    center_xy = np.asarray(anchor[:2], dtype=np.float64)
+    base_z = float(anchor[2])
+    current_height = tree.height_m or max(float(np.ptp(points[:, 2])), 0.1)
+    major_axis, minor_axis, flat_sample = _pca_axes(points[:, :2], center_xy)
+    metrics = seasonal_growth_metrics(
+        horizon_days=horizon_days,
+        start_date=start_date,
+        species=species,
+        age=age,
+        weather=weather,
+    )
+    seasonal_years = float(metrics["seasonal_growth_years"])
+    weather_factor = float(metrics["weather_multiplier"])
+    height_increment = float(metrics["height_increment_m"])
+    crown_width_increment = float(metrics["crown_width_increment_m"])
+    dbh_increment_cm = float(metrics["dbh_increment_cm"])
+
+    relative_z = points[:, 2] - base_z
+    height_fraction = np.clip(relative_z / max(current_height, 1.0e-6), 0.0, 1.0)
+    top_weight = _smoothstep(height_fraction, 0.12, 1.0)
+    crown_weight = _smoothstep(height_fraction, 0.38, 0.82)
+    stem_weight = 1.0 - _smoothstep(height_fraction, 0.08, 0.48)
+
+    relative_xy = points[:, :2] - center_xy
+    major_coordinate = relative_xy @ major_axis
+    minor_coordinate = relative_xy @ minor_axis
+    # Model several branch sectors instead of inflating the whole crown.  The
+    # deterministic phase keeps the same tree stable while the horizon changes;
+    # low-activity sectors remain almost fixed and active tips receive most of
+    # the current period's increment.  This is a visual growth envelope, not a
+    # claim that every source point is a botanical branch measurement.
+    angle = np.arctan2(minor_coordinate, major_coordinate)
+    species_phase = (sum(ord(char) for char in str(species or "其他")) % 360) * math.pi / 180
+    time_phase = 2 * math.pi * min(max(seasonal_years, 0.0), 5.0) / 5.0
+    branch_signal = np.maximum(
+        np.cos(3 * angle + species_phase + time_phase),
+        0.45 * np.cos(5 * angle - species_phase * 0.5 + time_phase * 0.7),
+    )
+    branch_activity = np.where(branch_signal > 0.18, 0.35 + 0.65 * np.clip(branch_signal, 0, 1), 0.06)
+    crown_weight = crown_weight * branch_activity
+    current_major = tree.crown_major_m or max(float(np.ptp(major_coordinate)), 0.5)
+    current_minor = tree.crown_minor_m or max(float(np.ptp(minor_coordinate)), 0.5)
+    crown_major_factor = 1.0 + crown_width_increment / max(current_major, 0.25)
+    minor_ratio = float(metrics["minor_to_major_increment"])
+    crown_minor_factor = 1.0 + crown_width_increment * minor_ratio / max(current_minor, 0.25)
+    trunk_factor = 1.0
+    if tree.dbh_cm is not None and tree.dbh_cm > 0:
+        trunk_factor += dbh_increment_cm / tree.dbh_cm
+    major_factor = 1.0 + crown_weight * (crown_major_factor - 1.0) + stem_weight * (trunk_factor - 1.0)
+    minor_factor = 1.0 + crown_weight * (crown_minor_factor - 1.0) + stem_weight * (trunk_factor - 1.0)
+    future_xy = center_xy + major_coordinate[:, None] * major_axis * major_factor[:, None] + minor_coordinate[:, None] * minor_axis * minor_factor[:, None]
+    future_z = points[:, 2] + height_increment * top_weight
+    future = np.column_stack((future_xy, future_z))
+    if tree._xyz_was_single:
+        future = future[0]
+
+    return {
+        "xyz_local_m": future,
+        "predicted_height_m": None if tree.height_m is None else tree.height_m + height_increment,
+        "predicted_crown_major_m": None if tree.crown_major_m is None else tree.crown_major_m + crown_width_increment,
+        "predicted_crown_minor_m": None if tree.crown_minor_m is None else tree.crown_minor_m + crown_width_increment * minor_ratio,
+        "predicted_dbh_cm": None if tree.dbh_cm is None else tree.dbh_cm + dbh_increment_cm,
+        "height_increment_m": height_increment,
+        "crown_width_increment_m": crown_width_increment,
+        "dbh_increment_cm": dbh_increment_cm,
+        "seasonal_growth_years": seasonal_years,
+        "weather_multiplier": weather_factor,
+        "species": str(species or "其他"),
+        "species_architecture": metrics["architecture"],
+        "age": float(age),
+        "start_date": str(start_date)[:10],
+        "target_date": (date.fromisoformat(str(start_date)[:10]) + timedelta(days=int(horizon_days))).isoformat(),
+        "flat_sample_axes_fallback": flat_sample,
+        "transformation": "NON_RIGID_STEM_CROWN_PHENOLOGY",
+        "branch_growth_mode": "SELECTIVE_ANGULAR_BRANCH_SECTORS",
+        "assumptions": [
+            "树干基部中心与地面高程固定；下部可随胸径增长发生径向增粗，顶梢增高按相对高度非线性分配。",
+            "树冠仅在上部点集扩张，长短轴分别变化；树干胸径在下部径向变化。",
+            "每个时间步只激活部分树冠方向的枝条扇区，其他枝条保持近静止，避免整冠同步等比例放大。",
+            "逐日积分春季萌发、夏季旺长、秋季缓生、冬季近休眠的月度生长权重。",
+            f"树种采用“{metrics['architecture']}”形态参数；人工选择的树种优先于自动识别建议。",
+            "天气为用户输入的情景修正并设有上下限，不代表经长期样地校准的因果模型。",
+            "预测孪生点云与当前实测点云分层显示，不替代现场复测。",
+        ],
+    }

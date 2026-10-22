@@ -1,10 +1,10 @@
 """Per-tree structural metrics from full-resolution raw members.
 
-One shared ground KD-tree is used for a single chunked HAG pass over all
-assigned full-resolution tree points.  Each tree then reports:
+Each tree is measured from its assigned full-resolution raw members.  A ground
+surface is still loaded for provenance and other pipeline consumers, but it
+does not move the tree-height or breast-height origin.  Each tree reports:
 
-- ``tree_height_m`` — ground-relative HAG, robust high-end statistic (the 98th
-  percentile of member HAG, so one isolated noise point never inflates it);
+- ``tree_height_m`` — original-member highest Z minus original-member lowest Z;
 - ``tree_top_xyz`` / ``tree_centroid_xyz``;
 - crown widths from horizontal XY geometry (major / minor / mean / ellipse
   area) — never a 3D box diagonal;
@@ -24,8 +24,8 @@ from algorithms.manual_span.config import ManualSpanConfig
 from algorithms.manual_span.dbh import DbhEvidence, classify_dbh
 from algorithms.spans.reconcile import TreeReconciliationResult
 
-TREE_HEIGHT_STATISTIC = "p98_of_ground_relative_hag_fullres"
-CROWN_WIDTH_STATISTIC = "xy_p95_minus_p05_along_principal_axes"
+TREE_HEIGHT_STATISTIC = "raw_tree_highest_minus_raw_tree_lowest_fullres"
+CROWN_WIDTH_STATISTIC = "raw_tree_xy_p99_minus_p01_principal_axes_with_axis_fallback"
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,13 +114,17 @@ def compute_tree_metrics(
         rows = np.flatnonzero(final_tree == tree_id)
         points = final_xyz[rows]
         count = int(len(points))
-        hag = _hag_chunked(points, ground_tree, ground, origin, 1_000_000)
+        # Structural measurement is anchored to this tree's exact raw-member
+        # vertical extent.  Ground removal and later display decimation must
+        # never shift the DBH plane upward.
+        raw_lowest_z = float(np.min(points[:, 2]))
+        raw_relative_height = points[:, 2] - raw_lowest_z
 
         height_m: float | None = None
         top_xyz_local: tuple[float, float, float] | None = None
         if count:
-            height_m = float(np.quantile(hag, 0.98))
-            high = hag >= float(np.quantile(hag, 0.98))
+            height_m = float(np.max(points[:, 2]) - raw_lowest_z)
+            high = points[:, 2] >= float(np.max(points[:, 2]) - 1e-9)
             if np.any(high):
                 top_xyz_local = tuple(
                     float(value) for value in np.median(points[high], axis=0)
@@ -130,20 +134,23 @@ def compute_tree_metrics(
         # Crown geometry from horizontal XY (principal axes).
         xy = points[:, :2]
         centred = xy - np.mean(xy, axis=0)
-        try:
-            covariance = np.cov(centred, rowvar=False)
-            eigenvalues, eigenvectors = np.linalg.eigh(covariance)
-            order = np.argsort(eigenvalues)[::-1]
-            major_axis = eigenvectors[:, order[0]]
-        except np.linalg.LinAlgError:  # pragma: no cover - degenerate guard
-            major_axis = np.asarray((1.0, 0.0))
+        major_axis = np.asarray((1.0, 0.0))
+        if count >= 2 and np.any(np.ptp(xy, axis=0) > 0):
+            try:
+                covariance = np.atleast_2d(np.cov(centred, rowvar=False))
+                if covariance.shape == (2, 2) and np.isfinite(covariance).all():
+                    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+                    order = np.argsort(eigenvalues)[::-1]
+                    major_axis = eigenvectors[:, order[0]]
+            except np.linalg.LinAlgError:  # pragma: no cover - degenerate guard
+                pass
         projection = centred @ major_axis
         minor_projection = centred @ np.asarray((-major_axis[1], major_axis[0]))
         major_width = float(
-            np.quantile(projection, 0.95) - np.quantile(projection, 0.05)
+            np.quantile(projection, 0.99) - np.quantile(projection, 0.01)
         )
         minor_width = float(
-            np.quantile(minor_projection, 0.95) - np.quantile(minor_projection, 0.05)
+            np.quantile(minor_projection, 0.99) - np.quantile(minor_projection, 0.01)
         )
         major = max(major_width, minor_width)
         minor = min(major_width, minor_width)
@@ -151,19 +158,15 @@ def compute_tree_metrics(
         area = np.pi * (major / 2.0) * (minor / 2.0)
 
         # DBH from the breast-height band.
-        # Keep the stem anchor in the same ground-relative frame as the 1.30 m
-        # band. Raw-Z quantiles shift on sloping ground and can place the 0.60 m
-        # search circle away from an otherwise visible trunk.
-        trunk_mask = (hag >= 0.30) & (hag <= 1.00)
+        base_z = raw_lowest_z
+        trunk_mask = raw_relative_height <= 1.0
         base_xy = (
             np.median(points[trunk_mask, :2], axis=0)
             if np.count_nonzero(trunk_mask) >= 3
-            else np.median(points[(hag >= 0.85) & (hag <= 1.75), :2], axis=0)
-            if np.any((hag >= 0.85) & (hag <= 1.75))
             else np.median(points[:, :2], axis=0)
         )
-        band_mask = (hag >= manual.dbh_band_center_m - manual.dbh_band_half_width_m) & (
-            hag <= manual.dbh_band_center_m + manual.dbh_band_half_width_m
+        band_mask = (raw_relative_height >= manual.dbh_band_center_m - manual.dbh_band_half_width_m) & (
+            raw_relative_height <= manual.dbh_band_center_m + manual.dbh_band_half_width_m
         )
         band_count = int(np.count_nonzero(band_mask))
         if band_count:
@@ -175,45 +178,6 @@ def compute_tree_metrics(
         else:
             stem_xy = None
         dbh = classify_dbh(stem_xy, band_count, manual)
-        if stem_xy is not None and len(stem_xy) >= 12:
-            from algorithms.manual_span.dbh import DBH_MEASURED, DBH_REVIEW, DbhEvidence
-            from algorithms.manual_span.dbh_recovery import (
-                DBH_RECOVERY_CONFIG,
-                _section_circle_fit,
-                fit_stem_dbh,
-            )
-
-            stem_mask = band_mask & (
-                np.linalg.norm(points[:, :2] - base_xy[None, :], axis=1)
-                <= manual.dbh_stem_radius_m
-            )
-            fitted = fit_stem_dbh(points[stem_mask], hag[stem_mask], method="DIRECT_STEM")
-            if fitted["dbh_cm"] is not None:
-                dbh = DbhEvidence(
-                    fitted["dbh_cm"] / 100.0, DBH_MEASURED,
-                    int(np.count_nonzero(stem_mask)), band_count,
-                )
-            else:
-                # A single dense section exactly at breast height is common in
-                # mobile scans. Fit its circle instead of using p90-p10 widths.
-                near = stem_mask & (np.abs(hag - manual.dbh_band_center_m) <= 0.075)
-                if np.count_nonzero(near) >= 12:
-                    circle, _, _ = _section_circle_fit(
-                        np.unique(points[near, :2], axis=0), DBH_RECOVERY_CONFIG
-                    )
-                    if circle.get("accepted"):
-                        dbh = DbhEvidence(
-                            float(circle["diameter_m"]), DBH_MEASURED,
-                            int(np.count_nonzero(near)), band_count,
-                        )
-                    else:
-                        dbh = DbhEvidence(
-                            None, DBH_REVIEW, int(np.count_nonzero(stem_mask)), band_count
-                        )
-                else:
-                    dbh = DbhEvidence(
-                        None, DBH_REVIEW, int(np.count_nonzero(stem_mask)), band_count
-                    )
 
         results.append(
             TreeMetrics(

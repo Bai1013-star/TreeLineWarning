@@ -1,0 +1,5 @@
+Natural Earth public-domain vector data
+Source: https://www.naturalearthdata.com/
+Dataset: Admin 0 Countries, 1:110m cultural vectors
+Bundled as offline_world.geojson for offline overview mapping.
+

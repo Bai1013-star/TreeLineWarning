@@ -117,15 +117,7 @@ class _DesktopHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         if download_name:
-            if download_name.isascii():
-                disposition = f'attachment; filename="{download_name}"'
-            else:
-                encoded = urllib.parse.quote(download_name, safe="")
-                disposition = (
-                    'attachment; filename="tree_risk_results.xlsx"; '
-                    f"filename*=UTF-8''{encoded}"
-                )
-            self.send_header("Content-Disposition", disposition)
+            self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
         self.end_headers()
         self.wfile.write(body)
 
@@ -175,7 +167,7 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             return
         if isinstance(exc, OSError) and getattr(exc, "errno", None) == 28:
             self._error(
-                "磁盘剩余空间不足，无法完成复核结果生成。请释放 E 盘空间后重试。",
+                f"磁盘剩余空间不足。请释放项目盘 {self.application.workflow.project_root.anchor} 空间后重试。",
                 status=status,
                 details=details,
             )
@@ -325,19 +317,37 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, **self.workflow.current_report()})
             return
         if path == "/api/future-preview/gate":
-            from desktop.current_report import current_finalized_gate
+            from desktop.future_preview import preview_gate
 
             self._send_json(
-                {"ok": True, "gate": current_finalized_gate(self.workflow, hydrate_editor=False)}
+                {"ok": True, "gate": preview_gate(self.workflow, hydrate_editor=False)}
             )
             return
         if path in {"/api/future-preview", "/api/desktop/future-preview"}:
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             try:
-                values = query.get("horizon", ["1"])
-                if len(values) != 1 or values[0] not in {"1", "3", "5"}:
-                    raise ValueError("horizon must be 1, 3, or 5 years")
-                self._send_json({"ok": True, **self.workflow.future_preview(int(values[0]))})
+                if "unit" in query or "value" in query:
+                    units = query.get("unit", [])
+                    values = query.get("value", [])
+                    if len(units) != 1 or len(values) != 1 or units[0] not in {
+                        "days", "months", "years"
+                    }:
+                        raise ValueError("unit/value must specify days, months, or years")
+                    value = int(values[0])
+                    limits = {"days": (1, 1826), "months": (1, 60), "years": (1, 5)}
+                    low, high = limits[units[0]]
+                    if not low <= value <= high:
+                        raise ValueError(f"{units[0]} value must be in {low}..{high}")
+                    result = self.workflow.future_preview(
+                        horizon_value=value,
+                        horizon_unit=units[0],
+                    )
+                else:
+                    values = query.get("horizon", ["1"])
+                    if len(values) != 1 or values[0] not in {"1", "3", "5"}:
+                        raise ValueError("horizon must be 1, 3, or 5 years")
+                    result = self.workflow.future_preview(int(values[0]))
+                self._send_json({"ok": True, **result})
             except ValueError as exc:
                 self._exception_error(exc, status=HTTPStatus.BAD_REQUEST)
             return
@@ -351,15 +361,14 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 requested_budget = 8_000
             requested_span = query.get("span_id", [None])[0]
-            # The first review read after process restart can hydrate the
-            # persisted final membership and display basis.  Serialize that
-            # process-local cache fill so a manual iframe refresh cannot race a
-            # still-finishing request and turn a valid read into HTTP 409.
-            with self.workflow._lock:
-                display = self.workflow.editor_data(
-                    display_budget=requested_budget, span_id=requested_span
-                )
-            self._send_json({"ok": True, **display})
+            self._send_json(
+                {
+                    "ok": True,
+                    **self.workflow.editor_data(
+                        display_budget=requested_budget, span_id=requested_span
+                    ),
+                }
+            )
             return
         if path == "/state":
             self._send_json(self.workflow.editor_state())
@@ -369,22 +378,11 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             return
         if path in {"/download_prediction", "/download_excel"}:
             try:
-                output = self.workflow.export_delivery()
+                output = self.workflow.export_prediction()
                 self._send_bytes(
                     output.read_bytes(),
                     content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    download_name=output.name,
-                )
-            except Exception as exc:
-                self._exception_error(exc)
-            return
-        if path == "/download_report_html":
-            try:
-                output = self.workflow.export_html_report()
-                self._send_bytes(
-                    output.read_bytes(),
-                    content_type="text/html; charset=utf-8",
-                    download_name="TreeLineWarning_Current_Report.html",
+                    download_name="Prediction_Input.xlsx",
                 )
             except Exception as exc:
                 self._exception_error(exc)
@@ -393,12 +391,8 @@ class _DesktopHandler(BaseHTTPRequestHandler):
 
     def _handle_post(self, path: str) -> None:
         try:
-            if path in {
-                "/api/dbh-review/prepare",
-                "/api/dbh-review/confirm",
-                "/api/dbh-review/recompute",
-            }:
-                from desktop.dbh_review import confirm, prepare, recompute
+            if path in {"/api/dbh-review/prepare", "/api/dbh-review/confirm"}:
+                from desktop.dbh_review import confirm, prepare
 
                 length = int(self.headers.get("Content-Length", "0") or 0)
                 origin = self.headers.get("Origin")
@@ -413,12 +407,7 @@ class _DesktopHandler(BaseHTTPRequestHandler):
                 request_id = payload.pop("request_id", None)
 
                 def callback():
-                    operation = (
-                        prepare if path.endswith("prepare")
-                        else recompute if path.endswith("recompute")
-                        else confirm
-                    )
-                    return operation(
+                    return (prepare if path.endswith("prepare") else confirm)(
                         self.workflow, payload
                     )
 
@@ -427,8 +416,8 @@ class _DesktopHandler(BaseHTTPRequestHandler):
                         raise ValueError("DBH_REVIEW_REQUEST_ID_REQUIRED")
                     self._send_json(
                         editor_tasks(self.workflow).submit(
-                            "DBH_REVIEW_PREVIEW" if path.endswith("prepare")
-                            else "DBH_RECOMPUTE" if path.endswith("recompute")
+                            "DBH_REVIEW_PREVIEW"
+                            if path.endswith("prepare")
                             else "DBH_REVIEW_CONFIRM",
                             callback,
                             request_id,
@@ -456,6 +445,7 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             actions = {
                 "/api/delete": ("DELETE", lambda: self.workflow.delete_selected()),
                 "/api/merge": ("MERGE", lambda: self.workflow.merge_selected()),
+                "/api/split": ("SPLIT", lambda: self.workflow.split_selected(payload.get("seed_xyz"))),
                 "/api/undo": ("UNDO", lambda: self.workflow.undo_editor()),
                 "/api/trim/commit": (
                     "TRIM_COMMIT",
@@ -472,7 +462,7 @@ class _DesktopHandler(BaseHTTPRequestHandler):
                 "/api/trim/component-preview": (
                     "COMPONENT_PREVIEW",
                     lambda: self.workflow.preview_trim_component(
-                        int(payload.get("tree_id")), list(payload.get("seed_xyz") or [])
+                        int(payload.get("tree_id", -1)), list(payload.get("seed_xyz") or []), payload.get("picks")
                     ),
                 ),
             }
@@ -562,13 +552,16 @@ class _DesktopHandler(BaseHTTPRequestHandler):
             if path == "/api/merge":
                 self._send_json(self.workflow.merge_selected())
                 return
+            if path == "/api/split":
+                self._send_json(self.workflow.split_selected(payload.get("seed_xyz")))
+                return
             if path == "/api/undo":
                 self._send_json(self.workflow.undo_editor())
                 return
             if path == "/api/trim/component-preview":
                 self._send_json(
                     self.workflow.preview_trim_component(
-                        int(payload.get("tree_id")), list(payload.get("seed_xyz") or [])
+                        int(payload.get("tree_id", -1)), list(payload.get("seed_xyz") or []), payload.get("picks")
                     )
                 )
                 return
@@ -620,7 +613,7 @@ class _DesktopHandler(BaseHTTPRequestHandler):
         path = urllib.parse.urlsplit(self.path).path
         try:
             self._handle_get(path)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass  # The client disconnected; do not terminate the local service.
         except Exception as exc:
             self._exception_error(exc)

@@ -402,7 +402,10 @@ def ensure_ground_workset(
             "attribute_policy": GROUND_WORKSET_ATTRIBUTE_POLICY,
         }
     )
-    root = output_root / region_digest
+    # The full digest is persisted and validated in the manifest.  A bounded
+    # prefix gives ample collision resistance while preventing WinError 206
+    # once temporary run filenames are appended on default Windows systems.
+    root = output_root / region_digest[:20]
     manifest_path = root / "ground-workset.json"
     cached = _load_cached(
         manifest_path,
@@ -444,7 +447,7 @@ def ensure_ground_workset(
             )
             source_read_points = 0
             active_region_point_count = 0
-            run_root = root / "representative-runs"
+            run_root = root / "runs"
             run_root.mkdir(parents=True, exist_ok=True)
             run_paths: list[Path] = []
             source_offset = 0

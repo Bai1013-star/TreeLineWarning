@@ -32,6 +32,7 @@ from core.stage_a.capability import CAPABILITY_NAMES
 from core.stage_a.models import stable_id
 
 from desktop.gis_project_import import import_gis_into_project
+from desktop.source_integrity import validate_las_extent
 
 DESKTOP_MANIFEST = "desktop-project.json"
 DESKTOP_SCHEMA = "treeline-desktop-project-v1"
@@ -63,14 +64,9 @@ def _manifest_path(root: Path) -> Path:
     return root / DESKTOP_MANIFEST
 
 
-def create_empty_project(parent: Path, project_name: str) -> dict:
-    """Create an empty, non-science project workspace below ``parent``."""
+def _initialize_empty_project_root(root: Path, name: str) -> dict:
+    """Initialize exactly ``root``; callers decide whether a child is needed."""
 
-    name = validate_project_name(project_name)
-    root = (parent / name).resolve()
-    if root.exists():
-        raise ValueError("目标项目目录已存在，请选择其他名称")
-    root.mkdir(parents=True)
     for relative in ("data/raw", "data/processed", "outputs", "artifacts", "exports"):
         (root / relative).mkdir(parents=True, exist_ok=True)
     now = _now()
@@ -120,6 +116,36 @@ def create_empty_project(parent: Path, project_name: str) -> dict:
     )
     save_project(Project.new(name), root)
     return describe_project(root)
+
+
+def create_empty_project(parent: Path, project_name: str) -> dict:
+    """Create an empty, non-science project workspace below ``parent``."""
+
+    name = validate_project_name(project_name)
+    root = (parent / name).resolve()
+    if root.exists():
+        raise ValueError("目标项目目录已存在，请选择其他名称")
+    root.mkdir(parents=True)
+    return _initialize_empty_project_root(root, name)
+
+
+def create_empty_project_in_folder(folder: Path) -> dict:
+    """Use the folder selected by the user as the project root itself.
+
+    This avoids the former redundant ``selected/name`` nesting, which also
+    pushed large analysis artifact paths beyond the Windows path limit.
+    """
+
+    root = Path(folder).resolve()
+    if not root.is_dir():
+        raise ValueError("请选择一个已经创建的空文件夹作为项目位置")
+    if (_manifest_path(root).is_file() or (root / "stage-a-project.json").is_file()
+            or (root / "project.json").is_file()):
+        raise ValueError("所选文件夹已经是项目，请使用“打开项目”")
+    if any(root.iterdir()):
+        raise ValueError("所选文件夹不是空文件夹，请新建一个空文件夹后再选择")
+    name = validate_project_name(root.name)
+    return _initialize_empty_project_root(root, name)
 
 
 def _read_desktop_manifest(root: Path) -> dict:
@@ -216,6 +242,8 @@ def import_pointcloud(root: Path, source: Path) -> dict:
     source = source.resolve()
     if source.suffix.lower() not in {".las", ".laz"} or not source.is_file():
         raise ValueError("请选择可读取的 LAS 或 LAZ 点云文件")
+    # Reject known truncation before hashing or changing the saved project.
+    validate_las_extent(source)
     source_sha256 = _sha256_file(source)
     payload["pointcloud_source"] = {
         "path": str(source),

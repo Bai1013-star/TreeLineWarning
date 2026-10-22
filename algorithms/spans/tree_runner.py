@@ -14,13 +14,14 @@ from __future__ import annotations
 import json
 import shutil
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from core.config.fast_baseline import (
     TREE_BACKEND_CROWN_STEM_HYBRID,
+    TREE_BACKEND_RAW_STEM_FIRST,
     TREE_BACKEND_LEGACY_WATERSHED,
     FastBaselineConfig,
 )
@@ -52,6 +53,153 @@ from algorithms.vegetation.coarse_to_fine import (
 )
 
 SPAN_TREE_RUNNER_SCHEMA = "fast-baseline-span-tree-runner-v1"
+
+
+def _restore_validated_trunk_membership(
+    region: Any,
+    raw_tree_id: np.ndarray,
+    hybrid: Any,
+    coarse_ground_xyz_absolute: np.ndarray,
+    origin_xyz: tuple[float, float, float],
+    *,
+    chunk_size: int = 500_000,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Restore original low-trunk rows around validated stems.
+
+    Crown/HAG membership deliberately rejects near-ground rows.  That is safe
+    for finding crowns but it must not become destructive denoising: the
+    original trunk is required for the ground+1.30 m DBH section.  This pass
+    only fills *unassigned* source rows inside a narrow cylinder around a
+    stem that already passed the multi-slice verticality checks.  Ground and
+    LAS noise classes are never restored, so vehicles and unrelated clusters
+    away from a validated stem stay excluded.
+    """
+
+    from scipy.spatial import cKDTree
+
+    result = np.asarray(raw_tree_id, dtype=np.int32)
+    if result.shape != (int(region.count),):
+        raise PoleEvidenceError("TREE_TRUNK_RESTORE_ALIGNMENT_INVALID")
+    confirmed = {
+        int(candidate.tree_id): candidate
+        for candidate in hybrid.candidates
+        if candidate.quality_state.value == "CONFIRMED_TREE"
+        and candidate.stem_seed_ids
+    }
+    stem_by_id = {
+        int(stem.stem_seed_id): stem for stem in hybrid.validated_stems
+    }
+    restore_specs: list[tuple[int, float, float, float, float]] = []
+    for tree_id, candidate in sorted(confirmed.items()):
+        for stem_id in candidate.stem_seed_ids:
+            stem = stem_by_id.get(int(stem_id))
+            if stem is None:
+                continue
+            # Keep the tube deliberately narrower than the candidate search
+            # radius.  It is wide enough for a mature trunk/DBH slice while
+            # avoiding nearby cars, poles and neighbouring crowns.
+            radius = max(
+                0.18,
+                min(0.48, float(stem.cross_section_radius_m) * 1.25 + 0.06),
+            )
+            max_hag = max(
+                1.65,
+                min(5.5, float(stem.stem_vertical_extent_m) + 0.75),
+            )
+            restore_specs.append(
+                (
+                    tree_id,
+                    float(stem.xy_local_m[0]),
+                    float(stem.xy_local_m[1]),
+                    radius,
+                    max_hag,
+                )
+            )
+    if not restore_specs:
+        return result, {
+            "mode": "VALIDATED_STEM_CYLINDER",
+            "restored_raw_points": 0,
+            "validated_stem_tubes": 0,
+        }
+
+    ground = np.asarray(coarse_ground_xyz_absolute, dtype=np.float64)
+    if ground.ndim != 2 or ground.shape[1] != 3 or not len(ground):
+        raise PoleEvidenceError("TREE_TRUNK_RESTORE_GROUND_INVALID")
+    ground_index = cKDTree(ground[:, :2])
+    origin = np.asarray(origin_xyz, dtype=np.float64)
+    xyz = region.xyz()
+    classification = region.classification()
+    restored = 0
+    quarantined_raw = 0
+    restored_by_tree: dict[str, int] = {}
+    planes = (getattr(hybrid, 'diagnostics', None) or {}).get('structural_planes', [])
+    keep_stems = tuple(stem_by_id[sid] for candidate in confirmed.values()
+        for sid in candidate.stem_seed_ids if sid in stem_by_id)
+    for start in range(0, int(region.count), chunk_size):
+        stop = min(int(region.count), start + chunk_size)
+        points = np.asarray(xyz[start:stop], dtype=np.float64)
+        current = result[start:stop]
+        cls = np.asarray(classification[start:stop], dtype=np.uint8)
+        non_tree = np.isin(cls, np.asarray([2, 6, 7, 18], dtype=np.uint8))
+        quarantined_raw += int(np.count_nonzero((current >= 0) & non_tree))
+        current[non_tree] = -1
+        unassigned = current < 0
+        if not np.any(unassigned) and not planes:
+            continue
+        # ASPRS: 2=ground, 6=building, 7=low noise, 18=high noise. Class 1 is retained
+        # because photogrammetric tree trunks are commonly unclassified.
+        eligible = unassigned & ~np.isin(cls, np.asarray([2, 6, 7, 18], dtype=np.uint8))
+        if not np.any(eligible) and not planes:
+            continue
+        absolute_xy = points[:, :2] + origin[:2]
+        _distance, neighbours = ground_index.query(
+            absolute_xy, k=min(8, len(ground))
+        )
+        if np.ndim(neighbours) == 1:
+            neighbours = np.asarray(neighbours)[:, None]
+        ground_z = np.median(ground[np.asarray(neighbours), 2], axis=1)
+        hag = points[:, 2] + origin[2] - ground_z
+        if planes:
+            from algorithms.spans.raw_stem_first import structural_plane_mask
+            planar_junk = structural_plane_mask(points, hag, keep_stems, planes)
+            eligible &= ~planar_junk
+            quarantined_raw += int(np.count_nonzero((current >= 0) & planar_junk))
+            current[planar_junk] = -1  # fine-cell backmapping must not reintroduce panels
+        # A point can fall in two close tubes.  Deterministic nearest-axis
+        # ownership prevents duplicates and preserves exact source rows.
+        best_distance = np.full(len(points), np.inf, dtype=np.float64)
+        best_tree = np.full(len(points), -1, dtype=np.int32)
+        for tree_id, stem_x, stem_y, radius, max_hag in restore_specs:
+            radial = np.hypot(points[:, 0] - stem_x, points[:, 1] - stem_y)
+            candidate_rows = (
+                eligible
+                & (hag >= 0.05)
+                & (hag <= max_hag)
+                & (radial <= radius)
+                & (radial < best_distance)
+            )
+            best_distance[candidate_rows] = radial[candidate_rows]
+            best_tree[candidate_rows] = np.int32(tree_id)
+        rows = best_tree >= 0
+        if np.any(rows):
+            current[rows] = best_tree[rows]
+            count = int(np.count_nonzero(rows))
+            restored += count
+            for tree_id in np.unique(best_tree[rows]):
+                tree_count = int(np.count_nonzero(best_tree[rows] == tree_id))
+                key = str(int(tree_id))
+                restored_by_tree[key] = restored_by_tree.get(key, 0) + tree_count
+    del xyz, classification
+    return result, {
+        "mode": "VALIDATED_STEM_CYLINDER",
+        "restored_raw_points": restored,
+        "quarantined_raw_object_points": quarantined_raw,
+        "validated_stem_tubes": len(restore_specs),
+        "restored_by_tree": restored_by_tree,
+        "excluded_las_classes": [2, 6, 7, 18],
+        "minimum_hag_m": 0.05,
+        "dbh_reference": "ORIGINAL_GROUND_PLUS_1.30_M",
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -530,7 +678,7 @@ def run_span_tree_pipeline(
             span, vegetation_region, coarse_ground_xyz_absolute, config,
             output_dir=output_dir, origin_xyz=origin_xyz, vegetation_query=vegetation_query,
         )
-    if config.tree_backend != TREE_BACKEND_CROWN_STEM_HYBRID:
+    if config.tree_backend not in {TREE_BACKEND_CROWN_STEM_HYBRID, TREE_BACKEND_RAW_STEM_FIRST}:
         raise PoleEvidenceError("TREE_BACKEND_INVALID")
     total_started = time.perf_counter()
     root = Path(output_dir)
@@ -552,6 +700,22 @@ def run_span_tree_pipeline(
             root / "recovered_region",
         )
     legacy_root = root / "legacy_reference"
+    raw_stems, raw_stem_diagnostics = (), {}
+    excluded_pole_axes = ()
+    if config.tree_backend == TREE_BACKEND_RAW_STEM_FIRST:
+        from algorithms.spans.raw_stem_first import detect_raw_stem_axes
+        raw_stems, raw_stem_diagnostics = detect_raw_stem_axes(
+            vegetation_query.region, coarse_ground_xyz_absolute, origin_xyz
+        )
+        # Operator-confirmed endpoints are poles, not tree seeds. Exclude only
+        # a detected shaft matching that endpoint, never its broad surroundings.
+        endpoints = np.asarray([span.start_xyz_absolute_m[:2], span.end_xyz_absolute_m[:2]]) - np.asarray(origin_xyz[:2])
+        excluded_pole_axes = tuple(stem for stem in raw_stems
+            if np.min(np.linalg.norm(endpoints - stem.xy_local_m, axis=1)) <= .60)
+        excluded_ids = {stem.stem_seed_id for stem in excluded_pole_axes}
+        raw_stems = tuple(replace(stem, stem_seed_id=i) for i, stem in enumerate(
+            stem for stem in raw_stems if stem.stem_seed_id not in excluded_ids))
+        raw_stem_diagnostics["confirmed_endpoint_shafts_excluded"] = len(excluded_pole_axes)
     candidate_started = time.perf_counter()
     legacy = _run_span_tree_pipeline_legacy(
         span, vegetation_region, coarse_ground_xyz_absolute, config,
@@ -571,9 +735,16 @@ def run_span_tree_pipeline(
     with np.load(legacy_root / "fine_representatives.npz", allow_pickle=False) as stream:
         raw_count = np.asarray(stream["raw_count"], dtype=np.uint32)
     segmentation_started = time.perf_counter()
-    hybrid = segment_stem_guided_hybrid(
-        fine_xyz, fine_hag, baseline_id, raw_count=raw_count
-    )
+    if config.tree_backend == TREE_BACKEND_RAW_STEM_FIRST:
+        from algorithms.spans.raw_stem_first import segment_from_raw_stems
+        with np.load(legacy_root / "fine_representatives.npz", allow_pickle=False) as stream:
+            fine_class = np.asarray(stream["classification"], dtype=np.uint8)
+        hybrid = segment_from_raw_stems(fine_xyz, fine_hag, raw_stems, classification=fine_class,
+            excluded_pole_axes=excluded_pole_axes)
+    else:
+        hybrid = segment_stem_guided_hybrid(
+            fine_xyz, fine_hag, baseline_id, raw_count=raw_count
+        )
     segmentation_runtime = time.perf_counter() - segmentation_started
     reconstruction_started = time.perf_counter()
     raw_tree = map_region_rows_to_tree(
@@ -581,6 +752,13 @@ def run_span_tree_pipeline(
         legacy_root / "fine_representatives.npz",
         fine_original,
         hybrid.fine_tree_id,
+    )
+    raw_tree, trunk_restore = _restore_validated_trunk_membership(
+        vegetation_query.region,
+        raw_tree,
+        hybrid,
+        coarse_ground_xyz_absolute,
+        origin_xyz,
     )
     reconstruction_runtime = time.perf_counter() - reconstruction_started
     # Per-tree full-resolution raw point counts in one O(N) pass (never
@@ -628,6 +806,11 @@ def run_span_tree_pipeline(
             shutil.copy2(source, root / filename)
     publish_runtime = time.perf_counter() - publish_started
     diagnostics = dict(hybrid.diagnostics)
+    if config.tree_backend == TREE_BACKEND_RAW_STEM_FIRST:
+        diagnostics["raw_stem_detection"] = raw_stem_diagnostics
+        diagnostics["validated_raw_stems"] = [stem.to_dict() for stem in raw_stems]
+        diagnostics["excluded_confirmed_pole_axes"] = [stem.to_dict() for stem in excluded_pole_axes]
+    diagnostics["original_trunk_restoration"] = trunk_restore
     diagnostics["pipeline_runtime_seconds"] = {
         "candidate_creation": candidate_runtime,
         "crown_stem_segmentation": segmentation_runtime,
@@ -751,6 +934,13 @@ def run_span_stem_guided_hybrid_candidate(
     from algorithms.vegetation.coarse_to_fine import map_region_rows_to_tree
 
     raw_tree = map_region_rows_to_tree(subset, fine_path, original, hybrid.fine_tree_id)
+    raw_tree, trunk_restore = _restore_validated_trunk_membership(
+        subset,
+        raw_tree,
+        hybrid,
+        coarse_ground_xyz_absolute,
+        origin_xyz,
+    )
     # Bounded two-pass assembly (same store as the canonical runner); the
     # candidate artifact omits the in_core column.
     xyz_out, original_out, tree_out, _core_out, member_count, _store = (
@@ -777,7 +967,10 @@ def run_span_stem_guided_hybrid_candidate(
         "candidate_only": True,
         "trees": [candidate.to_dict() for candidate in hybrid.candidates],
         "validated_stems": [stem.to_dict() for stem in hybrid.validated_stems],
-        "diagnostics": hybrid.diagnostics,
+        "diagnostics": {
+            **hybrid.diagnostics,
+            "original_trunk_restoration": trunk_restore,
+        },
         "full_resolution_original_index_unique": True,
         "assigned_raw_point_count": int(member_count),
     }

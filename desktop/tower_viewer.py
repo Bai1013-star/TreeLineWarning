@@ -16,6 +16,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 import numpy as np
+from desktop.source_integrity import validate_las_extent
 
 OVERVIEW_LIMIT = 90_000
 LOCAL_LIMIT = 35_000
@@ -123,6 +124,8 @@ def overview(
     import laspy
 
     total_started = time.perf_counter()
+    # Also protect already-imported projects and stale presentation caches.
+    validate_las_extent(source)
     maximum = max(1, int(maximum))
     digest, _facts = _cache_identity(source, maximum, source_identity)
     cache_path = _cache_path(cache_dir, digest) if cache_dir is not None else None
@@ -220,6 +223,7 @@ def refine(
     import laspy
 
     query_started = time.perf_counter()
+    validate_las_extent(source)
     radius = max(2.0, min(float(radius_m), 30.0))
     digest, _facts = _cache_identity(source, OVERVIEW_LIMIT, source_identity)
     cache_path = _cache_path(cache_dir, digest) if cache_dir is not None else None

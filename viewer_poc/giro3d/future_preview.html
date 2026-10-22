@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>TreeLineWarning · 预测与模拟</title>
+  <title>TreeLineWarning · 树木数字孪生趋势</title>
   <link rel="stylesheet" href="/future_preview.css">
 </head>
 <body>
   <main class="preview-shell">
     <header class="preview-header">
       <div>
-        <p class="eyebrow">TreeLineWarning Survey · LOCAL_SCENARIO</p>
-        <h1 id="futureTitle">预测与模拟</h1>
-        <p class="subtitle">基于当前最终单木几何的本地场景预览 · 只读实验功能</p>
+        <p class="eyebrow">TreeLineWarning Survey · SEASONAL NON-RIGID TWIN</p>
+        <h1 id="futureTitle">树木数字孪生趋势</h1>
+        <p class="subtitle">定稿点云 + 树种树龄 + 季节生长 + 天气情景 · 天/月/年时间轴</p>
       </div>
       <div class="preview-actions">
         <a class="button" href="/step3">当前最终报告</a>
@@ -20,27 +20,39 @@
       </div>
     </header>
 
-    <section class="notice">实验性预测 · 不替代当前正式勘察结果。仅为本地几何场景，不是经验证的长期生物学预测。</section>
+    <section class="notice">预测孪生层与实测点云严格分开。采用树干、冠层、顶梢分部位非刚性变形，并按方向逐步激活部分枝条，不是整棵树或全部枝条同步等比例放大；结果用于趋势研判，不替代现场复测。</section>
     <section id="futureStatus" class="notice" aria-live="polite">正在读取预测状态…</section>
 
     <section id="futureControls" class="panel hidden" aria-label="预测场景控制">
       <div class="control-row">
         <div class="mode-block">
-          <span class="control-label">预测模式</span>
-          <strong id="predictionMode">✓ 本地基础预测</strong>
-          <small id="modelInfo">仅使用本机已发布的当前几何</small>
+          <span class="control-label">孪生模式</span>
+          <strong id="predictionMode">✓ 季节非刚性孪生</strong>
+          <small id="modelInfo">树干基部中心与地面固定，顶梢/冠层/胸径分部位变化</small>
         </div>
         <div class="horizon-group" role="group" aria-label="预测时间范围">
           <button type="button" id="currentViewButton" data-view="current">当前</button>
-          <button type="button" data-horizon="1">+1 年</button>
-          <button type="button" data-horizon="3">+3 年</button>
-          <button type="button" data-horizon="5">+5 年</button>
+          <button type="button" data-value="1" data-unit="days">+1 天</button>
+          <button type="button" data-value="7" data-unit="days">+7 天</button>
+          <button type="button" data-value="30" data-unit="days">+30 天</button>
+          <button type="button" data-value="1" data-unit="months">+1 月</button>
+          <button type="button" data-value="3" data-unit="months">+3 月</button>
+          <button type="button" data-value="6" data-unit="months">+6 月</button>
+          <button type="button" data-value="12" data-unit="months">+12 月</button>
+          <button type="button" data-value="1" data-unit="years">+1 年</button>
+          <button type="button" data-value="3" data-unit="years">+3 年</button>
+          <button type="button" data-value="5" data-unit="years">+5 年</button>
         </div>
       </div>
       <div class="status-row">
         <span id="scenarioStatus" class="status-chip">当前几何</span>
-        <span class="status-chip muted-chip">未来净空：未实现</span>
-        <span class="status-chip muted-chip">未来导线：未实现</span>
+        <span class="status-chip muted-chip" id="futureClearanceStatus">未来净空：显示点估计</span>
+        <span class="status-chip muted-chip">导线：保持当前定稿曲线</span>
+      </div>
+      <div class="timeline-control">
+        <div class="timeline-heading"><strong>拖动时间轴查看逐日生长</strong><span id="timelineValue">第 1 天</span></div>
+        <input id="timelineSlider" type="range" min="1" max="1826" step="1" value="1" aria-label="孪生逐日时间轴">
+        <div class="timeline-scale"><span>当前</span><span>1 年</span><span>2 年</span><span>3 年</span><span>4 年</span><span>5 年</span></div>
       </div>
     </section>
 
@@ -49,17 +61,35 @@
         <div class="panel-heading">
           <div>
             <p class="eyebrow">CURRENT WIRES · SCENARIO TREES</p>
-            <h2>当前树木与场景树冠</h2>
+            <h2>当前实测点云与预测孪生层</h2>
           </div>
           <span id="geometrySource" class="source-pill"></span>
         </div>
         <div id="futurePlot" class="plot" aria-label="当前导线与当前或未来场景树木三维图"></div>
+        <div class="twin-kpis">
+          <div><span>当前拖动日期</span><strong id="selectedDate">—</strong></div>
+          <div><span>最小预测净空</span><strong id="selectedClearance">—</strong></div>
+          <div><span>首次越过设定标准</span><strong id="standardCrossing">—</strong></div>
+          <div><span>预计首次实际触线</span><strong id="contactTime">—</strong></div>
+        </div>
         <div class="legend" aria-label="图例">
           <span><i class="legend-dot current-dot"></i>当前树木</span>
           <span><i class="legend-dot future-dot"></i>场景树木</span>
           <span><i class="legend-line"></i>当前 W1 导线</span>
         </div>
         <p id="geometryNote" class="hint"></p>
+      </section>
+
+      <section class="panel geometry-panel">
+        <div class="panel-heading"><div><p class="eyebrow">TREE GROWTH</p><h2>树木生长变化折线</h2></div><span id="trendTree" class="source-pill"></span></div>
+        <div id="growthPlot" class="trend-plot" aria-label="树高、冠幅和胸径随时间变化折线图"></div>
+        <p class="hint">树高与冠幅使用米（m），胸径使用厘米（cm）；本图只表示生长量，不套用净空风险标准。</p>
+      </section>
+
+      <section class="panel geometry-panel">
+        <div class="panel-heading"><div><p class="eyebrow">CLEARANCE · PROJECT STANDARD</p><h2>树线净空与标准折线</h2></div><span class="source-pill">单位：m</span></div>
+        <div id="clearancePlot" class="trend-plot" aria-label="树线净空与项目设定标准随时间变化折线图"></div>
+        <p class="hint">虚线仅表示您在当前项目设置的净空标准；净空跌破标准后曲线转红。拖动上方时间轴时，两张图的竖线与三维孪生同步移动。</p>
       </section>
 
       <section class="panel">
@@ -74,8 +104,8 @@
           <table>
             <thead>
               <tr>
-                <th>树编号 / 持久 ID</th><th>档距</th><th>高度 (m)</th><th>冠幅长 (m)</th>
-                <th>冠幅短 (m)</th><th>DBH (cm)</th><th>父点数</th><th>显示点数</th>
+                <th>树编号 / 持久 ID</th><th>树种 / 树龄</th><th>目标日期</th><th>高度 (m)</th><th>冠幅长 (m)</th>
+                <th>冠幅短 (m)</th><th>DBH (cm)</th><th>未来净空估计 (m)</th><th>显示点数</th>
               </tr>
             </thead>
             <tbody id="treeRows"></tbody>
@@ -91,7 +121,21 @@
           </div>
         </div>
         <p id="assumptions" class="hint">实验性预测、不替代当前正式勘察结果。此页面不作生物学准确性声明。</p>
-        <p class="hint">页面只叠加当前 W1 导线；未来导线和未来净空尚未实现。</p>
+        <p class="hint">未来净空由有界显示点与当前定稿导线曲线估算，仅作可视化趋势；正式净空仍以全分辨率定稿计算为准。</p>
+      </section>
+
+      <section class="panel assumptions-panel">
+        <div class="panel-heading"><div><p class="eyebrow">RESEARCH BASIS</p><h2>论文与方法依据</h2></div></div>
+        <p class="hint">实现采用多时相激光扫描、非刚性点云运动、输电走廊植被生长预测和数字孪生研究的共同原则：重复观测用于校准，季节/天气驱动时间变化，树干与冠层分别建模，预测层不得冒充实测。</p>
+        <ul class="hint">
+          <li><a href="https://doi.org/10.3390/rs13245159" target="_blank" rel="noopener">Mongus 等：LiDAR 输电走廊植被管理数字孪生与生长模拟</a></li>
+          <li><a href="https://www.sciencedirect.com/science/article/pii/S0303243422001076" target="_blank" rel="noopener">PlantMove：时序 TLS 点云的非刚性三维运动场</a></li>
+          <li><a href="https://www.mdpi.com/1999-4907/16/4/578" target="_blank" rel="noopener">UAV-LiDAR 输电线路树障检测、三维重建与五年生长预测</a></li>
+          <li><a href="https://www.mdpi.com/2072-4292/17/21/3565" target="_blank" rel="noopener">配电网附近植被管理的计算机视觉数字孪生</a></li>
+          <li><a href="https://doi.org/10.5194/isprs-archives-XLVIII-2-2024-33-2024" target="_blank" rel="noopener">Bienert 等：高时间分辨率 TLS 监测落叶树季节生长与枝条运动</a></li>
+          <li><a href="https://academic.oup.com/treephys/article/42/2/304/6328619" target="_blank" rel="noopener">D'Orangeville 等：15 个树种的径向生长物候与木材功能类型差异</a></li>
+          <li><a href="https://www.nature.com/articles/s41597-024-04143-w" target="_blank" rel="noopener">LiPheStream：桦树、欧洲赤松和挪威云杉的高时空点云时间序列</a></li>
+        </ul>
       </section>
     </section>
   </main>

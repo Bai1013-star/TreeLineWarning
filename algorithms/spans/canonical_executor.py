@@ -12,7 +12,6 @@ import json
 import re
 import time
 from collections.abc import Callable
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -44,10 +43,6 @@ from algorithms.spans.role_tiles import (
     ROLE_TILE_CELL_SIZE_M,
     RoleSpecificTileCache,
     RoleTileCacheError,
-)
-from algorithms.spans.tower_exclusion import (
-    derive_registered_tower_exclusion,
-    publish_tower_membership,
 )
 from algorithms.spans.tree_identity import prepare_tree_identity
 from algorithms.spans.tree_runner import run_span_tree_pipeline
@@ -280,7 +275,6 @@ def run_tracked_canonical_span_science(
     cancellation_requested: Callable[[], bool] | None = None,
     config: FastBaselineConfig | None = None,
     acceleration_mode: str = "AUTO",
-    progress: Callable[[str, str, str], None] | None = None,
 ) -> SpanScienceResult:
     """Run one project Span through the existing tracked science modules."""
 
@@ -293,11 +287,6 @@ def run_tracked_canonical_span_science(
     if not isinstance(origin_value, (list, tuple)) or len(origin_value) != 3:
         raise ScienceAdapterError("SOURCE_SHARED_PREPARATION_NOT_READY")
 
-    def stage(name: str, backend: str, status: str) -> None:
-        if progress is not None:
-            progress(name, backend, status)
-
-    stage("CACHE_BUILD", "IO", "RUNNING")
     role_index_started = time.perf_counter()
     wire_tile_cache = _tile_cache_from_preparation(project_root, payload, input_data, "wire")
     # Vegetation is HIGH RECALL: the source-shared vegetation role index is
@@ -315,7 +304,6 @@ def run_tracked_canonical_span_science(
     if wire_tile_cache is None or vegetation_tile_cache is None:
         raise ScienceAdapterError("SPAN_LOCAL_ROLE_TILE_INDEX_NOT_BOUND")
     role_index_runtime = time.perf_counter() - role_index_started
-    stage("CACHE_BUILD", "IO", "CACHED")
     ground_path = _resolve_reference(project_root, ground_reference)
     try:
         coarse_ground = np.asarray(np.load(ground_path, allow_pickle=False), dtype=np.float64)
@@ -351,7 +339,6 @@ def run_tracked_canonical_span_science(
         wire_tile_cache, frame, wire_spec, output_root / "regions" / "wire"
     )
     wire_query_runtime = time.perf_counter() - wire_query_started
-    stage("VEGETATION", "IO", "RUNNING")
     vegetation_query_started = time.perf_counter()
     vegetation_query = subset_raw_tile_cache_oriented(
         vegetation_tile_cache,
@@ -360,11 +347,9 @@ def run_tracked_canonical_span_science(
         output_root / "regions" / "vegetation",
     )
     vegetation_query_runtime = time.perf_counter() - vegetation_query_started
-    stage("VEGETATION", "IO", "DONE")
     # HIGH-RECALL vegetation: the role index carries no wire exclusion, so the
     # Span-local vegetation query may include points adjacent to the conductor.
     vegetation_before_confirmed_wire_exclusion = int(vegetation_query.region.count)
-    stage("WIRE", "CPU", "RUNNING")
     wire_started = time.perf_counter()
     wire_result = run_span_wire_pipeline(
         span,
@@ -375,7 +360,6 @@ def run_tracked_canonical_span_science(
         authoritative_source_point_count=input_data.source_point_count,
     )
     wire_runtime = time.perf_counter() - wire_started
-    stage("WIRE", "CPU", "DONE")
     # Subtract ONLY the exact FINAL confirmed conductor member source indices
     # from the Span-local vegetation tree input.  Broad wire candidate / search
     # points that are not exact confirmed conductor members stay in vegetation.
@@ -406,7 +390,7 @@ def run_tracked_canonical_span_science(
         filtered_vegetation_region = subset_raw_region_excluding_source_indices(
             vegetation_query.region,
             sorted_confirmed_wire_indices,
-            output_root / "regions" / "vegetation_after_confirmed_wire",
+            output_root / "regions" / "veg_final",
         )
         confirmed_wire_members_removed = int(
             vegetation_query.region.count - filtered_vegetation_region.count
@@ -428,53 +412,15 @@ def run_tracked_canonical_span_science(
         vegetation_query.region.original_index(),
         sorted_confirmed_wire_indices,
     )
-    registered_towers = (
-        {
-            "tower_id": input_data.from_tower_id,
-            "base_xyz_absolute_m": list(span.start_xyz_absolute_m),
-            "top_xyz_absolute_m": list(input_data.from_endpoint_geometry["top_xyz_absolute_m"]),
-        },
-        {
-            "tower_id": input_data.to_tower_id,
-            "base_xyz_absolute_m": list(span.end_xyz_absolute_m),
-            "top_xyz_absolute_m": list(input_data.to_endpoint_geometry["top_xyz_absolute_m"]),
-        },
-    )
-    tower_exclusion = derive_registered_tower_exclusion(
-        vegetation_query.region, registered_towers
-    )
-    tower_source_index = tower_exclusion.source_index
-    tower_membership_manifest = publish_tower_membership(
-        tower_exclusion,
-        output_root,
-        source_identity=input_data.source_identity,
-        region_origin_xyz=vegetation_query.region.origin_xyz,
-    )
-    if len(tower_source_index):
-        tower_filtered = subset_raw_region_excluding_source_indices(
-            vegetation_query.region,
-            tower_source_index,
-            output_root / "regions" / "vegetation_after_confirmed_tower",
-        )
-        vegetation_query = replace(
-            vegetation_query,
-            region=tower_filtered,
-            oriented_region_points=int(tower_filtered.count),
-        )
-    confirmed_tower_excluded_count = int(
-        vegetation_after_confirmed_wire_exclusion - vegetation_query.region.count
-    )
-    if confirmed_tower_excluded_count != len(tower_source_index):
-        raise ScienceAdapterError("CONFIRMED_TOWER_EXCLUSION_ACCOUNTING_MISMATCH")
-    vegetation_after_confirmed_tower_exclusion = int(vegetation_query.region.count)
-    # Account for both exact conductor identities and geometrically supported
-    # tower identities before entering the frozen tree core.
+    # This accounting covers the boundary immediately before the frozen tree
+    # core.  There is deliberately no broad wire, tile, or proximity exclusion:
+    # the only subtraction is a source-identity match with FINAL CONFIRMED
+    # conductors.  Make any routing regression fail closed before tree science.
     tree_input_accounting = {
         "high_recall_candidate_count": vegetation_before_confirmed_wire_exclusion,
         "confirmed_wire_excluded_count": confirmed_wire_excluded_count,
-        "other_excluded_count": confirmed_tower_excluded_count,
-        "confirmed_tower_excluded_count": confirmed_tower_excluded_count,
-        "final_tree_input_count": vegetation_after_confirmed_tower_exclusion,
+        "other_excluded_count": 0,
+        "final_tree_input_count": vegetation_after_confirmed_wire_exclusion,
     }
     if confirmed_wire_members_removed != confirmed_wire_excluded_count:
         raise ScienceAdapterError("CONFIRMED_CONDUCTOR_EXCLUSION_ACCOUNTING_MISMATCH")
@@ -487,7 +433,6 @@ def run_tracked_canonical_span_science(
         raise ScienceAdapterError("TREE_INPUT_SOURCE_ACCOUNTING_MISMATCH")
     if wire_vegetation_source_overlap_in_tree_input:
         raise ScienceAdapterError("CONFIRMED_CONDUCTOR_REACHED_TREE_INPUT")
-    stage("TREE_SEGMENTATION", "CPU", "RUNNING")
     tree_started = time.perf_counter()
     tree_outcome = run_span_tree_pipeline(
         span,
@@ -511,9 +456,7 @@ def run_tracked_canonical_span_science(
         run_id=output_root.name,
     )
     tree_runtime = time.perf_counter() - tree_started
-    stage("TREE_SEGMENTATION", "CPU", "DONE")
 
-    stage("CLEARANCE", "MIXED", "RUNNING")
     clearance_started = time.perf_counter()
     clearance = run_span_tree_wire_clearance(
         reconciled,
@@ -524,13 +467,6 @@ def run_tracked_canonical_span_science(
         acceleration_mode=acceleration_mode,
     )
     clearance_runtime = time.perf_counter() - clearance_started
-    clearance_backend = str(clearance.diagnostics.get("backend", "CPU"))
-    stage(
-        "CLEARANCE",
-        "MIXED" if clearance_backend == "GPU_CERTIFIED_CPU_EXACT" else "CPU",
-        "DONE",
-    )
-    stage("RISK", "CPU", "DONE")
 
     def _publish_identity_terminal(assigned):
         terminal_clearance = run_span_tree_wire_clearance(
@@ -577,7 +513,6 @@ def run_tracked_canonical_span_science(
             "wire": str(output_root / "wire" / "span_wire_result.json"),
             "tree": str(output_root / "tree" / "span_tree_manifest.json"),
             "clearance": str(output_root / "clearance.json"),
-            "tower_membership": str(output_root / "tower_membership.json"),
         },
         diagnostics={
             "executor": "tracked.algorithms.spans",
@@ -594,7 +529,6 @@ def run_tracked_canonical_span_science(
             },
             "wire": dict(wire_result.diagnostics),
             "tree": dict(tree_outcome.to_manifest()),
-            "tower_exclusion": tower_membership_manifest,
             "clearance": dict(clearance.diagnostics),
             "source_spatial_query": {
                 "backend": "ROLE_SPECIFIC_SOURCE_TILE_CACHE",
@@ -626,10 +560,6 @@ def run_tracked_canonical_span_science(
                 "confirmed_wire_members_removed": int(confirmed_wire_members_removed),
                 "vegetation_after_confirmed_wire_exclusion": int(
                     vegetation_after_confirmed_wire_exclusion
-                ),
-                "confirmed_tower_members_removed": confirmed_tower_excluded_count,
-                "vegetation_after_confirmed_tower_exclusion": (
-                    vegetation_after_confirmed_tower_exclusion
                 ),
                 "vegetation_candidates": int(tree_outcome.fine_representative_count),
                 "full_resolution_vegetation_points": int(vegetation_query.oriented_region_points),

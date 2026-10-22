@@ -499,7 +499,6 @@ class BatchAnalysisScheduler:
         source_access_enabled: bool = False,
         acceleration_mode: str = "AUTO",
         execution_mode: str = "AUTO",
-        progress_callback: Callable[[str, str, str], None] | None = None,
     ) -> None:
         if type(project) is not Project:
             raise TypeError("project must be a Stage-A Project")
@@ -522,20 +521,9 @@ class BatchAnalysisScheduler:
         if selected_execution not in _EXECUTION_MODES:
             raise ValueError(f"execution_mode must be one of {sorted(_EXECUTION_MODES)}")
         self.execution_mode = selected_execution
-        self.progress_callback = progress_callback
         self._worker_state = threading.local()
         self._last_execution_plan: dict[str, Any] = {}
         self._latest_result: BatchAnalysisResult | None = None
-        self._source_preparation_seconds: float | None = None
-        self._source_cache_hit: bool | None = None
-
-    def _progress(self, stage: str, backend: str, status: str) -> None:
-        # A few low-level publication tests intentionally construct the
-        # scheduler with ``__new__`` to exercise deterministic ordering only.
-        # Progress reporting is optional and must remain transparent there.
-        callback = getattr(self, "progress_callback", None)
-        if callback is not None:
-            callback(str(stage), str(backend), str(status))
 
     def _default_science_runner(
         self, input_data: SpanAnalysisInput, preparation: SourceSharedPreparation, output_root: Path
@@ -563,7 +551,6 @@ class BatchAnalysisScheduler:
             acceleration_mode=getattr(
                 self._worker_state, "acceleration_mode", self.acceleration_mode
             ),
-            progress=self._progress,
         )
 
     def _new_analysis_run(self, span_ids: tuple[str, ...], run_id: str) -> AnalysisRun:
@@ -575,7 +562,7 @@ class BatchAnalysisScheduler:
                 "ground": "PDAL_SMRF_HAG_NN_FAST",
                 "wire": "FAST_MATURE_SPAN_WIRE",
                 "vegetation": "FULL_RESOLUTION_ORIGINAL_INDEX",
-                "tree": "CROWN_STEM_HYBRID",
+                "tree": self.config.tree_backend.upper(),
                 "reconciliation": "GLOBAL_ORIGINAL_INDEX_CORE_OWNERSHIP",
             },
             configuration_snapshot={
@@ -898,17 +885,6 @@ class BatchAnalysisScheduler:
         """Publish telemetry after all reconciliation/publication work ends."""
 
         telemetry.total_time_seconds = time.perf_counter() - started
-        from core.stage_b.runtime_profile import production_runtime_profile
-
-        diagnostics = dict(result.batch_diagnostics)
-        diagnostics["production_runtime_profile"] = production_runtime_profile(
-            result,
-            source_preparation_seconds=getattr(
-                self, "_source_preparation_seconds", None
-            ),
-            source_cache_hit=getattr(self, "_source_cache_hit", None),
-        )
-        result = replace(result, batch_diagnostics=diagnostics)
         if result.batch_manifest_reference:
             _write_json(
                 self.project_root / Path(result.batch_manifest_reference),
@@ -1121,25 +1097,10 @@ class BatchAnalysisScheduler:
         selected = result or self._latest_result
         if selected is None:
             raise ScienceAdapterError("TREE_EDITOR_REQUIRES_BATCH_RESULT")
-        original = selected.global_reconciled
-        if (
-            original is not None
-            and original.diagnostics.get("editor_schema")
-            == "treeline-stage-b-batch-editor-v1"
-        ):
-            original = self._load_persisted_global(selected.analysis_run_id)
-            if original is None:
-                raise ScienceAdapterError("TREE_EDITOR_ORIGINAL_MEMBERSHIP_MISSING")
-        tree_source = (
-            selected
-            if original is selected.global_reconciled
-            else replace(selected, global_reconciled=original)
-        )
         return BatchTreeEditor(
             self.project_root,
             selected,
-            tree_ids_by_span=self._tree_ids_by_span(tree_source),
-            original_reconciled=original,
+            tree_ids_by_span=self._tree_ids_by_span(selected),
             config=self.config,
             acceleration_mode=self.acceleration_mode,
         )
@@ -1152,9 +1113,6 @@ class BatchAnalysisScheduler:
         analysis_run_id: str | None = None,
     ) -> BatchAnalysisResult:
         started = time.perf_counter()
-        self._progress("RAW_IMPORT", "IO", "DONE")
-        self._progress("LAS_LAZ_DECODE", "IO", "RUNNING")
-        self._progress("CACHE_BUILD", "IO", "RUNNING")
         bindings_tuple = self.bridge.bind_spans(span_ids)
         if not bindings_tuple:
             raise ValueError("batch analysis requires at least one Span")
@@ -1180,7 +1138,6 @@ class BatchAnalysisScheduler:
         self._persist_run(self._new_analysis_run(selected, run_id))
         preparation: SourceSharedPreparation | None = None
         try:
-            source_preparation_started = time.perf_counter()
             statuses = {span_id: BatchSpanStatus.PREPARING for span_id in selected}
             first_input = bindings[selected[0]].science_input
             if self._uses_default_source_preparer:
@@ -1200,17 +1157,6 @@ class BatchAnalysisScheduler:
             else:
                 # Preserve the established two-argument test/integration seam.
                 preparation = self.source_preparer(self.project_root, first_input)
-            preparation_cached = bool(preparation.telemetry.get("cache_hit_count"))
-            self._source_preparation_seconds = (
-                time.perf_counter() - source_preparation_started
-            )
-            self._source_cache_hit = preparation_cached
-            prepared_status = "CACHED" if preparation_cached else "DONE"
-            self._progress("LAS_LAZ_DECODE", "IO", prepared_status)
-            self._progress("PDAL_PROCESSING", "CPU", prepared_status)
-            self._progress("GROUND", "CPU", prepared_status)
-            self._progress("HAG", "CPU", prepared_status)
-            self._progress("CACHE_BUILD", "IO", prepared_status)
             if telemetry.source_point_count <= 0:
                 try:
                     preparation_payload = json.loads(
@@ -1237,18 +1183,7 @@ class BatchAnalysisScheduler:
             self._source_access_metrics(telemetry)
             statuses = {span_id: BatchSpanStatus.WAITING for span_id in selected}
         except Exception as exc:
-            self._source_preparation_seconds = (
-                time.perf_counter() - source_preparation_started
-            )
-            self._source_cache_hit = False
             failure = structured_failure(exc, phase="SOURCE_PREPARATION")
-            # A failed source preparation must never leave several unrelated
-            # stages looking RUNNING forever in the desktop pipeline.
-            self._progress("LAS_LAZ_DECODE", "IO", "FAILED")
-            self._progress("PDAL_PROCESSING", "CPU", "FAILED")
-            self._progress("CACHE_BUILD", "IO", "FAILED")
-            failure_stage = str(failure.get("failure_stage") or "GROUND")
-            self._progress(failure_stage, "CPU", "FAILED")
             for span_id in selected:
                 statuses[span_id] = BatchSpanStatus.FAILED
             for span_id in selected:
@@ -1399,19 +1334,6 @@ class BatchAnalysisScheduler:
                 )
             except Exception as exc:
                 failure = structured_failure(exc, phase="SPAN_ANALYSIS")
-                stage_name = {
-                    "TREE": "TREE_SEGMENTATION",
-                    "TREE_SEGMENTATION": "TREE_SEGMENTATION",
-                    "VEGETATION": "VEGETATION",
-                    "WIRE": "WIRE",
-                    "CLEARANCE": "CLEARANCE",
-                    "RISK": "RISK",
-                }.get(str(failure.get("failure_stage")), "SPAN_ORGANIZATION")
-                stage_backend = {
-                    "VEGETATION": "IO",
-                    "CLEARANCE": "MIXED",
-                }.get(stage_name, "CPU")
-                self._progress(stage_name, stage_backend, "FAILED")
                 result = SpanScienceResult(
                     tree_count=0,
                     minimum_clearance_m=None,
@@ -1498,7 +1420,6 @@ class BatchAnalysisScheduler:
             getattr(self, "_last_execution_plan", {})
         )
         if not failed:
-            self._progress("SPAN_ORGANIZATION", "CPU", "RUNNING")
             reconciliation_started = time.perf_counter()
             try:
                 global_reconciled = self._global_reconcile(bindings, ordered_results)
@@ -1520,11 +1441,6 @@ class BatchAnalysisScheduler:
             finally:
                 telemetry.stage_time_seconds["tree_reconciliation"] = (
                     time.perf_counter() - reconciliation_started
-                )
-                self._progress(
-                    "SPAN_ORGANIZATION",
-                    "CPU",
-                    "FAILED" if failed else "DONE",
                 )
         status = (
             "PARTIAL_FAILURE"
@@ -1593,7 +1509,6 @@ class BatchAnalysisScheduler:
             batch_diagnostics=batch_diagnostics,
         )
         batch_root = self.project_root / "artifacts" / "project-runs" / "batches" / run_id
-        self._progress("REPORT_BUILD", "CPU", "RUNNING")
         manifest_started = time.perf_counter()
         manifest = result.to_dict()
         manifest_path = batch_root / "batch.json"
@@ -1601,7 +1516,6 @@ class BatchAnalysisScheduler:
         telemetry.stage_time_seconds["manifest_write"] = (
             time.perf_counter() - manifest_started
         )
-        self._progress("REPORT_BUILD", "CPU", "DONE")
         if global_reconciled is not None:
             reconciliation_write_started = time.perf_counter()
             _write_json(
@@ -1627,13 +1541,11 @@ class BatchAnalysisScheduler:
                 time.perf_counter() - membership_started
             )
             viewer_started = time.perf_counter()
-            self._progress("VIEWER_PAYLOAD", "CPU", "RUNNING")
             editor = self.open_editor(result)
             editor.persist()
             telemetry.stage_time_seconds["viewer_artifact_build"] = (
                 time.perf_counter() - viewer_started
             )
-            self._progress("VIEWER_PAYLOAD", "CPU", "DONE")
             if final_clearance is not None:
                 clearance_write_started = time.perf_counter()
                 _write_json(

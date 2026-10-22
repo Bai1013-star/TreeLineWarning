@@ -7,7 +7,7 @@ single local three-step browser workflow:
 
     STEP 1  /step1  manual span (tower A / tower B) selection
     STEP 2  /step2  human tree review (DELETE / MERGE / UNDO)
-    STEP 3  /step3  final result + 树木风险结果.xlsx
+    STEP 3  /step3  final result + Prediction_Input.xlsx
 
 The workspace layout is fixed:
 
@@ -15,8 +15,8 @@ The workspace layout is fixed:
       input/pointcloud/source.las|.laz      (exactly one source, else fail closed)
       source_cache/                          science staging (run checkpoints etc.)
       01_span_selection/span_selection.json
-      02_tree_analysis/Prediction_Input.xlsx  internal final cache and metadata
-      03_export/树木风险结果.xlsx               user workbook, 23 columns
+      02_tree_analysis/                      algorithm original + edit log + final
+      03_export/Prediction_Input.xlsx        Trees + Run_Metadata sheets
 
 Every science step calls the current authoritative implementation; nothing is
 re-implemented.  Display sampling never enters science membership.

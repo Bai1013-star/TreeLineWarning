@@ -2,14 +2,16 @@
 
 This class extends the proven :class:`TreeEditSession` only at the product
 editing boundary.  A negative ``tree_id`` is an internal sentinel meaning
-"apply the screen-space polygon to the current selected tree scope".  The
+"apply the screen-space polygon to all current editable cloud objects".  The
 selection is evaluated against every tree's authoritative full-resolution
 ``original_index`` membership; viewer samples are never used to decide edits.
 
 A region edit is committed as one ``REMOVE_POINTS`` operation so one UNDO
 restores the whole lasso action.  Completely covered trees are allowed to
-become empty and disappear from the effective tree list.  Partial remnants
-must still satisfy the existing minimum-member gate supplied by Stage-B.
+become empty and disappear from the effective tree list. Manual region deletion
+also permits small remnants: classification and minimum-tree-size rules must
+not prevent the operator from deleting false-positive objects. Points outside
+the polygon are preserved, and the original LAS is never modified.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ import numpy as np
 from algorithms.folder_pipeline.tree_editor import TreeEditorError, TreeEditSession
 
 REGION_LASSO_METHOD = "REGION_LASSO"
+COMPONENT_BATCH_METHOD = "COMPONENT_BATCH"
 REGION_LASSO_SENTINEL_TREE_ID = -1
 # Projection intermediates are display-geometry math over exact membership,
 # not science state.  Keep them bounded so a multi-million-point crown cannot
@@ -46,6 +49,42 @@ class RegionTreeEditSession(TreeEditSession):
 
     def current_tree_ids(self) -> list[int]:
         return [int(tree["tree_id"]) for tree in self.snapshot().get("trees", [])]
+
+    def preview_trim_components(self, picks: list[dict[str, Any]], *, binding: str = "") -> dict[str, Any]:
+        """Union explicitly clicked components; one commit and one undo for all."""
+        if not isinstance(picks, list) or not 1 <= len(picks) <= 32:
+            raise TreeEditorError("请选择 1 到 32 个误分团块位置")
+        started = time.perf_counter()
+        chunks: dict[int, list[np.ndarray]] = {}
+        old_previews = dict(self._previews)
+        try:
+            for pick in picks:
+                tree_id = int(pick["tree_id"])
+                public = super().preview_trim_component(tree_id, pick["seed_xyz"], binding=binding)
+                preview = self._require_preview(public["preview_id"])
+                chunks.setdefault(tree_id, []).append(preview["removed_indices"].copy())
+            removed_by_tree = {tid: np.unique(np.concatenate(rows)) for tid, rows in chunks.items()}
+            counts = {tid: len(self.current_membership(tid)[0]) for tid in chunks}
+            for tid, removed in removed_by_tree.items():
+                if len(removed) / counts[tid] >= _base._AUTO_COMPONENT_MAX_FRACTION:
+                    raise TreeEditorError(f"树 {tid} 所选团块合计范围过大，请减少选择或改用套索")
+            removed = np.unique(np.concatenate(list(removed_by_tree.values())))
+            total = sum(counts.values())
+            preview_id = uuid.uuid4().hex
+            preview = {
+                "preview_id": preview_id, "tree_id": -1, "tree_ids": sorted(chunks),
+                "method": COMPONENT_BATCH_METHOD, "binding": str(binding), "revision": self.revision,
+                "removed_indices": removed, "point_count": len(removed), "tree_point_count": total,
+                "fraction": len(removed) / total, "large_removal_warning": len(removed) / total > _base._LARGE_REMOVAL_FRACTION,
+                "selection_ms": round((time.perf_counter() - started) * 1000, 3),
+                "affected_tree_count": len(chunks), "fully_removed_tree_ids": [],
+                "per_tree_removed_counts": {str(tid): len(rows) for tid, rows in removed_by_tree.items()},
+            }
+            self._previews = {preview_id: preview}
+            return _base._public_preview(preview)
+        except Exception:
+            self._previews = old_previews
+            raise
 
     def preview_trim_lasso(
         self,
@@ -128,28 +167,15 @@ class RegionTreeEditSession(TreeEditSession):
 
     def _membership_blocks(self, scope: list[int]):
         """Visit compact editor identity rows once, without reading raw LAS or copying all XYZ."""
-        members, _ = _base._apply_ops(self.original, self.operations)
-        source_to_final = {
-            int(source): int(final) for final in scope for source in members.get(final, [])
-        }
-        keys = np.asarray(sorted(source_to_final), dtype=np.int32)
-        if not len(keys):
-            return
-        values = np.asarray([source_to_final[int(k)] for k in keys], dtype=np.int32)
-        removed = self._removed_original_indices()
-        for start in range(0, len(self.original.original_index), REGION_LASSO_PROJECTION_CHUNK):
-            stop = min(len(self.original.original_index), start + REGION_LASSO_PROJECTION_CHUNK)
-            source_ids = self.original.tree_id[start:stop]
-            positions = np.searchsorted(keys, source_ids)
-            positions = np.minimum(positions, len(keys) - 1)
-            keep = keys[positions] == source_ids
-            if len(removed):
-                keep &= ~_base._isin_sorted(
-                    self.original.original_index[start:stop], removed
-                )
-            local = np.flatnonzero(keep)
-            if len(local):
-                yield local + start, values[positions[local]]
+        members, _lineage = self._resolved_memberships()
+        for final_id in scope:
+            indices = members.get(int(final_id))
+            if indices is None or not len(indices):
+                continue
+            rows = self._rows_for_indices(indices)
+            for start in range(0, len(rows), REGION_LASSO_PROJECTION_CHUNK):
+                block = rows[start : start + REGION_LASSO_PROJECTION_CHUNK]
+                yield block, np.full(len(block), int(final_id), dtype=np.int32)
 
     def _preview_region_lasso(
         self,
@@ -179,10 +205,11 @@ class RegionTreeEditSession(TreeEditSession):
         }
         lookup_started = time.perf_counter()
         current_ids = set(self.current_tree_ids())
-        requested_scope = [int(value) for value in self.selected_ids if int(value) in current_ids]
-        scope = requested_scope or sorted(current_ids)
+        # A region tool is independent of tree selection and classification.
+        # Otherwise clicking a tree beforehand silently excludes other objects.
+        scope = sorted(current_ids)
         if not scope:
-            raise TreeEditorError("当前没有可进行区域剔除的单木")
+            raise TreeEditorError("当前没有可进行区域剔除的可编辑点云")
 
         selected_chunks: list[np.ndarray] = []
         per_tree_removed: dict[int, int] = {}
@@ -211,7 +238,7 @@ class RegionTreeEditSession(TreeEditSession):
                     per_tree_removed[key] = per_tree_removed.get(key, 0) + int(count)
 
         if not selected_chunks:
-            raise TreeEditorError("套索内没有树木点")
+            raise TreeEditorError("套索内没有可编辑点云，请检查视角和圈选范围")
         removed = np.concatenate(selected_chunks)
         if len(removed) > 1 and not np.all(removed[1:] > removed[:-1]):
             removed = np.unique(removed)
@@ -253,7 +280,7 @@ class RegionTreeEditSession(TreeEditSession):
 
     def preview_xyz(self, preview_id: str) -> np.ndarray:
         preview = self._require_preview(preview_id)
-        if preview.get("method") != REGION_LASSO_METHOD:
+        if preview.get("method") not in {REGION_LASSO_METHOD, COMPONENT_BATCH_METHOD}:
             return super().preview_xyz(preview_id)
         removed = np.asarray(preview["removed_indices"], dtype=np.int64)
         rows = np.isin(self.original.original_index, removed)
@@ -267,7 +294,7 @@ class RegionTreeEditSession(TreeEditSession):
         minimum_remaining_points: int | None = None,
     ) -> dict[str, Any]:
         preview = self._require_preview(preview_id)
-        if preview.get("method") != REGION_LASSO_METHOD:
+        if preview.get("method") not in {REGION_LASSO_METHOD, COMPONENT_BATCH_METHOD}:
             return super().commit_trim(
                 preview_id,
                 binding=binding,
@@ -300,7 +327,9 @@ class RegionTreeEditSession(TreeEditSession):
             if removed_counts.get(tree_id, 0) != expected:
                 raise TreeEditorError("预览已过期，请重新选择")
             remaining = current_counts.get(tree_id, 0) - expected
-            if minimum_remaining_points is not None and 0 < remaining < minimum_remaining_points:
+            if (preview["method"] != REGION_LASSO_METHOD
+                    and minimum_remaining_points is not None
+                    and 0 < remaining < minimum_remaining_points):
                 raise TreeEditorError(
                     f"区域剔除后树 {tree_id} 仅剩 {remaining} 个点，"
                     "不足以形成有效单木；请调整套索后重试。"
@@ -314,7 +343,7 @@ class RegionTreeEditSession(TreeEditSession):
         operation = {
             "type": "REMOVE_POINTS",
             "tree_ids": affected_ids,
-            "selection_method": REGION_LASSO_METHOD,
+            "selection_method": preview["method"],
             "point_count": int(len(removed)),
             "removed_indices_b64": _base._encode_indices(removed),
             "sequence": self.revision + 1,

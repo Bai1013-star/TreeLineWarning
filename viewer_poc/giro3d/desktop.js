@@ -19,11 +19,53 @@
     viewerLoaded: false,
     activeSpanId: null,
     executionMode: 'AUTO',
+    warningFrameLoaded: false,
   };
   const browserAcceptance = new URLSearchParams(window.location.search).has('browser-test');
-  let workspaceRefreshPromise = null;
-  let workspaceRefreshPending = false;
+  const warningModuleUrl = new URLSearchParams(window.location.search).get('warning_url');
   const $ = id => document.getElementById(id);
+  let currentRoute = null, restoringNavigation = false, pinnedProcessingView = false;
+  const previousRoutes = [];
+  const processingLabels = {NO_PROJECT:'项目起始页',PROJECT_CREATED:'导入点云',SOURCE_IMPORTED_UNIT_PENDING:'确认点云信息',TOWER_SELECTION:'杆塔选取',TOPOLOGY_READY:'分析准备',ANALYSIS_RUNNING:'分析进度',TREE_REVIEW_READY:'单木复核',FINALIZED:'当前项目结果'};
+  function routeKey(route) {
+    if (route.kind === 'warning') return `warning:${route.token}`;
+    if (route.url) { const url=new URL(route.url,location.href);url.searchParams.delete('run');return `${route.kind}:${url.pathname}${url.search}`; }
+    return `${route.kind}:${route.uiState}:${route.tool||''}`;
+  }
+  function updateBackButton() {
+    const previous=previousRoutes.at(-1),button=$('navigateBack');
+    button.disabled=!previous;button.title=previous?`返回：${previous.label}；保留项目数据和输入`:'当前是起始页面';
+  }
+  function rememberRoute(route) {
+    if(restoringNavigation)return;
+    if(currentRoute&&routeKey(currentRoute)===routeKey(route)){currentRoute={...currentRoute,...route};updateBackButton();return;}
+    if(currentRoute)previousRoutes.push(currentRoute);
+    currentRoute=route;updateBackButton();
+  }
+  function showModuleFrame(frameId) {
+    document.querySelector('.left')?.classList.add('hidden');$('center').classList.add('hidden');document.querySelector('.right')?.classList.add('hidden');
+    show('leftSplitter',false);show('rightSplitter',false);show('moduleFrameWrap',true);
+    show('moduleFrame',frameId==='moduleFrame');show('auxiliaryFrame',frameId==='auxiliaryFrame');
+  }
+  function navigateBack() {
+    const route=previousRoutes.pop();if(!route)return;
+    currentRoute=route;restoringNavigation=true;pinnedProcessingView=route.kind==='processing';
+    try {
+      if(route.kind==='warning'){
+        showModuleFrame('moduleFrame');setActiveTask(route.task);
+        $('moduleFrame').contentWindow.postMessage({type:'treeline-restore-view',token:route.token},new URL(warningModuleUrl).origin);
+      } else if(route.kind==='auxiliary'){
+        showModuleFrame('auxiliaryFrame');setActiveTask(route.task);if($('auxiliaryFrame').contentWindow.location.href!==route.url)$('auxiliaryFrame').src=route.url;
+      } else if(route.kind==='viewer'){
+        showProcessingWorkspace('ribbonReview',false);show('viewerWrap');$('center').classList.add('review-mode');
+        if($('viewer').contentWindow.location.href!==route.url)$('viewer').src=route.url;
+      } else {
+        showProcessingWorkspace(route.task,false);
+        if(route.tool)focusProcessingTool(route.tool,route.uiState);else renderWorkspace(route.uiState,false);
+      }
+      setStatus(`已返回：${route.label}。可修改后继续；返回不会删除结果或撤销点云编辑。`,'good');
+    } finally {restoringNavigation=false;updateBackButton();}
+  }
   const esc = value => String(value ?? '—').replace(/[&<>"']/g, ch => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[ch]));
@@ -84,18 +126,20 @@
     button.disabled = !allowed;
     button.textContent = allowed ? '预测与模拟' : '预测与模拟 🔒';
     button.classList.toggle('future-preview-locked', !allowed);
-    button.title = allowed ? '打开本地场景预测' : '请先完成当前项目的单木复核。';
+    button.title = allowed ? '打开当前树木点云的本地场景预测' : '请先完成点云分析并确认至少一棵树。';
     if (note) {
       note.textContent = allowed
-        ? '✓ 本地基础预测仅用于实验性场景预览，不替代当前正式勘察结果。'
-        : '请先完成当前项目的单木复核。';
+        ? (state.finalized
+          ? '✓ 本地基础预测仅用于实验性场景预览，不替代当前正式勘察结果。'
+          : '✓ 可按当前处理后的树木点云预览；未定稿结果会明确标记为实验性。')
+        : '请先完成点云分析并确认至少一棵树。';
       note.classList.toggle('status-good', allowed);
       note.classList.toggle('status-warn', !allowed);
     }
   }
   function openFuturePreview() {
-    if (state.canPredict) window.location.href = '/future-preview.html';
-    else setStatus('请先完成当前项目的单木复核', 'warn');
+    if (state.canPredict) openTwinWorkspace();
+    else setStatus('请先完成点云分析并确认至少一棵树', 'warn');
   }
   const userError = (error, fallback) => {
     console.error(fallback, error);
@@ -105,6 +149,113 @@
     $('footerState').textContent = `应用状态：${message}`;
     $('footerState').className = kind ? `status-${kind}` : '';
   };
+  function setActiveTask(buttonId) {
+    document.querySelectorAll('.ribbon-buttons button').forEach(button => button.classList.toggle('active-task', button.id === buttonId));
+  }
+  function showProcessingWorkspace(buttonId = '', record = true) {
+    show('moduleFrameWrap', false);
+    show('leftSplitter', true); show('rightSplitter', true);
+    document.querySelector('.left')?.classList.remove('hidden');
+    $('center')?.classList.remove('hidden');
+    document.querySelector('.right')?.classList.remove('hidden');
+    setActiveTask(buttonId);
+    if(record){pinnedProcessingView=false;rememberRoute({kind:'processing',uiState:state.uiState,task:buttonId,label:processingLabels[state.uiState]||'点云处理'});}
+  }
+  function openWarningWorkspace(workspace = 'single') {
+    if (workspace === 'project-batch') workspace = 'single';
+    if (!warningModuleUrl) {
+      setStatus('风险预测预警模块未启动', 'bad');
+      return;
+    }
+    const target = new URL(warningModuleUrl);
+    target.searchParams.set('processing_url', window.location.href);
+    target.searchParams.set('workspace', workspace);
+    target.searchParams.set('embedded', '1');
+    document.querySelector('.left')?.classList.add('hidden');
+    $('center')?.classList.add('hidden');
+    document.querySelector('.right')?.classList.add('hidden');
+    show('leftSplitter', false); show('rightSplitter', false);
+    show('moduleFrameWrap', true);
+    show('moduleFrame',true);show('auxiliaryFrame',false);pinnedProcessingView=false;
+    const taskButtons = {data: 'ribbonData', single: 'openWarningModule', batch: 'ribbonExternalBatch', training: 'ribbonTraining', report: 'exportWorkOrder', history: 'ribbonHistory'};
+    setActiveTask(taskButtons[workspace] || 'openWarningModule');
+    const frame = $('moduleFrame');
+    const warningOrigin = new URL(warningModuleUrl).origin;
+    let reuseFrame = false;
+    try { reuseFrame = state.warningFrameLoaded && new URL(frame.src).origin === warningOrigin; } catch (_) { reuseFrame = false; }
+    state.warningWorkspace = workspace;
+    if (reuseFrame) {
+      frame.contentWindow.postMessage({type: 'treeline-workspace', workspace}, warningOrigin);
+    } else {
+      // Give every task switch a distinct URL.  In particular, the external
+      // batch page must not be allowed to keep showing the previously loaded
+      // current-project data page while that page is still fetching results.
+      target.searchParams.set('_workspace_seq', String(Date.now()));
+      state.warningFrameLoaded = false;
+      frame.src = target.toString();
+    }
+    setStatus(`已在当前主界面打开：${{data:'查看数据',single:'树木预测（1～多棵）','project-batch':'当前项目多木预测',batch:'外部表格批量预测',training:'模型训练',report:'预测报告与工单',history:'历史记录'}[workspace] || '预测模块'}`, 'good');
+  }
+  function exitReview() {
+    // A project can open directly into review with no navigation history.
+    // Returning must still leave the embedded viewer, without deleting edits.
+    if (previousRoutes.length) { navigateBack(); return; }
+    showProcessingWorkspace('ribbonPreprocess', false);
+    focusProcessingTool('点云预处理');
+    pinnedProcessingView = true;
+    setStatus('已退出复核，项目及已提交编辑保留。', 'good');
+  }
+  function openWarningModule() { openWarningWorkspace('single'); }
+  function openTwinWorkspace() {
+    if (!state.canPredict) { setStatus('请先完成点云分析并确认至少一棵树', 'warn'); return; }
+    document.querySelector('.left')?.classList.add('hidden');
+    $('center')?.classList.add('hidden');
+    document.querySelector('.right')?.classList.add('hidden');
+    show('leftSplitter', false); show('rightSplitter', false);
+    show('moduleFrameWrap', true);
+    show('moduleFrame',false);show('auxiliaryFrame',true);pinnedProcessingView=false;
+    setActiveTask('ribbonTwin');
+    const target = new URL('/future-preview.html', window.location.href);
+    target.searchParams.set('embedded', '1');
+    const frame=$('auxiliaryFrame');
+    if(frame.src!==target.toString())frame.src=target.toString();
+    rememberRoute({kind:'auxiliary',url:target.toString(),task:'ribbonTwin',label:'点云数字孪生'});
+    setStatus('已在当前主界面打开：点云数字孪生', 'good');
+  }
+  function focusProcessingTool(label, viewState = state.uiState) {
+    const taskButtons = {'点云预处理':'ribbonPreprocess','地面点去除':'ribbonGround','导线重建':'ribbonWire','单木分割':'ribbonTrees','点云分析':'ribbonPreprocess'};
+    showProcessingWorkspace(taskButtons[label] || 'ribbonPreprocess',false);
+    if(!restoringNavigation)pinnedProcessingView=false;
+    rememberRoute({kind:'processing',uiState:viewState,tool:label,task:taskButtons[label]||'ribbonPreprocess',label});
+    const details = {
+      '点云预处理': '检查点云格式、坐标系、线性单位和基础质量，为后续自动分析准备统一数据。',
+      '地面点去除': '打开地面点去除任务界面，用于分离地面与非地面点。',
+      '导线重建': '打开导线识别与几何重建任务界面，用于形成树线距离计算基准。',
+      '单木分割': '打开单木分割任务界面，用于生成每棵树的高度、胸径、冠幅和空间距离数据。',
+      '点云分析': '打开当前项目的点云分析任务界面。',
+    };
+    const ready = ['TOPOLOGY_READY', 'ANALYSIS_RUNNING', 'TREE_REVIEW_READY', 'FINALIZED'].includes(viewState);
+    if (!ready) {
+      renderWorkspace(viewState,false);
+      setStatus(`请先完成当前准备步骤，然后进入${label}`, 'warn');
+      return;
+    }
+    $('center').classList.remove('review-mode');
+    show('viewerWrap', false); show('batchSection', true); show('analysisOverview', true);
+    $('pipelineStages').innerHTML = pipelineMarkup(viewState === 'ANALYSIS_RUNNING' ? 'current' : 'done');
+    const action = viewState === 'ANALYSIS_RUNNING' ? '' : '<button class="primary" data-action="start-analysis">运行当前项目处理流程</button>';
+    $('stageHost').innerHTML = stageCard('点云处理任务', label, details[label] || details['点云分析'], action, '<div class="notice">这一页只显示您点选的任务；运行时依旧保持完整处理链的数据一致性。</div>');
+    setStatus(`已打开：${label}`, 'good');
+  }
+  function exportPredictionExcel() {
+    const link = document.createElement('a');
+    link.href = '/download_excel';
+    link.download = 'Prediction_Input.xlsx';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setStatus('已按预测板块格式生成 Excel', 'good');
+  }
 
   async function getNativeBridge(requiredMethods) {
     let bridge = nativeApi();
@@ -246,33 +397,35 @@
       node.classList.toggle('done', step < active);
     });
   }
-  function show(id, visible = true) { $(id).classList.toggle('hidden', !visible); }
+  function show(id, visible = true) {
+    if ((id === 'viewerWrap' && !visible) || (id === 'moduleFrameWrap' && visible)) {
+      // Leaving a review is navigation, not cancellation of its server task.
+      // A late finalize response must not navigate the hidden frame to /step3.
+      // renderWorkspace temporarily hides then shows panes in the same tick.
+      // Notify only when the resulting layout actually leaves review hidden.
+      setTimeout(() => {
+        if ($('viewerWrap').classList.contains('hidden') || $('center').classList.contains('hidden')
+            || !$('moduleFrameWrap').classList.contains('hidden')) {
+          $('viewer')?.contentWindow?.postMessage({type:'treeline-review-hidden'},location.origin);
+        }
+      }, 0);
+    }
+    $(id).classList.toggle('hidden', !visible);
+  }
   function stageCard(kicker, title, body, actions = '', extra = '') {
     return `<div class="stage-card"><div class="stage-kicker">${kicker}</div><h1>${title}</h1><p>${body}</p>${extra}${actions ? `<div class="stage-actions">${actions}</div>` : ''}</div>`;
   }
   function towerPicker() {
     return `<div class="picker-card"><div class="picker-head"><div><h3>真实三维点云杆塔选取器</h3><p>斜视、侧视或自由旋转看清杆塔后单击；点击将使用真实局部点云确认坐标与高度。</p></div><div class="picker-controls"><select id="displayMode"><option value="height" selected>高度着色</option><option value="rgb">RGB</option><option value="intensity">强度</option></select><label>点大小 <input id="pointSize" type="range" min="1" max="8" value="2"></label><button id="perspectiveTowerView" class="small">透视视图</button><button id="topTowerView" class="small">俯视</button><button id="sideTowerView" class="small">侧视</button><button id="resetTowerView" class="small">重置视角</button></div></div><div id="towerLoad" class="notice">正在准备点云显示…</div><div id="towerDiagnostics" class="picker-diagnostics"></div><div class="picker-grid"><canvas id="towerCanvas" aria-label="可旋转真实三维点云主视图"></canvas><canvas id="tower3dCanvas" aria-label="局部高密度三维确认视图"></canvas></div><div class="picker-caption"><span>左：主 3D（左键旋转 · 右/中键平移 · 滚轮缩放 · 单击选杆）</span><span>右：局部高密度 3D 确认（同样支持旋转、平移、缩放）</span></div></div>`;
   }
-  function pipelineMarkup(mode, progress = []) {
-    const stages = [
-      ['GROUND', '地面处理'], ['WIRE', '导线识别'], ['VEGETATION', '植被提取'],
-      ['TREE_SEGMENTATION', '单木分割'], ['SPAN_ORGANIZATION', '跨档整理'],
-      ['CLEARANCE', '净空计算'], ['RISK', '风险分析']
-    ];
-    const byStage = new Map((progress || []).map(item => [item.stage, item]));
-    const labels = {PENDING: '等待', RUNNING: '进行中', CACHED: '缓存命中', DONE: '完成', FAILED: '失败'};
-    return stages.map(([key, name]) => {
-      const item = byStage.get(key) || {};
-      const status = mode === 'done' ? 'DONE' : (mode === 'fail' ? 'FAILED' : (item.status || 'PENDING'));
-      const cls = status === 'RUNNING' ? 'current' : (status === 'FAILED' ? 'fail' : (['DONE', 'CACHED'].includes(status) ? 'done' : 'pending'));
-      const backend = item.backend && item.backend !== 'UNKNOWN' ? ` · ${item.backend}` : '';
-      const elapsed = Number.isFinite(item.elapsed_seconds) ? ` · ${Number(item.elapsed_seconds).toFixed(2)}s` : '';
-      return `<div class="stage ${cls}">${name}<br><small>${labels[status] || status}${backend}${elapsed}</small></div>`;
-    }).join('');
+  function pipelineMarkup(mode) {
+    const names = ['地面处理', '导线识别', '植被提取', '单木分割', '跨档整理', '净空计算', '风险分析'];
+    return names.map(name => `<div class="stage ${mode}">${name}<br><small>${mode === 'done' ? '完成' : (mode === 'fail' ? '失败' : '进行中')}</small></div>`).join('');
   }
 
-  function renderWorkspace() {
-    const uiState = state.uiState;
+  function renderWorkspace(uiState = state.uiState, record = true) {
+    if(record&&!$('moduleFrameWrap').classList.contains('hidden'))return;
+    if(record&&uiState!=='TREE_REVIEW_READY')rememberRoute({kind:'processing',uiState,task:document.querySelector('.active-task')?.id||'',label:processingLabels[uiState]||'点云处理'});
     setStepper(uiState);
     ['capabilitySection', 'towerSection', 'batchSection', 'resultSection', 'objectSection'].forEach(id => show(id, false));
     show('riskSection', uiState !== 'NO_PROJECT');
@@ -299,7 +452,7 @@
       $('stageHost').innerHTML = stageCard('步骤 4 / 6', '准备开始分析', '线路拓扑已确认。请选择需要处理的档距，然后开始离线分析。', '<button class="primary" data-action="start-analysis">开始分析</button>', `<div class="topology-summary"><div class="summary-tile"><span>线路</span><b>${state.project.lines ?? 0}</b></div><div class="summary-tile"><span>杆塔</span><b>${state.project.towers ?? 0}</b></div><div class="summary-tile"><span>逻辑档距</span><b>${state.project.spans ?? 0}</b></div></div>`);
     } else if (uiState === 'ANALYSIS_RUNNING') {
       show('batchSection'); show('analysisOverview');
-      $('pipelineStages').innerHTML = pipelineMarkup('current', state.batch?.analysis_progress);
+      $('pipelineStages').innerHTML = pipelineMarkup('current');
       const cacheMessage = state.batch?.source_cache_message || '首次处理大型点云，正在建立可复用缓存。';
       $('stageHost').innerHTML = stageCard('步骤 4 / 6', '正在分析', '软件正在本机完成地面、导线、植被、单木、净空和风险分析。可继续查看右侧任务状态。', '', `<div class="stage-progress"><i></i></div><div class="notice">${esc(cacheMessage)}<br>请保持软件运行。全部计算均在本机完成。</div>`);
     } else if (uiState === 'TREE_REVIEW_READY') {
@@ -310,29 +463,35 @@
       loadViewer();
     } else if (uiState === 'FINALIZED') {
       show('resultSection'); show('objectSection'); show('analysisOverview');
-      show('viewerWrap', state.viewerLoaded);
-      if (state.viewerLoaded) $('center').classList.add('review-mode');
       $('pipelineStages').innerHTML = pipelineMarkup('done');
       const completed = (state.batch.spans || []).filter(span => span.status === 'FINALIZED').length;
       const futureAction = state.canPredict
         ? '<button data-action="open-future-preview">预测与模拟</button>'
         : '<button data-action="open-future-preview" disabled>预测与模拟 🔒</button>';
-      $('stageHost').innerHTML = stageCard('步骤 6 / 6', '结果已完成', '单木复核和档距结果已定稿。现在可以查看当前最终报告、实验性场景预览或导出树木风险结果。', `<button data-action="open-viewer">打开复核视图</button><button data-action="open-current-report">打开当前最终报告</button>${futureAction}<button class="primary" data-action="export-prediction">导出树木风险结果</button><button data-action="export-html">导出 HTML 报告</button>`, `<div class="result-summary"><div class="summary-tile"><span>已定稿档距</span><b>${completed}</b></div><div class="summary-tile"><span>风险阈值</span><b>${esc(state.batch.risk_policy?.warning_clearance_threshold_m)} m</b></div><div class="summary-tile"><span>结果状态</span><b class="status-good">已完成</b></div></div>`);
+      $('stageHost').innerHTML = stageCard('步骤 6 / 6', '结果已完成', '单木复核和档距结果已定稿。现在可以直接生成预警报告与工单，或查看点云数字孪生趋势。', `<button data-action="open-viewer">打开复核视图</button><button data-action="open-current-report">打开当前最终报告</button>${futureAction}<button class="primary" data-action="open-warning">生成预警报告与工单</button>`, `<div class="result-summary"><div class="summary-tile"><span>已定稿档距</span><b>${completed}</b></div><div class="summary-tile"><span>风险阈值</span><b>${esc(state.batch.risk_policy?.warning_clearance_threshold_m)} m</b></div><div class="summary-tile"><span>结果状态</span><b class="status-good">已完成</b></div></div>`);
     }
   }
 
-  async function loadWorkspace() {
+  async function loadWorkspace(advanceWorkflow = false) {
     try {
+      if(advanceWorkflow)pinnedProcessingView=false;
       const payload = await api('/api/desktop/workspace');
+      if(state.project?.root&&payload.project?.root&&state.project.root!==payload.project.root){
+        previousRoutes.length=0;currentRoute=null;pinnedProcessingView=false;state.warningFrameLoaded=false;state.warningWorkspace=null;
+        $('moduleFrame').src='about:blank';$('auxiliaryFrame').src='about:blank';showProcessingWorkspace('',false);updateBackButton();
+      }
       state.uiState = payload.ui_state;
       state.treeReviewReady = Boolean(payload.tree_review_ready);
       state.finalized = Boolean(payload.finalized);
-      state.canPredict = payload.can_predict === undefined ? state.finalized : Boolean(payload.can_predict);
+      // The twin is a read-only experimental view.  It may use the current
+      // processed tree cloud before formal publication; reports and exports
+      // remain protected by their independent finalization gates.
+      state.canPredict = state.treeReviewReady || state.finalized || Boolean(payload.can_predict);
       state.testMode = Boolean(payload.test_mode);
       renderProject(payload.project);
       renderCapability(payload.capability);
       renderBatch(payload.batch);
-      renderWorkspace();
+      if(!pinnedProcessingView)renderWorkspace();
       setStatus('离线本地服务已就绪', 'good');
     } catch (error) {
       setStatus(userError(error, '本地服务暂时不可用，请重新启动软件。'), 'bad');
@@ -340,36 +499,20 @@
     }
   }
 
-  function requestWorkspaceRefresh() {
-    if (workspaceRefreshPromise) {
-      workspaceRefreshPending = true;
-      return workspaceRefreshPromise;
-    }
-    workspaceRefreshPromise = (async () => {
-      do {
-        workspaceRefreshPending = false;
-        await loadWorkspace();
-      } while (workspaceRefreshPending);
-    })().finally(() => { workspaceRefreshPromise = null; });
-    return workspaceRefreshPromise;
-  }
-
   async function createProject() {
     try {
-      const bridge = await getNativeBridge(['choose_project_location', 'create_project']);
+      const bridge = await getNativeBridge(['choose_project_location', 'create_project_in_folder']);
       if (!bridge) {
         await jsonPost('/api/desktop/create', {project_name: `界面验收项目-${Date.now()}`});
       } else {
-        const parent = await bridge.choose_project_location();
-        if (!parent) { setStatus('已取消新建项目'); return; }
-        const name = window.prompt('请输入项目名称：');
-        if (!name?.trim()) { setStatus('已取消新建项目'); return; }
-        await bridge.create_project(parent, name.trim());
+        const folder = await bridge.choose_project_location();
+        if (!folder) { setStatus('已取消新建项目'); return; }
+        await bridge.create_project_in_folder(folder);
       }
       state.viewerLoaded = false;
       state.towerViewer = null; state.localPreview = null; state.towerMain3d = null; state.towerLocal3d = null;
-      await loadWorkspace();
-      setStatus('项目已创建，可以导入点云', 'good');
+      await loadWorkspace(true);
+      setStatus('项目已直接创建在所选文件夹中，可以导入点云', 'good');
     } catch (error) {
       setStatus(userError(error, '新建项目失败，请检查保存位置或项目名称后重试。'), 'bad');
     }
@@ -382,7 +525,7 @@
       if (!result) { setStatus('已取消打开项目'); return; }
       state.viewerLoaded = false;
       state.towerViewer = null; state.localPreview = null; state.towerMain3d = null; state.towerLocal3d = null;
-      await loadWorkspace();
+      await loadWorkspace(true);
       setStatus('项目已打开', 'good');
     } catch (error) {
       setStatus(userError(error, '打开项目失败，请确认所选文件夹是有效项目。'), 'bad');
@@ -394,7 +537,7 @@
       if (!bridge) await jsonPost('/api/desktop/fixture-source');
       else if (!await bridge.import_point_cloud()) { setStatus('已取消导入点云'); return; }
       state.towerViewer = null; state.localPreview = null; state.towerMain3d = null; state.towerLocal3d = null;
-      await loadWorkspace();
+      await loadWorkspace(true);
       setStatus('点云已导入，请确认坐标系和单位', 'good');
     } catch (error) {
       setStatus(userError(error, '点云导入失败，请选择可读取的 LAS/LAZ 文件。'), 'bad');
@@ -405,14 +548,14 @@
       const bridge = await getNativeBridge(['import_gis']);
       if (!bridge) { setStatus('GIS 导入仅在桌面软件中提供', 'warn'); return; }
       if (!await bridge.import_gis()) { setStatus('已取消导入 GIS'); return; }
-      await loadWorkspace();
+      await loadWorkspace(true);
       setStatus('GIS 数据已导入', 'good');
     } catch (error) { setStatus(userError(error, 'GIS 导入失败，请检查文件格式。'), 'bad'); }
   }
   async function confirmUnit() {
     try {
       await jsonPost('/api/desktop/capability/confirm', {unit: $('unitSelect').value});
-      await loadWorkspace();
+      await loadWorkspace(true);
       setStatus('点云单位已确认，可以选取杆塔', 'good');
     } catch (error) { setStatus(userError(error, '单位确认失败，请重新选择。'), 'bad'); }
   }
@@ -517,7 +660,7 @@
     try {
       const towers = state.towerRows;
       await jsonPost('/api/desktop/towers', {line_name: $('lineName').value, line_role: $('lineRole').value, parent_line_id: $('parentLine').value || null, towers});
-      await loadWorkspace();
+      await loadWorkspace(true);
       setStatus('杆塔顺序已保存，逻辑档距已生成', 'good');
     } catch (error) {
       $('towerMessage').textContent = userError(error, '无法保存杆塔，请检查名称、坐标和顺序。');
@@ -532,6 +675,7 @@
       const started = await jsonPost('/api/desktop/batch/start', {span_ids: spanIds, mode, execution_mode});
       renderBatch(started);
       state.uiState = started.status === 'RUNNING' ? 'ANALYSIS_RUNNING' : state.uiState;
+      pinnedProcessingView=false;
       renderWorkspace();
       setStatus(mode === 'FIXTURE' ? '测试分析正在运行' : (started.source_cache_message || '离线分析正在运行'), 'good');
       window.setTimeout(pollBatch, 900);
@@ -555,17 +699,21 @@
     } catch (error) { setStatus(userError(error, '暂时无法读取分析进度。'), 'bad'); }
   }
   async function retryBatch() {
-    try { await jsonPost('/api/desktop/batch/retry', {execution_mode: selectedExecutionMode()}); await loadWorkspace(); pollBatch(); }
+    try { await jsonPost('/api/desktop/batch/retry', {execution_mode: selectedExecutionMode()}); await loadWorkspace(true); pollBatch(); }
     catch (error) { setStatus(userError(error, '重试失败任务未能启动。'), 'bad'); }
   }
   function loadViewer(force = false) {
     if (!state.treeReviewReady && !state.finalized) { setStatus('单木结果尚未就绪', 'warn'); return; }
+    showProcessingWorkspace('ribbonReview',false);pinnedProcessingView=false;
     show('viewerWrap'); $('center').classList.add('review-mode');
-    if (!state.viewerLoaded || force) {
+    let reviewPageLoaded = false;
+    try { reviewPageLoaded = new URL($('viewer').contentWindow.location.href, window.location.href).pathname === '/step2'; } catch (_) { reviewPageLoaded = false; }
+    if (!state.viewerLoaded || force || !reviewPageLoaded) {
       const span = state.activeSpanId ? `&span_id=${encodeURIComponent(state.activeSpanId)}` : '';
       $('viewer').src = `/step2?run=${Date.now()}${span}`;
       state.viewerLoaded = true;
     }
+    rememberRoute({kind:'viewer',url:new URL($('viewer').src,location.href).toString(),task:'ribbonReview',label:'单木人工复核'});
     setStatus('单木结果复核视图已打开', 'good');
   }
   function localizeViewerFrame() {
@@ -596,59 +744,99 @@
     }
   }
   async function finalizeBatch() {
-    try { await jsonPost('/api/desktop/batch/finalize'); await loadWorkspace(); setStatus('单木复核已完成', 'good'); }
+    try { await jsonPost('/api/desktop/batch/finalize'); await loadWorkspace(true); setStatus('单木复核已完成', 'good'); }
     catch (error) { setStatus(userError(error, '无法完成复核，请先检查单木结果。'), 'bad'); }
-  }
-  async function exportPrediction() {
-    try {
-      if (!state.finalized) { setStatus('请先完成当前项目的单木复核', 'warn'); return; }
-      const bridge = nativeApi();
-      const result = bridge?.export_excel
-        ? await bridge.export_excel()
-        : await browserDownload('/download_prediction', '树木风险结果.xlsx');
-      if (result?.cancelled) { setStatus('已取消 Excel 导出', 'warn'); return; }
-      await loadWorkspace();
-      setStatus(`Excel 已保存${result?.path ? `：${result.path}` : ''}`, 'good');
-    } catch (error) { setStatus(userError(error, '导出失败，请先完成单木复核。'), 'bad'); }
-  }
-  async function browserDownload(url, filename) {
-    const response = await fetch(url, {cache: 'no-store'});
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.error?.message || `下载失败 (${response.status})`);
-    }
-    const anchor = document.createElement('a');
-    const objectUrl = URL.createObjectURL(await response.blob());
-    anchor.href = objectUrl;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-    return {ok: true};
-  }
-  async function exportHtml() {
-    try {
-      if (!state.finalized) { setStatus('请先完成当前项目的单木复核', 'warn'); return; }
-      const bridge = nativeApi();
-      const result = bridge?.export_html
-        ? await bridge.export_html()
-        : await browserDownload('/download_report_html', 'TreeLineWarning_Current_Report.html');
-      if (result?.cancelled) { setStatus('已取消 HTML 导出', 'warn'); return; }
-      setStatus(`HTML 报告已保存${result?.path ? `：${result.path}` : ''}`, 'good');
-    } catch (error) { setStatus(userError(error, 'HTML 报告导出失败。'), 'bad'); }
   }
   async function saveRisk() {
     const value = Number($('riskThreshold').value);
     if (!(value > 0)) { setStatus('预警净空阈值必须大于 0', 'warn'); return; }
-    try { await jsonPost('/api/desktop/risk-policy', {warning_clearance_threshold_m: value}); state.viewerLoaded = false; await loadWorkspace(); setStatus('风险阈值已保存，结果已即时重分类', 'good'); }
+    const reviewState = $('viewer').contentWindow?.TreeLineTreeReviewApp?.state;
+    if (reviewState && (reviewState.editingBusy || reviewState.mutation || reviewState.trimMode !== 'IDLE' || reviewState.operationMode !== 'SELECT')) {
+      setStatus('请先执行或取消当前树木编辑，再保存风险阈值。', 'warn'); return;
+    }
+    try {
+      await jsonPost('/api/desktop/risk-policy', {warning_clearance_threshold_m: value});
+      const review = $('viewer').contentWindow?.TreeLineTreeReviewApp;
+      const active = !$('viewerWrap').classList.contains('hidden') && review?.refreshThreshold;
+      await loadWorkspace();
+      if (active) { loadViewer(); await review.refreshThreshold(); }
+      else state.viewerLoaded = false;
+      setStatus('风险阈值已保存，危险点与风险分类已按当前阈值更新', 'good');
+    }
     catch (error) { setStatus(userError(error, '风险阈值保存失败。'), 'bad'); }
   }
 
-  $('newProject').addEventListener('click', createProject);
-  $('openProject').addEventListener('click', openProject);
-  $('importPointCloud').addEventListener('click', importPointCloud);
-  $('importGIS').addEventListener('click', importGIS);
+  function installPaneResizers() {
+    const workspace=$('workspace'),left=$('leftSplitter'),right=$('rightSplitter');
+    const savedLeft=Number(localStorage.getItem('treeline-left-width')),savedRight=Number(localStorage.getItem('treeline-right-width'));
+    if(Number.isFinite(savedLeft)&&savedLeft>=160)workspace.style.setProperty('--left-width',`${savedLeft}px`);
+    if(Number.isFinite(savedRight)&&savedRight>=260)workspace.style.setProperty('--right-width',`${savedRight}px`);
+    const drag=(splitter,side)=>splitter.addEventListener('pointerdown',event=>{
+      if(event.target.closest('button'))return;event.preventDefault();splitter.setPointerCapture(event.pointerId);splitter.classList.add('dragging');
+      const move=moveEvent=>{const rect=workspace.getBoundingClientRect(),width=side==='left'?moveEvent.clientX-rect.left:rect.right-moveEvent.clientX;const bounded=Math.round(Math.max(side==='left'?160:260,Math.min(side==='left'?520:620,width)));workspace.classList.remove(`${side}-collapsed`);workspace.style.setProperty(`--${side}-width`,`${bounded}px`);localStorage.setItem(`treeline-${side}-width`,String(bounded));};
+      const stop=()=>{splitter.classList.remove('dragging');splitter.removeEventListener('pointermove',move);splitter.removeEventListener('pointerup',stop);splitter.removeEventListener('pointercancel',stop);};
+      splitter.addEventListener('pointermove',move);splitter.addEventListener('pointerup',stop);splitter.addEventListener('pointercancel',stop);
+    });
+    drag(left,'left');drag(right,'right');
+    $('collapseLeft').addEventListener('click',()=>workspace.classList.toggle('left-collapsed'));
+    $('collapseRight').addEventListener('click',()=>workspace.classList.toggle('right-collapsed'));
+  }
+  installPaneResizers();
+  $('navigateBack').addEventListener('click',navigateBack);
+  window.addEventListener('message', event => {
+    if (event.origin === location.origin && event.source === $('viewer').contentWindow
+        && event.data?.type === 'treeline-exit-review') exitReview();
+  });
+  // The prediction frame uses a separate local origin; pywebview installs
+  // its native API on this top-level window, not on the embedded frame.
+  window.addEventListener('message',async event=>{
+    if(!warningModuleUrl||event.source!==$('moduleFrame').contentWindow||event.origin!==new URL(warningModuleUrl).origin)return;
+    const message=event.data,allowed=new Set(['save_export_url','save_export_file','save_table_export']);
+    if(message?.type!=='treeline-native-export'||typeof message.id!=='string'||!allowed.has(message.method)||!Array.isArray(message.args))return;
+    const reply={type:'treeline-native-export-result',id:message.id};
+    try{const api=nativeApi();reply.available=typeof api?.[message.method]==='function';if(reply.available)reply.result=await api[message.method](...message.args);}
+    catch(error){reply.error=String(error?.message||error);}
+    event.source.postMessage(reply,event.origin);
+  });
+  window.addEventListener('message',event=>{
+    if(!warningModuleUrl||event.source!==$('moduleFrame').contentWindow||event.origin!==new URL(warningModuleUrl).origin)return;
+    if(event.data?.type==='treeline-open-processing'){
+      const labels={preprocess:'点云预处理',ground:'地面点去除',wire:'导线重建',trees:'单木分割',processing:'点云分析'};
+      if(event.data.workspace==='twin')openTwinWorkspace();else if(event.data.workspace==='review')loadViewer();else focusProcessingTool(labels[event.data.workspace]||'点云分析');
+    }else if(event.data?.type==='treeline-navigation-state'&&event.data.token&&!$('moduleFrameWrap').classList.contains('hidden')&&!$('moduleFrame').classList.contains('hidden')){
+      const tasks={data:'ribbonData',input:event.data.entry==='batch'?'ribbonExternalBatch':'openWarningModule',results:'exportWorkOrder',history:'ribbonHistory',training:'ribbonTraining'};
+      const task=tasks[event.data.page]||'openWarningModule';setActiveTask(task);
+      rememberRoute({kind:'warning',token:event.data.token,task,label:event.data.label||'预测任务'});
+    }
+  });
+
+  $('newProject').addEventListener('click', () => { showProcessingWorkspace('newProject'); createProject(); });
+  $('openWarningModule').addEventListener('click', openWarningModule);
+  $('ribbonPreprocess').addEventListener('click', () => focusProcessingTool('点云预处理'));
+  $('ribbonGround').addEventListener('click', () => focusProcessingTool('地面点去除'));
+  $('ribbonWire').addEventListener('click', () => focusProcessingTool('导线重建'));
+  $('ribbonTrees').addEventListener('click', () => focusProcessingTool('单木分割'));
+  $('ribbonReview').addEventListener('click', () => loadViewer());
+  $('ribbonData').addEventListener('click', () => openWarningWorkspace('data'));
+  $('ribbonExternalBatch').addEventListener('click', () => openWarningWorkspace('batch'));
+  $('ribbonTwin').addEventListener('click', openTwinWorkspace);
+  $('ribbonTraining').addEventListener('click', () => openWarningWorkspace('training'));
+  $('ribbonHistory').addEventListener('click', () => openWarningWorkspace('history'));
+  $('moduleFrame').addEventListener('load', () => {
+    state.warningFrameLoaded = $('moduleFrame').src !== 'about:blank';
+    if (!state.warningFrameLoaded || !state.warningWorkspace || !warningModuleUrl) return;
+    try {
+      $('moduleFrame').contentWindow.postMessage(
+        {type: 'treeline-workspace', workspace: state.warningWorkspace},
+        new URL(warningModuleUrl).origin,
+      );
+    } catch (error) {
+      console.warn('Unable to confirm warning workspace after frame load', error);
+    }
+  });
+  $('openProject').addEventListener('click', () => { showProcessingWorkspace('openProject'); openProject(); });
+  $('importPointCloud').addEventListener('click', () => { showProcessingWorkspace('importPointCloud'); importPointCloud(); });
+  $('importGIS').addEventListener('click', () => { showProcessingWorkspace('importGIS'); importGIS(); });
   $('confirmUnit').addEventListener('click', confirmUnit);
   $('saveTowers').addEventListener('click', saveTowers);
   $('removeTower').addEventListener('click', () => { if (state.towerRows.length) { state.towerRows.pop(); renderTowerRows(); } });
@@ -664,24 +852,22 @@
   $('openViewer').addEventListener('click', () => loadViewer());
   $('openFuturePreview').addEventListener('click', openFuturePreview);
   $('refreshViewer').addEventListener('click', () => loadViewer(true));
-  $('viewer').addEventListener('load', localizeViewerFrame);
-  $('viewer').addEventListener('load', requestWorkspaceRefresh);
-  window.addEventListener('message', event => {
-    if (event.origin !== window.location.origin || event.source !== $('viewer').contentWindow) return;
-    if (event.data?.type === 'treeline:tree-review-changed') void requestWorkspaceRefresh();
+  $('viewer').addEventListener('load',()=>{
+    localizeViewerFrame();
+    try{const url=$('viewer').contentWindow.location.href,path=new URL(url).pathname;if(!['/step2','/step3','/dbh-review'].includes(path))return;
+      if(currentRoute?.kind==='viewer'&& !$('center').classList.contains('hidden'))rememberRoute({kind:'viewer',url,task:'ribbonReview',label:{'/step2':'单木人工复核','/step3':'当前最终报告','/dbh-review':'胸径复核'}[path]});
+    }catch(_){/* Only same-origin processing pages participate in history. */}
   });
-  window.addEventListener('focus', () => {
-    if (state.viewerLoaded) void requestWorkspaceRefresh();
+  $('auxiliaryFrame').addEventListener('load',()=>{
+    try{
+      const frame=$('auxiliaryFrame'),url=frame.contentWindow.location.href,path=new URL(url).pathname;
+      if(currentRoute?.kind==='auxiliary'&&['/step3','/future-preview.html'].includes(path))rememberRoute({kind:'auxiliary',url,task:path==='/step3'?'exportWorkOrder':'ribbonTwin',label:path==='/step3'?'当前最终报告':'点云数字孪生'});
+      frame.contentDocument?.querySelectorAll('a[href="/"]').forEach(link=>link.addEventListener('click',event=>{event.preventDefault();showProcessingWorkspace('',false);pinnedProcessingView=false;renderWorkspace();}));
+    }catch(_){/* Keep external links outside the local history. */}
   });
-  window.setInterval(() => {
-    if (state.viewerLoaded && !$('viewerWrap').classList.contains('hidden') && !document.hidden) {
-      void requestWorkspaceRefresh();
-    }
-  }, 5000);
   $('finalizeBatch').addEventListener('click', finalizeBatch);
-  $('exportPrediction').addEventListener('click', exportPrediction);
-  $('exportWorkOrder').addEventListener('click', exportPrediction);
-  $('exportHtml').addEventListener('click', exportHtml);
+  $('exportPrediction').addEventListener('click', openWarningModule);
+  $('exportWorkOrder').addEventListener('click', () => openWarningWorkspace('report'));
   $('saveRisk').addEventListener('click', saveRisk);
   $('stageHost').addEventListener('click', event => {
     const action = event.target.closest('[data-action]')?.dataset.action;
@@ -692,10 +878,9 @@
     else if (action === 'focus-towers') $('lineName').focus();
     else if (action === 'start-analysis') startBatch('REAL');
     else if (action === 'open-viewer') loadViewer();
-    else if (action === 'open-current-report') window.location.href = '/step3';
+    else if (action === 'open-current-report') {loadViewer();const url=new URL('/step3',location.href).toString();$('viewer').src=url;rememberRoute({kind:'viewer',url,task:'ribbonReview',label:'当前最终报告'});}
     else if (action === 'open-future-preview') openFuturePreview();
-    else if (action === 'export-prediction') exportPrediction();
-    else if (action === 'export-html') exportHtml();
+    else if (action === 'open-warning') openWarningModule();
   });
   window.addEventListener('error', event => {
     console.error('Unhandled UI error', event.error || event.message);
@@ -706,5 +891,13 @@
     setStatus('操作未能完成，详细信息已写入本地日志', 'bad');
   });
 
-  loadWorkspace();
+  loadWorkspace().then(() => {
+    const requested = new URLSearchParams(window.location.search).get('workspace');
+    if (requested === 'review') loadViewer();
+    else if (requested === 'preprocess') focusProcessingTool('点云预处理');
+    else if (requested === 'ground') focusProcessingTool('地面点去除');
+    else if (requested === 'wire') focusProcessingTool('导线重建');
+    else if (requested === 'trees') focusProcessingTool('单木分割');
+    else if (requested === 'analysis' || requested === 'processing') focusProcessingTool('点云分析');
+  });
 })();

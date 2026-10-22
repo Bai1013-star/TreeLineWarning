@@ -409,6 +409,80 @@ def _robust_quadratic_fit(
 # ---------------------------------------------------------------------------
 
 
+def _strong_endpoint_occlusion_bridge(
+    track: Any,
+    *,
+    approach_start: bool,
+    approach_end: bool,
+    span_length_m: float,
+    config: FastBaselineConfig,
+) -> bool:
+    """Admit only an exceptionally strong track with one bounded scan gap."""
+
+    return bool(
+        track.status == "REVIEW_ONLY"
+        and list(track.reasons) == ["unsupported_internal_gap"]
+        and approach_start
+        and approach_end
+        and track.coverage_ratio >= 0.90
+        and track.supported_slice_count
+        >= 3 * config.wire_confirmed_min_supported_slices
+        and track.supported_slice_ratio >= 0.80
+        and track.bounded_supported_slice_ratio >= 0.80
+        and track.maximum_gap_m <= 10.0
+        and track.maximum_gap_m <= 0.15 * span_length_m
+    )
+
+
+def _parallel_family_interior_rescue(track: Any, tracks: list[Any], config: FastBaselineConfig) -> bool:
+    """Keep a well-observed 3rd/4th conductor when foliage hides both ends.
+
+    Pole approaches remain the normal identity proof.  In a multi-conductor
+    distribution span, however, one phase can be hidden exactly where the
+    other phases reach the pole.  A track is rescued only when its own robust
+    geometry already passed every V2 confirmation gate, at least two sibling
+    tracks independently passed those same gates, and the interior evidence
+    is substantially stronger than the ordinary minimums.  This recovers an
+    observed line; it never synthesizes a missing conductor.
+    """
+
+    from algorithms.spans.wire_v2 import evaluate_catenary, evaluate_polynomial
+
+    siblings = 0
+    for item in tracks:
+        if item is track or item.status != 'CONFIRMED':
+            continue
+        lo = max(track.supported_s_min_m, item.supported_s_min_m)
+        hi = min(track.supported_s_max_m, item.supported_s_max_m)
+        if hi <= lo or (hi-lo) < .5 * (track.supported_s_max_m-track.supported_s_min_m):
+            continue
+        samples = np.linspace(lo, hi, 9)
+        def heights(value: Any) -> np.ndarray:
+            return (evaluate_catenary(value.catenary_parameters, samples)
+                    if value.model_type == 'CATENARY' else evaluate_polynomial(value.model_z_coefficients, samples))
+        height_difference = np.abs(heights(track)-heights(item))
+        lateral_difference = np.abs(evaluate_polynomial(track.model_u_coefficients, samples)
+                                    - evaluate_polynomial(item.model_u_coefficients, samples))
+        # A lower communication cable is not evidence for an occluded phase.
+        # Siblings must be distinct, side-by-side and in the same height band
+        # at corresponding longitudinal positions, including normal sag.
+        if (float(np.quantile(height_difference, .9)) <= config.wire_parallel_max_height_difference_m
+                and .20 <= float(np.median(lateral_difference)) <= 3.5):
+            siblings += 1
+    return bool(
+        track.status == "CONFIRMED"
+        and siblings >= 2
+        and track.coverage_ratio >= 0.85
+        and track.supported_slice_count >= 3 * config.wire_confirmed_min_supported_slices
+        and track.supported_slice_ratio >= 0.80
+        and track.bounded_supported_slice_ratio >= 0.80
+        and track.maximum_gap_m <= config.wire_track_max_unsupported_gap_m
+        and track.inlier_ratio >= config.wire_confirmed_min_inlier_ratio
+        and track.median_residual_m <= config.wire_confirmed_max_median_residual_m
+        and track.p95_residual_m <= config.wire_confirmed_max_p95_residual_m
+    )
+
+
 def run_span_wire_pipeline(
     span: SpanRecord,
     wire_region_subset: Any,
@@ -558,7 +632,26 @@ def run_span_wire_pipeline(
             s_values[rows], u_values[rows], z_values[rows], span, span_length, config
         ) if len(rows) else False
         status, reasons = track.status, list(track.reasons)
-        if status == CONFIRMED and not (approach_start or approach_end):
+        # Mobile/hand-held surveys can lose a short interior run when foliage
+        # occludes the conductor.  Do not make every >5 m gap distance-ready;
+        # bridge only a single-gap-only review track whose two endpoints,
+        # span-wide coverage, slice support and fitted geometry are already
+        # independently strong.  The 15%/10 m cap keeps the deliberately
+        # fail-closed large-gap behaviour intact.
+        strong_occlusion_bridge = _strong_endpoint_occlusion_bridge(
+            track,
+            approach_start=approach_start,
+            approach_end=approach_end,
+            span_length_m=span_length,
+            config=config,
+        )
+        if strong_occlusion_bridge:
+            status = CONFIRMED
+            reasons = ["strong_endpoint_occlusion_bridge"]
+        family_interior_rescue = _parallel_family_interior_rescue(track, tracks, config)
+        if status == CONFIRMED and not (approach_start or approach_end) and family_interior_rescue:
+            reasons = ["parallel_family_interior_confirmation"]
+        elif status == CONFIRMED and not (approach_start or approach_end):
             status, reasons = REVIEW_ONLY, reasons + ["missing_endpoint_approach_evidence"]
         if (
             status == CONFIRMED
@@ -573,6 +666,7 @@ def run_span_wire_pipeline(
         )
         diagnostic["status"] = status
         diagnostic["reasons"] = reasons
+        diagnostic['median_z_m'] = float(np.median(z_values[rows])) if len(rows) else None
         track_diagnostics.append(diagnostic)
         if status != CONFIRMED:
             continue

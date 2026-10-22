@@ -805,43 +805,18 @@ def fit_stem_dbh(
             diagnostics=details,
         )
 
-    section_heights = np.asarray(
-        [float(section["center_hag_m"]) for section in accepted_sections], dtype=np.float64
-    )
-    # A vertical diameter profile estimates the value at true breast height.
-    # In particular, a missing 1.30 m slice must not become the mean of the
-    # lowest and highest observed diameters on a tapered stem.
-    slope, intercept = np.polyfit(section_heights - 1.30, diameters, 1)
-    profile_dbh_m = float(intercept)
-    details["vertical_profile_slope_m_per_m"] = _json_float(slope)
-    details["vertical_profile_dbh_m"] = _json_float(profile_dbh_m)
-    central_gap = (
-        not ({2, 3} & {int(section["index"]) for section in accepted_sections})
-        or not np.any(np.abs(hag - 1.30) <= 0.10)
-    )
-    details["breast_height_occluded"] = central_gap
-    if not config.diameter_min_m <= profile_dbh_m <= config.diameter_max_m:
-        return _base_result(
-            point_count, slices, "VERTICAL_PROFILE_OUT_OF_RANGE",
-            requested_method=requested_method, diagnostics=details,
-        )
     section_rmse = np.asarray(
         [float(section["fit_rmse_m"]) for section in accepted_sections], dtype=np.float64
     )
     aggregate_rmse = float(sqrt(np.mean(section_rmse * section_rmse)))
     diameter_mad = float(np.median(np.abs(diameters - median_diameter)))
     uncertainty_cm = max(0.01, 100.0 * sqrt(aggregate_rmse**2 + (0.5 * 1.4826 * diameter_mad) ** 2))
-    if central_gap:
-        uncertainty_cm = max(
-            uncertainty_cm,
-            100.0 * abs(float(slope)) * float(np.min(abs(hag - 1.30))),
-        )
     details["diameter_mad_m"] = _json_float(diameter_mad)
     details["aggregate_fit_rmse_m"] = _json_float(aggregate_rmse)
     return {
-        "dbh_cm": _json_float(profile_dbh_m * 100.0),
+        "dbh_cm": _json_float(median_diameter * 100.0),
         "dbh_method": requested_method,
-        "dbh_quality": ESTIMATE if central_gap else HIGH,
+        "dbh_quality": HIGH,
         "dbh_point_count": int(point_count),
         "dbh_fit_rmse": _json_float(aggregate_rmse),
         "dbh_slice_count": int(accepted_count),

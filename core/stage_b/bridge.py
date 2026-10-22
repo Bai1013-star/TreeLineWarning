@@ -222,6 +222,7 @@ class ProjectScienceBridge:
             "scan_id": self.scan.scan_id,
             "resolved_access_path": self.scan.point_cloud_source,
             "source_point_count": self.scan.capability_report.get("point_count")
+            or self.scan.capability_report.get("details", {}).get("point_count")
             or self.scan.coverage.get("point_count"),
         }
         for key in ("origin_context", "source_bounds_min_xyz"):

@@ -1,0 +1,2 @@
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE),fs=require('node:fs');
+(async()=>{const urls=JSON.parse(fs.readFileSync(process.env.REAL_SERVERS,'utf8'));const b=await chromium.launch({channel:'msedge',headless:true});const p=await b.newPage();p.on('pageerror',e=>console.log('pageerror:'+e));await p.goto(urls.processing+'future-preview.html');await p.waitForTimeout(10000);console.log((await p.locator('body').innerText()).slice(0,1400));await p.screenshot({path:process.env.REAL_OUTPUT+'/twin_probe.png',fullPage:true});await b.close();})();

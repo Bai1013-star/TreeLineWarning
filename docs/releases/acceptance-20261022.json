@@ -1,0 +1,39 @@
+{
+  "date": "2026-10-22",
+  "passed": true,
+  "requirements": {
+    "wind_offset_plain_language_explanation": true,
+    "weather_history_persists_across_restarts_and_projects": true,
+    "weather_one_click_import_and_edit": true,
+    "same_height_parallel_conductor_fitting": true,
+    "short_results_and_orders_use_day_1_through_N": true
+  },
+  "regression": {"passed": 31, "failed": 0},
+  "real_point_cloud": {
+    "batch": "analysis-da20d936f7624badb7f41386b186fd52",
+    "status": "COMPLETE",
+    "fitted_conductors": 3,
+    "lateral_positions_m": [-1.0318680632452368, -0.10077265649537603, 0.8357506162905628],
+    "median_heights_m": [11.562799864196778, 11.428049974822999, 11.531199388885499],
+    "height_spread_m": 0.1347498893737793,
+    "lower_cable_not_used_as_a_phase": true,
+    "viewer_display": "2根已拟合杆 / 3根已拟合导线"
+  },
+  "ui_verification": {
+    "actual_predict_button": true,
+    "weather_save_reload_import_edit": true,
+    "daily_risk_row_counts_tested": [1, 3, 7, 15],
+    "work_order_saved_as_offline_html": true,
+    "script_errors": [],
+    "browser_external_requests": []
+  },
+  "screenshots": "TreeLineWarning_一体化_20261021/功能验收截图_20261022",
+  "archive": {
+    "file": "TreeLineWarning_20261022_便携.zip",
+    "verified_files": 35195,
+    "bytes": 2726383459,
+    "sha256": "9d26d24481a59c1aad0fdd1317b707b2cc602d1e9ebbf78e96f2e01d76644a96",
+    "all_file_hashes_passed": true
+  },
+  "notes": "2026/10/22更新原位覆盖软件代码；保留现有项目位置与启动器文件名。便携包不附带本机账号、项目或天气历史。"
+}

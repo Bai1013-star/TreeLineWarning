@@ -1,0 +1,106 @@
+const {chromium} = require(process.env.PLAYWRIGHT_MODULE);
+const assert = require('node:assert/strict');
+const path = require('node:path');
+
+(async () => {
+  const browser = await chromium.launch({channel:'msedge',headless:true});
+  const page = await browser.newPage({viewport:{width:1440,height:1000}});
+  const errors=[], forecasts=[], integrated=[];
+  page.on('pageerror', error=>errors.push(error.message));
+  page.on('dialog', dialog=>dialog.accept());
+  page.on('request', request=>{
+    if(request.url().endsWith('/predict/forecast'))forecasts.push(request.postDataJSON());
+    if(request.url().endsWith('/integrated/forecast'))integrated.push(request.postDataJSON());
+  });
+  const out=path.resolve('verification_unified_prediction');
+  // Manual prediction is usable even when there is no integrated project.
+  await page.route('**/integrated/context',route=>route.fulfill({status:404,body:'{}'}));
+  await page.goto('http://127.0.0.1:18765/?workspace=single&embedded=1');
+  await page.locator('#singleMode').waitFor({state:'visible'});
+  await page.locator('#activeStandard').filter({hasText:'标准'}).waitFor();
+  assert.equal(await page.locator('#suiteBatch').count(),0);
+  assert.equal(await page.locator('#singleEntry').isVisible(),true);
+  await page.locator('#generateReport').click();
+  await page.locator('#resultPage').waitFor({state:'visible',timeout:60000});
+  assert.equal(forecasts.length,1);
+  await page.locator('#backToInputPage').click();
+  await page.locator('#integratedTreeCount').fill('2');
+  await page.locator('#integratedTreeCount').blur();
+  await page.locator('[data-manual-field="height"]').fill('11');
+  await page.locator('[data-manual-field="clearance_distance"]').fill('5');
+  // Manual values survive reducing and increasing the tree count.
+  await page.locator('#integratedTreeCount').fill('1');await page.locator('#integratedTreeCount').blur();
+  await page.locator('#integratedTreeCount').fill('2');await page.locator('#integratedTreeCount').blur();
+  assert.equal(await page.locator('[data-manual-field="height"]').inputValue(),'11');
+  await page.locator('#generateReport').click();
+  await page.locator('#manualMultiResults tbody tr').nth(1).waitFor({timeout:60000});
+  assert.equal(forecasts.length,3);
+  assert.equal(forecasts[2].tree_data.height,11);
+  await page.screenshot({path:path.join(out,'manual_two_trees.png'),fullPage:true});
+  await page.locator('#manualMultiResults [data-open-tree-result="1"]').click();
+  assert.equal(await page.locator('#predictionTreeResultsNav button').count(),2);
+  await page.locator('#backToInputPage').click();
+  // Current point-cloud results use the SAME entry and tree count.
+  await page.unroute('**/integrated/context');
+  await page.locator('#integratedMode').click();
+  await page.locator('#integratedTree option').nth(2).waitFor({state:'attached'});
+  await page.locator('#integratedTree').selectOption('fixture-2');
+  await page.locator('#integratedTreeCount').fill('2');await page.locator('#integratedTreeCount').blur();
+  await page.locator('[data-integrated-extra-tree]').selectOption('fixture-1');
+  await page.locator('[data-integrated-extra-species]').fill('杨树');
+  await page.locator('#integratedManualWeather').click();
+  await page.locator('#saveIntegratedWeather').click();
+  await page.locator('#integratedGenerate').click();
+  await page.locator('#integratedMultiResults tbody tr').nth(1).waitFor({timeout:60000});
+  assert.deepEqual(integrated.map(item=>item.tree_key),['fixture-2','fixture-1']);
+  await page.screenshot({path:path.join(out,'pointcloud_two_trees.png'),fullPage:true});
+  // External spreadsheet page is independent and shows its own date/weather controls.
+  await page.goto('http://127.0.0.1:18765/?workspace=batch&embedded=1');
+  await page.locator('#batchFile').waitFor({state:'visible'});
+  assert.equal(await page.locator('#predictionSourcePanel').isVisible(),false);
+  assert.equal(await page.locator('#integratedManualWeather').isVisible(),true);
+  assert.equal(await page.locator('#integratedLatitude').isVisible(),true);
+  assert.equal(await page.locator('#integratedCmaPanel').isVisible(),false);
+  await page.locator('#externalObservationDate').fill('2026-11-01');
+  await page.locator('#externalTargetMonths').fill('3');
+  const fixture=await page.request.get('http://127.0.0.1:18765/verification/fixture.xlsx');
+  await page.locator('#batchFile').setInputFiles({name:'external.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:await fixture.body()});
+  await page.locator('#batchParseStatus').filter({hasText:'已选择：external.xlsx'}).waitFor();
+  const parseBox=await page.locator('#loadBatchData').boundingBox();
+  assert.ok(parseBox.y>=0&&parseBox.y+parseBox.height<1000,'Parse button must be visible at the top');
+  await page.locator('#loadBatchData').click();
+  await page.locator('#runBatchPrediction').waitFor({state:'visible'});
+  assert.equal(await page.locator('#batchPreview tbody tr').count(),2);
+  await page.locator('#integratedManualWeather').click();await page.locator('#saveIntegratedWeather').click();
+  await page.locator('#runBatchPrediction').click();
+  await page.locator('#downloadBatchResults').waitFor({state:'visible',timeout:60000});
+  assert.equal(await page.locator('#batchResult td.ok').count(),2);
+  assert.equal(forecasts.at(-1).selected_horizon_months,3);
+  assert.equal(forecasts.at(-1).tree_data.observation_date,'2026-11-01');
+  await page.waitForFunction(()=>!document.getElementById('runBatchPrediction').disabled);
+  await page.screenshot({path:path.join(out,'external_excel_batch.png'),fullPage:true});
+  // A table exported by View Data can be re-imported without per-row species,
+  // age or voltage. Explicit shared defaults supply only those missing fields.
+  await page.locator('#batchPaste').fill('tree_code,height,diameter,crown_width,horizontal_distance,vertical_distance,clearance_distance\nT-1-004,9.26,16.92,4.42,4,3,5');
+  await page.locator('#externalDefaultSpecies').fill('油松');
+  await page.locator('#parseBatchPaste').click();
+  assert.equal(await page.locator('#batchPreview tbody tr').count(),1);
+  await page.locator('#runBatchPrediction').click();
+  await page.locator('#batchResult td.ok').waitFor({timeout:60000});
+  assert.equal(forecasts.at(-1).tree_data.tree_code,'T-1-004');
+  assert.equal(forecasts.at(-1).tree_data.species,'油松');
+  await page.waitForFunction(()=>!document.getElementById('runBatchPrediction').disabled);
+  const exported=await page.request.get('http://127.0.0.1:18765/verification/exported_fixture.xlsx');
+  await page.locator('#batchFile').setInputFiles({name:'Prediction_Input.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:await exported.body()});
+  await page.locator('#loadBatchData').click();
+  await page.waitForFunction(()=>document.getElementById('batchPreview').textContent.includes('T-1-004'));
+  await page.locator('#runBatchPrediction').click();
+  await page.locator('#batchResult td.ok').waitFor({timeout:60000});
+  await page.waitForFunction(()=>!document.getElementById('runBatchPrediction').disabled);
+  assert.equal(forecasts.at(-1).tree_data.height,9.26);
+  assert.equal(forecasts.at(-1).tree_data.diameter,16.92);
+  assert.equal(forecasts.at(-1).tree_data.tree_code,'T-1-004');
+  assert.deepEqual(errors,[]);
+  console.log(JSON.stringify({passed:true,manualRequests:3,pointcloudFixtureRequests:2,externalExcelRequests:2,exportedTableReimportRequests:2,pageErrors:errors,screenshots:out}));
+  await browser.close();
+})().catch(error=>{console.error(error);process.exit(1)});

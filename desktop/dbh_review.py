@@ -3,35 +3,64 @@
 from __future__ import annotations
 
 from core.stage_b import dbh_raw_recovery as v2
+from core.stage_b import dbh_identity_recovery as v3
 from core.stage_b import dbh_review as review
 from core.stage_b.dbh_evidence import read_json, sha256
 
-from desktop.current_report import current_finalized_gate
 from desktop.editor_tasks import editor_action
 from desktop.tree_display_numbering_extensions import _current_display_identities
 
 
 def _context(workflow):
-    gate = current_finalized_gate(workflow)
-    if gate.get("status") != "PASS":
-        raise ValueError("DBH_REVIEW_REQUIRES_CURRENT_FINALIZE")
+    # DBH review is part of the human-review stage, not a post-finalization
+    # report.  Requiring a finalized publication here created a circular UI:
+    # the operator had to finish review before the 1.30 m raw-LAS evidence
+    # could be opened.  The current result + editor are the authoritative
+    # provisional membership; confirm/finalize still performs the normal
+    # publication checks afterwards.
     result = workflow._current_result()
     editor = workflow._ensure_editor()
     if result is None or editor is None:
-        raise ValueError("DBH_REVIEW_CURRENT_EDITOR_MISSING")
+        raise ValueError("DBH_REVIEW_REQUIRES_COMPLETED_ANALYSIS")
     return workflow.project_root, result, editor.final_reconciled(), editor
+
+
+def _load_review_base(root, result, members):
+    """Prepare raw-LAS evidence before finalization without publishing a report.
+
+    Removing the old finalized-only gate was insufficient: a new analysis has
+    no dbh_final pointer yet. Use the normal geometry/evidence computation for
+    the current editor revision, retaining all source and identity guards.
+    Corrupt evidence is not silently rebuilt or treated as a valid diameter.
+    """
+    pointer = review.v1._run_root(root, result.analysis_run_id) / 'dbh_final.json'
+    if not pointer.is_file():
+        v3.finalize_dbh(root, result, members)
+    try:
+        base, arrays = v2._load_base(root, result, members)
+    except ValueError as exc:
+        if str(exc) != 'DBH_V2_STALE_BASELINE':
+            raise
+        v3.finalize_dbh(root, result, members)
+        return v2._load_base(root, result, members)
+    # A stop/crash between the baseline and raw-ground recovery can leave a
+    # valid V1/V2 pointer. Valid provenance alone does not mean the requested
+    # original-LAS 1.30 m calculation has finished. This explicit review
+    # action resumes that calculation; read-only reports still never do it.
+    if isinstance(base, dict) and base.get('recovery_version') != v3.VERSION:
+        v3.finalize_dbh(root, result, members)
+        return v2._load_base(root, result, members)
+    return base, arrays
 
 
 @editor_action("DBH_REVIEW_PREVIEW")
 def list_trees(workflow):
     root, result, members, editor = _context(workflow)
-    base, _ = v2._load_base(root, result, members)
+    base, _ = _load_review_base(root, result, members)
     identities = _current_display_identities(workflow, editor)
     return {
         "ok": True,
         "human_can_type_dbh": False,
-        "reference_input_allowed": False,
-        "reference_dbh_cm": None,
         "trees": [
             {
                 "persistent_tree_id": row["persistent_tree_id"],
@@ -39,30 +68,15 @@ def list_trees(workflow):
                 "display_tree_id": identities.get(row["global_tree_id"], {}).get(
                     "display_tree_id", row["persistent_tree_id"]
                 ),
-                "dbh_cm": None if row.get("dbh_method") == "REFERENCE_ESTIMATE" else row["dbh_cm"],
-                "dbh_method": "UNAVAILABLE" if row.get("dbh_method") == "REFERENCE_ESTIMATE" else row["dbh_method"],
-                "dbh_quality": "UNAVAILABLE" if row.get("dbh_method") == "REFERENCE_ESTIMATE" else row.get("dbh_quality"),
-                "dbh_uncertainty_cm": row.get("dbh_uncertainty_cm"),
-                "dbh_fit_status": row.get("dbh_pre_reference_failure_reason", "PER_TREE_STEM_EVIDENCE_REQUIRED")
-                if row.get("dbh_method") == "REFERENCE_ESTIMATE" else row.get("dbh_fit_status"),
-                "dbh_stale_reference_estimate": row.get("dbh_stale_reference_estimate") or (
-                    {"value_cm": row.get("dbh_cm"), "reference": row.get("dbh_reference_estimate"),
-                     "status": "RETIRED_NOT_TREE_MEASUREMENT"}
-                    if row.get("dbh_method") == "REFERENCE_ESTIMATE" else None
-                ),
-                "dbh_pre_reference_failure_reason": row.get(
-                    "dbh_pre_reference_failure_reason"
-                ),
-                "dbh_reference_basis": (row.get("dbh_reference_estimate") or {}).get("basis"),
-                "dbh_reference_count": (row.get("dbh_reference_estimate") or {}).get(
-                    "reference_count"
-                ),
-                "dbh_reference_mean_cm": (row.get("dbh_reference_estimate") or {}).get(
-                    "reference_mean_cm"
-                ),
-                "dbh_reference_tree_ids": (row.get("dbh_reference_estimate") or {}).get(
-                    "reference_tree_persistent_ids"
-                ),
+                "dbh_cm": row["dbh_cm"],
+                "dbh_method": row["dbh_method"],
+                "dbh_fit_status": row["dbh_fit_status"],
+                "raw_original_las_review_available": True,
+                "raw_original_las_review_read_only": False,
+                "raw_original_las_recheck_existing": row["dbh_cm"] is not None,
+                "dbh_ground_z_absolute_m": row.get("dbh_ground_z_absolute_m"),
+                "dbh_measurement_z_absolute_m": row.get("dbh_measurement_z_absolute_m"),
+                "dbh_height_reference": row.get("dbh_height_reference"),
             }
             for row in base["trees"]
         ],
@@ -74,8 +88,8 @@ def prepare(workflow, request):
     if set(request) != {"persistent_tree_id"}:
         raise ValueError("DBH_REVIEW_INVALID_PREPARE_REQUEST")
     root, result, members, editor = _context(workflow)
-    base, _ = v2._load_base(root, result, members)
-    review._row(base, request["persistent_tree_id"], allow_accepted=True)
+    base, _ = _load_review_base(root, result, members)
+    review._row(base, request["persistent_tree_id"], require_unavailable=False)
     parent = review.v1._run_root(root, result.analysis_run_id) / "dbh_review_v4"
     data = None
     for path in sorted(
@@ -86,10 +100,8 @@ def prepare(workflow, request):
         try:
             saved = read_json(path)
             if (
-                saved.get("schema") == review.VERSION
-                and saved.get("review", {}).get("schema") == review.VERSION
-                and
                 saved["review"]["persistent_tree_id"] == request["persistent_tree_id"]
+                and saved.get("schema") == review.VERSION
                 and saved["binding"] == base["binding"]
                 and saved["baseline_geometry_sha256"] == base["baseline_geometry_sha256"]
                 and read_json(path.parent / "proof.json")["session_sha256"] == sha256(path)
@@ -101,6 +113,12 @@ def prepare(workflow, request):
             continue
     if data is None:
         data = review.prepare_review(root, result, members, request["persistent_tree_id"])
+    # Pending sessions created by an older build recorded an existing result
+    # as read-only.  Do not make users discard project evidence just to regain
+    # the controls: confirmation is already fail-safe and only replaces the
+    # baseline when the new point-cloud fit passes all quality gates.
+    data["read_only"] = False
+    data["recheck_existing_result"] = data.get("current_dbh_cm") is not None
     identity = _current_display_identities(workflow, editor).get(data["global_tree_id"], {})
     data["display_tree_id"] = identity.get("display_tree_id", data["persistent_tree_id"])
     data["current_crown"]["label"] = data["display_tree_id"]
@@ -110,48 +128,4 @@ def prepare(workflow, request):
 @editor_action("DBH_REVIEW_CONFIRM")
 def confirm(workflow, request):
     root, result, members, _ = _context(workflow)
-    outcome = review.confirm_review(root, result, members, request)
-    if outcome.get("status") == "RECOVERED" and callable(
-        getattr(workflow, "export_prediction", None)
-    ):
-        workflow.export_prediction()
-    if outcome.get("status") == "RECOVERED" and callable(
-        getattr(workflow, "export_delivery", None)
-    ):
-        workflow.export_delivery()
-    return outcome
-
-
-@editor_action("DBH_RECOMPUTE")
-def recompute(workflow, request):
-    """Re-run current DBH geometry over a verified finalized edit generation."""
-
-    if request:
-        raise ValueError("DBH_RECOMPUTE_INVALID_REQUEST")
-    root, result, members, _ = _context(workflow)
-    from core.stage_b.dbh_identity_recovery import finalize_dbh
-
-    outcome = finalize_dbh(root, result, members, force_recompute=True)
-    workbook = workflow.export_prediction()
-    available_count = sum(row.get("dbh_cm") is not None for row in outcome["trees"])
-    review_required_count = len(outcome["trees"]) - available_count
-    if isinstance(getattr(workflow, "_workflow", None), dict):
-        workflow._workflow["dbh_delivery_status"] = (
-            "READY" if review_required_count == 0 else "PER_TREE_REVIEW_REQUIRED"
-        )
-        workflow._workflow["dbh_delivery_message"] = (
-            None if review_required_count == 0
-            else "部分树木缺少本树树干点云证据，请在胸径复核页逐树核对或补测。"
-        )
-        workflow._save_workflow()
-    if callable(getattr(workflow, "export_delivery", None)):
-        workflow.export_delivery()
-    return {
-        "ok": True,
-        "status": "RECOMPUTED",
-        "tree_count": len(outcome["trees"]),
-        "dbh_available_count": available_count,
-        "reference_required_count": 0,
-        "review_required_count": review_required_count,
-        "workbook_updated": workbook.is_file(),
-    }
+    return review.confirm_review(root, result, members, request)

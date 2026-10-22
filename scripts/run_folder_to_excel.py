@@ -48,20 +48,11 @@ def main(argv: list[str] | None = None) -> int:
         "--threshold", type=float, default=None,
         help="危险净空阈值（m；默认取权威标准 algorithms.spans.project_adapter.RISK_THRESHOLD_M）",
     )
-    parser.add_argument(
-        "--reference-dbh-cm", type=float, default=None,
-        help="已停用；跨树均值和统一参考值不能补齐逐树胸径",
-    )
     parser.add_argument("--pole-a", type=_parse_xyz, default=None,
                         help="headless：杆塔 A 坐标（X Y Z）")
     parser.add_argument("--pole-b", type=_parse_xyz, default=None,
                         help="headless：杆塔 B 坐标（X Y Z）")
     args = parser.parse_args(argv)
-    if args.reference_dbh_cm is not None:
-        parser.error(
-            "--reference-dbh-cm 已停用：胸径须依据本树点云测量或复核；"
-            "无法测得的树会在 Excel 中留空并注明原因，不能用跨树均值或统一参考值补齐。"
-        )
 
     from algorithms.folder_pipeline.state import STEP_DONE, STEP_ERROR
     from algorithms.folder_pipeline.workspace import (
@@ -98,7 +89,6 @@ def main(argv: list[str] | None = None) -> int:
     folder_server = FolderServer(
         workspace,
         threshold_m=threshold,
-        reference_dbh_cm=args.reference_dbh_cm,
         headless_poles=(args.pole_a, args.pole_b) if headless else None,
     )
     httpd = __import__(

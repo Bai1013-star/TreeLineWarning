@@ -20,8 +20,8 @@ BASELINE_MODEL_VERSION = "origin-feature-chinese-ui-a502ec9"
 BASELINE_HORIZON = "current-baseline"
 FORMULA_MODEL_ID = "forecast-service-formula"
 AI_MODEL_ID = "forecast-service-temporal-attention"
-SPECIES_MODEL_SHA256 = "125A7F91C5257379B4967B542208901A6EFE2FA371939BC0F12A9FBF7591EEDB"
-TEMPORAL_MODEL_SHA256 = "3EF27CFA77E2051C5236F87A4B7145FDEE402A230787C9AF7BB5C7C96628748C"
+SPECIES_MODEL_SHA256 = "8B9BC051D2C281FB45DE12F8D39D41A4566C2DEC1C0455AB45C9EC3AC6879370"
+TEMPORAL_MODEL_SHA256 = "469B5FA88C6EC6B5B1B490B02B876C0CA36DBA8CF623DF98DE3CA7921D924204"
 SHORT_HORIZONS_DAYS = (1, 7, 14, 30)
 LONG_HORIZONS_MONTHS = (1, 2, 3, 6, 12)
 
@@ -200,7 +200,7 @@ def _run_baseline(observation: dict[str, Any], science_run_id: str) -> dict[str,
     clearance = safety.get("minimum_clearance_m")
     result = TreeRiskPredictor().predict(TreeInput(
         species="未知", height=float(geometry.get("apex_height_m") or 0.0), age=0,
-        diameter=0.0, wind_speed=0.0, rainfall=0.0, humidity=0.0, slope=0.0,
+        diameter=1.0, wind_speed=0.0, rainfall=0.0, humidity=0.0, slope=0.0,
         distance_to_wire=float(clearance) if clearance is not None else 999.0,
     ))
     return {
