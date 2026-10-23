@@ -12,10 +12,13 @@ try {
         }
         throw 'An output file already exists but its hash differs. Move that file before retrying.'
     }
-    if ($taskManifest.parts.Count -ne 2) { throw 'Two parts are required.' }
+    if ($taskManifest.parts.Count -ne 82) { throw 'All 82 parts are required.' }
     $taskPartPaths = @()
+    $taskPartNumber = 0
     foreach ($taskPart in $taskManifest.parts) {
-        if ($taskPart.name -notmatch '^TreeLineWarning_20261022\.zip\.part[12]$') { throw 'Invalid part name.' }
+        $taskPartNumber += 1
+        $taskExpectedPart = 'TreeLineWarning_20261022.zip.part{0:d3}' -f $taskPartNumber
+        if ($taskPart.name -ne $taskExpectedPart) { throw 'Invalid part name or ordering.' }
         $taskPartPath = Join-Path $PSScriptRoot $taskPart.name
         Write-Host ('Checking ' + $taskPart.name)
         if ((Get-Item -LiteralPath $taskPartPath).Length -ne $taskPart.bytes) { throw 'Part size mismatch.' }
